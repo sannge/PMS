@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .routers import applications_router, auth_router, files_router, notes_router, projects_router, tasks_router
-from .websocket import manager
+from .websocket import manager, route_incoming_message
 from .services.auth_service import decode_access_token
 
 # Create FastAPI application
@@ -95,9 +95,9 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = None):
 
     try:
         while True:
-            # Receive and handle messages
+            # Receive and handle messages using extended routing
             data = await websocket.receive_json()
-            await manager.handle_message(connection, data)
+            await route_incoming_message(connection, data)
 
     except WebSocketDisconnect:
         await manager.disconnect(websocket)
