@@ -7,10 +7,10 @@
  * - Search functionality (placeholder for future)
  * - Theme toggle
  * - User menu with logout
- * - Notification indicator
+ * - Notification center with dropdown
  */
 
-import { useState, useCallback, ReactNode } from 'react'
+import { useState, useCallback, ReactNode, useEffect } from 'react'
 import { cn } from '@/lib/utils'
 import { useAuth, useCurrentUser } from '@/hooks/use-auth'
 import {
@@ -18,11 +18,11 @@ import {
   Sun,
   Moon,
   Monitor,
-  Bell,
   LogOut,
   User,
   ChevronDown,
 } from 'lucide-react'
+import { NotificationBell, type Notification } from '@/components/notifications'
 
 // ============================================================================
 // Types
@@ -199,6 +199,34 @@ export function Header({
   const { logout, isLoading } = useAuth()
   const [isThemeMenuOpen, setIsThemeMenuOpen] = useState(false)
 
+  // Notification state - placeholder until notifications store is implemented
+  const [notifications, setNotifications] = useState<Notification[]>([])
+  const [isLoadingNotifications, setIsLoadingNotifications] = useState(false)
+  const unreadCount = notifications.filter((n) => !n.is_read).length
+
+  // Handle notification actions
+  const handleNotificationClick = useCallback((notification: Notification) => {
+    // Navigate to the related entity when store is implemented
+    // For now, just mark as read
+    setNotifications((prev) =>
+      prev.map((n) => (n.id === notification.id ? { ...n, is_read: true } : n))
+    )
+  }, [])
+
+  const handleMarkAsRead = useCallback((notification: Notification) => {
+    setNotifications((prev) =>
+      prev.map((n) => (n.id === notification.id ? { ...n, is_read: true } : n))
+    )
+  }, [])
+
+  const handleMarkAllAsRead = useCallback(() => {
+    setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })))
+  }, [])
+
+  const handleDeleteNotification = useCallback((notification: Notification) => {
+    setNotifications((prev) => prev.filter((n) => n.id !== notification.id))
+  }, [])
+
   // Cycle through themes
   const cycleTheme = useCallback(() => {
     const themes: Theme[] = ['light', 'dark', 'system']
@@ -295,20 +323,15 @@ export function Header({
         </div>
 
         {/* Notifications */}
-        <button
-          className={cn(
-            'relative flex h-9 w-9 items-center justify-center rounded-md border border-border',
-            'text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors',
-            'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
-          )}
-          title="Notifications"
-        >
-          <Bell className="h-4 w-4" />
-          {/* Notification Badge */}
-          <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] font-semibold text-destructive-foreground">
-            3
-          </span>
-        </button>
+        <NotificationBell
+          notifications={notifications}
+          unreadCount={unreadCount}
+          isLoading={isLoadingNotifications}
+          onNotificationClick={handleNotificationClick}
+          onMarkAsRead={handleMarkAsRead}
+          onMarkAllAsRead={handleMarkAllAsRead}
+          onDelete={handleDeleteNotification}
+        />
 
         {/* User Menu */}
         <UserMenu onLogout={logout} isLoading={isLoading} />
