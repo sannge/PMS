@@ -1,0 +1,25 @@
+{
+  "active": true,
+  "spec": "002-application-overview-i-want-to-create-an-app-that-",
+  "state": "building",
+  "subtasks": {
+    "completed": 45,
+    "total": 46,
+    "in_progress": 1,
+    "failed": 0
+  },
+  "phase": {
+    "current": "Testing & Polish",
+    "id": null,
+    "total": 7
+  },
+  "workers": {
+    "active": 0,
+    "max": 1
+  },
+  "session": {
+    "number": 2,
+    "started_at": "2026-01-17T08:44:48.994821"
+  },
+  "last_update": "2026-01-17T08:46:37.328283"
+}

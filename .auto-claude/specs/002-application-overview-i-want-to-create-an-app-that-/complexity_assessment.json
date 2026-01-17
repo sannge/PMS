@@ -1,0 +1,190 @@
+{
+  "complexity": "complex",
+  "workflow_type": "feature",
+  "confidence": 0.95,
+  "reasoning": "This is a greenfield enterprise application requiring multiple external integrations (SQL Server, MinIO), new architectural patterns (Electron-FastAPI IPC, WebSocket real-time collaboration), and a complete feature set equivalent to Jira + OneNote. The combination of desktop app development, real-time collaboration, production database integration, and comprehensive testing requirements makes this definitively complex.",
+
+  "analysis": {
+    "scope": {
+      "estimated_files": 75,
+      "estimated_services": 3,
+      "is_cross_cutting": true,
+      "notes": "Full application build: Electron frontend (~30 files), FastAPI backend (~25 files), shared types/utils (~10 files), tests (~10+ files). Services: Frontend (Electron/React), Backend (FastAPI REST), Real-time (WebSocket server)."
+    },
+    "integrations": {
+      "external_services": ["SQL Server", "MinIO Object Storage"],
+      "new_dependencies": [
+        "electron",
+        "react",
+        "shadcn-ui",
+        "tailwindcss",
+        "fastapi",
+        "sqlalchemy",
+        "pyodbc",
+        "minio",
+        "websockets",
+        "playwright"
+      ],
+      "research_needed": true,
+      "notes": "MinIO SDK integration for file uploads, SQL Server with pyodbc/sqlalchemy, Electron-React communication patterns, WebSocket state management for collaboration all require research."
+    },
+    "infrastructure": {
+      "docker_changes": false,
+      "database_changes": true,
+      "config_changes": true,
+      "notes": "Must design and create SQL Server schema from scratch. Environment configuration for database credentials, MinIO access, and WebSocket endpoints. No Docker mentioned but production infrastructure already exists."
+    },
+    "knowledge": {
+      "patterns_exist": false,
+      "research_required": true,
+      "unfamiliar_tech": [
+        "Electron desktop packaging",
+        "Electron-FastAPI IPC patterns",
+        "MinIO Python SDK",
+        "SQL Server with SQLAlchemy",
+        "WebSocket collaboration patterns",
+        "CRDT/Operational Transforms for conflict resolution"
+      ],
+      "notes": "Project is greenfield - no existing patterns. Real-time collaborative editing is particularly complex requiring careful design for conflict resolution, connection handling, and state synchronization."
+    },
+    "risk": {
+      "level": "high",
+      "concerns": [
+        "Real-time collaboration conflict resolution complexity",
+        "SQL Server schema design for Application→Project→Task hierarchy",
+        "Electron security (IPC boundaries, credential storage)",
+        "Cross-platform desktop compatibility (Windows/Mac/Linux)",
+        "Production database migration management",
+        "WebSocket connection reliability and reconnection handling",
+        "File upload security and validation for MinIO",
+        "Authentication system across Electron and FastAPI"
+      ],
+      "notes": "Multiple high-risk areas: security (auth, file uploads, credentials), real-time sync (data integrity), and production infrastructure (live database)."
+    }
+  },
+
+  "recommended_phases": [
+    "discovery",
+    "requirements",
+    "research",
+    "context",
+    "spec_writing",
+    "self_critique",
+    "planning",
+    "validation"
+  ],
+
+  "flags": {
+    "needs_research": true,
+    "needs_self_critique": true,
+    "needs_infrastructure_setup": true
+  },
+
+  "validation_recommendations": {
+    "risk_level": "high",
+    "skip_validation": false,
+    "minimal_mode": false,
+    "test_types_required": ["unit", "integration", "e2e"],
+    "security_scan_required": true,
+    "staging_deployment_required": false,
+    "reasoning": "Enterprise-grade application with authentication, file uploads to external storage, and database operations requires comprehensive testing. Security scan mandatory for auth flows, credential handling, and file upload validation. No staging deployment since this is desktop app, but thorough E2E testing with Playwright is critical."
+  },
+
+  "research_topics": [
+    {
+      "topic": "Electron + React + FastAPI Architecture",
+      "priority": "high",
+      "questions": [
+        "Best practices for Electron-FastAPI IPC communication",
+        "Secure credential storage in Electron apps",
+        "Packaging Python backend with Electron"
+      ]
+    },
+    {
+      "topic": "MinIO Integration",
+      "priority": "medium",
+      "questions": [
+        "MinIO Python SDK patterns for file upload/download",
+        "Bucket structure and access patterns for document storage",
+        "Presigned URL generation for secure file access"
+      ]
+    },
+    {
+      "topic": "WebSocket Real-time Collaboration",
+      "priority": "high",
+      "questions": [
+        "Conflict resolution strategies (CRDT vs OT)",
+        "WebSocket connection management and reconnection",
+        "State synchronization patterns for collaborative editing"
+      ]
+    },
+    {
+      "topic": "SQL Server Schema Design",
+      "priority": "high",
+      "questions": [
+        "Application → Project → Task hierarchy modeling",
+        "SQLAlchemy with SQL Server (pyodbc driver)",
+        "Database migration strategy for production"
+      ]
+    }
+  ],
+
+  "subtask_categories": [
+    {
+      "category": "Foundation",
+      "items": [
+        "Authentication system design",
+        "Database schema and models",
+        "Electron shell with React",
+        "FastAPI project structure"
+      ]
+    },
+    {
+      "category": "Core PM Features",
+      "items": [
+        "Application/Project/Task CRUD",
+        "Hierarchy management",
+        "Roadmap and timeline views",
+        "Issue tracking workflows"
+      ]
+    },
+    {
+      "category": "Note-taking Module",
+      "items": [
+        "Rich text editor integration",
+        "Multi-tab interface",
+        "File upload to MinIO",
+        "Document organization"
+      ]
+    },
+    {
+      "category": "Real-time Layer",
+      "items": [
+        "WebSocket architecture",
+        "Collaborative editing",
+        "Presence indicators",
+        "Conflict resolution"
+      ]
+    },
+    {
+      "category": "Notification System",
+      "items": [
+        "Event-driven notifications",
+        "Desktop notifications (Electron)",
+        "Notification preferences",
+        "Persistence and history"
+      ]
+    },
+    {
+      "category": "Testing Suite",
+      "items": [
+        "Unit test framework setup",
+        "Integration tests for API",
+        "Playwright E2E scenarios",
+        "Edge case coverage"
+      ]
+    }
+  ],
+
+  "created_at": "2025-01-17T12:00:00Z"
+}
