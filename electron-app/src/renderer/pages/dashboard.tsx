@@ -18,7 +18,10 @@ import { Sidebar, type NavItem } from '@/components/layout/sidebar'
 import { Header } from '@/components/layout/header'
 import { ApplicationsPage } from '@/pages/applications/index'
 import { ApplicationDetailPage } from '@/pages/applications/[id]'
+import { ProjectsPage } from '@/pages/projects/index'
+import { ProjectDetailPage } from '@/pages/projects/[id]'
 import type { Application } from '@/stores/applications-store'
+import type { Project } from '@/stores/projects-store'
 import {
   FolderKanban,
   ListTodo,
@@ -291,6 +294,10 @@ export function DashboardPage({
 
   // Application navigation state
   const [selectedApplicationId, setSelectedApplicationId] = useState<string | null>(null)
+  const [selectedApplicationName, setSelectedApplicationName] = useState<string | null>(null)
+
+  // Project navigation state
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
 
   // Sidebar collapse state with localStorage persistence
   const [isCollapsed, setIsCollapsed] = useState<boolean>(() => {
@@ -312,17 +319,40 @@ export function DashboardPage({
     // Clear selected application when navigating away from applications
     if (item !== 'applications') {
       setSelectedApplicationId(null)
+      setSelectedApplicationName(null)
+    }
+    // Clear selected project when navigating away from projects
+    if (item !== 'projects') {
+      setSelectedProjectId(null)
     }
   }, [])
 
   // Handle application selection
   const handleSelectApplication = useCallback((application: Application) => {
     setSelectedApplicationId(application.id)
+    setSelectedApplicationName(application.name)
   }, [])
 
   // Handle back to applications list
   const handleBackToApplications = useCallback(() => {
     setSelectedApplicationId(null)
+    setSelectedApplicationName(null)
+    setSelectedProjectId(null)
+  }, [])
+
+  // Handle project selection from application detail page
+  const handleSelectProjectFromApp = useCallback((projectId: string) => {
+    setSelectedProjectId(projectId)
+  }, [])
+
+  // Handle project selection from projects page
+  const handleSelectProject = useCallback((project: Project) => {
+    setSelectedProjectId(project.id)
+  }, [])
+
+  // Handle back to projects list
+  const handleBackToProjects = useCallback(() => {
+    setSelectedProjectId(null)
   }, [])
 
   // Handle sidebar collapse
@@ -342,13 +372,24 @@ export function DashboardPage({
           />
         )
       case 'applications':
-        // Show detail page if an application is selected
+        // Show project detail page if a project is selected within an application
+        if (selectedApplicationId && selectedProjectId) {
+          return (
+            <ProjectDetailPage
+              projectId={selectedProjectId}
+              onBack={handleBackToProjects}
+              onDeleted={handleBackToProjects}
+            />
+          )
+        }
+        // Show application detail page if an application is selected
         if (selectedApplicationId) {
           return (
             <ApplicationDetailPage
               applicationId={selectedApplicationId}
               onBack={handleBackToApplications}
               onDeleted={handleBackToApplications}
+              onSelectProject={handleSelectProjectFromApp}
             />
           )
         }
@@ -357,6 +398,48 @@ export function DashboardPage({
           <ApplicationsPage
             onSelectApplication={handleSelectApplication}
           />
+        )
+      case 'projects':
+        // Show project detail if a project is selected
+        if (selectedProjectId) {
+          return (
+            <ProjectDetailPage
+              projectId={selectedProjectId}
+              onBack={handleBackToProjects}
+              onDeleted={handleBackToProjects}
+            />
+          )
+        }
+        // Show projects list for the selected application or all projects
+        if (selectedApplicationId) {
+          return (
+            <ProjectsPage
+              applicationId={selectedApplicationId}
+              applicationName={selectedApplicationName || undefined}
+              onSelectProject={handleSelectProject}
+              onBack={handleBackToApplications}
+            />
+          )
+        }
+        // Show placeholder if no application is selected
+        return (
+          <div className="flex flex-1 items-center justify-center text-muted-foreground">
+            <div className="text-center">
+              <LayoutDashboard className="mx-auto mb-4 h-16 w-16 opacity-50" />
+              <h2 className="text-xl font-semibold text-foreground">Projects</h2>
+              <p>Select an application to view its projects</p>
+              <button
+                onClick={() => handleNavigate('applications')}
+                className={cn(
+                  'mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground',
+                  'hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                  'transition-colors duration-200'
+                )}
+              >
+                Go to Applications
+              </button>
+            </div>
+          </div>
         )
       case 'tasks':
         return (

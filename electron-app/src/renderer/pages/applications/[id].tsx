@@ -19,7 +19,15 @@ import {
   type Application,
   type ApplicationUpdate,
 } from '@/stores/applications-store'
+import {
+  useProjectsStore,
+  type Project,
+  type ProjectCreate,
+  type ProjectUpdate,
+} from '@/stores/projects-store'
 import { ApplicationForm } from '@/components/applications/application-form'
+import { ProjectCard } from '@/components/projects/project-card'
+import { ProjectForm } from '@/components/projects/project-form'
 import {
   FolderKanban,
   ArrowLeft,
@@ -31,6 +39,8 @@ import {
   Calendar,
   User,
   LayoutDashboard,
+  Search,
+  X,
 } from 'lucide-react'
 
 // ============================================================================
@@ -198,14 +208,40 @@ export function ApplicationDetailPage({
     clearError,
   } = useApplicationsStore()
 
+  // Projects state
+  const {
+    projects,
+    isLoading: isLoadingProjects,
+    isCreating: isCreatingProject,
+    isUpdating: isUpdatingProject,
+    isDeleting: isDeletingProject,
+    error: projectsError,
+    fetchProjects,
+    createProject,
+    updateProject,
+    deleteProject,
+    clearError: clearProjectsError,
+  } = useProjectsStore()
+
   // Local state
   const [isEditing, setIsEditing] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [projectModalMode, setProjectModalMode] = useState<'create' | 'edit' | null>(null)
+  const [editingProject, setEditingProject] = useState<Project | null>(null)
+  const [deletingProject, setDeletingProject] = useState<Project | null>(null)
+  const [projectSearchQuery, setProjectSearchQuery] = useState('')
 
   // Fetch application on mount
   useEffect(() => {
     fetchApplication(token, applicationId)
   }, [token, applicationId, fetchApplication])
+
+  // Fetch projects when application is loaded
+  useEffect(() => {
+    if (selectedApplication?.id === applicationId) {
+      fetchProjects(token, applicationId)
+    }
+  }, [token, applicationId, selectedApplication?.id, fetchProjects])
 
   // Handle edit
   const handleEdit = useCallback(() => {
@@ -248,6 +284,89 @@ export function ApplicationDetailPage({
   const handleCancelDelete = useCallback(() => {
     setShowDeleteDialog(false)
   }, [])
+
+  // ============================================================================
+  // Project Handlers
+  // ============================================================================
+
+  // Handle create project
+  const handleCreateProject = useCallback(() => {
+    clearProjectsError()
+    setEditingProject(null)
+    setProjectModalMode('create')
+  }, [clearProjectsError])
+
+  // Handle edit project
+  const handleEditProject = useCallback(
+    (project: Project) => {
+      clearProjectsError()
+      setEditingProject(project)
+      setProjectModalMode('edit')
+    },
+    [clearProjectsError]
+  )
+
+  // Handle delete project click
+  const handleDeleteProjectClick = useCallback((project: Project) => {
+    setDeletingProject(project)
+  }, [])
+
+  // Handle confirm delete project
+  const handleConfirmDeleteProject = useCallback(async () => {
+    if (!deletingProject) return
+
+    const success = await deleteProject(token, deletingProject.id)
+    if (success) {
+      setDeletingProject(null)
+    }
+  }, [deletingProject, deleteProject, token])
+
+  // Handle cancel delete project
+  const handleCancelDeleteProject = useCallback(() => {
+    setDeletingProject(null)
+  }, [])
+
+  // Handle close project modal
+  const handleCloseProjectModal = useCallback(() => {
+    setProjectModalMode(null)
+    setEditingProject(null)
+  }, [])
+
+  // Handle project form submit
+  const handleProjectFormSubmit = useCallback(
+    async (data: ProjectCreate | ProjectUpdate) => {
+      if (projectModalMode === 'create') {
+        const project = await createProject(token, applicationId, data as ProjectCreate)
+        if (project) {
+          handleCloseProjectModal()
+        }
+      } else if (projectModalMode === 'edit' && editingProject) {
+        const project = await updateProject(token, editingProject.id, data as ProjectUpdate)
+        if (project) {
+          handleCloseProjectModal()
+        }
+      }
+    },
+    [projectModalMode, editingProject, createProject, updateProject, token, applicationId, handleCloseProjectModal]
+  )
+
+  // Handle project click
+  const handleProjectClick = useCallback(
+    (project: Project) => {
+      onSelectProject?.(project.id)
+    },
+    [onSelectProject]
+  )
+
+  // Handle project search
+  const handleProjectSearch = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const query = e.target.value
+      setProjectSearchQuery(query)
+      fetchProjects(token, applicationId, { search: query || undefined })
+    },
+    [token, applicationId, fetchProjects]
+  )
 
   // Loading state
   if (isLoading && !selectedApplication) {
@@ -410,6 +529,7 @@ export function ApplicationDetailPage({
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-foreground">Projects</h2>
           <button
+            onClick={handleCreateProject}
             className={cn(
               'inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground',
               'hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
@@ -421,36 +541,99 @@ export function ApplicationDetailPage({
           </button>
         </div>
 
+        {/* Project Search Bar */}
+        {(projects.length > 0 || projectSearchQuery) && (
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="text"
+              value={projectSearchQuery}
+              onChange={handleProjectSearch}
+              placeholder="Search projects..."
+              className={cn(
+                'w-full rounded-md border border-input bg-background py-2 pl-10 pr-4 text-sm text-foreground placeholder:text-muted-foreground',
+                'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background'
+              )}
+            />
+            {projectSearchQuery && (
+              <button
+                onClick={() => {
+                  setProjectSearchQuery('')
+                  fetchProjects(token, applicationId)
+                }}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Projects Error Display */}
+        {projectsError && !projectModalMode && (
+          <div className="flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+            <AlertCircle className="h-4 w-4 flex-shrink-0" />
+            <span>{projectsError.message}</span>
+            <button
+              onClick={clearProjectsError}
+              className="ml-auto text-destructive hover:text-destructive/80"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
+        {/* Loading Projects State */}
+        {isLoadingProjects && projects.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-8">
+            <Loader2 className="h-6 w-6 animate-spin text-primary" />
+            <p className="mt-2 text-sm text-muted-foreground">Loading projects...</p>
+          </div>
+        )}
+
         {/* Empty Projects State */}
-        {application.projects_count === 0 && (
+        {!isLoadingProjects && projects.length === 0 && (
           <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-12">
             <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted">
               <LayoutDashboard className="h-8 w-8 text-muted-foreground" />
             </div>
             <h3 className="mt-4 text-lg font-semibold text-foreground">
-              No projects yet
+              {projectSearchQuery ? 'No projects found' : 'No projects yet'}
             </h3>
             <p className="mt-2 text-center text-muted-foreground">
-              Create your first project to start organizing your work.
+              {projectSearchQuery
+                ? `No projects match "${projectSearchQuery}"`
+                : 'Create your first project to start organizing your work.'}
             </p>
-            <button
-              className={cn(
-                'mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground',
-                'hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
-                'transition-colors duration-200'
-              )}
-            >
-              <Plus className="h-4 w-4" />
-              Create Project
-            </button>
+            {!projectSearchQuery && (
+              <button
+                onClick={handleCreateProject}
+                className={cn(
+                  'mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground',
+                  'hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                  'transition-colors duration-200'
+                )}
+              >
+                <Plus className="h-4 w-4" />
+                Create Project
+              </button>
+            )}
           </div>
         )}
 
-        {/* Projects List Placeholder */}
-        {application.projects_count > 0 && (
-          <div className="rounded-lg border border-border bg-card p-6 text-center text-muted-foreground">
-            <LayoutDashboard className="mx-auto mb-2 h-8 w-8 opacity-50" />
-            <p>Projects list will be implemented in the next phase</p>
+        {/* Projects Grid */}
+        {!isLoadingProjects && projects.length > 0 && (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {projects.map((project) => (
+              <ProjectCard
+                key={project.id}
+                project={project}
+                onClick={onSelectProject ? handleProjectClick : undefined}
+                onEdit={handleEditProject}
+                onDelete={handleDeleteProjectClick}
+                disabled={isDeletingProject}
+              />
+            ))}
           </div>
         )}
       </div>
@@ -476,6 +659,74 @@ export function ApplicationDetailPage({
           onConfirm={handleConfirmDelete}
           onCancel={handleCancelDelete}
         />
+      )}
+
+      {/* Create/Edit Project Modal */}
+      {projectModalMode && (
+        <Modal onClose={handleCloseProjectModal}>
+          <ProjectForm
+            project={editingProject}
+            isSubmitting={projectModalMode === 'create' ? isCreatingProject : isUpdatingProject}
+            error={projectsError?.message}
+            onSubmit={handleProjectFormSubmit}
+            onCancel={handleCloseProjectModal}
+          />
+        </Modal>
+      )}
+
+      {/* Delete Project Confirmation Dialog */}
+      {deletingProject && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-lg border border-border bg-card p-6 shadow-lg">
+            <div className="flex items-start gap-4">
+              <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+                <AlertCircle className="h-5 w-5" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold text-foreground">Delete Project</h3>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Are you sure you want to delete <strong>{deletingProject.name}</strong> ({deletingProject.key})?
+                  This will also delete all tasks within this project.
+                  This action cannot be undone.
+                </p>
+              </div>
+            </div>
+            <div className="mt-6 flex items-center justify-end gap-3">
+              <button
+                onClick={handleCancelDeleteProject}
+                disabled={isDeletingProject}
+                className={cn(
+                  'rounded-md border border-input bg-background px-4 py-2 text-sm font-medium text-foreground',
+                  'hover:bg-accent hover:text-accent-foreground',
+                  'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                  'disabled:cursor-not-allowed disabled:opacity-50',
+                  'transition-colors duration-200'
+                )}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDeleteProject}
+                disabled={isDeletingProject}
+                className={cn(
+                  'rounded-md bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground',
+                  'hover:bg-destructive/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                  'disabled:cursor-not-allowed disabled:opacity-50',
+                  'transition-colors duration-200'
+                )}
+              >
+                {isDeletingProject ? (
+                  <span className="flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Deleting...
+                  </span>
+                ) : (
+                  'Delete'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
