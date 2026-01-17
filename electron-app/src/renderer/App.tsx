@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils'
 import { useAuthInit, useAuth } from '@/hooks/use-auth'
 import { LoginPage } from '@/pages/login'
 import { RegisterPage } from '@/pages/register'
+import { DashboardPage } from '@/pages/dashboard'
 import { ProtectedRoute, PublicRoute, AuthGate, useAuthGuard } from '@/components/protected-route'
 
 // ============================================================================
@@ -488,11 +489,11 @@ function AuthPages(): JSX.Element {
 
 /**
  * The main application content shown when user is authenticated
- * Currently shows WelcomeScreen - will be replaced by dashboard
+ * Renders the dashboard layout with sidebar navigation
  */
 function AuthenticatedApp(): JSX.Element {
-  const { logout } = useAuth()
-  return <WelcomeScreen onLogout={logout} />
+  const { theme, setTheme } = useTheme()
+  return <DashboardPage theme={theme} onThemeChange={setTheme} />
 }
 
 // ============================================================================
@@ -508,8 +509,6 @@ function AuthenticatedApp(): JSX.Element {
  * content based on authentication state.
  */
 function AuthRouter(): JSX.Element {
-  const { logout } = useAuth()
-
   return (
     <AuthGate
       loading={<LoadingScreen />}
