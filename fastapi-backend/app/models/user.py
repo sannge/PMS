@@ -12,6 +12,8 @@ from ..database import Base
 
 if TYPE_CHECKING:
     from .application import Application
+    from .attachment import Attachment
+    from .note import Note
     from .task import Task
 
 
@@ -91,6 +93,16 @@ class User(Base):
         "Task",
         foreign_keys="Task.reporter_id",
         back_populates="reporter",
+        lazy="dynamic",
+    )
+    created_notes = relationship(
+        "Note",
+        back_populates="creator",
+        lazy="dynamic",
+    )
+    uploaded_attachments = relationship(
+        "Attachment",
+        back_populates="uploader",
         lazy="dynamic",
     )
 

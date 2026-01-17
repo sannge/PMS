@@ -11,6 +11,7 @@ from sqlalchemy.orm import relationship
 from ..database import Base
 
 if TYPE_CHECKING:
+    from .attachment import Attachment
     from .project import Project
     from .user import User
 
@@ -168,6 +169,12 @@ class Task(Base):
     subtasks = relationship(
         "Task",
         back_populates="parent",
+        lazy="dynamic",
+    )
+    attachments = relationship(
+        "Attachment",
+        back_populates="task",
+        cascade="all, delete-orphan",
         lazy="dynamic",
     )
 
