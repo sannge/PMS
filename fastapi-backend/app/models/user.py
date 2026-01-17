@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from .application import Application
     from .attachment import Attachment
     from .note import Note
+    from .notification import Notification
     from .task import Task
 
 
@@ -103,6 +104,12 @@ class User(Base):
     uploaded_attachments = relationship(
         "Attachment",
         back_populates="uploader",
+        lazy="dynamic",
+    )
+    notifications = relationship(
+        "Notification",
+        back_populates="user",
+        cascade="all, delete-orphan",
         lazy="dynamic",
     )
 
