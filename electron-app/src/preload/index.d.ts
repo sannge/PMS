@@ -41,6 +41,21 @@ export interface NotificationPayload {
   timestamp: string
 }
 
+export interface ShowNotificationOptions {
+  title: string
+  body: string
+  type?: 'info' | 'success' | 'warning' | 'error' | 'task' | 'mention' | 'comment'
+  entityType?: string
+  entityId?: string
+  silent?: boolean
+}
+
+export interface NotificationResult {
+  id: string
+  clicked: boolean
+  closed: boolean
+}
+
 export interface ElectronAPI {
   // Platform info
   platform: NodeJS.Platform
@@ -82,7 +97,13 @@ export interface ElectronAPI {
   downloadFile: (fileId: string) => Promise<FileDownloadResult>
   getFileUrl: (fileId: string) => Promise<string>
 
-  // Notification events
+  // Desktop notification operations
+  showNotification: (options: ShowNotificationOptions) => Promise<NotificationResult>
+  isNotificationSupported: () => Promise<boolean>
+  closeNotification: (id: string) => Promise<{ success: boolean }>
+  closeAllNotifications: () => Promise<{ success: boolean }>
+
+  // Notification events (from main process)
   onNotification: (callback: (notification: NotificationPayload) => void) => () => void
   offNotification: (callback: (notification: NotificationPayload) => void) => void
 

@@ -12,6 +12,7 @@ import { app, BrowserWindow, shell, session, Menu, MenuItemConstructorOptions } 
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
+import { registerNotificationHandlers, isNotificationSupported } from './notifications'
 
 // Keep a global reference of the window object to prevent garbage collection
 let mainWindow: BrowserWindow | null = null
@@ -288,6 +289,9 @@ app.whenReady().then(() => {
 
   // Register IPC handlers for renderer communication
   registerIpcHandlers()
+
+  // Register notification handlers for desktop alerts
+  registerNotificationHandlers()
 
   // Create application menu
   createApplicationMenu()

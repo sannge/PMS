@@ -51,6 +51,21 @@ export interface NotificationPayload {
   timestamp: string
 }
 
+export interface ShowNotificationOptions {
+  title: string
+  body: string
+  type?: 'info' | 'success' | 'warning' | 'error' | 'task' | 'mention' | 'comment'
+  entityType?: string
+  entityId?: string
+  silent?: boolean
+}
+
+export interface NotificationResult {
+  id: string
+  clicked: boolean
+  closed: boolean
+}
+
 // Type for the exposed electronAPI
 export interface ElectronAPI {
   // Platform info
@@ -93,7 +108,13 @@ export interface ElectronAPI {
   downloadFile: (fileId: string) => Promise<FileDownloadResult>
   getFileUrl: (fileId: string) => Promise<string>
 
-  // Notification events
+  // Desktop notification operations
+  showNotification: (options: ShowNotificationOptions) => Promise<NotificationResult>
+  isNotificationSupported: () => Promise<boolean>
+  closeNotification: (id: string) => Promise<{ success: boolean }>
+  closeAllNotifications: () => Promise<{ success: boolean }>
+
+  // Notification events (from main process)
   onNotification: (callback: (notification: NotificationPayload) => void) => () => void
   offNotification: (callback: (notification: NotificationPayload) => void) => void
 
@@ -224,6 +245,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Get presigned URL for file
   getFileUrl: (fileId: string) =>
     ipcRenderer.invoke('storage:getUrl', { fileId }) as Promise<string>,
+
+  // Show desktop notification
+  showNotification: (options: ShowNotificationOptions) =>
+    ipcRenderer.invoke('notifications:show', options) as Promise<NotificationResult>,
+
+  // Check if notifications are supported
+  isNotificationSupported: () =>
+    ipcRenderer.invoke('notifications:isSupported') as Promise<boolean>,
+
+  // Close a specific notification
+  closeNotification: (id: string) =>
+    ipcRenderer.invoke('notifications:close', { id }) as Promise<{ success: boolean }>,
+
+  // Close all notifications
+  closeAllNotifications: () =>
+    ipcRenderer.invoke('notifications:closeAll') as Promise<{ success: boolean }>,
 
   // Notification subscription - returns unsubscribe function
   onNotification: (callback: (notification: NotificationPayload) => void) => {
