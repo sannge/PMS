@@ -16,6 +16,9 @@ import { useState, useCallback, useEffect, ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { Sidebar, type NavItem } from '@/components/layout/sidebar'
 import { Header } from '@/components/layout/header'
+import { ApplicationsPage } from '@/pages/applications/index'
+import { ApplicationDetailPage } from '@/pages/applications/[id]'
+import type { Application } from '@/stores/applications-store'
 import {
   FolderKanban,
   ListTodo,
@@ -173,7 +176,17 @@ function RecentActivityItem({ type, title, description, time, status }: RecentAc
 // Dashboard Content Component
 // ============================================================================
 
-function DashboardContent(): JSX.Element {
+interface DashboardContentProps {
+  onNavigateToApplications?: () => void
+  onNavigateToTasks?: () => void
+  onNavigateToNotes?: () => void
+}
+
+function DashboardContent({
+  onNavigateToApplications,
+  onNavigateToTasks,
+  onNavigateToNotes,
+}: DashboardContentProps): JSX.Element {
   return (
     <div className="space-y-6">
       {/* Welcome Section */}
@@ -218,16 +231,19 @@ function DashboardContent(): JSX.Element {
             icon={<FolderKanban className="h-6 w-6" />}
             label="Create Application"
             description="Start a new project container"
+            onClick={onNavigateToApplications}
           />
           <QuickAction
             icon={<ListTodo className="h-6 w-6" />}
             label="Add Task"
             description="Create a new task or issue"
+            onClick={onNavigateToTasks}
           />
           <QuickAction
             icon={<StickyNote className="h-6 w-6" />}
             label="New Note"
             description="Start writing a new note"
+            onClick={onNavigateToNotes}
           />
         </div>
       </div>
@@ -273,6 +289,9 @@ export function DashboardPage({
   // Navigation state
   const [activeItem, setActiveItem] = useState<NavItem>('dashboard')
 
+  // Application navigation state
+  const [selectedApplicationId, setSelectedApplicationId] = useState<string | null>(null)
+
   // Sidebar collapse state with localStorage persistence
   const [isCollapsed, setIsCollapsed] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
@@ -290,6 +309,20 @@ export function DashboardPage({
   // Handle navigation
   const handleNavigate = useCallback((item: NavItem) => {
     setActiveItem(item)
+    // Clear selected application when navigating away from applications
+    if (item !== 'applications') {
+      setSelectedApplicationId(null)
+    }
+  }, [])
+
+  // Handle application selection
+  const handleSelectApplication = useCallback((application: Application) => {
+    setSelectedApplicationId(application.id)
+  }, [])
+
+  // Handle back to applications list
+  const handleBackToApplications = useCallback(() => {
+    setSelectedApplicationId(null)
   }, [])
 
   // Handle sidebar collapse
@@ -301,16 +334,29 @@ export function DashboardPage({
   const renderContent = (): ReactNode => {
     switch (activeItem) {
       case 'dashboard':
-        return <DashboardContent />
-      case 'applications':
         return (
-          <div className="flex flex-1 items-center justify-center text-muted-foreground">
-            <div className="text-center">
-              <FolderKanban className="mx-auto mb-4 h-16 w-16 opacity-50" />
-              <h2 className="text-xl font-semibold text-foreground">Applications</h2>
-              <p>Application management coming soon...</p>
-            </div>
-          </div>
+          <DashboardContent
+            onNavigateToApplications={() => handleNavigate('applications')}
+            onNavigateToTasks={() => handleNavigate('tasks')}
+            onNavigateToNotes={() => handleNavigate('notes')}
+          />
+        )
+      case 'applications':
+        // Show detail page if an application is selected
+        if (selectedApplicationId) {
+          return (
+            <ApplicationDetailPage
+              applicationId={selectedApplicationId}
+              onBack={handleBackToApplications}
+              onDeleted={handleBackToApplications}
+            />
+          )
+        }
+        // Otherwise show the list
+        return (
+          <ApplicationsPage
+            onSelectApplication={handleSelectApplication}
+          />
         )
       case 'tasks':
         return (
