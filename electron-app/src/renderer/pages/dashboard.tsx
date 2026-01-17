@@ -20,6 +20,7 @@ import { ApplicationsPage } from '@/pages/applications/index'
 import { ApplicationDetailPage } from '@/pages/applications/[id]'
 import { ProjectsPage } from '@/pages/projects/index'
 import { ProjectDetailPage } from '@/pages/projects/[id]'
+import { NotesPage } from '@/pages/notes/index'
 import type { Application } from '@/stores/applications-store'
 import type { Project } from '@/stores/projects-store'
 import {
@@ -453,13 +454,9 @@ export function DashboardPage({
         )
       case 'notes':
         return (
-          <div className="flex flex-1 items-center justify-center text-muted-foreground">
-            <div className="text-center">
-              <StickyNote className="mx-auto mb-4 h-16 w-16 opacity-50" />
-              <h2 className="text-xl font-semibold text-foreground">Notes</h2>
-              <p>Note-taking coming soon...</p>
-            </div>
-          </div>
+          <NotesPage
+            applicationId={selectedApplicationId}
+          />
         )
       case 'settings':
         return (
