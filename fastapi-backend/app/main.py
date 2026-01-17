@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routers import auth_router
+from .routers import applications_router, auth_router
 
 # Create FastAPI application
 app = FastAPI(
@@ -26,6 +26,7 @@ app.add_middleware(
 
 # Include API routers
 app.include_router(auth_router)
+app.include_router(applications_router)
 
 
 @app.get("/")
