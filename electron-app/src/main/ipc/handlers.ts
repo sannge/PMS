@@ -96,10 +96,11 @@ async function makeApiRequest<T = unknown>(
   const url = `${API_BASE_URL}${endpoint}`
 
   // Prepare request options
+  const contentType = headers['Content-Type'] || 'application/json'
   const fetchOptions: RequestInit = {
     method,
     headers: {
-      'Content-Type': 'application/json',
+      'Content-Type': contentType,
       Accept: 'application/json',
       ...headers
     }
@@ -107,7 +108,12 @@ async function makeApiRequest<T = unknown>(
 
   // Add body for non-GET requests
   if (body !== undefined && method !== 'GET') {
-    fetchOptions.body = JSON.stringify(body)
+    // Don't JSON stringify if body is already a string (e.g., form-urlencoded)
+    if (typeof body === 'string') {
+      fetchOptions.body = body
+    } else {
+      fetchOptions.body = JSON.stringify(body)
+    }
   }
 
   // Create abort controller for timeout

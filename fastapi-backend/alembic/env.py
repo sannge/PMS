@@ -39,7 +39,8 @@ if config.config_file_name is not None:
 
 # Set the SQLAlchemy URL from our application config
 # This overrides the dummy URL in alembic.ini
-config.set_main_option("sqlalchemy.url", DATABASE_URL)
+# Escape % characters for configparser (% needs to be %% for interpolation)
+config.set_main_option("sqlalchemy.url", DATABASE_URL.replace("%", "%%"))
 
 # Target metadata for 'autogenerate' support
 # This tells Alembic what tables/columns should exist

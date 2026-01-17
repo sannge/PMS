@@ -11,7 +11,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, lazyload
 
 from ..database import get_db
 from ..models.application import Application
@@ -150,17 +150,11 @@ async def list_projects(
     # Verify application ownership
     verify_application_ownership(application_id, current_user, db)
 
-    # Build query for projects with task count
-    query = db.query(
-        Project,
-        func.count(Task.id).label("tasks_count"),
-    ).outerjoin(
-        Task,
-        Task.project_id == Project.id,
-    ).filter(
-        Project.application_id == application_id,
-    ).group_by(
-        Project.id,
+    # Build query for projects (SQL Server compatible - no GROUP BY with eager loading)
+    query = (
+        db.query(Project)
+        .options(lazyload(Project.application))
+        .filter(Project.application_id == application_id)
     )
 
     # Apply search filter if provided
@@ -175,11 +169,28 @@ async def list_projects(
     query = query.order_by(Project.updated_at.desc())
 
     # Apply pagination
-    results = query.offset(skip).limit(limit).all()
+    projects_list = query.offset(skip).limit(limit).all()
+
+    # Get task counts for each project
+    project_ids = [p.id for p in projects_list]
+
+    # Query task counts separately
+    counts_query = (
+        db.query(
+            Task.project_id,
+            func.count(Task.id).label("count"),
+        )
+        .filter(Task.project_id.in_(project_ids))
+        .group_by(Task.project_id)
+        .all()
+    )
+
+    # Create a map of project_id -> count
+    counts_map = {str(proj_id): count for proj_id, count in counts_query}
 
     # Convert to response format
     projects = []
-    for project, tasks_count in results:
+    for project in projects_list:
         project_response = ProjectWithTasks(
             id=project.id,
             name=project.name,
@@ -189,7 +200,7 @@ async def list_projects(
             application_id=project.application_id,
             created_at=project.created_at,
             updated_at=project.updated_at,
-            tasks_count=tasks_count,
+            tasks_count=counts_map.get(str(project.id), 0),
         )
         projects.append(project_response)
 
@@ -286,26 +297,19 @@ async def get_project(
     Returns the project with its task count.
     Only the application owner can access their projects.
     """
-    # Query project with task count
-    result = db.query(
-        Project,
-        func.count(Task.id).label("tasks_count"),
-    ).outerjoin(
-        Task,
-        Task.project_id == Project.id,
-    ).filter(
-        Project.id == project_id,
-    ).group_by(
-        Project.id,
-    ).first()
+    # Query project (SQL Server compatible - no GROUP BY with eager loading)
+    project = (
+        db.query(Project)
+        .options(lazyload(Project.application))
+        .filter(Project.id == project_id)
+        .first()
+    )
 
-    if not result:
+    if not project:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Project with ID {project_id} not found",
         )
-
-    project, tasks_count = result
 
     # Verify ownership through application
     application = db.query(Application).filter(
@@ -317,6 +321,13 @@ async def get_project(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied. You are not the owner of this project's application.",
         )
+
+    # Get task count separately
+    tasks_count = (
+        db.query(func.count(Task.id))
+        .filter(Task.project_id == project_id)
+        .scalar()
+    ) or 0
 
     return ProjectWithTasks(
         id=project.id,

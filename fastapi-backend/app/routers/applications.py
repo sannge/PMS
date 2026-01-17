@@ -9,8 +9,8 @@ from typing import Annotated, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, joinedload, lazyload
 
 from ..database import get_db
 from ..models.application import Application
@@ -53,17 +53,21 @@ async def list_applications(
 
     Returns applications with their project counts.
     """
-    # Build query for applications owned by the current user
-    query = db.query(
-        Application,
-        func.count(Project.id).label("projects_count"),
-    ).outerjoin(
-        Project,
-        Project.application_id == Application.id,
-    ).filter(
-        Application.owner_id == current_user.id,
-    ).group_by(
-        Application.id,
+    # Build a subquery for project counts (SQL Server compatible)
+    project_counts_subquery = (
+        select(
+            Project.application_id,
+            func.count(Project.id).label("projects_count"),
+        )
+        .group_by(Project.application_id)
+        .subquery()
+    )
+
+    # Main query - join with subquery to get counts
+    query = (
+        db.query(Application)
+        .options(lazyload(Application.owner))  # Avoid eager loading
+        .filter(Application.owner_id == current_user.id)
     )
 
     # Apply search filter if provided
@@ -74,11 +78,28 @@ async def list_applications(
     query = query.order_by(Application.updated_at.desc())
 
     # Apply pagination
-    results = query.offset(skip).limit(limit).all()
+    applications_list = query.offset(skip).limit(limit).all()
+
+    # Get project counts for each application
+    app_ids = [app.id for app in applications_list]
+
+    # Query project counts separately
+    counts_query = (
+        db.query(
+            Project.application_id,
+            func.count(Project.id).label("count"),
+        )
+        .filter(Project.application_id.in_(app_ids))
+        .group_by(Project.application_id)
+        .all()
+    )
+
+    # Create a map of application_id -> count
+    counts_map = {str(app_id): count for app_id, count in counts_query}
 
     # Convert to response format
     applications = []
-    for app, projects_count in results:
+    for app in applications_list:
         app_response = ApplicationWithProjects(
             id=app.id,
             name=app.name,
@@ -86,7 +107,7 @@ async def list_applications(
             owner_id=app.owner_id,
             created_at=app.created_at,
             updated_at=app.updated_at,
-            projects_count=projects_count,
+            projects_count=counts_map.get(str(app.id), 0),
         )
         applications.append(app_response)
 
@@ -156,26 +177,19 @@ async def get_application(
     Returns the application with its project count.
     Only the owner can access their applications.
     """
-    # Query application with project count
-    result = db.query(
-        Application,
-        func.count(Project.id).label("projects_count"),
-    ).outerjoin(
-        Project,
-        Project.application_id == Application.id,
-    ).filter(
-        Application.id == application_id,
-    ).group_by(
-        Application.id,
-    ).first()
+    # Query application (SQL Server compatible - no GROUP BY with eager loading)
+    application = (
+        db.query(Application)
+        .options(lazyload(Application.owner))
+        .filter(Application.id == application_id)
+        .first()
+    )
 
-    if not result:
+    if not application:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Application with ID {application_id} not found",
         )
-
-    application, projects_count = result
 
     # Check ownership
     if application.owner_id != current_user.id:
@@ -183,6 +197,13 @@ async def get_application(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied. You are not the owner of this application.",
         )
+
+    # Get project count separately
+    projects_count = (
+        db.query(func.count(Project.id))
+        .filter(Project.application_id == application_id)
+        .scalar()
+    ) or 0
 
     return ApplicationWithProjects(
         id=application.id,

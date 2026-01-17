@@ -66,9 +66,21 @@ export interface ProjectCardProps {
  * Format a date string to a human-readable format
  */
 function formatDate(dateString: string): string {
-  const date = new Date(dateString)
+  // Ensure the date is parsed as UTC if no timezone is specified
+  let dateStr = dateString
+  if (!dateStr.endsWith('Z') && !dateStr.includes('+') && !dateStr.includes('-', 10)) {
+    dateStr = dateStr + 'Z'
+  }
+
+  const date = new Date(dateStr)
   const now = new Date()
   const diffMs = now.getTime() - date.getTime()
+
+  // Handle future dates (negative diff) - show "Just now"
+  if (diffMs < 0) {
+    return 'Just now'
+  }
+
   const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
 
   if (diffDays === 0) {
