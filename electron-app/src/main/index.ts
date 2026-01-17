@@ -11,6 +11,7 @@
 import { app, BrowserWindow, shell, session, Menu, MenuItemConstructorOptions } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { registerIpcHandlers } from './ipc/handlers'
 
 // Keep a global reference of the window object to prevent garbage collection
 let mainWindow: BrowserWindow | null = null
@@ -284,6 +285,9 @@ app.whenReady().then(() => {
   // Setup security configurations
   setupContentSecurityPolicy()
   setupSessionSecurity()
+
+  // Register IPC handlers for renderer communication
+  registerIpcHandlers()
 
   // Create application menu
   createApplicationMenu()
