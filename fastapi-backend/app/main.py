@@ -1,10 +1,12 @@
 """FastAPI application entry point."""
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .routers import applications_router, auth_router, files_router, notes_router, projects_router, tasks_router
+from .websocket import manager
+from .services.auth_service import decode_access_token
 
 # Create FastAPI application
 app = FastAPI(
@@ -50,4 +52,54 @@ async def health_check():
         "status": "healthy",
         "database": "pending",  # Will be updated when database is configured
         "minio": "pending",  # Will be updated when MinIO is configured
+        "websocket": {
+            "connections": manager.total_connections,
+            "rooms": manager.total_rooms,
+        },
     }
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket, token: str | None = None):
+    """
+    WebSocket endpoint for real-time collaboration.
+
+    Args:
+        websocket: The WebSocket connection
+        token: JWT token for authentication (query parameter)
+
+    Authentication is done via query parameter since WebSocket
+    doesn't support custom headers in the initial handshake
+    from browser clients.
+
+    Usage:
+        ws://localhost:8000/ws?token=<jwt_token>
+    """
+    # Validate token
+    if not token:
+        await websocket.close(code=4001, reason="Authentication required")
+        return
+
+    try:
+        token_data = decode_access_token(token)
+        if token_data is None or token_data.user_id is None:
+            await websocket.close(code=4001, reason="Invalid token")
+            return
+        user_id = token_data.user_id
+    except Exception:
+        await websocket.close(code=4001, reason="Invalid token")
+        return
+
+    # Accept connection and register
+    connection = await manager.connect(websocket, user_id)
+
+    try:
+        while True:
+            # Receive and handle messages
+            data = await websocket.receive_json()
+            await manager.handle_message(connection, data)
+
+    except WebSocketDisconnect:
+        await manager.disconnect(websocket)
+    except Exception:
+        await manager.disconnect(websocket)
