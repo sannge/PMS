@@ -14,6 +14,14 @@ from .minio_service import (
     get_minio_service,
     minio_service,
 )
+from .notification_service import (
+    NotificationService,
+    create_notification,
+    notify_comment_added,
+    notify_mentioned,
+    notify_task_assigned,
+    notify_task_status_changed,
+)
 
 __all__ = [
     # Auth service
@@ -28,4 +36,11 @@ __all__ = [
     "MinIOServiceError",
     "get_minio_service",
     "minio_service",
+    # Notification service
+    "NotificationService",
+    "create_notification",
+    "notify_comment_added",
+    "notify_mentioned",
+    "notify_task_assigned",
+    "notify_task_status_changed",
 ]

@@ -8,6 +8,7 @@ from .applications import router as applications_router
 from .auth import router as auth_router
 from .files import router as files_router
 from .notes import router as notes_router
+from .notifications import router as notifications_router
 from .projects import router as projects_router
 from .tasks import router as tasks_router
 
@@ -16,6 +17,7 @@ __all__ = [
     "auth_router",
     "files_router",
     "notes_router",
+    "notifications_router",
     "projects_router",
     "tasks_router",
 ]
