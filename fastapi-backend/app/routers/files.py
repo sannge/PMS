@@ -239,6 +239,30 @@ async def list_attachments(
 
 
 @router.get(
+    "/test",
+    summary="Test endpoint",
+    description="Test endpoint for verifying authentication.",
+    responses={
+        200: {"description": "Test successful"},
+        401: {"description": "Not authenticated"},
+    },
+)
+async def test_endpoint(
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    """
+    Test endpoint that requires authentication.
+
+    Returns a simple response confirming the authenticated user.
+    """
+    return {
+        "message": "Files API is working",
+        "user_id": str(current_user.id),
+        "user_email": current_user.email,
+    }
+
+
+@router.get(
     "/{attachment_id}",
     response_model=FileDownloadResponse,
     summary="Get a file by ID",
@@ -584,27 +608,3 @@ async def get_entity_attachments(
     attachments = query.offset(skip).limit(limit).all()
 
     return attachments
-
-
-@router.get(
-    "/test",
-    summary="Test endpoint",
-    description="Test endpoint for verifying authentication.",
-    responses={
-        200: {"description": "Test successful"},
-        401: {"description": "Not authenticated"},
-    },
-)
-async def test_endpoint(
-    current_user: Annotated[User, Depends(get_current_user)],
-) -> dict:
-    """
-    Test endpoint that requires authentication.
-
-    Returns a simple response confirming the authenticated user.
-    """
-    return {
-        "message": "Files API is working",
-        "user_id": str(current_user.id),
-        "user_email": current_user.email,
-    }
