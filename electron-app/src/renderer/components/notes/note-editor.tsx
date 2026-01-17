@@ -15,7 +15,7 @@
  * - Auto-save support via onChange callback
  */
 
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useState, useRef } from 'react'
 import { useEditor, EditorContent, type Editor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Underline from '@tiptap/extension-underline'
@@ -52,7 +52,13 @@ import {
   Redo2,
   RemoveFormatting,
   Pilcrow,
+  Paperclip,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react'
+import { useFilesStore, type Attachment } from '@/stores/files-store'
+import { FileUpload } from '@/components/files/file-upload'
+import { AttachmentList } from '@/components/files/attachment-list'
 
 // ============================================================================
 // Types
@@ -95,6 +101,14 @@ export interface NoteEditorProps {
    * Auto focus on mount
    */
   autoFocus?: boolean
+  /**
+   * Note ID for attachments (optional)
+   */
+  noteId?: string
+  /**
+   * Whether to show attachments section
+   */
+  showAttachments?: boolean
 }
 
 interface ToolbarButtonProps {
@@ -155,9 +169,11 @@ interface EditorToolbarProps {
   editor: Editor | null
   onAddImage?: () => void
   onAddLink?: () => void
+  onAttachFile?: () => void
+  showAttachButton?: boolean
 }
 
-function EditorToolbar({ editor, onAddImage, onAddLink }: EditorToolbarProps): JSX.Element | null {
+function EditorToolbar({ editor, onAddImage, onAddLink, onAttachFile, showAttachButton }: EditorToolbarProps): JSX.Element | null {
   if (!editor) return null
 
   const handleAddLink = useCallback(() => {
@@ -385,6 +401,11 @@ function EditorToolbar({ editor, onAddImage, onAddLink }: EditorToolbarProps): J
       <ToolbarButton onClick={handleAddImage} title="Add Image">
         <ImageIcon className="h-4 w-4" />
       </ToolbarButton>
+      {showAttachButton && onAttachFile && (
+        <ToolbarButton onClick={onAttachFile} title="Attach File">
+          <Paperclip className="h-4 w-4" />
+        </ToolbarButton>
+      )}
 
       <ToolbarDivider />
 
@@ -413,7 +434,20 @@ export function NoteEditor({
   className,
   showToolbar = true,
   autoFocus = false,
+  noteId,
+  showAttachments = false,
 }: NoteEditorProps): JSX.Element {
+  const [isAttachmentsExpanded, setIsAttachmentsExpanded] = useState(false)
+  const [showUploadPanel, setShowUploadPanel] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Handle attach file button click
+  const handleAttachFile = useCallback(() => {
+    if (noteId) {
+      setShowUploadPanel(true)
+      setIsAttachmentsExpanded(true)
+    }
+  }, [noteId])
   // Initialize editor with extensions
   const editor = useEditor({
     extensions: [
@@ -533,7 +567,13 @@ export function NoteEditor({
       )}
     >
       {/* Toolbar */}
-      {showToolbar && editable && <EditorToolbar editor={editor} />}
+      {showToolbar && editable && (
+        <EditorToolbar
+          editor={editor}
+          onAttachFile={handleAttachFile}
+          showAttachButton={showAttachments && !!noteId}
+        />
+      )}
 
       {/* Editor Content */}
       <EditorContent
@@ -553,6 +593,86 @@ export function NoteEditor({
       {editor && (
         <div className="border-t border-border px-4 py-1.5 text-xs text-muted-foreground">
           {editor.storage.characterCount?.characters() || 0} characters
+        </div>
+      )}
+
+      {/* Attachments Section */}
+      {showAttachments && noteId && (
+        <div className="border-t border-border">
+          {/* Header */}
+          <button
+            onClick={() => setIsAttachmentsExpanded(!isAttachmentsExpanded)}
+            className={cn(
+              'w-full flex items-center justify-between px-4 py-2',
+              'text-sm text-muted-foreground hover:text-foreground hover:bg-accent/50',
+              'transition-colors'
+            )}
+          >
+            <div className="flex items-center gap-2">
+              <Paperclip className="h-4 w-4" />
+              <span>Attachments</span>
+            </div>
+            {isAttachmentsExpanded ? (
+              <ChevronUp className="h-4 w-4" />
+            ) : (
+              <ChevronDown className="h-4 w-4" />
+            )}
+          </button>
+
+          {/* Content */}
+          {isAttachmentsExpanded && (
+            <div className="px-4 pb-4 space-y-3">
+              {/* Upload panel */}
+              {showUploadPanel && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-medium text-muted-foreground">
+                      Upload Files
+                    </span>
+                    <button
+                      onClick={() => setShowUploadPanel(false)}
+                      className="text-xs text-muted-foreground hover:text-foreground"
+                    >
+                      Hide
+                    </button>
+                  </div>
+                  <FileUpload
+                    entityType="note"
+                    entityId={noteId}
+                    compact
+                    onUploadComplete={() => {
+                      // File uploaded successfully
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* Add file button when upload panel is hidden */}
+              {!showUploadPanel && (
+                <button
+                  onClick={() => setShowUploadPanel(true)}
+                  className={cn(
+                    'w-full flex items-center justify-center gap-2 py-2',
+                    'rounded-md border border-dashed border-border',
+                    'text-sm text-muted-foreground hover:text-foreground hover:border-primary/50',
+                    'transition-colors'
+                  )}
+                >
+                  <Paperclip className="h-4 w-4" />
+                  Attach file
+                </button>
+              )}
+
+              {/* Attachment list */}
+              <AttachmentList
+                entityType="note"
+                entityId={noteId}
+                viewMode="list"
+                showViewToggle={false}
+                compact
+              />
+            </div>
+          )}
         </div>
       )}
     </div>

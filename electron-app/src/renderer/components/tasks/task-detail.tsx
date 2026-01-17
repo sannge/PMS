@@ -38,9 +38,14 @@ import {
   Bookmark,
   Layers,
   ChevronRight,
+  Paperclip,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react'
 import type { Task, TaskStatus, TaskUpdate, TaskPriority, TaskType } from '@/stores/tasks-store'
 import { TaskStatusBadge } from './task-status-badge'
+import { FileUpload } from '@/components/files/file-upload'
+import { AttachmentList } from '@/components/files/attachment-list'
 
 // ============================================================================
 // Types
@@ -301,6 +306,78 @@ function EditableField({
           <span className={!value ? 'italic' : ''}>{value || placeholder}</span>
         )}
       </button>
+    </div>
+  )
+}
+
+// ============================================================================
+// Task Attachments Section Component
+// ============================================================================
+
+interface TaskAttachmentsSectionProps {
+  taskId: string
+}
+
+function TaskAttachmentsSection({ taskId }: TaskAttachmentsSectionProps): JSX.Element {
+  const [isExpanded, setIsExpanded] = useState(true)
+  const [showUpload, setShowUpload] = useState(false)
+
+  return (
+    <div className="space-y-3">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <button
+          onClick={() => setIsExpanded(!isExpanded)}
+          className="flex items-center gap-2 text-xs font-medium text-muted-foreground uppercase tracking-wide hover:text-foreground transition-colors"
+        >
+          <Paperclip className="h-3.5 w-3.5" />
+          Attachments
+          {isExpanded ? (
+            <ChevronUp className="h-3.5 w-3.5" />
+          ) : (
+            <ChevronDown className="h-3.5 w-3.5" />
+          )}
+        </button>
+        {isExpanded && (
+          <button
+            onClick={() => setShowUpload(!showUpload)}
+            className={cn(
+              'text-xs font-medium transition-colors',
+              showUpload
+                ? 'text-primary'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            {showUpload ? 'Hide upload' : 'Add file'}
+          </button>
+        )}
+      </div>
+
+      {/* Content */}
+      {isExpanded && (
+        <div className="space-y-4">
+          {/* Upload area */}
+          {showUpload && (
+            <FileUpload
+              entityType="task"
+              entityId={taskId}
+              onUploadComplete={() => {
+                // Optionally hide upload after success
+              }}
+              className="mb-2"
+            />
+          )}
+
+          {/* Attachment list */}
+          <AttachmentList
+            entityType="task"
+            entityId={taskId}
+            viewMode="list"
+            showViewToggle={false}
+            compact
+          />
+        </div>
+      )}
     </div>
   )
 }
@@ -662,6 +739,12 @@ export function TaskDetail({
                 )}
               </div>
             </div>
+
+            {/* Divider */}
+            <div className="border-t border-border" />
+
+            {/* Attachments Section */}
+            <TaskAttachmentsSection taskId={task.id} />
           </div>
         </div>
 
