@@ -17,6 +17,7 @@
  * - Activity feed (placeholder)
  * - Delete confirmation
  * - Keyboard navigation (Escape to close)
+ * - Real-time updates via WebSocket
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react'
@@ -41,11 +42,19 @@ import {
   Paperclip,
   ChevronDown,
   ChevronUp,
+  Wifi,
+  WifiOff,
 } from 'lucide-react'
 import type { Task, TaskStatus, TaskUpdate, TaskPriority, TaskType } from '@/stores/tasks-store'
 import { TaskStatusBadge } from './task-status-badge'
 import { FileUpload } from '@/components/files/file-upload'
 import { AttachmentList } from '@/components/files/attachment-list'
+import {
+  useWebSocket,
+  MessageType,
+  WebSocketClient,
+  type TaskUpdateEventData,
+} from '@/hooks/use-websocket'
 
 // ============================================================================
 // Types
@@ -88,6 +97,18 @@ export interface TaskDetailProps {
    * Callback to open in full page view
    */
   onOpenFull?: () => void
+  /**
+   * Callback when task is updated externally via WebSocket
+   */
+  onExternalUpdate?: (task: Task) => void
+  /**
+   * Callback when task is deleted externally via WebSocket
+   */
+  onExternalDelete?: () => void
+  /**
+   * Whether to enable real-time updates
+   */
+  enableRealtime?: boolean
 }
 
 // ============================================================================
@@ -396,9 +417,80 @@ export function TaskDetail({
   onUpdate,
   onDelete,
   onOpenFull,
+  onExternalUpdate,
+  onExternalDelete,
+  enableRealtime = true,
 }: TaskDetailProps): JSX.Element | null {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
+  const [externalUpdateNotice, setExternalUpdateNotice] = useState<string | null>(null)
+
+  // WebSocket connection for real-time updates
+  const { status, subscribe, joinRoom, leaveRoom } = useWebSocket()
+  const callbackRefs = useRef({ onExternalUpdate, onExternalDelete })
+
+  // Keep callback refs up to date
+  useEffect(() => {
+    callbackRefs.current = { onExternalUpdate, onExternalDelete }
+  }, [onExternalUpdate, onExternalDelete])
+
+  // Join task room and subscribe to updates when panel is open
+  useEffect(() => {
+    if (!isOpen || !enableRealtime || !status.isConnected || !task.project_id) {
+      return
+    }
+
+    const roomId = WebSocketClient.getProjectRoom(task.project_id)
+    joinRoom(roomId)
+
+    // Subscribe to task updates
+    const unsubscribeUpdated = subscribe<TaskUpdateEventData>(
+      MessageType.TASK_UPDATED,
+      (data) => {
+        if (data.task_id === task.id) {
+          setExternalUpdateNotice('Task was updated by another user')
+          setTimeout(() => setExternalUpdateNotice(null), 3000)
+          if (callbackRefs.current.onExternalUpdate && data.task) {
+            callbackRefs.current.onExternalUpdate(data.task as Task)
+          }
+        }
+      }
+    )
+
+    // Subscribe to task status changes
+    const unsubscribeStatus = subscribe<TaskUpdateEventData>(
+      MessageType.TASK_STATUS_CHANGED,
+      (data) => {
+        if (data.task_id === task.id) {
+          setExternalUpdateNotice('Task status was changed by another user')
+          setTimeout(() => setExternalUpdateNotice(null), 3000)
+          if (callbackRefs.current.onExternalUpdate && data.task) {
+            callbackRefs.current.onExternalUpdate(data.task as Task)
+          }
+        }
+      }
+    )
+
+    // Subscribe to task deletions
+    const unsubscribeDeleted = subscribe<TaskUpdateEventData>(
+      MessageType.TASK_DELETED,
+      (data) => {
+        if (data.task_id === task.id) {
+          setExternalUpdateNotice('Task was deleted by another user')
+          if (callbackRefs.current.onExternalDelete) {
+            callbackRefs.current.onExternalDelete()
+          }
+        }
+      }
+    )
+
+    return () => {
+      unsubscribeUpdated()
+      unsubscribeStatus()
+      unsubscribeDeleted()
+      leaveRoom(roomId)
+    }
+  }, [isOpen, enableRealtime, status.isConnected, task.id, task.project_id, subscribe, joinRoom, leaveRoom])
 
   // Close on escape key
   useEffect(() => {
@@ -500,6 +592,22 @@ export function TaskDetail({
                 {getTaskTypeLabel(task.task_type)}
               </span>
             </div>
+            {/* Real-time connection indicator */}
+            {enableRealtime && (
+              <div
+                className={cn(
+                  'flex items-center gap-1 text-xs',
+                  status.isConnected ? 'text-green-500' : 'text-muted-foreground'
+                )}
+                title={status.isConnected ? 'Real-time updates active' : 'Not connected'}
+              >
+                {status.isConnected ? (
+                  <Wifi className="h-3 w-3" />
+                ) : (
+                  <WifiOff className="h-3 w-3" />
+                )}
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-1">
@@ -556,6 +664,14 @@ export function TaskDetail({
             <div className="mx-4 mt-4 flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
               <AlertCircle className="h-4 w-4 flex-shrink-0" />
               <span>{error}</span>
+            </div>
+          )}
+
+          {/* External Update Notice */}
+          {externalUpdateNotice && (
+            <div className="mx-4 mt-4 flex items-center gap-2 rounded-md border border-blue-500/50 bg-blue-500/10 p-3 text-sm text-blue-600 dark:text-blue-400 animate-in fade-in slide-in-from-top-2 duration-200">
+              <Wifi className="h-4 w-4 flex-shrink-0" />
+              <span>{externalUpdateNotice}</span>
             </div>
           )}
 

@@ -12,9 +12,10 @@
  * - Drag-and-drop ready structure (actual DnD to be implemented in phase-7)
  * - List view toggle
  * - Empty state handling
+ * - Real-time updates via WebSocket
  */
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 import { getAuthHeaders } from '@/stores/auth-store'
@@ -36,7 +37,14 @@ import {
   Timer,
   Eye,
   XCircle,
+  Wifi,
+  WifiOff,
 } from 'lucide-react'
+import {
+  useTaskUpdates,
+  useWebSocket,
+  type TaskUpdateEventData,
+} from '@/hooks/use-websocket'
 
 // ============================================================================
 // Types
@@ -111,6 +119,10 @@ export interface ProjectBoardProps {
    * Additional CSS classes
    */
   className?: string
+  /**
+   * Whether to enable real-time updates
+   */
+  enableRealtime?: boolean
 }
 
 // ============================================================================
@@ -495,15 +507,73 @@ export function ProjectBoard({
   onTaskClick,
   onAddTask,
   className,
+  enableRealtime = true,
 }: ProjectBoardProps): JSX.Element {
   // State
   const [viewMode, setViewMode] = useState<'board' | 'list'>('board')
   const [tasks, setTasks] = useState<Task[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [realtimeNotice, setRealtimeNotice] = useState<string | null>(null)
 
   // Auth
   const token = useAuthStore((state) => state.token)
+
+  // WebSocket status
+  const { status } = useWebSocket()
+
+  // Handle real-time task updates
+  const handleTaskUpdate = useCallback((data: TaskUpdateEventData) => {
+    if (data.project_id !== projectId) return
+
+    setTasks((currentTasks) => {
+      if (data.action === 'created' && data.task) {
+        // Add new task if not already present
+        const exists = currentTasks.some((t) => t.id === data.task_id)
+        if (!exists) {
+          setRealtimeNotice('New task added')
+          setTimeout(() => setRealtimeNotice(null), 3000)
+          return [...currentTasks, data.task as Task]
+        }
+        return currentTasks
+      } else if (data.action === 'updated' && data.task) {
+        // Update existing task
+        const index = currentTasks.findIndex((t) => t.id === data.task_id)
+        if (index !== -1) {
+          setRealtimeNotice('Task updated')
+          setTimeout(() => setRealtimeNotice(null), 3000)
+          const newTasks = [...currentTasks]
+          newTasks[index] = data.task as Task
+          return newTasks
+        }
+        return currentTasks
+      } else if (data.action === 'deleted') {
+        // Remove deleted task
+        const index = currentTasks.findIndex((t) => t.id === data.task_id)
+        if (index !== -1) {
+          setRealtimeNotice('Task removed')
+          setTimeout(() => setRealtimeNotice(null), 3000)
+          return currentTasks.filter((t) => t.id !== data.task_id)
+        }
+        return currentTasks
+      } else if (data.action === 'status_changed' && data.task) {
+        // Update task status
+        const index = currentTasks.findIndex((t) => t.id === data.task_id)
+        if (index !== -1) {
+          setRealtimeNotice('Task status changed')
+          setTimeout(() => setRealtimeNotice(null), 3000)
+          const newTasks = [...currentTasks]
+          newTasks[index] = data.task as Task
+          return newTasks
+        }
+        return currentTasks
+      }
+      return currentTasks
+    })
+  }, [projectId])
+
+  // Subscribe to task updates via WebSocket
+  useTaskUpdates(enableRealtime ? projectId : null, handleTaskUpdate)
 
   // Fetch tasks
   useEffect(() => {
@@ -590,6 +660,36 @@ export function ProjectBoard({
               List
             </button>
           </div>
+
+          {/* Real-time connection indicator */}
+          {enableRealtime && (
+            <div
+              className={cn(
+                'flex items-center gap-1.5 px-2 py-1 rounded-md text-xs',
+                status.isConnected
+                  ? 'bg-green-500/10 text-green-600 dark:text-green-400'
+                  : 'bg-muted text-muted-foreground'
+              )}
+              title={status.isConnected ? 'Real-time updates active' : 'Not connected to real-time updates'}
+            >
+              {status.isConnected ? (
+                <Wifi className="h-3.5 w-3.5" />
+              ) : (
+                <WifiOff className="h-3.5 w-3.5" />
+              )}
+              <span className="hidden sm:inline">
+                {status.isConnected ? 'Live' : 'Offline'}
+              </span>
+            </div>
+          )}
+
+          {/* Real-time update notice */}
+          {realtimeNotice && (
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-400 text-xs animate-in fade-in slide-in-from-left-2 duration-200">
+              <Wifi className="h-3.5 w-3.5" />
+              <span>{realtimeNotice}</span>
+            </div>
+          )}
         </div>
 
         {/* Add Task Button */}

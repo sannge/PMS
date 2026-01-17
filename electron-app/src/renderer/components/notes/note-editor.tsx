@@ -13,6 +13,7 @@
  * - Highlight text
  * - Keyboard shortcuts
  * - Auto-save support via onChange callback
+ * - Real-time updates via WebSocket
  */
 
 import { useCallback, useEffect, useState, useRef } from 'react'
@@ -55,10 +56,19 @@ import {
   Paperclip,
   ChevronDown,
   ChevronUp,
+  Wifi,
+  WifiOff,
+  Users,
 } from 'lucide-react'
 import { useFilesStore, type Attachment } from '@/stores/files-store'
 import { FileUpload } from '@/components/files/file-upload'
 import { AttachmentList } from '@/components/files/attachment-list'
+import {
+  useWebSocket,
+  MessageType,
+  WebSocketClient,
+  type NoteUpdateEventData,
+} from '@/hooks/use-websocket'
 
 // ============================================================================
 // Types
@@ -109,6 +119,22 @@ export interface NoteEditorProps {
    * Whether to show attachments section
    */
   showAttachments?: boolean
+  /**
+   * Application ID for WebSocket room subscription
+   */
+  applicationId?: string
+  /**
+   * Whether to enable real-time updates
+   */
+  enableRealtime?: boolean
+  /**
+   * Callback when note is updated externally via WebSocket
+   */
+  onExternalContentChange?: (content: string) => void
+  /**
+   * Callback when note is deleted externally via WebSocket
+   */
+  onExternalDelete?: () => void
 }
 
 interface ToolbarButtonProps {
@@ -436,10 +462,83 @@ export function NoteEditor({
   autoFocus = false,
   noteId,
   showAttachments = false,
+  applicationId,
+  enableRealtime = true,
+  onExternalContentChange,
+  onExternalDelete,
 }: NoteEditorProps): JSX.Element {
   const [isAttachmentsExpanded, setIsAttachmentsExpanded] = useState(false)
   const [showUploadPanel, setShowUploadPanel] = useState(false)
+  const [externalUpdateNotice, setExternalUpdateNotice] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const isLocalChange = useRef(false)
+
+  // WebSocket connection for real-time updates
+  const { status, subscribe, joinRoom, leaveRoom, sendTyping } = useWebSocket()
+  const callbackRefs = useRef({ onExternalContentChange, onExternalDelete })
+
+  // Keep callback refs up to date
+  useEffect(() => {
+    callbackRefs.current = { onExternalContentChange, onExternalDelete }
+  }, [onExternalContentChange, onExternalDelete])
+
+  // Join application room and subscribe to note updates
+  useEffect(() => {
+    if (!enableRealtime || !status.isConnected || !applicationId || !noteId) {
+      return
+    }
+
+    const roomId = WebSocketClient.getApplicationRoom(applicationId)
+    joinRoom(roomId)
+
+    // Subscribe to note content changes
+    const unsubscribeContent = subscribe<NoteUpdateEventData>(
+      MessageType.NOTE_CONTENT_CHANGED,
+      (data) => {
+        if (data.note_id === noteId && !isLocalChange.current) {
+          setExternalUpdateNotice('Note updated by another user')
+          setTimeout(() => setExternalUpdateNotice(null), 3000)
+          if (callbackRefs.current.onExternalContentChange && data.content) {
+            callbackRefs.current.onExternalContentChange(data.content)
+          }
+        }
+      }
+    )
+
+    // Subscribe to note updates
+    const unsubscribeUpdated = subscribe<NoteUpdateEventData>(
+      MessageType.NOTE_UPDATED,
+      (data) => {
+        if (data.note_id === noteId && !isLocalChange.current) {
+          setExternalUpdateNotice('Note updated by another user')
+          setTimeout(() => setExternalUpdateNotice(null), 3000)
+          if (callbackRefs.current.onExternalContentChange && data.content) {
+            callbackRefs.current.onExternalContentChange(data.content)
+          }
+        }
+      }
+    )
+
+    // Subscribe to note deletions
+    const unsubscribeDeleted = subscribe<NoteUpdateEventData>(
+      MessageType.NOTE_DELETED,
+      (data) => {
+        if (data.note_id === noteId) {
+          setExternalUpdateNotice('Note was deleted by another user')
+          if (callbackRefs.current.onExternalDelete) {
+            callbackRefs.current.onExternalDelete()
+          }
+        }
+      }
+    )
+
+    return () => {
+      unsubscribeContent()
+      unsubscribeUpdated()
+      unsubscribeDeleted()
+      leaveRoom(roomId)
+    }
+  }, [enableRealtime, status.isConnected, applicationId, noteId, subscribe, joinRoom, leaveRoom])
 
   // Handle attach file button click
   const handleAttachFile = useCallback(() => {
@@ -448,6 +547,21 @@ export function NoteEditor({
       setIsAttachmentsExpanded(true)
     }
   }, [noteId])
+
+  // Wrapper for onChange to track local changes
+  const handleContentChange = useCallback(
+    (newContent: string) => {
+      isLocalChange.current = true
+      if (onChange) {
+        onChange(newContent)
+      }
+      // Reset local change flag after a short delay
+      setTimeout(() => {
+        isLocalChange.current = false
+      }, 100)
+    },
+    [onChange]
+  )
   // Initialize editor with extensions
   const editor = useEditor({
     extensions: [
@@ -512,9 +626,7 @@ export function NoteEditor({
     editable,
     autofocus: autoFocus,
     onUpdate: ({ editor }) => {
-      if (onChange) {
-        onChange(editor.getHTML())
-      }
+      handleContentChange(editor.getHTML())
     },
     onFocus: () => {
       if (onFocus) {
@@ -589,10 +701,34 @@ export function NoteEditor({
         )}
       />
 
-      {/* Word Count (optional, can be added if needed) */}
+      {/* External Update Notice */}
+      {externalUpdateNotice && (
+        <div className="border-t border-border px-4 py-2 flex items-center gap-2 bg-blue-500/10 text-blue-600 dark:text-blue-400 text-sm animate-in fade-in slide-in-from-top-2 duration-200">
+          <Wifi className="h-4 w-4 flex-shrink-0" />
+          <span>{externalUpdateNotice}</span>
+        </div>
+      )}
+
+      {/* Status Bar */}
       {editor && (
-        <div className="border-t border-border px-4 py-1.5 text-xs text-muted-foreground">
-          {editor.storage.characterCount?.characters() || 0} characters
+        <div className="border-t border-border px-4 py-1.5 flex items-center justify-between text-xs text-muted-foreground">
+          <span>{editor.storage.characterCount?.characters() || 0} characters</span>
+          {/* Real-time connection indicator */}
+          {enableRealtime && applicationId && noteId && (
+            <div
+              className={cn(
+                'flex items-center gap-1',
+                status.isConnected ? 'text-green-500' : 'text-muted-foreground'
+              )}
+              title={status.isConnected ? 'Real-time updates active' : 'Not connected'}
+            >
+              {status.isConnected ? (
+                <Wifi className="h-3 w-3" />
+              ) : (
+                <WifiOff className="h-3 w-3" />
+              )}
+            </div>
+          )}
         </div>
       )}
 
