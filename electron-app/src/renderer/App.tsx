@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils'
 import { useAuthInit, useAuth } from '@/hooks/use-auth'
 import { LoginPage } from '@/pages/login'
 import { RegisterPage } from '@/pages/register'
+import { ProtectedRoute, PublicRoute, AuthGate, useAuthGuard } from '@/components/protected-route'
 
 // ============================================================================
 // Types
@@ -456,16 +457,14 @@ function LoadingScreen(): JSX.Element {
 }
 
 // ============================================================================
-// Auth Router Component
+// Auth Pages Component
 // ============================================================================
 
 /**
- * Handles routing between auth pages and main application
- * Based on authentication state
+ * Handles switching between login and register pages
+ * Used within PublicRoute to show auth forms when not logged in
  */
-function AuthRouter(): JSX.Element {
-  const { isInitialized, isAuthenticated, isLoading } = useAuthInit()
-  const { user, logout } = useAuth()
+function AuthPages(): JSX.Element {
   const [authView, setAuthView] = useState<AuthView>('login')
 
   // Navigation handlers
@@ -477,22 +476,47 @@ function AuthRouter(): JSX.Element {
     setAuthView('login')
   }, [])
 
-  // Show loading screen while auth is initializing
-  if (!isInitialized || isLoading) {
-    return <LoadingScreen />
+  if (authView === 'register') {
+    return <RegisterPage onNavigateToLogin={navigateToLogin} />
   }
+  return <LoginPage onNavigateToRegister={navigateToRegister} />
+}
 
-  // Show auth pages if not authenticated
-  if (!isAuthenticated) {
-    if (authView === 'register') {
-      return <RegisterPage onNavigateToLogin={navigateToLogin} />
-    }
-    return <LoginPage onNavigateToRegister={navigateToRegister} />
-  }
+// ============================================================================
+// Authenticated App Component
+// ============================================================================
 
-  // User is authenticated - show main application
-  // WelcomeScreen is a temporary placeholder until dashboard is implemented
+/**
+ * The main application content shown when user is authenticated
+ * Currently shows WelcomeScreen - will be replaced by dashboard
+ */
+function AuthenticatedApp(): JSX.Element {
+  const { logout } = useAuth()
   return <WelcomeScreen onLogout={logout} />
+}
+
+// ============================================================================
+// Auth Router Component
+// ============================================================================
+
+/**
+ * Handles routing between auth pages and main application
+ * Based on authentication state
+ *
+ * Uses the ProtectedRoute and PublicRoute components for auth guards.
+ * The AuthGate component provides a declarative way to show different
+ * content based on authentication state.
+ */
+function AuthRouter(): JSX.Element {
+  const { logout } = useAuth()
+
+  return (
+    <AuthGate
+      loading={<LoadingScreen />}
+      authenticated={<AuthenticatedApp />}
+      unauthenticated={<AuthPages />}
+    />
+  )
 }
 
 // ============================================================================
