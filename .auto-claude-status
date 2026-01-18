@@ -3,7 +3,7 @@
   "spec": "003-be-able-to-invite-other-users-into-applications-us",
   "state": "building",
   "subtasks": {
-    "completed": 30,
+    "completed": 31,
     "total": 35,
     "in_progress": 1,
     "failed": 0
@@ -18,8 +18,8 @@
     "max": 1
   },
   "session": {
-    "number": 143,
+    "number": 144,
     "started_at": "2026-01-17T20:36:35.197613"
   },
-  "last_update": "2026-01-17T22:08:33.678197"
+  "last_update": "2026-01-17T22:11:26.506598"
 }
