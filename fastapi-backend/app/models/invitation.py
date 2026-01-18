@@ -12,6 +12,7 @@ from ..database import Base
 
 if TYPE_CHECKING:
     from .application import Application
+    from .application_member import ApplicationMember
     from .user import User
 
 
@@ -105,6 +106,12 @@ class Invitation(Base):
         "User",
         foreign_keys=[invitee_id],
         back_populates="received_invitations",
+        lazy="joined",
+    )
+    membership = relationship(
+        "ApplicationMember",
+        back_populates="invitation",
+        uselist=False,
         lazy="joined",
     )
 

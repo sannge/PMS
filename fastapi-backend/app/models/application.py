@@ -12,6 +12,7 @@ from ..database import Base
 
 if TYPE_CHECKING:
     from .application_member import ApplicationMember
+    from .invitation import Invitation
     from .note import Note
     from .project import Project
     from .user import User
@@ -96,6 +97,12 @@ class Application(Base):
     )
     members = relationship(
         "ApplicationMember",
+        back_populates="application",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+    invitations = relationship(
+        "Invitation",
         back_populates="application",
         cascade="all, delete-orphan",
         lazy="dynamic",

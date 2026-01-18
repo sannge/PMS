@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from .application import Application
     from .application_member import ApplicationMember
     from .attachment import Attachment
+    from .invitation import Invitation
     from .note import Note
     from .notification import Notification
     from .task import Task
@@ -116,6 +117,20 @@ class User(Base):
     memberships = relationship(
         "ApplicationMember",
         back_populates="user",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+    sent_invitations = relationship(
+        "Invitation",
+        foreign_keys="Invitation.inviter_id",
+        back_populates="inviter",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+    received_invitations = relationship(
+        "Invitation",
+        foreign_keys="Invitation.invitee_id",
+        back_populates="invitee",
         cascade="all, delete-orphan",
         lazy="dynamic",
     )
