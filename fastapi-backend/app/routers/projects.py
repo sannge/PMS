@@ -3,6 +3,11 @@
 Provides endpoints for managing Projects within Applications.
 Projects are nested under Applications in the Application > Project > Task hierarchy.
 All endpoints require authentication.
+
+Access Control:
+- List/Get projects: Any member (owner, editor, viewer)
+- Create/Update projects: Only owners and editors
+- Delete projects: Only owners
 """
 
 from datetime import datetime
@@ -15,6 +20,7 @@ from sqlalchemy.orm import Session, lazyload
 
 from ..database import get_db
 from ..models.application import Application
+from ..models.application_member import ApplicationMember
 from ..models.project import Project
 from ..models.task import Task
 from ..models.user import User
@@ -29,24 +35,91 @@ from ..services.auth_service import get_current_user
 router = APIRouter(tags=["Projects"])
 
 
-def verify_application_ownership(
+# ============================================================================
+# Helper Functions for Role-Based Access Control
+# ============================================================================
+
+
+def get_user_application_role(
+    db: Session,
+    user_id: UUID,
+    application_id: UUID,
+) -> Optional[str]:
+    """
+    Get the user's role in an application.
+
+    Args:
+        db: Database session
+        user_id: The user's ID
+        application_id: The application's ID
+
+    Returns:
+        The role string ('owner', 'editor', 'viewer') or None if not a member.
+    """
+    # Check if user is the owner
+    app = db.query(Application).filter(Application.id == application_id).first()
+    if app and app.owner_id == user_id:
+        return "owner"
+
+    # Check ApplicationMembers table
+    member = db.query(ApplicationMember).filter(
+        ApplicationMember.application_id == application_id,
+        ApplicationMember.user_id == user_id,
+    ).first()
+
+    return member.role if member else None
+
+
+def is_application_owner(
+    db: Session,
+    user_id: UUID,
+    application_id: UUID,
+) -> bool:
+    """Check if the user is the owner of the application."""
+    return get_user_application_role(db, user_id, application_id) == "owner"
+
+
+def is_application_member(
+    db: Session,
+    user_id: UUID,
+    application_id: UUID,
+) -> bool:
+    """Check if the user is a member of the application (any role)."""
+    return get_user_application_role(db, user_id, application_id) is not None
+
+
+def can_edit_application(
+    db: Session,
+    user_id: UUID,
+    application_id: UUID,
+) -> bool:
+    """Check if the user can edit the application (owner or editor)."""
+    role = get_user_application_role(db, user_id, application_id)
+    return role in ["owner", "editor"]
+
+
+def verify_application_access(
     application_id: UUID,
     current_user: User,
     db: Session,
+    require_edit: bool = False,
+    require_owner: bool = False,
 ) -> Application:
     """
-    Verify that the application exists and the user owns it.
+    Verify that the application exists and the user has appropriate access.
 
     Args:
         application_id: The UUID of the application
         current_user: The authenticated user
         db: Database session
+        require_edit: If True, require owner or editor role (not viewer)
+        require_owner: If True, require owner role only
 
     Returns:
         Application: The verified application
 
     Raises:
-        HTTPException: If application not found or user is not the owner
+        HTTPException: If application not found or user doesn't have appropriate access
     """
     application = db.query(Application).filter(
         Application.id == application_id,
@@ -58,10 +131,25 @@ def verify_application_ownership(
             detail=f"Application with ID {application_id} not found",
         )
 
-    if application.owner_id != current_user.id:
+    # Get user's role in this application
+    user_role = get_user_application_role(db, current_user.id, application_id)
+
+    if not user_role:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. You are not the owner of this application.",
+            detail="Access denied. You are not a member of this application.",
+        )
+
+    if require_owner and user_role != "owner":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. Only owners can perform this action.",
+        )
+
+    if require_edit and user_role not in ["owner", "editor"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. Only owners and editors can perform this action.",
         )
 
     return application
@@ -71,14 +159,18 @@ def verify_project_access(
     project_id: UUID,
     current_user: User,
     db: Session,
+    require_edit: bool = False,
+    require_owner: bool = False,
 ) -> Project:
     """
-    Verify that the project exists and the user has access to it via application ownership.
+    Verify that the project exists and the user has access to it via application membership.
 
     Args:
         project_id: The UUID of the project
         current_user: The authenticated user
         db: Database session
+        require_edit: If True, require owner or editor role (not viewer)
+        require_owner: If True, require owner role only
 
     Returns:
         Project: The verified project
@@ -96,15 +188,25 @@ def verify_project_access(
             detail=f"Project with ID {project_id} not found",
         )
 
-    # Verify ownership through the parent application
-    application = db.query(Application).filter(
-        Application.id == project.application_id,
-    ).first()
+    # Verify access through the parent application membership
+    user_role = get_user_application_role(db, current_user.id, project.application_id)
 
-    if not application or application.owner_id != current_user.id:
+    if not user_role:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. You are not the owner of this project's application.",
+            detail="Access denied. You are not a member of this project's application.",
+        )
+
+    if require_owner and user_role != "owner":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. Only owners can perform this action.",
+        )
+
+    if require_edit and user_role not in ["owner", "editor"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. Only owners and editors can perform this action.",
         )
 
     return project
@@ -123,7 +225,7 @@ def verify_project_access(
     responses={
         200: {"description": "List of projects retrieved successfully"},
         401: {"description": "Not authenticated"},
-        403: {"description": "Access denied - not the owner"},
+        403: {"description": "Access denied - not a member"},
         404: {"description": "Application not found"},
     },
 )
@@ -146,9 +248,10 @@ async def list_projects(
     - **project_type**: Optional filter by project type (scrum, kanban, etc.)
 
     Returns projects with their task counts.
+    Any member (owner, editor, viewer) can list projects.
     """
-    # Verify application ownership
-    verify_application_ownership(application_id, current_user, db)
+    # Verify user is a member of the application (any role)
+    verify_application_access(application_id, current_user, db)
 
     # Build query for projects (SQL Server compatible - no GROUP BY with eager loading)
     query = (
@@ -217,7 +320,7 @@ async def list_projects(
         201: {"description": "Project created successfully"},
         400: {"description": "Validation error or duplicate key"},
         401: {"description": "Not authenticated"},
-        403: {"description": "Access denied - not the owner"},
+        403: {"description": "Access denied - not an owner or editor"},
         404: {"description": "Application not found"},
     },
 )
@@ -236,9 +339,10 @@ async def create_project(
     - **project_type**: Project type (default: 'kanban')
 
     The project will be created under the specified application.
+    Only owners and editors can create projects.
     """
-    # Verify application ownership
-    verify_application_ownership(application_id, current_user, db)
+    # Verify user has edit access (owner or editor)
+    verify_application_access(application_id, current_user, db, require_edit=True)
 
     # Check for duplicate key within the application
     existing_project = db.query(Project).filter(
@@ -282,7 +386,7 @@ async def create_project(
     responses={
         200: {"description": "Project retrieved successfully"},
         401: {"description": "Not authenticated"},
-        403: {"description": "Access denied - not the owner"},
+        403: {"description": "Access denied - not a member"},
         404: {"description": "Project not found"},
     },
 )
@@ -295,32 +399,10 @@ async def get_project(
     Get a specific project by its ID.
 
     Returns the project with its task count.
-    Only the application owner can access their projects.
+    Any member (owner, editor, viewer) can access the project.
     """
-    # Query project (SQL Server compatible - no GROUP BY with eager loading)
-    project = (
-        db.query(Project)
-        .options(lazyload(Project.application))
-        .filter(Project.id == project_id)
-        .first()
-    )
-
-    if not project:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Project with ID {project_id} not found",
-        )
-
-    # Verify ownership through application
-    application = db.query(Application).filter(
-        Application.id == project.application_id,
-    ).first()
-
-    if not application or application.owner_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. You are not the owner of this project's application.",
-        )
+    # Verify access (any member can view) and get project
+    project = verify_project_access(project_id, current_user, db)
 
     # Get task count separately
     tasks_count = (
@@ -351,7 +433,7 @@ async def get_project(
         200: {"description": "Project updated successfully"},
         400: {"description": "Validation error"},
         401: {"description": "Not authenticated"},
-        403: {"description": "Access denied - not the owner"},
+        403: {"description": "Access denied - not an owner or editor"},
         404: {"description": "Project not found"},
     },
 )
@@ -369,10 +451,10 @@ async def update_project(
     - **project_type**: New project type (optional)
 
     Note: Project key cannot be changed after creation.
-    Only the application owner can update their projects.
+    Only owners and editors can update projects.
     """
-    # Verify access and get project
-    project = verify_project_access(project_id, current_user, db)
+    # Verify edit access (owner or editor) and get project
+    project = verify_project_access(project_id, current_user, db, require_edit=True)
 
     # Update fields if provided
     update_data = project_data.model_dump(exclude_unset=True)
@@ -403,7 +485,7 @@ async def update_project(
     responses={
         204: {"description": "Project deleted successfully"},
         401: {"description": "Not authenticated"},
-        403: {"description": "Access denied - not the owner"},
+        403: {"description": "Access denied - only owners can delete"},
         404: {"description": "Project not found"},
     },
 )
@@ -419,11 +501,12 @@ async def delete_project(
     - Tasks
     - Attachments linked to those tasks
 
-    Only the application owner can delete their projects.
+    Only owners can delete projects.
+    Editors and viewers cannot delete projects.
     This action is irreversible.
     """
-    # Verify access and get project
-    project = verify_project_access(project_id, current_user, db)
+    # Verify owner access and get project
+    project = verify_project_access(project_id, current_user, db, require_owner=True)
 
     # Delete the project (cascade will handle related records)
     db.delete(project)

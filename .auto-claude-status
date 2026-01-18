@@ -3,23 +3,23 @@
   "spec": "003-be-able-to-invite-other-users-into-applications-us",
   "state": "building",
   "subtasks": {
-    "completed": 19,
+    "completed": 21,
     "total": 35,
     "in_progress": 1,
     "failed": 0
   },
   "phase": {
-    "current": "Project Assignment API",
+    "current": "Access Control Updates",
     "id": null,
-    "total": 2
+    "total": 3
   },
   "workers": {
     "active": 0,
     "max": 1
   },
   "session": {
-    "number": 132,
+    "number": 134,
     "started_at": "2026-01-17T20:36:35.197613"
   },
-  "last_update": "2026-01-17T21:34:05.866775"
+  "last_update": "2026-01-17T21:42:35.995409"
 }
