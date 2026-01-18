@@ -201,7 +201,17 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   fetchProjects: async (token, applicationId, options = {}) => {
     const { skip = 0, search } = options
 
-    set({ isLoading: true, error: null, currentApplicationId: applicationId })
+    // Clear projects when switching applications to show skeleton loader
+    const currentAppId = get().currentApplicationId
+    const isNewApplication = currentAppId !== applicationId
+
+    set({
+      isLoading: true,
+      error: null,
+      currentApplicationId: applicationId,
+      // Clear projects when switching to a different application
+      ...(isNewApplication && { projects: [] }),
+    })
 
     try {
       if (!window.electronAPI) {

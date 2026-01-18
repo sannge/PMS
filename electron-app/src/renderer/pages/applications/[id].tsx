@@ -1,17 +1,15 @@
 /**
  * Application Detail Page
  *
- * Displays detailed view of a single application with its projects.
- * Allows editing and managing projects within the application.
- *
+ * Space-efficient detail view with compact inline header.
  * Features:
- * - Application header with edit capability
- * - Projects list within the application
- * - Navigation back to applications list
- * - Loading and error states
+ * - Ultra-compact header with inline actions
+ * - Breadcrumb navigation
+ * - Projects grid with search
+ * - Minimal footprint design
  */
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 import {
@@ -30,17 +28,18 @@ import { ProjectCard } from '@/components/projects/project-card'
 import { ProjectForm } from '@/components/projects/project-form'
 import {
   FolderKanban,
-  ArrowLeft,
+  ChevronRight,
+  MoreHorizontal,
   Edit2,
   Trash2,
   Plus,
   Loader2,
   AlertCircle,
-  Calendar,
-  User,
   LayoutDashboard,
   Search,
   X,
+  Info,
+  ArrowLeft,
 } from 'lucide-react'
 
 // ============================================================================
@@ -75,10 +74,175 @@ export interface ApplicationDetailPageProps {
  */
 function formatDate(dateString: string): string {
   return new Date(dateString).toLocaleDateString(undefined, {
-    year: 'numeric',
-    month: 'long',
+    month: 'short',
     day: 'numeric',
+    year: 'numeric',
   })
+}
+
+/**
+ * Compact relative date format
+ */
+function formatRelativeDate(dateString: string): string {
+  // Ensure UTC parsing - append 'Z' if no timezone indicator
+  let dateStr = dateString
+  if (!dateStr.endsWith('Z') && !dateStr.includes('+') && !dateStr.includes('-', 10)) {
+    dateStr = dateStr + 'Z'
+  }
+
+  const date = new Date(dateStr)
+  const now = new Date()
+  const diffMs = now.getTime() - date.getTime()
+
+  // Handle future dates or very recent (within 1 minute)
+  if (diffMs < 0 || diffMs < 60000) return 'Just now'
+
+  const diffMins = Math.floor(diffMs / (1000 * 60))
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+
+  if (diffMins < 60) return `${diffMins}m ago`
+  if (diffHours < 24) return `${diffHours}h ago`
+  if (diffDays === 1) return 'Yesterday'
+  if (diffDays < 7) return `${diffDays}d ago`
+  if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`
+  return formatDate(dateString)
+}
+
+// ============================================================================
+// Actions Dropdown Component
+// ============================================================================
+
+interface ActionsDropdownProps {
+  onEdit: () => void
+  onDelete: () => void
+}
+
+function ActionsDropdown({ onEdit, onDelete }: ActionsDropdownProps): JSX.Element {
+  const [isOpen, setIsOpen] = useState(false)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setIsOpen(false)
+      }
+    }
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside)
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [isOpen])
+
+  return (
+    <div ref={dropdownRef} className="relative">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className={cn(
+          'flex h-7 w-7 items-center justify-center rounded-md transition-colors',
+          'text-muted-foreground hover:text-foreground hover:bg-muted',
+          isOpen && 'bg-muted text-foreground'
+        )}
+      >
+        <MoreHorizontal className="h-4 w-4" />
+      </button>
+
+      {isOpen && (
+        <div className={cn(
+          'absolute right-0 top-full mt-1 z-50 min-w-[140px]',
+          'rounded-lg border border-border bg-card shadow-lg',
+          'animate-fade-in py-1'
+        )}>
+          <button
+            onClick={() => { onEdit(); setIsOpen(false) }}
+            className={cn(
+              'flex w-full items-center gap-2 px-3 py-1.5 text-sm',
+              'text-foreground hover:bg-muted transition-colors'
+            )}
+          >
+            <Edit2 className="h-3.5 w-3.5" />
+            Edit
+          </button>
+          <button
+            onClick={() => { onDelete(); setIsOpen(false) }}
+            className={cn(
+              'flex w-full items-center gap-2 px-3 py-1.5 text-sm',
+              'text-destructive hover:bg-destructive/10 transition-colors'
+            )}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============================================================================
+// Info Tooltip Component
+// ============================================================================
+
+interface InfoTooltipProps {
+  application: Application
+}
+
+function InfoTooltip({ application }: InfoTooltipProps): JSX.Element {
+  const [isOpen, setIsOpen] = useState(false)
+  const tooltipRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (tooltipRef.current && !tooltipRef.current.contains(e.target as Node)) {
+        setIsOpen(false)
+      }
+    }
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside)
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [isOpen])
+
+  return (
+    <div ref={tooltipRef} className="relative">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className={cn(
+          'flex h-7 w-7 items-center justify-center rounded-md transition-colors',
+          'text-muted-foreground hover:text-foreground hover:bg-muted',
+          isOpen && 'bg-muted text-foreground'
+        )}
+        title="Details"
+      >
+        <Info className="h-4 w-4" />
+      </button>
+
+      {isOpen && (
+        <div className={cn(
+          'absolute right-0 top-full mt-1 z-50 w-64',
+          'rounded-lg border border-border bg-card shadow-lg p-3',
+          'animate-fade-in'
+        )}>
+          <div className="space-y-2 text-xs">
+            {application.description && (
+              <div>
+                <span className="text-muted-foreground">Description</span>
+                <p className="text-foreground mt-0.5">{application.description}</p>
+              </div>
+            )}
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Created</span>
+              <span className="text-foreground">{formatDate(application.created_at)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Updated</span>
+              <span className="text-foreground">{formatRelativeDate(application.updated_at)}</span>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 // ============================================================================
@@ -437,137 +601,90 @@ export function ApplicationDetailPage({
   const application = selectedApplication
 
   return (
-    <div className="space-y-6">
-      {/* Back Button */}
-      {onBack && (
-        <button
-          onClick={onBack}
-          className={cn(
-            'inline-flex items-center gap-2 text-sm font-medium text-muted-foreground',
-            'hover:text-foreground focus:outline-none focus:text-foreground',
-            'transition-colors duration-200'
+    <div className="space-y-4">
+      {/* Compact Header Bar */}
+      <div className="flex items-center justify-between gap-4 pb-3 border-b border-border">
+        {/* Left: Breadcrumb + Title */}
+        <div className="flex items-center gap-2 min-w-0">
+          {onBack && (
+            <>
+              <button
+                onClick={onBack}
+                className={cn(
+                  'text-xs font-medium text-muted-foreground hover:text-foreground',
+                  'transition-colors flex-shrink-0'
+                )}
+              >
+                Applications
+              </button>
+              <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50 flex-shrink-0" />
+            </>
           )}
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Back to Applications
-        </button>
-      )}
-
-      {/* Application Header */}
-      <div className="rounded-lg border border-border bg-card">
-        <div className="p-6">
-          <div className="flex items-start justify-between gap-4">
-            {/* Icon and Details */}
-            <div className="flex items-start gap-4">
-              <div className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                <FolderKanban className="h-7 w-7" />
-              </div>
-              <div>
-                <h1 className="text-2xl font-bold text-foreground">
-                  {application.name}
-                </h1>
-                {application.description && (
-                  <p className="mt-2 text-muted-foreground">
-                    {application.description}
-                  </p>
-                )}
-              </div>
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+              <FolderKanban className="h-4 w-4" />
             </div>
-
-            {/* Action Buttons */}
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleEdit}
-                className={cn(
-                  'inline-flex items-center gap-2 rounded-md border border-input bg-background px-3 py-2 text-sm font-medium text-foreground',
-                  'hover:bg-accent hover:text-accent-foreground',
-                  'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
-                  'transition-colors duration-200'
-                )}
-              >
-                <Edit2 className="h-4 w-4" />
-                Edit
-              </button>
-              <button
-                onClick={handleDeleteClick}
-                className={cn(
-                  'inline-flex items-center gap-2 rounded-md border border-destructive/50 bg-background px-3 py-2 text-sm font-medium text-destructive',
-                  'hover:bg-destructive/10',
-                  'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
-                  'transition-colors duration-200'
-                )}
-              >
-                <Trash2 className="h-4 w-4" />
-                Delete
-              </button>
-            </div>
+            <h1 className="text-base font-semibold text-foreground truncate">
+              {application.name}
+            </h1>
+            <span className="text-xs text-muted-foreground flex-shrink-0 bg-muted px-1.5 py-0.5 rounded">
+              {application.projects_count} {application.projects_count === 1 ? 'project' : 'projects'}
+            </span>
           </div>
+        </div>
 
-          {/* Meta Information */}
-          <div className="mt-6 flex flex-wrap items-center gap-6 text-sm text-muted-foreground">
-            <div className="flex items-center gap-2">
-              <LayoutDashboard className="h-4 w-4" />
-              <span>
-                {application.projects_count}{' '}
-                {application.projects_count === 1 ? 'project' : 'projects'}
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Calendar className="h-4 w-4" />
-              <span>Created {formatDate(application.created_at)}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Calendar className="h-4 w-4" />
-              <span>Updated {formatDate(application.updated_at)}</span>
-            </div>
-          </div>
+        {/* Right: Actions */}
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <InfoTooltip application={application} />
+          <ActionsDropdown onEdit={handleEdit} onDelete={handleDeleteClick} />
         </div>
       </div>
 
-      {/* Projects Section */}
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-foreground">Projects</h2>
+      {/* Projects Section - Compact Header */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          {/* Search inline with title */}
+          <div className="flex items-center gap-3 flex-1">
+            <h2 className="text-sm font-medium text-foreground flex-shrink-0">Projects</h2>
+            {(projects.length > 0 || projectSearchQuery) && (
+              <div className="relative flex-1 max-w-xs">
+                <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  type="text"
+                  value={projectSearchQuery}
+                  onChange={handleProjectSearch}
+                  placeholder="Search..."
+                  className={cn(
+                    'w-full rounded-md border border-input bg-background py-1.5 pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground',
+                    'focus:outline-none focus:ring-1 focus:ring-ring'
+                  )}
+                />
+                {projectSearchQuery && (
+                  <button
+                    onClick={() => {
+                      setProjectSearchQuery('')
+                      fetchProjects(token, applicationId)
+                    }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
           <button
             onClick={handleCreateProject}
             className={cn(
-              'inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground',
+              'inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground',
               'hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
-              'transition-colors duration-200'
+              'transition-colors flex-shrink-0'
             )}
           >
-            <Plus className="h-4 w-4" />
+            <Plus className="h-3.5 w-3.5" />
             New Project
           </button>
         </div>
-
-        {/* Project Search Bar */}
-        {(projects.length > 0 || projectSearchQuery) && (
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <input
-              type="text"
-              value={projectSearchQuery}
-              onChange={handleProjectSearch}
-              placeholder="Search projects..."
-              className={cn(
-                'w-full rounded-md border border-input bg-background py-2 pl-10 pr-4 text-sm text-foreground placeholder:text-muted-foreground',
-                'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background'
-              )}
-            />
-            {projectSearchQuery && (
-              <button
-                onClick={() => {
-                  setProjectSearchQuery('')
-                  fetchProjects(token, applicationId)
-                }}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            )}
-          </div>
-        )}
 
         {/* Projects Error Display */}
         {projectsError && !projectModalMode && (
@@ -593,28 +710,27 @@ export function ApplicationDetailPage({
 
         {/* Empty Projects State */}
         {!isLoadingProjects && projects.length === 0 && (
-          <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-12">
-            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted">
-              <LayoutDashboard className="h-8 w-8 text-muted-foreground" />
+          <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-8">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted">
+              <LayoutDashboard className="h-5 w-5 text-muted-foreground" />
             </div>
-            <h3 className="mt-4 text-lg font-semibold text-foreground">
+            <h3 className="mt-3 text-sm font-medium text-foreground">
               {projectSearchQuery ? 'No projects found' : 'No projects yet'}
             </h3>
-            <p className="mt-2 text-center text-muted-foreground">
+            <p className="mt-1 text-xs text-center text-muted-foreground max-w-[200px]">
               {projectSearchQuery
-                ? `No projects match "${projectSearchQuery}"`
-                : 'Create your first project to start organizing your work.'}
+                ? `No matches for "${projectSearchQuery}"`
+                : 'Get started by creating your first project.'}
             </p>
             {!projectSearchQuery && (
               <button
                 onClick={handleCreateProject}
                 className={cn(
-                  'mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground',
-                  'hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
-                  'transition-colors duration-200'
+                  'mt-3 inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground',
+                  'hover:bg-primary/90 transition-colors'
                 )}
               >
-                <Plus className="h-4 w-4" />
+                <Plus className="h-3.5 w-3.5" />
                 Create Project
               </button>
             )}

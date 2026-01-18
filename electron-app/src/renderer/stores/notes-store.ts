@@ -122,6 +122,11 @@ export interface NotesState {
   selectNote: (note: Note | null) => void
   setCurrentApplication: (applicationId: string | null) => void
 
+  // Session persistence
+  saveSession: () => void
+  restoreSession: () => { tabIds: string[]; activeTabId: string | null; applicationId: string | null } | null
+  restoreTabs: (token: string | null, tabIds: string[], activeTabId: string | null) => Promise<void>
+
   // Utilities
   clearError: () => void
   reset: () => void
@@ -305,10 +310,54 @@ export const useNotesStore = create<NotesState>((set, get) => ({
   },
 
   /**
-   * Create a new note
+   * Create a new note with optimistic update
    */
   createNote: async (token, applicationId, data) => {
-    set({ isCreating: true, error: null })
+    // Generate temporary ID for optimistic update
+    const tempId = `temp-${Date.now()}`
+    const now = new Date().toISOString()
+
+    // Create optimistic note
+    const optimisticNote: Note = {
+      id: tempId,
+      title: data.title,
+      content: data.content || null,
+      tab_order: data.tab_order || 0,
+      application_id: applicationId,
+      parent_id: data.parent_id || null,
+      created_by: null,
+      created_at: now,
+      updated_at: now,
+      children_count: 0,
+    }
+
+    // Optimistically add to tree immediately
+    const addToTree = (nodes: NoteTree[], parentId: string | null): NoteTree[] => {
+      if (!parentId) {
+        // Add to root level
+        return [...nodes, { ...optimisticNote, children: [] } as NoteTree]
+      }
+      return nodes.map((node) => {
+        if (node.id === parentId) {
+          return {
+            ...node,
+            children: [...(node.children || []), { ...optimisticNote, children: [] } as NoteTree],
+          }
+        }
+        if (node.children && node.children.length > 0) {
+          return { ...node, children: addToTree(node.children, parentId) }
+        }
+        return node
+      })
+    }
+
+    const optimisticTree = addToTree(get().noteTree, data.parent_id || null)
+    set({
+      noteTree: optimisticTree,
+      notes: [...get().notes, optimisticNote],
+      isCreating: true,
+      error: null,
+    })
 
     try {
       if (!window.electronAPI) {
@@ -327,39 +376,106 @@ export const useNotesStore = create<NotesState>((set, get) => ({
       )
 
       if (response.status !== 201) {
+        // Rollback optimistic update on error
+        const rollbackTree = (nodes: NoteTree[]): NoteTree[] =>
+          nodes
+            .filter((n) => n.id !== tempId)
+            .map((n) => ({ ...n, children: rollbackTree(n.children || []) }))
+
         const error = parseApiError(response.status, response.data)
-        set({ isCreating: false, error })
+        set({
+          noteTree: rollbackTree(get().noteTree),
+          notes: get().notes.filter((n) => n.id !== tempId),
+          isCreating: false,
+          error,
+        })
         return null
       }
 
       const note = response.data
-      // Add the new note to the list
+
+      // Replace temp note with real note
+      const replaceInTree = (nodes: NoteTree[]): NoteTree[] =>
+        nodes.map((n) => {
+          if (n.id === tempId) {
+            return { ...note, children: [] } as NoteTree
+          }
+          return { ...n, children: replaceInTree(n.children || []) }
+        })
+
       set({
-        notes: [...get().notes, note],
+        noteTree: replaceInTree(get().noteTree),
+        notes: get().notes.map((n) => (n.id === tempId ? note : n)),
         isCreating: false,
       })
 
-      // Refresh the tree to reflect changes
-      const currentAppId = get().currentApplicationId
-      if (currentAppId) {
-        get().fetchNoteTree(token, currentAppId)
-      }
-
       return note
     } catch (err) {
+      // Rollback on error
+      const rollbackTree = (nodes: NoteTree[]): NoteTree[] =>
+        nodes
+          .filter((n) => n.id !== tempId)
+          .map((n) => ({ ...n, children: rollbackTree(n.children || []) }))
+
       const error: NoteError = {
         message: err instanceof Error ? err.message : 'Failed to create note',
       }
-      set({ isCreating: false, error })
+      set({
+        noteTree: rollbackTree(get().noteTree),
+        notes: get().notes.filter((n) => n.id !== tempId),
+        isCreating: false,
+        error,
+      })
       return null
     }
   },
 
   /**
-   * Update an existing note
+   * Update an existing note with optimistic update
    */
   updateNote: async (token, noteId, data) => {
-    set({ isUpdating: true, error: null })
+    // Store previous state for rollback
+    const previousNotes = get().notes
+    const previousNoteTree = get().noteTree
+    const previousSelectedNote = get().selectedNote
+
+    // Get the note being updated
+    const existingNote = previousNotes.find((n) => n.id === noteId)
+    if (!existingNote) {
+      set({ error: { message: 'Note not found' } })
+      return null
+    }
+
+    // Create optimistic update
+    const optimisticNote: Note = {
+      ...existingNote,
+      ...data,
+      updated_at: new Date().toISOString(),
+    }
+
+    // Update tree optimistically
+    const updateInTree = (nodes: NoteTree[]): NoteTree[] =>
+      nodes.map((n) => {
+        if (n.id === noteId) {
+          return { ...n, ...data, updated_at: optimisticNote.updated_at }
+        }
+        if (n.children && n.children.length > 0) {
+          return { ...n, children: updateInTree(n.children) }
+        }
+        return n
+      })
+
+    // Update state optimistically
+    set({
+      notes: previousNotes.map((n) => (n.id === noteId ? optimisticNote : n)),
+      noteTree: updateInTree(previousNoteTree),
+      openTabs: get().openTabs.map((tab) =>
+        tab.id === noteId ? { ...tab, title: data.title || tab.title, isDirty: false } : tab
+      ),
+      selectedNote: previousSelectedNote?.id === noteId ? optimisticNote : previousSelectedNote,
+      isUpdating: true,
+      error: null,
+    })
 
     try {
       if (!window.electronAPI) {
@@ -373,39 +489,55 @@ export const useNotesStore = create<NotesState>((set, get) => ({
       )
 
       if (response.status !== 200) {
+        // Rollback on error
         const error = parseApiError(response.status, response.data)
-        set({ isUpdating: false, error })
+        set({
+          notes: previousNotes,
+          noteTree: previousNoteTree,
+          selectedNote: previousSelectedNote,
+          isUpdating: false,
+          error,
+        })
         return null
       }
 
       const note = response.data
-      // Update the note in the list
-      const notes = get().notes.map((n) => (n.id === noteId ? note : n))
 
-      // Update open tab if exists
-      const openTabs = get().openTabs.map((tab) =>
-        tab.id === noteId ? { ...tab, title: note.title, isDirty: false } : tab
-      )
+      // Update with server response (in case server modified anything)
+      const updateWithServerData = (nodes: NoteTree[]): NoteTree[] =>
+        nodes.map((n) => {
+          if (n.id === noteId) {
+            return { ...n, ...note }
+          }
+          if (n.children && n.children.length > 0) {
+            return { ...n, children: updateWithServerData(n.children) }
+          }
+          return n
+        })
 
       set({
-        notes,
-        openTabs,
+        notes: get().notes.map((n) => (n.id === noteId ? note : n)),
+        noteTree: updateWithServerData(get().noteTree),
+        openTabs: get().openTabs.map((tab) =>
+          tab.id === noteId ? { ...tab, title: note.title, isDirty: false } : tab
+        ),
         selectedNote: note,
         isUpdating: false,
       })
 
-      // Refresh the tree to reflect changes
-      const currentAppId = get().currentApplicationId
-      if (currentAppId) {
-        get().fetchNoteTree(token, currentAppId)
-      }
-
       return note
     } catch (err) {
+      // Rollback on error
       const error: NoteError = {
         message: err instanceof Error ? err.message : 'Failed to update note',
       }
-      set({ isUpdating: false, error })
+      set({
+        notes: previousNotes,
+        noteTree: previousNoteTree,
+        selectedNote: previousSelectedNote,
+        isUpdating: false,
+        error,
+      })
       return null
     }
   },
@@ -442,15 +574,28 @@ export const useNotesStore = create<NotesState>((set, get) => ({
         ? (openTabs.length > 0 ? openTabs[openTabs.length - 1].id : null)
         : get().activeTabId
 
+      // Remove note from tree immediately for instant UI feedback
+      const removeFromTree = (nodes: NoteTree[]): NoteTree[] => {
+        return nodes
+          .filter((node) => node.id !== noteId)
+          .map((node) => ({
+            ...node,
+            children: removeFromTree(node.children || []),
+          }))
+      }
+
+      const updatedNoteTree = removeFromTree(get().noteTree)
+
       set({
         notes,
+        noteTree: updatedNoteTree,
         openTabs,
         activeTabId,
         selectedNote: null,
         isDeleting: false,
       })
 
-      // Refresh the tree to reflect changes
+      // Also refresh from server to ensure consistency
       const currentAppId = get().currentApplicationId
       if (currentAppId) {
         get().fetchNoteTree(token, currentAppId)
@@ -630,6 +775,98 @@ export const useNotesStore = create<NotesState>((set, get) => ({
    */
   clearError: () => {
     set({ error: null })
+  },
+
+  /**
+   * Save session state to localStorage for persistence across app restarts
+   */
+  saveSession: () => {
+    const { openTabs, activeTabId, currentApplicationId } = get()
+    const sessionData = {
+      openTabs: openTabs.map((tab) => ({
+        id: tab.id,
+        title: tab.title,
+      })),
+      activeTabId,
+      currentApplicationId,
+      savedAt: new Date().toISOString(),
+    }
+    try {
+      localStorage.setItem('pm-notes-session', JSON.stringify(sessionData))
+    } catch {
+      // Ignore storage errors
+    }
+  },
+
+  /**
+   * Restore session state from localStorage
+   * Returns the saved application ID if found
+   */
+  restoreSession: () => {
+    try {
+      const saved = localStorage.getItem('pm-notes-session')
+      if (!saved) return null
+
+      const sessionData = JSON.parse(saved)
+
+      // Only restore if saved within the last 7 days
+      const savedAt = new Date(sessionData.savedAt)
+      const now = new Date()
+      const diffDays = (now.getTime() - savedAt.getTime()) / (1000 * 60 * 60 * 24)
+      if (diffDays > 7) {
+        localStorage.removeItem('pm-notes-session')
+        return null
+      }
+
+      return {
+        tabIds: sessionData.openTabs?.map((t: { id: string }) => t.id) || [],
+        activeTabId: sessionData.activeTabId,
+        applicationId: sessionData.currentApplicationId,
+      }
+    } catch {
+      return null
+    }
+  },
+
+  /**
+   * Restore tabs by fetching note data for saved tab IDs
+   */
+  restoreTabs: async (token: string | null, tabIds: string[], activeTabId: string | null) => {
+    if (!window.electronAPI || tabIds.length === 0) return
+
+    const openTabs: NoteTab[] = []
+
+    for (const noteId of tabIds) {
+      try {
+        const response = await window.electronAPI.get<Note>(
+          `/api/notes/${noteId}`,
+          getAuthHeaders(token)
+        )
+        if (response.status === 200 && response.data) {
+          openTabs.push({
+            id: response.data.id,
+            title: response.data.title,
+            content: response.data.content,
+            isDirty: false,
+          })
+        }
+      } catch {
+        // Skip notes that can't be fetched (deleted, etc.)
+      }
+    }
+
+    if (openTabs.length > 0) {
+      // Verify activeTabId is still valid
+      const validActiveTabId = openTabs.find((t) => t.id === activeTabId)
+        ? activeTabId
+        : openTabs[0].id
+
+      set({
+        openTabs,
+        activeTabId: validActiveTabId,
+        selectedNote: null, // Will be set when tab is clicked
+      })
+    }
   },
 
   /**

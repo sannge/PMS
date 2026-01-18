@@ -29,11 +29,11 @@ import {
   LayoutDashboard,
   Plus,
   Search,
-  Loader2,
   AlertCircle,
   X,
   ArrowLeft,
 } from 'lucide-react'
+import { SkeletonRowCardList, ProgressBar, PulseIndicator } from '@/components/ui/skeleton'
 
 // ============================================================================
 // Types
@@ -193,10 +193,17 @@ export function ProjectsPage({
   const [modalMode, setModalMode] = useState<ModalMode>(null)
   const [editingProject, setEditingProject] = useState<Project | null>(null)
   const [deletingProject, setDeletingProject] = useState<Project | null>(null)
+  const [fetchedAppId, setFetchedAppId] = useState<string | null>(null)
 
-  // Fetch projects on mount
+  // Show skeleton: either loading OR we haven't fetched for this app yet
+  const showSkeleton = isLoading || fetchedAppId !== applicationId
+
+  // Fetch projects on mount or when applicationId changes
   useEffect(() => {
-    fetchProjects(token, applicationId)
+    setFetchedAppId(null) // Reset to show skeleton immediately
+    fetchProjects(token, applicationId).then(() => {
+      setFetchedAppId(applicationId)
+    })
   }, [token, applicationId, fetchProjects])
 
   // Handle search
@@ -282,69 +289,71 @@ export function ProjectsPage({
   const filteredProjects = projects
 
   return (
-    <div className="space-y-6">
-      {/* Back Button */}
-      {onBack && (
-        <button
-          onClick={onBack}
-          className={cn(
-            'inline-flex items-center gap-2 text-sm font-medium text-muted-foreground',
-            'hover:text-foreground focus:outline-none focus:text-foreground',
-            'transition-colors duration-200'
+    <div className="space-y-4">
+      {/* Compact Header */}
+      <div className="flex items-center justify-between gap-3 pb-3 border-b border-border">
+        <div className="flex items-center gap-3 flex-1">
+          {/* Back button */}
+          {onBack && (
+            <button
+              onClick={onBack}
+              className={cn(
+                'flex items-center justify-center h-7 w-7 rounded-md',
+                'text-muted-foreground hover:text-foreground hover:bg-muted',
+                'transition-colors'
+              )}
+              title={applicationName ? `Back to ${applicationName}` : 'Back'}
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </button>
           )}
-        >
-          <ArrowLeft className="h-4 w-4" />
-          {applicationName ? `Back to ${applicationName}` : 'Back'}
-        </button>
-      )}
-
-      {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Projects</h1>
-          <p className="mt-1 text-muted-foreground">
-            {applicationName
-              ? `Manage projects in ${applicationName}`
-              : 'Manage your projects and tasks'}
-          </p>
+          <h1 className="text-sm font-semibold text-foreground">Projects</h1>
+          {applicationName && (
+            <span className="text-xs text-muted-foreground">in {applicationName}</span>
+          )}
+          {/* Inline Search */}
+          <div className="relative flex-1 max-w-xs">
+            <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={handleSearch}
+              placeholder="Search..."
+              className={cn(
+                'w-full rounded-md border border-input bg-background py-1.5 pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground',
+                'focus:outline-none focus:ring-1 focus:ring-ring'
+              )}
+            />
+            {searchQuery && (
+              <button
+                onClick={() => {
+                  setSearchQuery('')
+                  fetchProjects(token, applicationId)
+                }}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+          {/* Inline operation indicator */}
+          {(isCreating || isUpdating || isDeleting) && (
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <PulseIndicator color="primary" />
+              <span>{isCreating ? 'Creating' : isUpdating ? 'Saving' : 'Deleting'}...</span>
+            </span>
+          )}
         </div>
         <button
           onClick={handleCreate}
           className={cn(
-            'inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground',
-            'hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
-            'transition-colors duration-200'
+            'inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground',
+            'hover:bg-primary/90 transition-colors'
           )}
         >
-          <Plus className="h-4 w-4" />
-          New Project
+          <Plus className="h-3.5 w-3.5" />
+          New
         </button>
-      </div>
-
-      {/* Search Bar */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <input
-          type="text"
-          value={searchQuery}
-          onChange={handleSearch}
-          placeholder="Search projects..."
-          className={cn(
-            'w-full rounded-md border border-input bg-background py-2 pl-10 pr-4 text-sm text-foreground placeholder:text-muted-foreground',
-            'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background'
-          )}
-        />
-        {searchQuery && (
-          <button
-            onClick={() => {
-              setSearchQuery('')
-              fetchProjects(token, applicationId)
-            }}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        )}
       </div>
 
       {/* Error Display */}
@@ -361,48 +370,44 @@ export function ProjectsPage({
         </div>
       )}
 
-      {/* Loading State */}
-      {isLoading && projects.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-12">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          <p className="mt-4 text-muted-foreground">Loading projects...</p>
-        </div>
+      {/* Loading State - Skeleton */}
+      {showSkeleton && (
+        <SkeletonRowCardList count={6} />
       )}
 
-      {/* Empty State */}
-      {!isLoading && projects.length === 0 && (
-        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-12">
-          <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
-            <LayoutDashboard className="h-8 w-8 text-primary" />
+      {/* Empty State: only show when done loading and truly empty */}
+      {!showSkeleton && projects.length === 0 && (
+        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-8">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
+            <LayoutDashboard className="h-5 w-5 text-primary" />
           </div>
-          <h3 className="mt-4 text-lg font-semibold text-foreground">
+          <h3 className="mt-3 text-sm font-medium text-foreground">
             {searchQuery ? 'No projects found' : 'No projects yet'}
           </h3>
-          <p className="mt-2 text-center text-muted-foreground">
+          <p className="mt-1 text-xs text-center text-muted-foreground max-w-[200px]">
             {searchQuery
-              ? `No projects match "${searchQuery}"`
-              : 'Create your first project to start organizing your tasks.'}
+              ? `No matches for "${searchQuery}"`
+              : 'Get started by creating your first project.'}
           </p>
           {!searchQuery && (
             <button
               onClick={handleCreate}
               className={cn(
-                'mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground',
-                'hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
-                'transition-colors duration-200'
+                'mt-3 inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground',
+                'hover:bg-primary/90 transition-colors'
               )}
             >
-              <Plus className="h-4 w-4" />
+              <Plus className="h-3.5 w-3.5" />
               Create Project
             </button>
           )}
         </div>
       )}
 
-      {/* Projects Grid */}
-      {!isLoading && projects.length > 0 && (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {filteredProjects.map((project) => (
+      {/* Projects List: only show when done loading */}
+      {!showSkeleton && projects.length > 0 && (
+        <div className="space-y-2">
+          {filteredProjects.map((project, index) => (
             <ProjectCard
               key={project.id}
               project={project}
@@ -410,15 +415,9 @@ export function ProjectsPage({
               onEdit={handleEdit}
               onDelete={handleDeleteClick}
               disabled={isDeleting}
+              index={index}
             />
           ))}
-        </div>
-      )}
-
-      {/* Loading More Indicator */}
-      {isLoading && projects.length > 0 && (
-        <div className="flex justify-center py-4">
-          <Loader2 className="h-6 w-6 animate-spin text-primary" />
         </div>
       )}
 

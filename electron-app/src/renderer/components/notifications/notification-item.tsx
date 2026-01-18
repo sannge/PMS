@@ -165,18 +165,24 @@ function getEntityIcon(entityType: EntityType | null): JSX.Element | null {
  * Format relative time
  */
 function formatRelativeTime(dateString: string): string {
-  const date = new Date(dateString)
+  // Ensure UTC parsing - append 'Z' if no timezone indicator
+  let dateStr = dateString
+  if (!dateStr.endsWith('Z') && !dateStr.includes('+') && !dateStr.includes('-', 10)) {
+    dateStr = dateStr + 'Z'
+  }
+
+  const date = new Date(dateStr)
   const now = new Date()
   const diffMs = now.getTime() - date.getTime()
-  const diffSec = Math.floor(diffMs / 1000)
-  const diffMin = Math.floor(diffSec / 60)
-  const diffHour = Math.floor(diffMin / 60)
-  const diffDay = Math.floor(diffHour / 24)
+
+  // Handle future dates or very recent
+  if (diffMs < 0 || diffMs < 60000) return 'Just now'
+
+  const diffMin = Math.floor(diffMs / (1000 * 60))
+  const diffHour = Math.floor(diffMs / (1000 * 60 * 60))
+  const diffDay = Math.floor(diffMs / (1000 * 60 * 60 * 24))
   const diffWeek = Math.floor(diffDay / 7)
 
-  if (diffSec < 60) {
-    return 'Just now'
-  }
   if (diffMin < 60) {
     return `${diffMin}m ago`
   }

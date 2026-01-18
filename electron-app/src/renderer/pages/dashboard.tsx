@@ -1,21 +1,18 @@
 /**
  * Dashboard Page
  *
- * Main dashboard layout with sidebar navigation and header.
- * This is the primary authenticated view of the application.
- *
+ * Modern dashboard with refined statistics, quick actions, and activity feed.
  * Features:
- * - Collapsible sidebar navigation
- * - Header with search, theme toggle, and user menu
- * - Content area for current page/view
- * - Responsive layout
- * - State persistence for sidebar collapse
+ * - Animated stat cards with trend indicators
+ * - Quick action cards with hover effects
+ * - Activity timeline with status indicators
+ * - Smooth staggered animations
  */
 
 import { useState, useCallback, useEffect, ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { Sidebar, type NavItem } from '@/components/layout/sidebar'
-import { Header } from '@/components/layout/header'
+import { WindowTitleBar } from '@/components/layout/window-title-bar'
 import { ApplicationsPage } from '@/pages/applications/index'
 import { ApplicationDetailPage } from '@/pages/applications/[id]'
 import { ProjectsPage } from '@/pages/projects/index'
@@ -32,6 +29,12 @@ import {
   Clock,
   CheckCircle2,
   AlertCircle,
+  TrendingUp,
+  TrendingDown,
+  Sparkles,
+  Zap,
+  Target,
+  Activity,
 } from 'lucide-react'
 
 // ============================================================================
@@ -41,13 +44,7 @@ import {
 type Theme = 'light' | 'dark' | 'system'
 
 export interface DashboardProps {
-  /**
-   * Current theme
-   */
   theme?: Theme
-  /**
-   * Callback when theme changes
-   */
   onThemeChange?: (theme: Theme) => void
 }
 
@@ -59,14 +56,17 @@ interface StatCardProps {
     value: number
     isPositive: boolean
   }
-  className?: string
+  color: 'amber' | 'violet' | 'emerald' | 'blue'
+  index?: number
 }
 
 interface QuickActionProps {
   icon: ReactNode
   label: string
   description: string
+  color: 'amber' | 'violet' | 'emerald'
   onClick?: () => void
+  index?: number
 }
 
 interface RecentActivityProps {
@@ -81,55 +81,145 @@ interface RecentActivityProps {
 // Helper Components
 // ============================================================================
 
-function StatCard({ icon, label, value, trend, className }: StatCardProps): JSX.Element {
+const colorClasses = {
+  amber: {
+    bg: 'bg-gradient-to-br from-amber-400/20 via-orange-500/15 to-amber-600/10',
+    icon: 'text-amber-600 dark:text-amber-400',
+    ring: 'ring-amber-500/20',
+    shadow: 'group-hover:shadow-amber-500/20',
+  },
+  violet: {
+    bg: 'bg-gradient-to-br from-violet-400/20 via-purple-500/15 to-violet-600/10',
+    icon: 'text-violet-600 dark:text-violet-400',
+    ring: 'ring-violet-500/20',
+    shadow: 'group-hover:shadow-violet-500/20',
+  },
+  emerald: {
+    bg: 'bg-gradient-to-br from-emerald-400/20 via-green-500/15 to-emerald-600/10',
+    icon: 'text-emerald-600 dark:text-emerald-400',
+    ring: 'ring-emerald-500/20',
+    shadow: 'group-hover:shadow-emerald-500/20',
+  },
+  blue: {
+    bg: 'bg-gradient-to-br from-blue-400/20 via-cyan-500/15 to-blue-600/10',
+    icon: 'text-blue-600 dark:text-blue-400',
+    ring: 'ring-blue-500/20',
+    shadow: 'group-hover:shadow-blue-500/20',
+  },
+}
+
+function StatCard({ icon, label, value, trend, color, index = 0 }: StatCardProps): JSX.Element {
+  const colors = colorClasses[color]
+
   return (
     <div
       className={cn(
-        'rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent/50',
-        className
+        'group relative rounded-2xl border border-border bg-card p-5',
+        'transition-all duration-300 ease-out',
+        'hover:-translate-y-1 hover:shadow-xl hover:shadow-black/5',
+        'animate-fade-in opacity-0'
       )}
+      style={{ animationDelay: `${index * 100}ms` }}
     >
-      <div className="flex items-center justify-between">
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+      {/* Gradient overlay on hover */}
+      <div className={cn(
+        'absolute inset-0 rounded-2xl opacity-0 transition-opacity duration-300',
+        'group-hover:opacity-100 pointer-events-none',
+        colors.bg
+      )} />
+
+      <div className="relative flex items-center justify-between">
+        <div className={cn(
+          'flex h-12 w-12 items-center justify-center rounded-xl',
+          colors.bg,
+          colors.icon,
+          'ring-1',
+          colors.ring,
+          'transition-all duration-300',
+          'group-hover:shadow-lg',
+          colors.shadow,
+          'group-hover:scale-105'
+        )}>
           {icon}
         </div>
+
         {trend && (
-          <span
-            className={cn(
-              'text-xs font-medium',
-              trend.isPositive ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
+          <div className={cn(
+            'flex items-center gap-1 rounded-full px-2.5 py-1',
+            'text-xs font-semibold',
+            trend.isPositive
+              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+              : 'bg-red-500/10 text-red-600 dark:text-red-400'
+          )}>
+            {trend.isPositive ? (
+              <TrendingUp className="h-3.5 w-3.5" />
+            ) : (
+              <TrendingDown className="h-3.5 w-3.5" />
             )}
-          >
-            {trend.isPositive ? '+' : '-'}{Math.abs(trend.value)}%
-          </span>
+            <span>{Math.abs(trend.value)}%</span>
+          </div>
         )}
       </div>
-      <div className="mt-3">
-        <p className="text-2xl font-bold text-foreground">{value}</p>
-        <p className="text-sm text-muted-foreground">{label}</p>
+
+      <div className="relative mt-4">
+        <p className="text-3xl font-bold tracking-tight text-foreground">{value}</p>
+        <p className="mt-1 text-sm text-muted-foreground">{label}</p>
       </div>
     </div>
   )
 }
 
-function QuickAction({ icon, label, description, onClick }: QuickActionProps): JSX.Element {
+function QuickAction({ icon, label, description, color, onClick, index = 0 }: QuickActionProps): JSX.Element {
+  const colors = colorClasses[color]
+
   return (
     <button
       onClick={onClick}
       className={cn(
-        'flex items-center gap-4 rounded-lg border border-border bg-card p-4 text-left transition-colors',
-        'hover:border-primary/50 hover:bg-accent/50',
-        'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+        'group relative flex items-center gap-4 rounded-2xl border border-border bg-card p-5 text-left',
+        'transition-all duration-300 ease-out',
+        'hover:-translate-y-1 hover:shadow-xl hover:shadow-black/5',
+        'hover:border-accent/30',
+        'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+        'animate-fade-in opacity-0'
       )}
+      style={{ animationDelay: `${index * 75 + 200}ms` }}
     >
-      <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+      {/* Gradient overlay on hover */}
+      <div className={cn(
+        'absolute inset-0 rounded-2xl opacity-0 transition-opacity duration-300',
+        'group-hover:opacity-100 pointer-events-none',
+        colors.bg
+      )} />
+
+      <div className={cn(
+        'relative flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-xl',
+        colors.bg,
+        colors.icon,
+        'ring-1',
+        colors.ring,
+        'transition-all duration-300',
+        'group-hover:shadow-lg',
+        colors.shadow,
+        'group-hover:scale-105'
+      )}>
         {icon}
       </div>
-      <div className="flex-1 min-w-0">
-        <p className="font-medium text-foreground">{label}</p>
-        <p className="text-sm text-muted-foreground truncate">{description}</p>
+
+      <div className="relative flex-1 min-w-0">
+        <p className="font-semibold text-foreground group-hover:text-accent transition-colors duration-300">
+          {label}
+        </p>
+        <p className="mt-0.5 text-sm text-muted-foreground truncate">{description}</p>
       </div>
-      <ArrowRight className="h-5 w-5 flex-shrink-0 text-muted-foreground" />
+
+      <div className={cn(
+        'relative opacity-0 translate-x-2',
+        'transition-all duration-300',
+        'group-hover:opacity-100 group-hover:translate-x-0'
+      )}>
+        <ArrowRight className="h-5 w-5 text-accent" />
+      </div>
     </button>
   )
 }
@@ -149,28 +239,35 @@ function RecentActivityItem({ type, title, description, time, status }: RecentAc
   const getStatusIcon = () => {
     switch (status) {
       case 'completed':
-        return <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />
+        return <CheckCircle2 className="h-4 w-4 text-emerald-500" />
       case 'in-progress':
-        return <Clock className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
+        return <Activity className="h-4 w-4 text-amber-500" />
       case 'pending':
-        return <AlertCircle className="h-4 w-4 text-muted-foreground" />
+        return <Clock className="h-4 w-4 text-muted-foreground" />
       default:
         return null
     }
   }
 
   return (
-    <div className="flex items-start gap-3 py-3">
-      <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+    <div className="group flex items-start gap-4 py-4 transition-colors duration-200 hover:bg-muted/30 px-2 -mx-2 rounded-lg">
+      <div className={cn(
+        'flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl',
+        'bg-muted/50 text-muted-foreground',
+        'transition-all duration-200',
+        'group-hover:bg-accent/10 group-hover:text-accent'
+      )}>
         {getIcon()}
       </div>
+
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <p className="font-medium text-foreground truncate">{title}</p>
           {getStatusIcon()}
         </div>
-        <p className="text-sm text-muted-foreground truncate">{description}</p>
+        <p className="mt-0.5 text-sm text-muted-foreground truncate">{description}</p>
       </div>
+
       <span className="flex-shrink-0 text-xs text-muted-foreground">{time}</span>
     </div>
   )
@@ -192,75 +289,121 @@ function DashboardContent({
   onNavigateToNotes,
 }: DashboardContentProps): JSX.Element {
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* Welcome Section */}
-      <div className="rounded-lg border border-border bg-gradient-to-r from-primary/10 to-transparent p-6">
-        <h2 className="text-2xl font-bold text-foreground">Welcome back!</h2>
-        <p className="mt-1 text-muted-foreground">
-          Here's an overview of your projects and tasks.
-        </p>
+      <div className={cn(
+        'relative overflow-hidden rounded-2xl p-8',
+        'bg-gradient-to-br from-sidebar via-sidebar to-sidebar-muted/50',
+        'border border-sidebar-muted/30',
+        'animate-fade-in'
+      )}>
+        {/* Background decorations */}
+        <div className="absolute -top-24 -right-24 h-64 w-64 rounded-full bg-gradient-to-br from-amber-500/20 to-orange-500/10 blur-3xl" />
+        <div className="absolute -bottom-24 -left-24 h-64 w-64 rounded-full bg-gradient-to-br from-violet-500/10 to-purple-500/10 blur-3xl" />
+
+        <div className="relative">
+          <div className="flex items-center gap-3 mb-2">
+            <Sparkles className="h-6 w-6 text-amber-400" />
+            <span className="text-sm font-medium text-amber-400">Dashboard</span>
+          </div>
+          <h2 className="text-3xl font-bold tracking-tight text-white">
+            Good morning!
+          </h2>
+          <p className="mt-2 text-slate-400 max-w-lg">
+            Here's an overview of your projects and recent activity. Let's make today productive.
+          </p>
+        </div>
       </div>
 
       {/* Stats Grid */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
-          icon={<FolderKanban className="h-5 w-5" />}
+          icon={<FolderKanban className="h-6 w-6" />}
           label="Applications"
           value={0}
-          trend={{ value: 0, isPositive: true }}
+          color="amber"
+          index={0}
         />
         <StatCard
-          icon={<LayoutDashboard className="h-5 w-5" />}
+          icon={<LayoutDashboard className="h-6 w-6" />}
           label="Projects"
           value={0}
+          color="violet"
+          index={1}
         />
         <StatCard
-          icon={<ListTodo className="h-5 w-5" />}
+          icon={<Target className="h-6 w-6" />}
           label="Active Tasks"
           value={0}
+          color="blue"
+          index={2}
         />
         <StatCard
-          icon={<CheckCircle2 className="h-5 w-5" />}
+          icon={<CheckCircle2 className="h-6 w-6" />}
           label="Completed"
           value={0}
           trend={{ value: 0, isPositive: true }}
+          color="emerald"
+          index={3}
         />
       </div>
 
       {/* Quick Actions */}
       <div>
-        <h3 className="mb-4 text-lg font-semibold text-foreground">Quick Actions</h3>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="mb-5 flex items-center gap-3">
+          <Zap className="h-5 w-5 text-amber-500" />
+          <h3 className="text-lg font-semibold text-foreground">Quick Actions</h3>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <QuickAction
             icon={<FolderKanban className="h-6 w-6" />}
             label="Create Application"
             description="Start a new project container"
+            color="amber"
             onClick={onNavigateToApplications}
+            index={0}
           />
           <QuickAction
             icon={<ListTodo className="h-6 w-6" />}
             label="Add Task"
             description="Create a new task or issue"
+            color="violet"
             onClick={onNavigateToTasks}
+            index={1}
           />
           <QuickAction
             icon={<StickyNote className="h-6 w-6" />}
             label="New Note"
             description="Start writing a new note"
+            color="emerald"
             onClick={onNavigateToNotes}
+            index={2}
           />
         </div>
       </div>
 
       {/* Recent Activity */}
       <div>
-        <h3 className="mb-4 text-lg font-semibold text-foreground">Recent Activity</h3>
-        <div className="rounded-lg border border-border bg-card">
-          <div className="divide-y divide-border px-4">
-            <div className="py-8 text-center text-muted-foreground">
-              <LayoutDashboard className="mx-auto mb-2 h-8 w-8 opacity-50" />
-              <p>No recent activity</p>
-              <p className="text-sm">Your recent updates will appear here</p>
+        <div className="mb-5 flex items-center gap-3">
+          <Activity className="h-5 w-5 text-violet-500" />
+          <h3 className="text-lg font-semibold text-foreground">Recent Activity</h3>
+        </div>
+        <div className={cn(
+          'rounded-2xl border border-border bg-card overflow-hidden',
+          'animate-fade-in opacity-0'
+        )} style={{ animationDelay: '400ms' }}>
+          <div className="p-6">
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <div className={cn(
+                'flex h-16 w-16 items-center justify-center rounded-2xl mb-4',
+                'bg-muted/50'
+              )}>
+                <LayoutDashboard className="h-8 w-8 text-muted-foreground/50" />
+              </div>
+              <p className="font-medium text-foreground">No recent activity</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Your recent updates will appear here
+              </p>
             </div>
           </div>
         </div>
@@ -269,18 +412,6 @@ function DashboardContent({
   )
 }
 
-// ============================================================================
-// Page Title Map
-// ============================================================================
-
-const pageTitles: Record<NavItem, string> = {
-  dashboard: 'Dashboard',
-  applications: 'Applications',
-  projects: 'Projects',
-  tasks: 'Tasks',
-  notes: 'Notes',
-  settings: 'Settings',
-}
 
 // ============================================================================
 // Dashboard Page Component
@@ -290,17 +421,11 @@ export function DashboardPage({
   theme = 'system',
   onThemeChange,
 }: DashboardProps): JSX.Element {
-  // Navigation state
   const [activeItem, setActiveItem] = useState<NavItem>('dashboard')
-
-  // Application navigation state
   const [selectedApplicationId, setSelectedApplicationId] = useState<string | null>(null)
   const [selectedApplicationName, setSelectedApplicationName] = useState<string | null>(null)
-
-  // Project navigation state
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
 
-  // Sidebar collapse state with localStorage persistence
   const [isCollapsed, setIsCollapsed] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('pm-sidebar-collapsed')
@@ -309,59 +434,48 @@ export function DashboardPage({
     return false
   })
 
-  // Save collapse state to localStorage
   useEffect(() => {
     localStorage.setItem('pm-sidebar-collapsed', String(isCollapsed))
   }, [isCollapsed])
 
-  // Handle navigation
   const handleNavigate = useCallback((item: NavItem) => {
     setActiveItem(item)
-    // Clear selected application when navigating away from applications
     if (item !== 'applications') {
       setSelectedApplicationId(null)
       setSelectedApplicationName(null)
     }
-    // Clear selected project when navigating away from projects
     if (item !== 'projects') {
       setSelectedProjectId(null)
     }
   }, [])
 
-  // Handle application selection
   const handleSelectApplication = useCallback((application: Application) => {
     setSelectedApplicationId(application.id)
     setSelectedApplicationName(application.name)
   }, [])
 
-  // Handle back to applications list
   const handleBackToApplications = useCallback(() => {
     setSelectedApplicationId(null)
     setSelectedApplicationName(null)
     setSelectedProjectId(null)
   }, [])
 
-  // Handle project selection from application detail page
   const handleSelectProjectFromApp = useCallback((projectId: string) => {
     setSelectedProjectId(projectId)
   }, [])
 
-  // Handle project selection from projects page
   const handleSelectProject = useCallback((project: Project) => {
     setSelectedProjectId(project.id)
   }, [])
 
-  // Handle back to projects list
   const handleBackToProjects = useCallback(() => {
     setSelectedProjectId(null)
   }, [])
 
-  // Handle sidebar collapse
   const handleCollapsedChange = useCallback((collapsed: boolean) => {
     setIsCollapsed(collapsed)
   }, [])
 
-  // Render content based on active navigation item
   const renderContent = (): ReactNode => {
     switch (activeItem) {
       case 'dashboard':
@@ -373,7 +487,6 @@ export function DashboardPage({
           />
         )
       case 'applications':
-        // Show project detail page if a project is selected within an application
         if (selectedApplicationId && selectedProjectId) {
           return (
             <ProjectDetailPage
@@ -383,7 +496,6 @@ export function DashboardPage({
             />
           )
         }
-        // Show application detail page if an application is selected
         if (selectedApplicationId) {
           return (
             <ApplicationDetailPage
@@ -394,14 +506,12 @@ export function DashboardPage({
             />
           )
         }
-        // Otherwise show the list
         return (
           <ApplicationsPage
             onSelectApplication={handleSelectApplication}
           />
         )
       case 'projects':
-        // Show project detail if a project is selected
         if (selectedProjectId) {
           return (
             <ProjectDetailPage
@@ -411,7 +521,6 @@ export function DashboardPage({
             />
           )
         }
-        // Show projects list for the selected application or all projects
         if (selectedApplicationId) {
           return (
             <ProjectsPage
@@ -422,33 +531,50 @@ export function DashboardPage({
             />
           )
         }
-        // Show placeholder if no application is selected
         return (
-          <div className="flex flex-1 items-center justify-center text-muted-foreground">
-            <div className="text-center">
-              <LayoutDashboard className="mx-auto mb-4 h-16 w-16 opacity-50" />
+          <div className="flex flex-1 items-center justify-center">
+            <div className="text-center animate-fade-in">
+              <div className={cn(
+                'mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-2xl',
+                'bg-muted/50'
+              )}>
+                <LayoutDashboard className="h-10 w-10 text-muted-foreground/50" />
+              </div>
               <h2 className="text-xl font-semibold text-foreground">Projects</h2>
-              <p>Select an application to view its projects</p>
+              <p className="mt-2 text-muted-foreground">
+                Select an application to view its projects
+              </p>
               <button
                 onClick={() => handleNavigate('applications')}
                 className={cn(
-                  'mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground',
-                  'hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
-                  'transition-colors duration-200'
+                  'mt-6 inline-flex items-center gap-2 rounded-xl px-5 py-2.5',
+                  'text-sm font-semibold',
+                  'bg-gradient-to-r from-amber-500 to-orange-500 text-white',
+                  'transition-all duration-300',
+                  'hover:from-amber-400 hover:to-orange-400 hover:shadow-lg hover:shadow-amber-500/25',
+                  'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
                 )}
               >
                 Go to Applications
+                <ArrowRight className="h-4 w-4" />
               </button>
             </div>
           </div>
         )
       case 'tasks':
         return (
-          <div className="flex flex-1 items-center justify-center text-muted-foreground">
-            <div className="text-center">
-              <ListTodo className="mx-auto mb-4 h-16 w-16 opacity-50" />
+          <div className="flex flex-1 items-center justify-center">
+            <div className="text-center animate-fade-in">
+              <div className={cn(
+                'mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-2xl',
+                'bg-muted/50'
+              )}>
+                <ListTodo className="h-10 w-10 text-muted-foreground/50" />
+              </div>
               <h2 className="text-xl font-semibold text-foreground">Tasks</h2>
-              <p>Task management coming soon...</p>
+              <p className="mt-2 text-muted-foreground">
+                Task management coming soon...
+              </p>
             </div>
           </div>
         )
@@ -460,10 +586,12 @@ export function DashboardPage({
         )
       case 'settings':
         return (
-          <div className="flex flex-1 items-center justify-center text-muted-foreground">
-            <div className="text-center">
+          <div className="flex flex-1 items-center justify-center">
+            <div className="text-center animate-fade-in">
               <h2 className="text-xl font-semibold text-foreground">Settings</h2>
-              <p>Settings page coming soon...</p>
+              <p className="mt-2 text-muted-foreground">
+                Settings page coming soon...
+              </p>
             </div>
           </div>
         )
@@ -473,26 +601,22 @@ export function DashboardPage({
   }
 
   return (
-    <div className="flex h-full bg-background">
-      {/* Sidebar */}
-      <Sidebar
-        activeItem={activeItem}
-        onNavigate={handleNavigate}
-        isCollapsed={isCollapsed}
-        onCollapsedChange={handleCollapsedChange}
-      />
+    <div className="flex h-screen flex-col bg-background">
+      {/* Unified Title Bar with utility controls */}
+      <WindowTitleBar theme={theme} onThemeChange={onThemeChange} />
 
-      {/* Main Content Area */}
-      <div className="flex flex-1 flex-col overflow-hidden">
-        {/* Header */}
-        <Header
-          title={pageTitles[activeItem]}
-          theme={theme}
-          onThemeChange={onThemeChange}
+      {/* Main Layout */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Sidebar */}
+        <Sidebar
+          activeItem={activeItem}
+          onNavigate={handleNavigate}
+          isCollapsed={isCollapsed}
+          onCollapsedChange={handleCollapsedChange}
         />
 
-        {/* Page Content */}
-        <main className="flex-1 overflow-auto p-6">
+        {/* Main Content Area - reduced padding for space efficiency */}
+        <main className="flex-1 overflow-auto p-4 lg:p-5">
           {renderContent()}
         </main>
       </div>

@@ -318,6 +318,15 @@
 }
 
 @layer utilities {
+  /* Electron window draggable regions */
+  .app-drag {
+    -webkit-app-region: drag;
+  }
+
+  .app-no-drag {
+    -webkit-app-region: no-drag;
+  }
+
   /* Animation delays */
   .animation-delay-100 { animation-delay: 100ms; }
   .animation-delay-200 { animation-delay: 200ms; }

@@ -23,7 +23,6 @@ import {
   LayoutGrid,
   List,
   Plus,
-  Loader2,
   AlertCircle,
   ChevronRight,
   ChevronDown,
@@ -36,10 +35,14 @@ import {
   Circle,
   Timer,
   Eye,
-  XCircle,
   Wifi,
   WifiOff,
 } from 'lucide-react'
+import {
+  SkeletonTaskCard,
+  SkeletonListView,
+  ProgressBar,
+} from '@/components/ui/skeleton'
 import {
   useTaskUpdates,
   useWebSocket,
@@ -342,9 +345,10 @@ function BoardColumnComponent({
       {/* Column Content */}
       <div className="flex-1 overflow-y-auto p-2 space-y-2">
         {isLoading ? (
-          <div className="flex items-center justify-center py-4">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-          </div>
+          <>
+            <SkeletonTaskCard />
+            <SkeletonTaskCard />
+          </>
         ) : tasks.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-8 text-center">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted text-muted-foreground">
@@ -390,11 +394,7 @@ function ListView({ tasks, onTaskClick, isLoading }: ListViewProps): JSX.Element
   }
 
   if (isLoading) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-      </div>
-    )
+    return <SkeletonListView />
   }
 
   return (
@@ -708,6 +708,9 @@ export function ProjectBoard({
         )}
       </div>
 
+      {/* Subtle progress bar when refreshing with existing data */}
+      <ProgressBar isActive={isLoading && tasks.length > 0} />
+
       {/* Board or List View */}
       {viewMode === 'board' ? (
         <div className="flex-1 overflow-x-auto">
@@ -719,14 +722,14 @@ export function ProjectBoard({
                 tasks={tasksByStatus[column.id] || []}
                 onTaskClick={onTaskClick}
                 onAddTask={onAddTask}
-                isLoading={isLoading}
+                isLoading={isLoading && tasks.length === 0}
               />
             ))}
           </div>
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto">
-          <ListView tasks={tasks} onTaskClick={onTaskClick} isLoading={isLoading} />
+          <ListView tasks={tasks} onTaskClick={onTaskClick} isLoading={isLoading && tasks.length === 0} />
         </div>
       )}
 

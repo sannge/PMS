@@ -1,16 +1,15 @@
 /**
  * Sidebar Navigation Component
  *
- * Provides the main navigation structure for the application.
+ * Ultra-compact sidebar optimized for screen real estate.
  * Features:
- * - Collapsible sidebar with expanded/collapsed states
- * - Navigation links for Applications, Projects, Tasks, Notes
- * - Active state highlighting
- * - User-friendly icons from Lucide
- * - Responsive design with theme support
+ * - Minimal expanded width (180px)
+ * - Compact icon-only collapsed mode (48px)
+ * - Smooth transitions
+ * - Space-efficient navigation
  */
 
-import { useState, useCallback, ReactNode } from 'react'
+import { useCallback, ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import {
   LayoutDashboard,
@@ -18,7 +17,6 @@ import {
   ListTodo,
   StickyNote,
   ChevronLeft,
-  ChevronRight,
   Settings,
   Bell,
   Plus,
@@ -31,25 +29,10 @@ import {
 type NavItem = 'dashboard' | 'applications' | 'projects' | 'tasks' | 'notes' | 'settings'
 
 export interface SidebarProps {
-  /**
-   * Currently active navigation item
-   */
   activeItem?: NavItem
-  /**
-   * Callback when navigation item is clicked
-   */
   onNavigate?: (item: NavItem) => void
-  /**
-   * Whether the sidebar is collapsed
-   */
   isCollapsed?: boolean
-  /**
-   * Callback when collapse state changes
-   */
   onCollapsedChange?: (collapsed: boolean) => void
-  /**
-   * Optional className for the sidebar container
-   */
   className?: string
 }
 
@@ -60,6 +43,7 @@ interface NavLinkProps {
   isCollapsed?: boolean
   onClick?: () => void
   badge?: number
+  index?: number
 }
 
 // ============================================================================
@@ -78,29 +62,40 @@ function NavLink({
     <button
       onClick={onClick}
       className={cn(
-        'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-        'hover:bg-accent hover:text-accent-foreground',
-        'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background',
+        'group relative flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-medium',
+        'transition-all duration-200',
         isActive
-          ? 'bg-primary/10 text-primary'
-          : 'text-muted-foreground',
+          ? 'bg-sidebar-accent/15 text-sidebar-accent'
+          : 'text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-muted/40',
         isCollapsed && 'justify-center px-2'
       )}
       title={isCollapsed ? label : undefined}
     >
-      <span className="flex-shrink-0">{icon}</span>
+      {/* Active indicator */}
+      {isActive && (
+        <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-r-full bg-sidebar-accent" />
+      )}
+
+      <span className={cn(
+        'flex-shrink-0',
+        isActive && 'text-sidebar-accent'
+      )}>
+        {icon}
+      </span>
+
       {!isCollapsed && (
         <>
           <span className="flex-1 truncate text-left">{label}</span>
           {badge !== undefined && badge > 0 && (
-            <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground">
+            <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-sidebar-accent px-1 text-[9px] font-bold text-sidebar">
               {badge > 99 ? '99+' : badge}
             </span>
           )}
         </>
       )}
+
       {isCollapsed && badge !== undefined && badge > 0 && (
-        <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-primary" />
+        <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-sidebar-accent" />
       )}
     </button>
   )
@@ -117,7 +112,6 @@ export function Sidebar({
   onCollapsedChange,
   className,
 }: SidebarProps): JSX.Element {
-  // Handle navigation
   const handleNavigate = useCallback(
     (item: NavItem) => {
       onNavigate?.(item)
@@ -125,125 +119,103 @@ export function Sidebar({
     [onNavigate]
   )
 
-  // Toggle collapse state
   const toggleCollapsed = useCallback(() => {
     onCollapsedChange?.(!isCollapsed)
   }, [isCollapsed, onCollapsedChange])
 
+  const navItems = [
+    { id: 'dashboard' as NavItem, icon: <LayoutDashboard className="h-4 w-4" />, label: 'Dashboard' },
+    { id: 'applications' as NavItem, icon: <FolderKanban className="h-4 w-4" />, label: 'Applications' },
+    { id: 'tasks' as NavItem, icon: <ListTodo className="h-4 w-4" />, label: 'Tasks' },
+    { id: 'notes' as NavItem, icon: <StickyNote className="h-4 w-4" />, label: 'Notes' },
+  ]
+
   return (
     <aside
       className={cn(
-        'flex h-full flex-col border-r border-border bg-card transition-all duration-300',
-        isCollapsed ? 'w-16' : 'w-64',
+        'flex h-full flex-col bg-sidebar transition-all duration-200',
+        'border-r border-sidebar-muted/30',
+        isCollapsed ? 'w-12' : 'w-44',
         className
       )}
     >
-      {/* Header */}
-      <div className={cn(
-        'flex items-center border-b border-border px-4 py-4',
-        isCollapsed ? 'justify-center' : 'justify-between'
-      )}>
-        {!isCollapsed && (
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-sm">
-              PM
-            </div>
-            <span className="text-lg font-semibold text-foreground">PM Desktop</span>
-          </div>
-        )}
-        {isCollapsed && (
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-sm">
-            PM
-          </div>
-        )}
-      </div>
-
-      {/* Main Navigation */}
-      <nav className="flex-1 space-y-1 p-3">
-        {/* Quick Create Button */}
+      {/* Quick Create Button */}
+      <div className="p-2">
         <button
           className={cn(
-            'flex w-full items-center gap-2 rounded-lg border border-dashed border-border px-3 py-2 text-sm font-medium',
-            'text-muted-foreground hover:border-primary hover:text-primary transition-colors',
-            'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
-            isCollapsed && 'justify-center px-2'
+            'flex w-full items-center gap-2 rounded-lg border border-dashed border-sidebar-muted/40 px-2 py-1.5',
+            'text-xs font-medium text-sidebar-foreground/50',
+            'transition-all duration-200',
+            'hover:border-sidebar-accent/50 hover:text-sidebar-accent hover:bg-sidebar-accent/5',
+            isCollapsed && 'justify-center px-1.5'
           )}
           title={isCollapsed ? 'Create New' : undefined}
         >
-          <Plus className="h-4 w-4" />
-          {!isCollapsed && <span>Create New</span>}
+          <Plus className="h-3.5 w-3.5" />
+          {!isCollapsed && <span>New</span>}
         </button>
+      </div>
 
-        {/* Divider */}
-        <div className="my-3 border-t border-border" />
+      {/* Navigation Section Label */}
+      {!isCollapsed && (
+        <div className="px-3 pt-2 pb-1">
+          <span className="text-[9px] font-semibold uppercase tracking-wider text-sidebar-foreground/30">
+            Menu
+          </span>
+        </div>
+      )}
 
-        {/* Navigation Links */}
-        <NavLink
-          icon={<LayoutDashboard className="h-5 w-5" />}
-          label="Dashboard"
-          isActive={activeItem === 'dashboard'}
-          isCollapsed={isCollapsed}
-          onClick={() => handleNavigate('dashboard')}
-        />
-        <NavLink
-          icon={<FolderKanban className="h-5 w-5" />}
-          label="Applications"
-          isActive={activeItem === 'applications'}
-          isCollapsed={isCollapsed}
-          onClick={() => handleNavigate('applications')}
-        />
-        <NavLink
-          icon={<ListTodo className="h-5 w-5" />}
-          label="Tasks"
-          isActive={activeItem === 'tasks'}
-          isCollapsed={isCollapsed}
-          onClick={() => handleNavigate('tasks')}
-        />
-        <NavLink
-          icon={<StickyNote className="h-5 w-5" />}
-          label="Notes"
-          isActive={activeItem === 'notes'}
-          isCollapsed={isCollapsed}
-          onClick={() => handleNavigate('notes')}
-        />
+      {/* Main Navigation */}
+      <nav className={cn('flex-1 space-y-0.5 px-2', isCollapsed && 'pt-2')}>
+        {navItems.map((item, index) => (
+          <NavLink
+            key={item.id}
+            icon={item.icon}
+            label={item.label}
+            isActive={activeItem === item.id}
+            isCollapsed={isCollapsed}
+            onClick={() => handleNavigate(item.id)}
+            index={index}
+          />
+        ))}
       </nav>
 
-      {/* Footer */}
-      <div className="space-y-1 border-t border-border p-3">
+      {/* Footer Section */}
+      <div className="space-y-0.5 border-t border-sidebar-muted/20 p-2">
         <NavLink
-          icon={<Bell className="h-5 w-5" />}
-          label="Notifications"
+          icon={<Bell className="h-4 w-4" />}
+          label="Alerts"
           isCollapsed={isCollapsed}
           onClick={() => {}}
           badge={3}
+          index={5}
         />
+
         <NavLink
-          icon={<Settings className="h-5 w-5" />}
+          icon={<Settings className="h-4 w-4" />}
           label="Settings"
           isActive={activeItem === 'settings'}
           isCollapsed={isCollapsed}
           onClick={() => handleNavigate('settings')}
+          index={6}
         />
 
         {/* Collapse Toggle */}
         <button
           onClick={toggleCollapsed}
           className={cn(
-            'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors',
-            'hover:bg-accent hover:text-accent-foreground',
-            'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
-            isCollapsed && 'justify-center px-2'
+            'mt-1 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs',
+            'text-sidebar-foreground/40 transition-all duration-200',
+            'hover:bg-sidebar-muted/30 hover:text-sidebar-foreground/60',
+            isCollapsed && 'justify-center px-1.5'
           )}
-          title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={isCollapsed ? 'Expand' : 'Collapse'}
         >
-          {isCollapsed ? (
-            <ChevronRight className="h-5 w-5" />
-          ) : (
-            <>
-              <ChevronLeft className="h-5 w-5" />
-              <span>Collapse</span>
-            </>
-          )}
+          <ChevronLeft className={cn(
+            'h-3.5 w-3.5 transition-transform duration-200',
+            isCollapsed && 'rotate-180'
+          )} />
+          {!isCollapsed && <span>Collapse</span>}
         </button>
       </div>
     </aside>

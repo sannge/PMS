@@ -27,8 +27,12 @@ function createWindow(): void {
     minWidth: 1024,
     minHeight: 768,
     show: false, // Don't show until ready-to-show event
-    autoHideMenuBar: false,
-    title: 'PM Desktop',
+    frame: false, // Remove native title bar for custom design
+    titleBarStyle: 'hidden', // Hide title bar on macOS
+    titleBarOverlay: false, // No overlay - fully custom title bar
+    autoHideMenuBar: true, // Hide menu bar by default
+    title: 'PMS - Project Management System',
+    backgroundColor: '#0f0f12', // Match dark theme background
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       // Security: Isolate preload scripts from renderer context
@@ -57,6 +61,15 @@ function createWindow(): void {
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
     mainWindow?.focus()
+  })
+
+  // Notify renderer of maximize state changes
+  mainWindow.on('maximize', () => {
+    mainWindow?.webContents.send('window-maximized-change', true)
+  })
+
+  mainWindow.on('unmaximize', () => {
+    mainWindow?.webContents.send('window-maximized-change', false)
   })
 
   // Handle external links - open in default browser
@@ -272,9 +285,9 @@ app.whenReady().then(() => {
 
   // Set about panel info
   app.setAboutPanelOptions({
-    applicationName: 'PM Desktop',
+    applicationName: 'PMS - Project Management System',
     applicationVersion: app.getVersion(),
-    copyright: 'Copyright 2024',
+    copyright: 'Copyright 2024-2026',
     version: app.getVersion()
   })
 

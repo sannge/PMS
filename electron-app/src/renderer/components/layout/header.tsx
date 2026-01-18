@@ -1,16 +1,12 @@
 /**
  * Header Component
  *
- * Top navigation bar for the application dashboard.
- * Features:
- * - Page title display
- * - Search functionality (placeholder for future)
- * - Theme toggle
- * - User menu with logout
- * - Notification center with dropdown
+ * Minimal utility header - no page title (sidebar shows section).
+ * Contains only global actions: search, theme, notifications, user.
+ * Designed to work alongside page-specific headers.
  */
 
-import { useState, useCallback, ReactNode, useEffect } from 'react'
+import { useState, useCallback, ReactNode, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { useAuth, useCurrentUser } from '@/hooks/use-auth'
 import {
@@ -21,6 +17,7 @@ import {
   LogOut,
   User,
   ChevronDown,
+  Command,
 } from 'lucide-react'
 import { NotificationBell, type Notification } from '@/components/notifications'
 
@@ -31,71 +28,82 @@ import { NotificationBell, type Notification } from '@/components/notifications'
 type Theme = 'light' | 'dark' | 'system'
 
 export interface HeaderProps {
-  /**
-   * Page title to display
-   */
-  title?: string
-  /**
-   * Current theme
-   */
   theme?: Theme
-  /**
-   * Callback when theme is changed
-   */
   onThemeChange?: (theme: Theme) => void
-  /**
-   * Optional className for the header container
-   */
   className?: string
-  /**
-   * Optional breadcrumb or subtitle
-   */
-  subtitle?: ReactNode
 }
 
 // ============================================================================
-// Theme Icon Component
+// Theme Toggle Component
 // ============================================================================
 
-function ThemeIcon({ theme }: { theme: Theme }): JSX.Element {
-  switch (theme) {
-    case 'dark':
-      return <Moon className="h-4 w-4" />
-    case 'light':
-      return <Sun className="h-4 w-4" />
-    default:
-      return <Monitor className="h-4 w-4" />
-  }
+function ThemeToggle({
+  theme,
+  onThemeChange,
+}: {
+  theme: Theme
+  onThemeChange?: (theme: Theme) => void
+}): JSX.Element {
+  const themes: { value: Theme; icon: ReactNode; label: string }[] = [
+    { value: 'light', icon: <Sun className="h-3.5 w-3.5" />, label: 'Light' },
+    { value: 'dark', icon: <Moon className="h-3.5 w-3.5" />, label: 'Dark' },
+    { value: 'system', icon: <Monitor className="h-3.5 w-3.5" />, label: 'System' },
+  ]
+
+  const currentTheme = themes.find((t) => t.value === theme) || themes[2]
+
+  const cycleTheme = useCallback(() => {
+    const currentIndex = themes.findIndex((t) => t.value === theme)
+    const nextIndex = (currentIndex + 1) % themes.length
+    onThemeChange?.(themes[nextIndex].value)
+  }, [theme, onThemeChange, themes])
+
+  return (
+    <button
+      onClick={cycleTheme}
+      className={cn(
+        'flex h-7 w-7 items-center justify-center rounded-md',
+        'text-muted-foreground transition-colors',
+        'hover:bg-muted hover:text-foreground'
+      )}
+      title={`Theme: ${theme}`}
+    >
+      {currentTheme.icon}
+    </button>
+  )
 }
 
 // ============================================================================
 // User Menu Component
 // ============================================================================
 
-interface UserMenuProps {
+function UserMenu({
+  onLogout,
+  isLoading,
+}: {
   onLogout: () => Promise<void>
   isLoading?: boolean
-}
-
-function UserMenu({ onLogout, isLoading }: UserMenuProps): JSX.Element {
+}): JSX.Element {
   const [isOpen, setIsOpen] = useState(false)
   const user = useCurrentUser()
+  const menuRef = useRef<HTMLDivElement>(null)
 
   const handleLogout = useCallback(async () => {
     setIsOpen(false)
     await onLogout()
   }, [onLogout])
 
-  const toggleMenu = useCallback(() => {
-    setIsOpen((prev) => !prev)
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setIsOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  const closeMenu = useCallback(() => {
-    setIsOpen(false)
-  }, [])
-
-  // Get user initials for avatar
-  const getInitials = (name?: string, email?: string): string => {
+  const getInitials = (name?: string | null, email?: string | null): string => {
     if (name) {
       const parts = name.split(' ')
       if (parts.length >= 2) {
@@ -110,77 +118,107 @@ function UserMenu({ onLogout, isLoading }: UserMenuProps): JSX.Element {
   }
 
   return (
-    <div className="relative">
+    <div className="relative" ref={menuRef}>
       <button
-        onClick={toggleMenu}
+        onClick={() => setIsOpen(!isOpen)}
         className={cn(
-          'flex items-center gap-2 rounded-lg border border-border px-2 py-1.5 text-sm',
-          'hover:bg-accent hover:text-accent-foreground transition-colors',
-          'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+          'flex items-center gap-1.5 rounded-md px-1.5 py-1',
+          'transition-colors hover:bg-muted'
         )}
       >
-        <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
-          {getInitials(user?.display_name, user?.email)}
+        <div className="relative">
+          <div className={cn(
+            'flex h-6 w-6 items-center justify-center rounded-md text-[10px] font-bold',
+            'bg-gradient-to-br from-amber-400 to-orange-500 text-white'
+          )}>
+            {getInitials(user?.display_name, user?.email)}
+          </div>
+          <span className="absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-green-400 ring-1 ring-background" />
         </div>
-        <span className="hidden max-w-[100px] truncate text-foreground sm:block">
-          {user?.display_name || user?.email || 'User'}
-        </span>
         <ChevronDown className={cn(
-          'h-4 w-4 text-muted-foreground transition-transform',
+          'h-3 w-3 text-muted-foreground transition-transform',
           isOpen && 'rotate-180'
         )} />
       </button>
 
-      {/* Dropdown Menu */}
       {isOpen && (
-        <>
-          {/* Backdrop */}
-          <div
-            className="fixed inset-0 z-40"
-            onClick={closeMenu}
-          />
-
-          {/* Menu */}
-          <div className="absolute right-0 top-full z-50 mt-2 w-56 rounded-lg border border-border bg-card shadow-lg">
-            {/* User Info */}
-            <div className="border-b border-border p-3">
-              <p className="text-sm font-medium text-foreground truncate">
-                {user?.display_name || 'User'}
-              </p>
-              <p className="text-xs text-muted-foreground truncate">
-                {user?.email}
-              </p>
-            </div>
-
-            {/* Menu Items */}
-            <div className="p-1">
-              <button
-                onClick={() => setIsOpen(false)}
-                className={cn(
-                  'flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-foreground',
-                  'hover:bg-accent hover:text-accent-foreground transition-colors'
-                )}
-              >
-                <User className="h-4 w-4" />
-                Profile
-              </button>
-
-              <button
-                onClick={handleLogout}
-                disabled={isLoading}
-                className={cn(
-                  'flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm',
-                  'text-destructive hover:bg-destructive/10 transition-colors',
-                  'disabled:opacity-50 disabled:cursor-not-allowed'
-                )}
-              >
-                <LogOut className="h-4 w-4" />
-                {isLoading ? 'Signing out...' : 'Sign out'}
-              </button>
-            </div>
+        <div className="absolute right-0 top-full z-50 mt-1 w-48 rounded-lg border border-border bg-card shadow-lg overflow-hidden">
+          <div className="bg-muted/50 px-3 py-2 border-b border-border">
+            <p className="text-xs font-medium text-foreground truncate">
+              {user?.display_name || 'User'}
+            </p>
+            <p className="text-[10px] text-muted-foreground truncate">
+              {user?.email}
+            </p>
           </div>
-        </>
+          <div className="p-1">
+            <button
+              onClick={() => setIsOpen(false)}
+              className={cn(
+                'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs',
+                'text-foreground hover:bg-muted transition-colors'
+              )}
+            >
+              <User className="h-3.5 w-3.5 text-muted-foreground" />
+              Profile
+            </button>
+            <button
+              onClick={handleLogout}
+              disabled={isLoading}
+              className={cn(
+                'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs',
+                'text-destructive hover:bg-destructive/10 transition-colors',
+                'disabled:opacity-50'
+              )}
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              {isLoading ? 'Signing out...' : 'Sign out'}
+            </button>
+          </div>
+        </div>
       )}
+    </div>
+  )
+}
+
+// ============================================================================
+// Search Component
+// ============================================================================
+
+function SearchBar(): JSX.Element {
+  const [isFocused, setIsFocused] = useState(false)
+
+  return (
+    <div className={cn(
+      'relative hidden sm:flex items-center',
+      'transition-all duration-200',
+      isFocused ? 'w-64' : 'w-48'
+    )}>
+      <Search className="absolute left-2.5 h-3.5 w-3.5 text-muted-foreground" />
+      <input
+        type="text"
+        placeholder="Search..."
+        onFocus={() => setIsFocused(true)}
+        onBlur={() => setIsFocused(false)}
+        className={cn(
+          'w-full rounded-md border border-input bg-background py-1.5 pl-8 pr-12 text-xs',
+          'placeholder:text-muted-foreground text-foreground',
+          'transition-all duration-200',
+          'focus:outline-none focus:ring-1 focus:ring-ring'
+        )}
+      />
+      <div className={cn(
+        'absolute right-2 flex items-center gap-0.5',
+        'text-[9px] font-medium text-muted-foreground',
+        isFocused && 'opacity-0'
+      )}>
+        <kbd className="flex h-4 items-center rounded border border-border bg-muted px-1 font-mono">
+          <Command className="h-2.5 w-2.5" />
+        </kbd>
+        <kbd className="flex h-4 items-center rounded border border-border bg-muted px-1 font-mono">
+          K
+        </kbd>
+      </div>
     </div>
   )
 }
@@ -190,24 +228,16 @@ function UserMenu({ onLogout, isLoading }: UserMenuProps): JSX.Element {
 // ============================================================================
 
 export function Header({
-  title = 'Dashboard',
   theme = 'system',
   onThemeChange,
   className,
-  subtitle,
 }: HeaderProps): JSX.Element {
   const { logout, isLoading } = useAuth()
-  const [isThemeMenuOpen, setIsThemeMenuOpen] = useState(false)
-
-  // Notification state - placeholder until notifications store is implemented
   const [notifications, setNotifications] = useState<Notification[]>([])
-  const [isLoadingNotifications, setIsLoadingNotifications] = useState(false)
+  const [isLoadingNotifications] = useState(false)
   const unreadCount = notifications.filter((n) => !n.is_read).length
 
-  // Handle notification actions
   const handleNotificationClick = useCallback((notification: Notification) => {
-    // Navigate to the related entity when store is implemented
-    // For now, just mark as read
     setNotifications((prev) =>
       prev.map((n) => (n.id === notification.id ? { ...n, is_read: true } : n))
     )
@@ -227,115 +257,34 @@ export function Header({
     setNotifications((prev) => prev.filter((n) => n.id !== notification.id))
   }, [])
 
-  // Cycle through themes
-  const cycleTheme = useCallback(() => {
-    const themes: Theme[] = ['light', 'dark', 'system']
-    const currentIndex = themes.indexOf(theme)
-    const nextIndex = (currentIndex + 1) % themes.length
-    onThemeChange?.(themes[nextIndex])
-  }, [theme, onThemeChange])
-
-  // Handle theme selection from dropdown
-  const selectTheme = useCallback((newTheme: Theme) => {
-    onThemeChange?.(newTheme)
-    setIsThemeMenuOpen(false)
-  }, [onThemeChange])
-
   return (
     <header
       className={cn(
-        'flex items-center justify-between border-b border-border bg-background px-6 py-3',
+        'flex items-center justify-end gap-2 px-4 py-1.5',
+        'bg-background/80 backdrop-blur-sm border-b border-border/50',
+        'sticky top-0 z-40',
         className
       )}
     >
-      {/* Left Section - Title */}
-      <div className="flex flex-col">
-        <h1 className="text-xl font-semibold text-foreground">{title}</h1>
-        {subtitle && (
-          <div className="text-sm text-muted-foreground">{subtitle}</div>
-        )}
-      </div>
+      <SearchBar />
 
-      {/* Right Section - Actions */}
-      <div className="flex items-center gap-2">
-        {/* Search */}
-        <div className="relative hidden sm:block">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <input
-            type="text"
-            placeholder="Search..."
-            className={cn(
-              'w-48 rounded-md border border-input bg-background py-1.5 pl-9 pr-3 text-sm',
-              'placeholder:text-muted-foreground text-foreground',
-              'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background',
-              'lg:w-64'
-            )}
-          />
-        </div>
+      <div className="h-4 w-px bg-border/50" />
 
-        {/* Theme Toggle */}
-        <div className="relative">
-          <button
-            onClick={cycleTheme}
-            onContextMenu={(e) => {
-              e.preventDefault()
-              setIsThemeMenuOpen(!isThemeMenuOpen)
-            }}
-            className={cn(
-              'flex h-9 w-9 items-center justify-center rounded-md border border-border',
-              'text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors',
-              'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
-            )}
-            title={`Theme: ${theme} (click to cycle, right-click for menu)`}
-          >
-            <ThemeIcon theme={theme} />
-          </button>
+      <ThemeToggle theme={theme} onThemeChange={onThemeChange} />
 
-          {/* Theme Dropdown */}
-          {isThemeMenuOpen && (
-            <>
-              <div
-                className="fixed inset-0 z-40"
-                onClick={() => setIsThemeMenuOpen(false)}
-              />
-              <div className="absolute right-0 top-full z-50 mt-2 w-36 rounded-lg border border-border bg-card shadow-lg">
-                <div className="p-1">
-                  {(['light', 'dark', 'system'] as Theme[]).map((t) => (
-                    <button
-                      key={t}
-                      onClick={() => selectTheme(t)}
-                      className={cn(
-                        'flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm capitalize',
-                        'hover:bg-accent hover:text-accent-foreground transition-colors',
-                        theme === t
-                          ? 'bg-primary/10 text-primary'
-                          : 'text-foreground'
-                      )}
-                    >
-                      <ThemeIcon theme={t} />
-                      {t}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </>
-          )}
-        </div>
+      <NotificationBell
+        notifications={notifications}
+        unreadCount={unreadCount}
+        isLoading={isLoadingNotifications}
+        onNotificationClick={handleNotificationClick}
+        onMarkAsRead={handleMarkAsRead}
+        onMarkAllAsRead={handleMarkAllAsRead}
+        onDelete={handleDeleteNotification}
+      />
 
-        {/* Notifications */}
-        <NotificationBell
-          notifications={notifications}
-          unreadCount={unreadCount}
-          isLoading={isLoadingNotifications}
-          onNotificationClick={handleNotificationClick}
-          onMarkAsRead={handleMarkAsRead}
-          onMarkAllAsRead={handleMarkAllAsRead}
-          onDelete={handleDeleteNotification}
-        />
+      <div className="h-4 w-px bg-border/50" />
 
-        {/* User Menu */}
-        <UserMenu onLogout={logout} isLoading={isLoading} />
-      </div>
+      <UserMenu onLogout={logout} isLoading={isLoading} />
     </header>
   )
 }

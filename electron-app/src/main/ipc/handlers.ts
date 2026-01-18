@@ -133,13 +133,31 @@ async function makeApiRequest<T = unknown>(
 
     // Parse response body
     let data: T
-    const contentType = response.headers.get('content-type') || ''
 
-    if (contentType.includes('application/json')) {
-      data = await response.json()
+    // Handle empty responses (204 No Content, or empty body)
+    const contentLength = response.headers.get('content-length')
+    if (response.status === 204 || contentLength === '0') {
+      data = null as unknown as T
     } else {
-      // For non-JSON responses, return text as data
-      data = (await response.text()) as unknown as T
+      const contentType = response.headers.get('content-type') || ''
+
+      if (contentType.includes('application/json')) {
+        // Try to parse JSON, handle empty body gracefully
+        const text = await response.text()
+        if (text && text.trim()) {
+          try {
+            data = JSON.parse(text)
+          } catch {
+            // If JSON parsing fails, return the text
+            data = text as unknown as T
+          }
+        } else {
+          data = null as unknown as T
+        }
+      } else {
+        // For non-JSON responses, return text as data
+        data = (await response.text()) as unknown as T
+      }
     }
 
     return {

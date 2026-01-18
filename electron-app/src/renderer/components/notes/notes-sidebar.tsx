@@ -1,9 +1,10 @@
 /**
  * Notes Sidebar Component
  *
- * Displays a hierarchical tree view of notes for navigation.
+ * Collapsible hierarchical tree view of notes for navigation.
  *
  * Features:
+ * - Collapsible sidebar with toggle
  * - Tree structure with expand/collapse
  * - Create new note (root or child)
  * - Context menu for note actions
@@ -17,6 +18,7 @@ import type { NoteTree, Note } from '@/stores/notes-store'
 import {
   ChevronRight,
   ChevronDown,
+  ChevronLeft,
   StickyNote,
   FolderOpen,
   Folder,
@@ -28,6 +30,7 @@ import {
   Search,
   X,
 } from 'lucide-react'
+import { SkeletonNotesSidebar, ProgressBar } from '@/components/ui/skeleton'
 
 // ============================================================================
 // Types
@@ -46,6 +49,14 @@ export interface NotesSidebarProps {
    * Whether the sidebar is loading
    */
   isLoading?: boolean
+  /**
+   * Whether the sidebar is collapsed
+   */
+  isCollapsed?: boolean
+  /**
+   * Callback when collapsed state changes
+   */
+  onCollapsedChange?: (collapsed: boolean) => void
   /**
    * Callback when a note is selected
    */
@@ -328,6 +339,8 @@ export function NotesSidebar({
   noteTree,
   activeNoteId,
   isLoading,
+  isCollapsed = false,
+  onCollapsedChange,
   onSelectNote,
   onCreateNote,
   onEditNote,
@@ -413,35 +426,96 @@ export function NotesSidebar({
     return allIds
   }, [expandedIds, searchQuery, filteredNoteTree])
 
-  return (
-    <div className={cn('flex h-full flex-col bg-card', className)}>
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-border px-3 py-2">
-        <h3 className="text-sm font-semibold text-foreground">Notes</h3>
+  // Toggle sidebar collapse
+  const handleToggleCollapse = useCallback(() => {
+    onCollapsedChange?.(!isCollapsed)
+  }, [isCollapsed, onCollapsedChange])
+
+  // Collapsed view
+  if (isCollapsed) {
+    return (
+      <div className={cn(
+        'flex h-full w-10 flex-col bg-card border-r border-border',
+        'transition-all duration-200',
+        className
+      )}>
+        {/* Expand button */}
+        <button
+          onClick={handleToggleCollapse}
+          className={cn(
+            'flex h-8 w-full items-center justify-center',
+            'text-muted-foreground hover:text-foreground hover:bg-muted',
+            'border-b border-border transition-colors'
+          )}
+          title="Expand notes"
+        >
+          <ChevronRight className="h-4 w-4" />
+        </button>
+
+        {/* Create note button */}
         <button
           onClick={() => onCreateNote?.(null)}
           className={cn(
-            'flex h-6 w-6 items-center justify-center rounded hover:bg-accent',
-            'text-muted-foreground hover:text-foreground',
-            'focus:outline-none focus:ring-1 focus:ring-ring'
+            'flex h-8 w-full items-center justify-center',
+            'text-muted-foreground hover:text-foreground hover:bg-muted',
+            'transition-colors'
           )}
-          title="Create New Note"
+          title="Create new note"
         >
           <Plus className="h-4 w-4" />
         </button>
+
+        {/* Notes icon */}
+        <div className="flex-1 flex items-start justify-center pt-4">
+          <StickyNote className="h-4 w-4 text-muted-foreground/50" />
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className={cn(
+      'flex h-full flex-col bg-card transition-all duration-200',
+      className
+    )}>
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-border px-2 py-1.5">
+        <h3 className="text-xs font-semibold text-foreground">Notes</h3>
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={() => onCreateNote?.(null)}
+            className={cn(
+              'flex h-6 w-6 items-center justify-center rounded hover:bg-muted',
+              'text-muted-foreground hover:text-foreground'
+            )}
+            title="Create New Note"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={handleToggleCollapse}
+            className={cn(
+              'flex h-6 w-6 items-center justify-center rounded hover:bg-muted',
+              'text-muted-foreground hover:text-foreground'
+            )}
+            title="Collapse sidebar"
+          >
+            <ChevronLeft className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
 
       {/* Search */}
-      <div className="border-b border-border px-3 py-2">
+      <div className="border-b border-border px-2 py-1.5">
         <div className="relative">
-          <Search className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search notes..."
+            placeholder="Search..."
             className={cn(
-              'w-full rounded-md border border-input bg-background py-1.5 pl-8 pr-8 text-sm',
+              'w-full rounded-md border border-input bg-background py-1 pl-7 pr-6 text-xs',
               'placeholder:text-muted-foreground',
               'focus:outline-none focus:ring-1 focus:ring-ring'
             )}
@@ -449,36 +523,37 @@ export function NotesSidebar({
           {searchQuery && (
             <button
               onClick={() => setSearchQuery('')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
             >
-              <X className="h-4 w-4" />
+              <X className="h-3 w-3" />
             </button>
           )}
         </div>
       </div>
 
+      {/* Subtle loading progress bar */}
+      <ProgressBar isActive={isLoading && filteredNoteTree.length > 0} />
+
       {/* Note Tree */}
-      <div className="flex-1 overflow-auto p-2" role="tree" aria-label="Notes">
-        {isLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-          </div>
+      <div className="flex-1 overflow-auto p-1.5" role="tree" aria-label="Notes">
+        {isLoading && filteredNoteTree.length === 0 ? (
+          <SkeletonNotesSidebar />
         ) : filteredNoteTree.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-8 text-center">
-            <StickyNote className="h-8 w-8 text-muted-foreground opacity-50" />
-            <p className="mt-2 text-sm text-muted-foreground">
-              {searchQuery ? 'No notes match your search' : 'No notes yet'}
+          <div className="flex flex-col items-center justify-center py-6 text-center">
+            <StickyNote className="h-6 w-6 text-muted-foreground opacity-50" />
+            <p className="mt-2 text-xs text-muted-foreground">
+              {searchQuery ? 'No matches' : 'No notes yet'}
             </p>
             {!searchQuery && (
               <button
                 onClick={() => onCreateNote?.(null)}
                 className={cn(
-                  'mt-3 inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-sm',
+                  'mt-2 inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs',
                   'bg-primary text-primary-foreground',
-                  'hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring'
+                  'hover:bg-primary/90'
                 )}
               >
-                <Plus className="h-4 w-4" />
+                <Plus className="h-3 w-3" />
                 Create Note
               </button>
             )}
