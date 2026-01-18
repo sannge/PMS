@@ -19,6 +19,16 @@ import { getAuthHeaders } from './auth-store'
 // ============================================================================
 
 /**
+ * Ownership type indicating how user relates to the application
+ */
+export type OwnershipType = 'created' | 'invited'
+
+/**
+ * Application role enumeration
+ */
+export type ApplicationRole = 'owner' | 'editor' | 'viewer'
+
+/**
  * Application data from the API
  */
 export interface Application {
@@ -29,6 +39,8 @@ export interface Application {
   projects_count: number
   created_at: string
   updated_at: string
+  ownership_type?: OwnershipType
+  user_role?: ApplicationRole
 }
 
 /**
