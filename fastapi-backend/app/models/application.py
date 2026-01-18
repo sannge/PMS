@@ -11,6 +11,7 @@ from sqlalchemy.orm import relationship
 from ..database import Base
 
 if TYPE_CHECKING:
+    from .application_member import ApplicationMember
     from .note import Note
     from .project import Project
     from .user import User
@@ -89,6 +90,12 @@ class Application(Base):
     )
     notes = relationship(
         "Note",
+        back_populates="application",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+    members = relationship(
+        "ApplicationMember",
         back_populates="application",
         cascade="all, delete-orphan",
         lazy="dynamic",
