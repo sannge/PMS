@@ -567,6 +567,279 @@ async def route_incoming_message(
                 logger.warning(f"Invalid action: {action_str}")
 
 
+async def handle_invitation_notification(
+    user_id: UUID,
+    invitation_data: dict[str, Any],
+    connection_manager: Optional[ConnectionManager] = None,
+) -> int:
+    """
+    Send an invitation notification to a specific user.
+
+    This is called when a user receives a new invitation to join an application.
+
+    Args:
+        user_id: The user to notify (the invitee)
+        invitation_data: The invitation payload containing:
+            - invitation_id: UUID of the invitation
+            - application_id: UUID of the application
+            - application_name: Name of the application
+            - inviter_id: UUID of the user who sent the invitation
+            - inviter_name: Name of the inviter
+            - role: The offered role (owner, editor, viewer)
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        int: Number of connections that received the notification
+    """
+    mgr = connection_manager or manager
+
+    message = {
+        "type": MessageType.INVITATION_RECEIVED.value,
+        "data": {
+            **invitation_data,
+            "timestamp": datetime.utcnow().isoformat(),
+        },
+    }
+
+    recipients = await mgr.broadcast_to_user(user_id, message)
+
+    logger.info(
+        f"Invitation notification sent: user_id={user_id}, "
+        f"invitation_id={invitation_data.get('invitation_id')}, "
+        f"recipients={recipients}"
+    )
+
+    return recipients
+
+
+async def handle_invitation_response(
+    inviter_id: UUID,
+    application_id: UUID | str,
+    response_data: dict[str, Any],
+    connection_manager: Optional[ConnectionManager] = None,
+) -> int:
+    """
+    Notify the inviter when an invitation is accepted or rejected.
+
+    This is called when an invitee responds to an invitation.
+
+    Args:
+        inviter_id: The user to notify (the original inviter)
+        application_id: The application's UUID
+        response_data: The response payload containing:
+            - invitation_id: UUID of the invitation
+            - invitee_id: UUID of the user who responded
+            - invitee_name: Name of the responder
+            - status: The response (accepted, rejected)
+            - role: The role that was offered
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        int: Number of connections that received the notification
+    """
+    mgr = connection_manager or manager
+
+    message = {
+        "type": MessageType.INVITATION_RESPONSE.value,
+        "data": {
+            "application_id": str(application_id),
+            **response_data,
+            "timestamp": datetime.utcnow().isoformat(),
+        },
+    }
+
+    # Notify the inviter
+    recipients = await mgr.broadcast_to_user(inviter_id, message)
+
+    # Also broadcast to the application room for other members
+    room_id = get_application_room(application_id)
+    await mgr.broadcast_to_room(room_id, message)
+
+    logger.info(
+        f"Invitation response sent: inviter_id={inviter_id}, "
+        f"status={response_data.get('status')}, "
+        f"recipients={recipients}"
+    )
+
+    return recipients
+
+
+async def handle_member_added(
+    application_id: UUID | str,
+    member_data: dict[str, Any],
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Broadcast when a new member is added to an application.
+
+    This is called after an invitation is accepted or when an owner
+    directly adds a member.
+
+    Args:
+        application_id: The application's UUID
+        member_data: The member payload containing:
+            - user_id: UUID of the new member
+            - user_name: Name of the new member
+            - user_email: Email of the new member
+            - role: The member's role (owner, editor, viewer)
+            - is_manager: Whether the member has manager privileges
+            - added_by: UUID of who added the member
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_application_room(application_id)
+
+    payload: dict[str, Any] = {
+        "application_id": str(application_id),
+        **member_data,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    message = {
+        "type": MessageType.MEMBER_ADDED.value,
+        "data": payload,
+    }
+
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    logger.info(
+        f"Member added notification: application_id={application_id}, "
+        f"user_id={member_data.get('user_id')}, "
+        f"role={member_data.get('role')}, "
+        f"recipients={recipients}"
+    )
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.MEMBER_ADDED.value,
+        success=True,
+    )
+
+
+async def handle_member_removed(
+    application_id: UUID | str,
+    removed_user_id: UUID,
+    member_data: dict[str, Any],
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Broadcast when a member is removed from an application.
+
+    This notifies both the application room and the removed user.
+
+    Args:
+        application_id: The application's UUID
+        removed_user_id: The UUID of the removed user
+        member_data: The removal payload containing:
+            - user_id: UUID of the removed member
+            - user_name: Name of the removed member
+            - removed_by: UUID of who removed the member
+            - reason: Optional reason for removal
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_application_room(application_id)
+
+    payload: dict[str, Any] = {
+        "application_id": str(application_id),
+        **member_data,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    message = {
+        "type": MessageType.MEMBER_REMOVED.value,
+        "data": payload,
+    }
+
+    # Broadcast to application room
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    # Also notify the removed user directly
+    await mgr.broadcast_to_user(removed_user_id, message)
+
+    logger.info(
+        f"Member removed notification: application_id={application_id}, "
+        f"user_id={member_data.get('user_id')}, "
+        f"recipients={recipients}"
+    )
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.MEMBER_REMOVED.value,
+        success=True,
+    )
+
+
+async def handle_role_updated(
+    application_id: UUID | str,
+    user_id: UUID,
+    role_data: dict[str, Any],
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Broadcast when a member's role is updated.
+
+    This notifies both the application room and the affected user.
+
+    Args:
+        application_id: The application's UUID
+        user_id: The UUID of the user whose role changed
+        role_data: The role update payload containing:
+            - user_id: UUID of the affected member
+            - user_name: Name of the affected member
+            - old_role: Previous role
+            - new_role: New role
+            - is_manager: Whether member has manager privileges
+            - updated_by: UUID of who made the change
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_application_room(application_id)
+
+    payload: dict[str, Any] = {
+        "application_id": str(application_id),
+        **role_data,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    message = {
+        "type": MessageType.ROLE_UPDATED.value,
+        "data": payload,
+    }
+
+    # Broadcast to application room
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    # Also notify the affected user directly
+    await mgr.broadcast_to_user(user_id, message)
+
+    logger.info(
+        f"Role updated notification: application_id={application_id}, "
+        f"user_id={role_data.get('user_id')}, "
+        f"old_role={role_data.get('old_role')}, "
+        f"new_role={role_data.get('new_role')}, "
+        f"recipients={recipients}"
+    )
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.ROLE_UPDATED.value,
+        success=True,
+    )
+
+
 # Export all handlers and utilities
 __all__ = [
     "UpdateAction",
@@ -582,5 +855,10 @@ __all__ = [
     "handle_user_presence",
     "handle_notification",
     "handle_notification_read",
+    "handle_invitation_notification",
+    "handle_invitation_response",
+    "handle_member_added",
+    "handle_member_removed",
+    "handle_role_updated",
     "route_incoming_message",
 ]
