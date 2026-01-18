@@ -1,10 +1,18 @@
 """Pydantic schemas for Application model validation."""
 
 from datetime import datetime
+from enum import Enum
 from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class OwnershipType(str, Enum):
+    """Ownership type enumeration for application access."""
+
+    CREATED = "created"
+    INVITED = "invited"
 
 
 class ApplicationBase(BaseModel):
@@ -74,4 +82,12 @@ class ApplicationWithProjects(ApplicationResponse):
     projects_count: int = Field(
         0,
         description="Number of projects in this application",
+    )
+    ownership_type: Optional[OwnershipType] = Field(
+        None,
+        description="Whether the user created this application or was invited",
+    )
+    user_role: Optional[str] = Field(
+        None,
+        description="The current user's role in this application (owner, editor, viewer)",
     )
