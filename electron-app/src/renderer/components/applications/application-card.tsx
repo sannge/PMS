@@ -7,6 +7,7 @@
  * - Hover-reveal actions dropdown
  * - Description tooltip on hover
  * - Smooth micro-interactions
+ * - Ownership badge (Created/Invited)
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react'
@@ -19,8 +20,9 @@ import {
   Layers,
   MoreHorizontal,
   ChevronRight,
+  UserPlus,
 } from 'lucide-react'
-import type { Application } from '@/stores/applications-store'
+import type { Application, OwnershipType } from '@/stores/applications-store'
 
 // ============================================================================
 // Types
@@ -82,6 +84,51 @@ function formatDate(dateString: string): string {
     month: 'short',
     day: 'numeric',
   })
+}
+
+// ============================================================================
+// Ownership Badge Component
+// ============================================================================
+
+interface OwnershipBadgeProps {
+  ownershipType?: OwnershipType
+}
+
+function OwnershipBadge({ ownershipType }: OwnershipBadgeProps): JSX.Element | null {
+  if (!ownershipType) {
+    return null
+  }
+
+  if (ownershipType === 'created') {
+    return (
+      <span
+        className={cn(
+          'inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium',
+          'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+        )}
+        title="You created this application"
+      >
+        Created
+      </span>
+    )
+  }
+
+  if (ownershipType === 'invited') {
+    return (
+      <span
+        className={cn(
+          'inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium',
+          'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+        )}
+        title="You were invited to this application"
+      >
+        <UserPlus className="h-2.5 w-2.5" />
+        Invited
+      </span>
+    )
+  }
+
+  return null
 }
 
 // ============================================================================
@@ -255,6 +302,9 @@ export function ApplicationCard({
       <span className="flex-shrink-0 max-w-[180px] truncate text-sm font-medium text-foreground group-hover:text-amber-600 dark:group-hover:text-amber-400 transition-colors">
         {application.name}
       </span>
+
+      {/* Ownership Badge */}
+      <OwnershipBadge ownershipType={application.ownership_type} />
 
       {/* Description indicator (dot) - shows if has description */}
       {application.description && (
