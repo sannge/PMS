@@ -44,12 +44,17 @@ export type NotificationType =
   | 'status_change'
   | 'due_date_reminder'
   | 'project_invite'
+  | 'application_invite'
+  | 'invitation_accepted'
+  | 'invitation_rejected'
+  | 'role_changed'
+  | 'project_assigned'
   | 'system'
 
 /**
  * Entity type enumeration (matching backend)
  */
-export type EntityType = 'task' | 'note' | 'project' | 'application' | 'comment'
+export type EntityType = 'task' | 'note' | 'project' | 'application' | 'comment' | 'invitation' | 'application_member'
 
 /**
  * Notification data structure
@@ -131,6 +136,26 @@ const TYPE_CONFIG: Record<NotificationType, TypeConfig> = {
     icon: <UserPlus className="h-4 w-4" />,
     iconBg: 'bg-teal-100 text-teal-600 dark:bg-teal-900/30 dark:text-teal-400',
   },
+  application_invite: {
+    icon: <UserPlus className="h-4 w-4" />,
+    iconBg: 'bg-cyan-100 text-cyan-600 dark:bg-cyan-900/30 dark:text-cyan-400',
+  },
+  invitation_accepted: {
+    icon: <CheckCircle2 className="h-4 w-4" />,
+    iconBg: 'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400',
+  },
+  invitation_rejected: {
+    icon: <AlertCircle className="h-4 w-4" />,
+    iconBg: 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400',
+  },
+  role_changed: {
+    icon: <Layers className="h-4 w-4" />,
+    iconBg: 'bg-violet-100 text-violet-600 dark:bg-violet-900/30 dark:text-violet-400',
+  },
+  project_assigned: {
+    icon: <FolderKanban className="h-4 w-4" />,
+    iconBg: 'bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400',
+  },
   system: {
     icon: <AlertCircle className="h-4 w-4" />,
     iconBg: 'bg-slate-100 text-slate-600 dark:bg-slate-900/30 dark:text-slate-400',
@@ -156,6 +181,10 @@ function getEntityIcon(entityType: EntityType | null): JSX.Element | null {
       return <Layers className="h-3 w-3" />
     case 'comment':
       return <MessageSquare className="h-3 w-3" />
+    case 'invitation':
+      return <UserPlus className="h-3 w-3" />
+    case 'application_member':
+      return <UserPlus className="h-3 w-3" />
     default:
       return null
   }
