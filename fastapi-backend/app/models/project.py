@@ -12,6 +12,7 @@ from ..database import Base
 
 if TYPE_CHECKING:
     from .application import Application
+    from .project_assignment import ProjectAssignment
     from .task import Task
 
 
@@ -93,6 +94,12 @@ class Project(Base):
     )
     tasks = relationship(
         "Task",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+    assignments = relationship(
+        "ProjectAssignment",
         back_populates="project",
         cascade="all, delete-orphan",
         lazy="dynamic",
