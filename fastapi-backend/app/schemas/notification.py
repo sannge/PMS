@@ -19,6 +19,12 @@ class NotificationType(str, Enum):
     DUE_DATE_REMINDER = "due_date_reminder"
     PROJECT_INVITE = "project_invite"
     SYSTEM = "system"
+    # Application invitation notification types
+    APPLICATION_INVITE = "application_invite"
+    INVITATION_ACCEPTED = "invitation_accepted"
+    INVITATION_REJECTED = "invitation_rejected"
+    ROLE_CHANGED = "role_changed"
+    PROJECT_ASSIGNED = "project_assigned"
 
 
 class EntityType(str, Enum):
@@ -29,6 +35,9 @@ class EntityType(str, Enum):
     PROJECT = "project"
     APPLICATION = "application"
     COMMENT = "comment"
+    # New entity types for invitation system
+    INVITATION = "invitation"
+    APPLICATION_MEMBER = "application_member"
 
 
 class NotificationBase(BaseModel):
