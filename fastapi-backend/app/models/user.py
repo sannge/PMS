@@ -12,6 +12,7 @@ from ..database import Base
 
 if TYPE_CHECKING:
     from .application import Application
+    from .application_member import ApplicationMember
     from .attachment import Attachment
     from .note import Note
     from .notification import Notification
@@ -108,6 +109,12 @@ class User(Base):
     )
     notifications = relationship(
         "Notification",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+    memberships = relationship(
+        "ApplicationMember",
         back_populates="user",
         cascade="all, delete-orphan",
         lazy="dynamic",
