@@ -359,22 +359,22 @@ app.on('certificate-error', (event, webContents, url, error, certificate, callba
   }
 })
 
-// Prevent multiple instances
-const gotTheLock = app.requestSingleInstanceLock()
-
-if (!gotTheLock) {
-  app.quit()
-} else {
-  app.on('second-instance', () => {
-    // Focus the main window if a second instance is attempted
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) {
-        mainWindow.restore()
-      }
-      mainWindow.focus()
-    }
-  })
-}
+// Prevent multiple instances (disabled for testing)
+// const gotTheLock = app.requestSingleInstanceLock()
+//
+// if (!gotTheLock) {
+//   app.quit()
+// } else {
+//   app.on('second-instance', () => {
+//     // Focus the main window if a second instance is attempted
+//     if (mainWindow) {
+//       if (mainWindow.isMinimized()) {
+//         mainWindow.restore()
+//       }
+//       mainWindow.focus()
+//     }
+//   })
+// }
 
 // Export for potential testing
 export { createWindow, mainWindow }

@@ -5,7 +5,7 @@
  * Consolidates all top-level controls into a single compact bar.
  * Features:
  * - Custom PMS logo
- * - Integrated search, theme toggle, notifications, user menu
+ * - Integrated search, theme toggle, user menu
  * - Draggable region for window movement
  * - Minimize, Maximize/Restore, Close buttons
  */
@@ -27,7 +27,6 @@ import {
   ChevronDown,
   Command,
 } from 'lucide-react'
-import { NotificationBell, type Notification } from '@/components/notifications'
 
 // ============================================================================
 // Types
@@ -388,7 +387,7 @@ function CompactUserMenu(): JSX.Element {
 }
 
 // ============================================================================
-// Utility Controls (Search, Theme, Notifications, User)
+// Utility Controls (Search, Theme, User)
 // ============================================================================
 
 function UtilityControls({
@@ -398,46 +397,11 @@ function UtilityControls({
   theme: Theme
   onThemeChange?: (theme: Theme) => void
 }): JSX.Element {
-  const [notifications, setNotifications] = useState<Notification[]>([])
-  const unreadCount = notifications.filter((n) => !n.is_read).length
-
-  const handleNotificationClick = useCallback((notification: Notification) => {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === notification.id ? { ...n, is_read: true } : n))
-    )
-  }, [])
-
-  const handleMarkAsRead = useCallback((notification: Notification) => {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === notification.id ? { ...n, is_read: true } : n))
-    )
-  }, [])
-
-  const handleMarkAllAsRead = useCallback(() => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })))
-  }, [])
-
-  const handleDeleteNotification = useCallback((notification: Notification) => {
-    setNotifications((prev) => prev.filter((n) => n.id !== notification.id))
-  }, [])
-
   return (
     <div className="flex items-center gap-1 app-no-drag">
       <SearchButton />
 
       <ThemeToggle theme={theme} onThemeChange={onThemeChange} />
-
-      <div className="[&_button]:h-6 [&_button]:w-6 [&_svg]:h-3.5 [&_svg]:w-3.5">
-        <NotificationBell
-          notifications={notifications}
-          unreadCount={unreadCount}
-          isLoading={false}
-          onNotificationClick={handleNotificationClick}
-          onMarkAsRead={handleMarkAsRead}
-          onMarkAllAsRead={handleMarkAllAsRead}
-          onDelete={handleDeleteNotification}
-        />
-      </div>
 
       <div className="h-4 w-px bg-sidebar-muted/20 mx-0.5" />
 

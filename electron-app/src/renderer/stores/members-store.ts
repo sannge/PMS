@@ -2,14 +2,18 @@
  * Members Store
  *
  * Zustand store for managing application members state in the renderer process.
- * Handles member operations: fetch, update role, remove, grant/revoke manager.
+ * Handles member operations: fetch, update role, and remove.
  *
  * Features:
  * - Application members list with pagination
- * - Role update operations
+ * - Role update operations (with role-based permissions)
  * - Remove member operations
- * - Manager role grant/revoke
  * - Loading and error states
+ *
+ * Role-based permissions:
+ * - Viewer: Can view members only. Cannot edit roles, invite, or remove members.
+ * - Editor: Can promote viewers to editors. Can invite with viewer or editor roles.
+ * - Owner: Full access - can invite with any role, update any role, remove members.
  */
 
 import { create } from 'zustand'
@@ -41,7 +45,6 @@ export interface Member {
   application_id: string
   user_id: string
   role: ApplicationRole
-  is_manager: boolean
   invitation_id: string | null
   created_at: string
   updated_at: string
@@ -59,7 +62,6 @@ export interface MemberWithUser extends Member {
  */
 export interface MemberUpdate {
   role?: ApplicationRole
-  is_manager?: boolean
 }
 
 /**
@@ -72,7 +74,6 @@ export interface MemberCount {
     editors: number
     viewers: number
   }
-  managers: number
 }
 
 /**
@@ -95,8 +96,6 @@ export interface MembersState {
   isLoading: boolean
   isUpdating: boolean
   isRemoving: boolean
-  isGrantingManager: boolean
-  isRevokingManager: boolean
   error: MemberError | null
 
   // Pagination
@@ -122,18 +121,9 @@ export interface MembersState {
     applicationId: string,
     userId: string
   ) => Promise<boolean>
-  grantManagerRole: (
-    token: string | null,
-    applicationId: string,
-    userId: string
-  ) => Promise<MemberWithUser | null>
-  revokeManagerRole: (
-    token: string | null,
-    applicationId: string,
-    userId: string
-  ) => Promise<MemberWithUser | null>
   addMember: (member: MemberWithUser) => void
   updateMemberInList: (member: MemberWithUser) => void
+  updateMemberRoleInList: (userId: string, newRole: ApplicationRole) => void
   removeMemberFromList: (userId: string) => void
   setCurrentApplicationId: (applicationId: string | null) => void
   clearError: () => void
@@ -203,8 +193,6 @@ const initialState = {
   isLoading: false,
   isUpdating: false,
   isRemoving: false,
-  isGrantingManager: false,
-  isRevokingManager: false,
   error: null,
   skip: 0,
   limit: 50,
@@ -296,6 +284,11 @@ export const useMembersStore = create<MembersState>((set, get) => ({
 
   /**
    * Update a member's role
+   *
+   * Permissions:
+   * - Viewer: Cannot update roles
+   * - Editor: Can only promote viewers to editors
+   * - Owner: Can update any role
    */
   updateMemberRole: async (token, applicationId, userId, data) => {
     set({ isUpdating: true, error: null })
@@ -338,6 +331,10 @@ export const useMembersStore = create<MembersState>((set, get) => ({
 
   /**
    * Remove a member from the application
+   *
+   * Permissions:
+   * - Any member can remove themselves
+   * - Only owners can remove other members
    */
   removeMember: async (token, applicationId, userId) => {
     set({ isRemoving: true, error: null })
@@ -375,89 +372,6 @@ export const useMembersStore = create<MembersState>((set, get) => ({
   },
 
   /**
-   * Grant manager role to an editor
-   */
-  grantManagerRole: async (token, applicationId, userId) => {
-    set({ isGrantingManager: true, error: null })
-
-    try {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<MemberWithUser>(
-        `/api/applications/${applicationId}/members/${userId}/manager`,
-        {},
-        getAuthHeaders(token)
-      )
-
-      if (response.status !== 200) {
-        const error = parseApiError(response.status, response.data)
-        set({ isGrantingManager: false, error })
-        return null
-      }
-
-      const updatedMember = response.data
-      // Update the member in the list
-      const members = get().members.map((member) =>
-        member.user_id === userId ? updatedMember : member
-      )
-      set({
-        members,
-        isGrantingManager: false,
-      })
-      return updatedMember
-    } catch (err) {
-      const error: MemberError = {
-        message: err instanceof Error ? err.message : 'Failed to grant manager role',
-      }
-      set({ isGrantingManager: false, error })
-      return null
-    }
-  },
-
-  /**
-   * Revoke manager role from an editor
-   */
-  revokeManagerRole: async (token, applicationId, userId) => {
-    set({ isRevokingManager: true, error: null })
-
-    try {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.delete<MemberWithUser>(
-        `/api/applications/${applicationId}/members/${userId}/manager`,
-        getAuthHeaders(token)
-      )
-
-      if (response.status !== 200) {
-        const error = parseApiError(response.status, response.data)
-        set({ isRevokingManager: false, error })
-        return null
-      }
-
-      const updatedMember = response.data
-      // Update the member in the list
-      const members = get().members.map((member) =>
-        member.user_id === userId ? updatedMember : member
-      )
-      set({
-        members,
-        isRevokingManager: false,
-      })
-      return updatedMember
-    } catch (err) {
-      const error: MemberError = {
-        message: err instanceof Error ? err.message : 'Failed to revoke manager role',
-      }
-      set({ isRevokingManager: false, error })
-      return null
-    }
-  },
-
-  /**
    * Add a member to the list (used for WebSocket updates)
    */
   addMember: (member) => {
@@ -471,6 +385,16 @@ export const useMembersStore = create<MembersState>((set, get) => ({
   updateMemberInList: (member) => {
     const members = get().members.map((m) =>
       m.user_id === member.user_id ? member : m
+    )
+    set({ members })
+  },
+
+  /**
+   * Update only a member's role in the list (used for WebSocket role updates)
+   */
+  updateMemberRoleInList: (userId, newRole) => {
+    const members = get().members.map((m) =>
+      m.user_id === userId ? { ...m, role: newRole, updated_at: new Date().toISOString() } : m
     )
     set({ members })
   },
@@ -527,12 +451,6 @@ export const selectIsUpdating = (state: MembersState): boolean =>
 export const selectIsRemoving = (state: MembersState): boolean =>
   state.isRemoving
 
-export const selectIsGrantingManager = (state: MembersState): boolean =>
-  state.isGrantingManager
-
-export const selectIsRevokingManager = (state: MembersState): boolean =>
-  state.isRevokingManager
-
 export const selectError = (state: MembersState): MemberError | null =>
   state.error
 
@@ -547,8 +465,5 @@ export const selectEditors = (state: MembersState): MemberWithUser[] =>
 
 export const selectViewers = (state: MembersState): MemberWithUser[] =>
   state.members.filter((m) => m.role === 'viewer')
-
-export const selectManagers = (state: MembersState): MemberWithUser[] =>
-  state.members.filter((m) => m.is_manager)
 
 export default useMembersStore

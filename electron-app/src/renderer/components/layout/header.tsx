@@ -2,8 +2,8 @@
  * Header Component
  *
  * Minimal utility header - no page title (sidebar shows section).
- * Contains only global actions: search, theme, notifications, user.
- * Designed to work alongside page-specific headers.
+ * Contains only global actions: search, theme toggle, user menu.
+ * Notifications are handled by the sidebar notification panel.
  */
 
 import { useState, useCallback, ReactNode, useEffect, useRef } from 'react'
@@ -19,7 +19,6 @@ import {
   ChevronDown,
   Command,
 } from 'lucide-react'
-import { NotificationBell, type Notification } from '@/components/notifications'
 
 // ============================================================================
 // Types
@@ -233,29 +232,6 @@ export function Header({
   className,
 }: HeaderProps): JSX.Element {
   const { logout, isLoading } = useAuth()
-  const [notifications, setNotifications] = useState<Notification[]>([])
-  const [isLoadingNotifications] = useState(false)
-  const unreadCount = notifications.filter((n) => !n.is_read).length
-
-  const handleNotificationClick = useCallback((notification: Notification) => {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === notification.id ? { ...n, is_read: true } : n))
-    )
-  }, [])
-
-  const handleMarkAsRead = useCallback((notification: Notification) => {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === notification.id ? { ...n, is_read: true } : n))
-    )
-  }, [])
-
-  const handleMarkAllAsRead = useCallback(() => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })))
-  }, [])
-
-  const handleDeleteNotification = useCallback((notification: Notification) => {
-    setNotifications((prev) => prev.filter((n) => n.id !== notification.id))
-  }, [])
 
   return (
     <header
@@ -271,18 +247,6 @@ export function Header({
       <div className="h-4 w-px bg-border/50" />
 
       <ThemeToggle theme={theme} onThemeChange={onThemeChange} />
-
-      <NotificationBell
-        notifications={notifications}
-        unreadCount={unreadCount}
-        isLoading={isLoadingNotifications}
-        onNotificationClick={handleNotificationClick}
-        onMarkAsRead={handleMarkAsRead}
-        onMarkAllAsRead={handleMarkAllAsRead}
-        onDelete={handleDeleteNotification}
-      />
-
-      <div className="h-4 w-px bg-border/50" />
 
       <UserMenu onLogout={logout} isLoading={isLoading} />
     </header>

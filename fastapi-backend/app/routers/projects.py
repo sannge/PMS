@@ -15,7 +15,7 @@ from typing import Annotated, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, lazyload
 
 from ..database import get_db
@@ -44,6 +44,7 @@ def get_user_application_role(
     db: Session,
     user_id: UUID,
     application_id: UUID,
+    application: Optional[Application] = None,
 ) -> Optional[str]:
     """
     Get the user's role in an application.
@@ -52,13 +53,21 @@ def get_user_application_role(
         db: Database session
         user_id: The user's ID
         application_id: The application's ID
+        application: Optional pre-fetched application to avoid extra query
 
     Returns:
         The role string ('owner', 'editor', 'viewer') or None if not a member.
     """
-    # Check if user is the owner
-    app = db.query(Application).filter(Application.id == application_id).first()
-    if app and app.owner_id == user_id:
+    # If application is provided, use it; otherwise fetch with member in single query
+    if application is None:
+        # Single query to get application
+        application = db.query(Application).filter(Application.id == application_id).first()
+
+    if not application:
+        return None
+
+    # Check if user is the original owner
+    if application.owner_id == user_id:
         return "owner"
 
     # Check ApplicationMembers table
@@ -131,8 +140,8 @@ def verify_application_access(
             detail=f"Application with ID {application_id} not found",
         )
 
-    # Get user's role in this application
-    user_role = get_user_application_role(db, current_user.id, application_id)
+    # Get user's role in this application (pass application to avoid re-fetching)
+    user_role = get_user_application_role(db, current_user.id, application_id, application)
 
     if not user_role:
         raise HTTPException(
@@ -178,7 +187,11 @@ def verify_project_access(
     Raises:
         HTTPException: If project not found or user doesn't have access
     """
-    project = db.query(Project).filter(
+    # Fetch project with application in single query using join
+    from sqlalchemy.orm import joinedload
+    project = db.query(Project).options(
+        joinedload(Project.application)
+    ).filter(
         Project.id == project_id,
     ).first()
 
@@ -188,8 +201,8 @@ def verify_project_access(
             detail=f"Project with ID {project_id} not found",
         )
 
-    # Verify access through the parent application membership
-    user_role = get_user_application_role(db, current_user.id, project.application_id)
+    # Verify access through the parent application membership (pass application to avoid re-fetching)
+    user_role = get_user_application_role(db, current_user.id, project.application_id, project.application)
 
     if not user_role:
         raise HTTPException(
@@ -363,6 +376,7 @@ async def create_project(
         description=project_data.description,
         project_type=project_data.project_type,
         application_id=application_id,
+        created_by=current_user.id,
     )
 
     # Save to database
@@ -485,7 +499,7 @@ async def update_project(
     responses={
         204: {"description": "Project deleted successfully"},
         401: {"description": "Not authenticated"},
-        403: {"description": "Access denied - only owners can delete"},
+        403: {"description": "Access denied - insufficient permissions"},
         404: {"description": "Project not found"},
     },
 )
@@ -501,12 +515,47 @@ async def delete_project(
     - Tasks
     - Attachments linked to those tasks
 
-    Only owners can delete projects.
-    Editors and viewers cannot delete projects.
+    Permissions:
+    - Owners: Can delete any project
+    - Editors: Can only delete projects they created
+    - Viewers: Cannot delete any project
+
     This action is irreversible.
     """
-    # Verify owner access and get project
-    project = verify_project_access(project_id, current_user, db, require_owner=True)
+    # Get the project
+    project = db.query(Project).filter(Project.id == project_id).first()
+
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project with ID {project_id} not found",
+        )
+
+    # Get user's role in the application
+    user_role = get_user_application_role(db, current_user.id, project.application_id)
+
+    if not user_role:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. You are not a member of this project's application.",
+        )
+
+    # Viewers cannot delete any project
+    if user_role == "viewer":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. Viewers cannot delete projects.",
+        )
+
+    # Editors can only delete projects they created
+    if user_role == "editor":
+        if project.created_by != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied. Editors can only delete projects they created.",
+            )
+
+    # Owners can delete any project (no additional check needed)
 
     # Delete the project (cascade will handle related records)
     db.delete(project)

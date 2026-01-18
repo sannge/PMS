@@ -12,8 +12,9 @@
  * - Connection state tracking
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAuthStore } from '@/stores/auth-store'
+import { useNotificationsStore } from '@/stores/notifications-store'
 import {
   wsClient,
   WebSocketClient,
@@ -28,7 +29,46 @@ import {
   type UserPresenceEventData,
   type RoomJoinedEventData,
   type ConnectedEventData,
+  type InvitationReceivedEventData,
+  type InvitationResponseEventData,
+  type MemberAddedEventData,
+  type MemberRemovedEventData,
+  type RoleUpdatedEventData,
+  type NotificationReadEventData,
 } from '@/lib/websocket'
+
+// ============================================================================
+// Utilities
+// ============================================================================
+
+/**
+ * Creates a debounced version of a function
+ */
+function debounce<T extends (...args: Parameters<T>) => void>(
+  func: T,
+  wait: number
+): { (...args: Parameters<T>): void; cancel: () => void } {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null
+
+  const debounced = (...args: Parameters<T>) => {
+    if (timeoutId) {
+      clearTimeout(timeoutId)
+    }
+    timeoutId = setTimeout(() => {
+      func(...args)
+      timeoutId = null
+    }, wait)
+  }
+
+  debounced.cancel = () => {
+    if (timeoutId) {
+      clearTimeout(timeoutId)
+      timeoutId = null
+    }
+  }
+
+  return debounced
+}
 
 // ============================================================================
 // Types
@@ -451,6 +491,83 @@ export function useWebSocketStatus(): WebSocketStatus {
 }
 
 /**
+ * Hook for debounced typing indicator
+ *
+ * Sends typing indicator with debouncing to reduce message frequency.
+ * Automatically sends isTyping=false after the debounce delay.
+ *
+ * @example
+ * ```tsx
+ * function NoteEditor({ roomId }) {
+ *   const { setTyping } = useDebouncedTyping(roomId, 300)
+ *
+ *   return (
+ *     <textarea
+ *       onChange={() => setTyping(true)}
+ *       onBlur={() => setTyping(false)}
+ *     />
+ *   )
+ * }
+ * ```
+ */
+export function useDebouncedTyping(
+  roomId: string | null,
+  delay: number = 300
+): { setTyping: (isTyping: boolean) => void } {
+  const { sendTyping, status } = useWebSocket()
+  const lastSentRef = useRef<boolean | null>(null)
+
+  // Debounced function to send "stopped typing" after delay
+  const debouncedStopTyping = useMemo(
+    () =>
+      debounce(() => {
+        if (roomId && status.isConnected && lastSentRef.current !== false) {
+          sendTyping(roomId, false)
+          lastSentRef.current = false
+        }
+      }, delay + 1000), // Extra delay before sending "stopped"
+    [roomId, status.isConnected, sendTyping, delay]
+  )
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      debouncedStopTyping.cancel()
+      // Send final "stopped typing" on unmount
+      if (roomId && lastSentRef.current === true) {
+        sendTyping(roomId, false)
+      }
+    }
+  }, [roomId, sendTyping, debouncedStopTyping])
+
+  const setTyping = useCallback(
+    (isTyping: boolean) => {
+      if (!roomId || !status.isConnected) return
+
+      if (isTyping) {
+        // Only send "typing" if we haven't already
+        if (lastSentRef.current !== true) {
+          sendTyping(roomId, true)
+          lastSentRef.current = true
+        }
+        // Reset the stop-typing timer
+        debouncedStopTyping()
+      } else {
+        // Immediately send "stopped typing"
+        debouncedStopTyping.cancel()
+        if (lastSentRef.current !== false) {
+          sendTyping(roomId, false)
+          lastSentRef.current = false
+        }
+      }
+    },
+    [roomId, status.isConnected, sendTyping, debouncedStopTyping]
+  )
+
+  return { setTyping }
+}
+
+/**
  * Hook for subscribing to all WebSocket messages (debugging)
  */
 export function useWebSocketDebug(
@@ -477,6 +594,148 @@ export function useWebSocketDebug(
   }, [enabled, status.isConnected, subscribe])
 }
 
+/**
+ * Hook for subscribing to invitation notifications
+ *
+ * This hook listens for all invitation-related WebSocket events:
+ * - invitation_received: When someone invites you to an application
+ * - invitation_response: When someone accepts/rejects your invitation
+ * - member_added: When a new member joins an application
+ * - member_removed: When a member leaves/is removed from an application
+ * - role_updated: When a member's role is changed
+ *
+ * @example
+ * ```tsx
+ * function App() {
+ *   useInvitationNotifications({
+ *     onInvitationReceived: (data) => {
+ *       toast.info(`${data.inviter_name} invited you to ${data.application_name}`)
+ *     },
+ *     onInvitationResponse: (data) => {
+ *       toast.info(`${data.invitee_name} ${data.status} your invitation`)
+ *     }
+ *   })
+ * }
+ * ```
+ */
+export interface UseInvitationNotificationsOptions {
+  onInvitationReceived?: (data: InvitationReceivedEventData) => void
+  onInvitationResponse?: (data: InvitationResponseEventData) => void
+  onMemberAdded?: (data: MemberAddedEventData) => void
+  onMemberRemoved?: (data: MemberRemovedEventData) => void
+  onRoleUpdated?: (data: RoleUpdatedEventData) => void
+}
+
+export function useInvitationNotifications(
+  options: UseInvitationNotificationsOptions = {}
+): void {
+  const { subscribe, status } = useWebSocket()
+  const optionsRef = useRef(options)
+
+  useEffect(() => {
+    optionsRef.current = options
+  }, [options])
+
+  useEffect(() => {
+    if (!status.isConnected) {
+      return
+    }
+
+    const unsubscribes: Unsubscribe[] = []
+
+    // Listen for invitation received
+    unsubscribes.push(
+      subscribe<InvitationReceivedEventData>(
+        MessageType.INVITATION_RECEIVED,
+        (data) => optionsRef.current.onInvitationReceived?.(data)
+      )
+    )
+
+    // Listen for invitation response (accept/reject)
+    unsubscribes.push(
+      subscribe<InvitationResponseEventData>(
+        MessageType.INVITATION_RESPONSE,
+        (data) => optionsRef.current.onInvitationResponse?.(data)
+      )
+    )
+
+    // Listen for member added
+    unsubscribes.push(
+      subscribe<MemberAddedEventData>(
+        MessageType.MEMBER_ADDED,
+        (data) => optionsRef.current.onMemberAdded?.(data)
+      )
+    )
+
+    // Listen for member removed
+    unsubscribes.push(
+      subscribe<MemberRemovedEventData>(
+        MessageType.MEMBER_REMOVED,
+        (data) => optionsRef.current.onMemberRemoved?.(data)
+      )
+    )
+
+    // Listen for role updated
+    unsubscribes.push(
+      subscribe<RoleUpdatedEventData>(
+        MessageType.ROLE_UPDATED,
+        (data) => optionsRef.current.onRoleUpdated?.(data)
+      )
+    )
+
+    return () => {
+      unsubscribes.forEach((unsubscribe) => unsubscribe())
+    }
+  }, [status.isConnected, subscribe])
+}
+
+/**
+ * Hook for syncing notification read status across tabs/devices
+ *
+ * When a notification is marked as read on one device/tab, this hook
+ * receives the event via WebSocket and updates the local store.
+ *
+ * @example
+ * ```tsx
+ * function App() {
+ *   useNotificationReadSync()
+ *   // Now notification read status syncs across all open tabs
+ * }
+ * ```
+ */
+export function useNotificationReadSync(): void {
+  const { subscribe, status } = useWebSocket()
+
+  useEffect(() => {
+    if (!status.isConnected) {
+      return
+    }
+
+    const unsubscribe = subscribe<NotificationReadEventData>(
+      MessageType.NOTIFICATION_READ,
+      (data) => {
+        // Update the notification in local store (optimistic, no backend call)
+        const store = useNotificationsStore.getState()
+        const notification = store.notifications.find(
+          (n: { id: string }) => n.id === data.notification_id
+        )
+        if (notification && !notification.read) {
+          // Directly update state without calling markAsRead (which would trigger another backend call)
+          useNotificationsStore.setState((state) => ({
+            ...state,
+            notifications: state.notifications.map((n) =>
+              n.id === data.notification_id ? { ...n, read: true } : n
+            ),
+            unreadCount: Math.max(0, state.unreadCount - 1),
+          }))
+        }
+      }
+    )
+
+    return unsubscribe
+  }, [status.isConnected, subscribe])
+}
+
 // ============================================================================
 // Exports
 // ============================================================================
@@ -486,6 +745,7 @@ export {
   WebSocketClient,
   WebSocketState,
   MessageType,
+  debounce,
   type WebSocketMessage,
   type WebSocketConfig,
   type WebSocketEventListener,
@@ -495,4 +755,10 @@ export {
   type UserPresenceEventData,
   type ConnectedEventData,
   type RoomJoinedEventData,
+  type InvitationReceivedEventData,
+  type InvitationResponseEventData,
+  type MemberAddedEventData,
+  type MemberRemovedEventData,
+  type RoleUpdatedEventData,
+  type NotificationReadEventData,
 }

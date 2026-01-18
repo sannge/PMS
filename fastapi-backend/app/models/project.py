@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from .application import Application
     from .project_assignment import ProjectAssignment
     from .task import Task
+    from .user import User
 
 
 class Project(Base):
@@ -25,6 +26,7 @@ class Project(Base):
     Attributes:
         id: Unique identifier (UUID)
         application_id: FK to parent application
+        created_by: FK to the user who created the project
         name: Project name
         key: Short project key for task prefixes (e.g., "PROJ")
         description: Optional project description
@@ -49,6 +51,12 @@ class Project(Base):
         UNIQUEIDENTIFIER,
         ForeignKey("Applications.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
+    )
+    created_by = Column(
+        UNIQUEIDENTIFIER,
+        ForeignKey("Users.id", ondelete="SET NULL"),
+        nullable=True,
         index=True,
     )
 
@@ -91,6 +99,11 @@ class Project(Base):
         "Application",
         back_populates="projects",
         lazy="joined",
+    )
+    creator = relationship(
+        "User",
+        foreign_keys=[created_by],
+        lazy="select",  # Don't eagerly join - load only when accessed
     )
     tasks = relationship(
         "Task",

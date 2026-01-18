@@ -1,15 +1,63 @@
 """WebSocket event handlers for different event types."""
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from .manager import ConnectionManager, MessageType, WebSocketConnection, manager
 
 logger = logging.getLogger(__name__)
+
+
+async def broadcast_to_target_users(
+    mgr: ConnectionManager,
+    room_id: str,
+    message: dict[str, Any],
+    target_user_ids: list[UUID],
+) -> int:
+    """
+    Broadcast efficiently: room + specific users not in room.
+
+    Strategy for 5000+ concurrent users:
+    1. Broadcast to room (covers users actively viewing the page)
+    2. Send direct notifications only to specific target users NOT in room
+    3. All operations run in parallel
+
+    This is O(1) for room broadcast + O(k) parallel for k target users,
+    where k is typically 1-2 (the affected user + action performer).
+
+    Args:
+        mgr: The connection manager
+        room_id: The room to broadcast to
+        message: The message to send
+        target_user_ids: Specific users who MUST receive this (e.g., affected user)
+
+    Returns:
+        int: Total number of successful sends
+    """
+    # Get users currently in the room (O(1) set lookup prep)
+    users_in_room = set(mgr.get_room_users(room_id))
+
+    # Find target users NOT already in room
+    users_needing_direct = [
+        uid for uid in target_user_ids
+        if uid not in users_in_room
+    ]
+
+    # Run room broadcast and direct sends in parallel
+    tasks = [mgr.broadcast_to_room(room_id, message)]
+    tasks.extend(
+        mgr.broadcast_to_user(uid, message)
+        for uid in users_needing_direct
+    )
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    return sum(r for r in results if isinstance(r, int))
 
 
 class UpdateAction(str, Enum):
@@ -355,10 +403,11 @@ async def handle_application_update(
 
     recipients = await mgr.broadcast_to_room(room_id, message)
 
-    # For application deleted, we also need to broadcast to all users
-    # since the application list might need updating
-    if action == UpdateAction.DELETED:
-        await mgr.broadcast_to_all(message)
+    # Note: We intentionally do NOT broadcast_to_all for deleted applications
+    # as that would leak application information to unauthorized users.
+    # Users viewing the application get notified via room broadcast.
+    # Users with the application in their list will discover the deletion
+    # when they next fetch/interact with it (lazy invalidation).
 
     logger.info(
         f"Application {action.value}: application_id={application_id}, "
@@ -503,6 +552,7 @@ async def route_incoming_message(
     connection: WebSocketConnection,
     data: dict[str, Any],
     connection_manager: Optional[ConnectionManager] = None,
+    room_authorizer: Optional[Any] = None,
 ) -> None:
     """
     Route incoming WebSocket messages to appropriate handlers.
@@ -514,11 +564,33 @@ async def route_incoming_message(
         connection: The connection that sent the message
         data: The message data
         connection_manager: Optional custom manager (defaults to global)
+        room_authorizer: Optional callable(user_id, room_id) -> bool for room access check
     """
     mgr = connection_manager or manager
     message_type = data.get("type")
 
-    # First, let the manager handle core message types
+    # Intercept JOIN_ROOM to enforce authorization
+    if message_type == MessageType.JOIN_ROOM.value:
+        room_id = data.get("data", {}).get("room_id")
+        if room_id and room_authorizer:
+            is_authorized = await room_authorizer(connection.user_id, room_id)
+            if not is_authorized:
+                logger.warning(
+                    f"Room join denied: user={connection.user_id}, room={room_id}"
+                )
+                await mgr.send_personal(
+                    connection,
+                    {
+                        "type": MessageType.ERROR.value,
+                        "data": {
+                            "error": "UNAUTHORIZED",
+                            "message": f"Access denied to room: {room_id}",
+                        },
+                    },
+                )
+                return  # Don't process this message further
+
+    # Let the manager handle core message types
     await mgr.handle_message(connection, data)
 
     # Handle additional application-specific messages
@@ -672,8 +744,11 @@ async def handle_member_added(
     """
     Broadcast when a new member is added to an application.
 
-    This is called after an invitation is accepted or when an owner
-    directly adds a member.
+    Optimized for 5000+ concurrent users:
+    - Room broadcast: O(1) for users viewing the application
+    - Direct notification: Only to new member + inviter (2 users max)
+    - No DB query for all members needed
+    - All sends run in parallel
 
     Args:
         application_id: The application's UUID
@@ -681,7 +756,7 @@ async def handle_member_added(
             - user_id: UUID of the new member
             - user_name: Name of the new member
             - user_email: Email of the new member
-            - role: The member's role (owner, editor, viewer)
+            - role: The member's role
             - is_manager: Whether the member has manager privileges
             - added_by: UUID of who added the member
         connection_manager: Optional custom manager (defaults to global)
@@ -693,6 +768,7 @@ async def handle_member_added(
     room_id = get_application_room(application_id)
 
     payload: dict[str, Any] = {
+        "message_id": str(uuid4()),
         "application_id": str(application_id),
         **member_data,
         "timestamp": datetime.utcnow().isoformat(),
@@ -703,13 +779,32 @@ async def handle_member_added(
         "data": payload,
     }
 
-    recipients = await mgr.broadcast_to_room(room_id, message)
+    # Only notify: new member + person who added them
+    # Other members will see update when they view the page (room broadcast covers that)
+    target_users: list[UUID] = []
 
-    logger.info(
-        f"Member added notification: application_id={application_id}, "
-        f"user_id={member_data.get('user_id')}, "
-        f"role={member_data.get('role')}, "
-        f"recipients={recipients}"
+    new_user_id = member_data.get("user_id")
+    if new_user_id:
+        try:
+            target_users.append(
+                UUID(new_user_id) if isinstance(new_user_id, str) else new_user_id
+            )
+        except (ValueError, TypeError):
+            pass
+
+    added_by = member_data.get("added_by")
+    if added_by:
+        try:
+            added_by_uuid = UUID(added_by) if isinstance(added_by, str) else added_by
+            if added_by_uuid not in target_users:
+                target_users.append(added_by_uuid)
+        except (ValueError, TypeError):
+            pass
+
+    recipients = await broadcast_to_target_users(mgr, room_id, message, target_users)
+
+    logger.debug(
+        f"member_added: app={application_id}, user={new_user_id}, recipients={recipients}"
     )
 
     return BroadcastResult(
@@ -729,16 +824,14 @@ async def handle_member_removed(
     """
     Broadcast when a member is removed from an application.
 
-    This notifies both the application room and the removed user.
+    Optimized for scale:
+    - Room broadcast covers members viewing the page
+    - Direct notification only to removed user + remover
 
     Args:
         application_id: The application's UUID
         removed_user_id: The UUID of the removed user
-        member_data: The removal payload containing:
-            - user_id: UUID of the removed member
-            - user_name: Name of the removed member
-            - removed_by: UUID of who removed the member
-            - reason: Optional reason for removal
+        member_data: The removal payload
         connection_manager: Optional custom manager (defaults to global)
 
     Returns:
@@ -748,6 +841,7 @@ async def handle_member_removed(
     room_id = get_application_room(application_id)
 
     payload: dict[str, Any] = {
+        "message_id": str(uuid4()),
         "application_id": str(application_id),
         **member_data,
         "timestamp": datetime.utcnow().isoformat(),
@@ -758,16 +852,22 @@ async def handle_member_removed(
         "data": payload,
     }
 
-    # Broadcast to application room
-    recipients = await mgr.broadcast_to_room(room_id, message)
+    # Target: removed user + person who removed them
+    target_users: list[UUID] = [removed_user_id]
 
-    # Also notify the removed user directly
-    await mgr.broadcast_to_user(removed_user_id, message)
+    removed_by = member_data.get("removed_by")
+    if removed_by:
+        try:
+            removed_by_uuid = UUID(removed_by) if isinstance(removed_by, str) else removed_by
+            if removed_by_uuid != removed_user_id:
+                target_users.append(removed_by_uuid)
+        except (ValueError, TypeError):
+            pass
 
-    logger.info(
-        f"Member removed notification: application_id={application_id}, "
-        f"user_id={member_data.get('user_id')}, "
-        f"recipients={recipients}"
+    recipients = await broadcast_to_target_users(mgr, room_id, message, target_users)
+
+    logger.debug(
+        f"member_removed: app={application_id}, user={removed_user_id}, recipients={recipients}"
     )
 
     return BroadcastResult(
@@ -787,18 +887,14 @@ async def handle_role_updated(
     """
     Broadcast when a member's role is updated.
 
-    This notifies both the application room and the affected user.
+    Optimized for scale:
+    - Room broadcast covers members viewing the page
+    - Direct notification only to affected user + updater
 
     Args:
         application_id: The application's UUID
         user_id: The UUID of the user whose role changed
-        role_data: The role update payload containing:
-            - user_id: UUID of the affected member
-            - user_name: Name of the affected member
-            - old_role: Previous role
-            - new_role: New role
-            - is_manager: Whether member has manager privileges
-            - updated_by: UUID of who made the change
+        role_data: The role update payload
         connection_manager: Optional custom manager (defaults to global)
 
     Returns:
@@ -808,6 +904,7 @@ async def handle_role_updated(
     room_id = get_application_room(application_id)
 
     payload: dict[str, Any] = {
+        "message_id": str(uuid4()),
         "application_id": str(application_id),
         **role_data,
         "timestamp": datetime.utcnow().isoformat(),
@@ -818,18 +915,22 @@ async def handle_role_updated(
         "data": payload,
     }
 
-    # Broadcast to application room
-    recipients = await mgr.broadcast_to_room(room_id, message)
+    # Target: affected user + person who updated
+    target_users: list[UUID] = [user_id]
 
-    # Also notify the affected user directly
-    await mgr.broadcast_to_user(user_id, message)
+    updated_by = role_data.get("updated_by")
+    if updated_by:
+        try:
+            updated_by_uuid = UUID(updated_by) if isinstance(updated_by, str) else updated_by
+            if updated_by_uuid != user_id:
+                target_users.append(updated_by_uuid)
+        except (ValueError, TypeError):
+            pass
 
-    logger.info(
-        f"Role updated notification: application_id={application_id}, "
-        f"user_id={role_data.get('user_id')}, "
-        f"old_role={role_data.get('old_role')}, "
-        f"new_role={role_data.get('new_role')}, "
-        f"recipients={recipients}"
+    recipients = await broadcast_to_target_users(mgr, room_id, message, target_users)
+
+    logger.debug(
+        f"role_updated: app={application_id}, user={user_id}, recipients={recipients}"
     )
 
     return BroadcastResult(

@@ -39,16 +39,29 @@ def get_user_application_role(
     db: Session,
     user_id: UUID,
     application_id: UUID,
+    application: Optional[Application] = None,
 ) -> Optional[str]:
     """
     Get the user's role in an application.
 
+    Args:
+        db: Database session
+        user_id: The user's ID
+        application_id: The application's ID
+        application: Optional pre-fetched application to avoid extra query
+
     Returns:
         The role string ('owner', 'editor', 'viewer') or None if not a member.
     """
-    # Check if user is the owner
-    app = db.query(Application).filter(Application.id == application_id).first()
-    if app and app.owner_id == user_id:
+    # If application is provided, use it; otherwise fetch
+    if application is None:
+        application = db.query(Application).filter(Application.id == application_id).first()
+
+    if not application:
+        return None
+
+    # Check if user is the original owner
+    if application.owner_id == user_id:
         return "owner"
 
     # Check ApplicationMembers table
@@ -299,8 +312,8 @@ async def get_application(
             detail=f"Application with ID {application_id} not found",
         )
 
-    # Check if user is owner or member
-    user_role = get_user_application_role(db, current_user.id, application_id)
+    # Check if user is owner or member (pass application to avoid re-fetching)
+    user_role = get_user_application_role(db, current_user.id, application_id, application)
     if not user_role:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

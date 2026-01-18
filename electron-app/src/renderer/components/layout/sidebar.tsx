@@ -11,6 +11,7 @@
 
 import { useCallback, ReactNode } from 'react'
 import { cn } from '@/lib/utils'
+import { useNotificationsStore } from '@/stores/notifications-store'
 import {
   LayoutDashboard,
   FolderKanban,
@@ -33,6 +34,7 @@ export interface SidebarProps {
   onNavigate?: (item: NavItem) => void
   isCollapsed?: boolean
   onCollapsedChange?: (collapsed: boolean) => void
+  onNotificationClick?: () => void
   className?: string
 }
 
@@ -110,8 +112,12 @@ export function Sidebar({
   onNavigate,
   isCollapsed = false,
   onCollapsedChange,
+  onNotificationClick,
   className,
 }: SidebarProps): JSX.Element {
+  const unreadCount = useNotificationsStore((state) => state.unreadCount)
+  const toggleNotifications = useNotificationsStore((state) => state.toggleOpen)
+
   const handleNavigate = useCallback(
     (item: NavItem) => {
       onNavigate?.(item)
@@ -122,6 +128,14 @@ export function Sidebar({
   const toggleCollapsed = useCallback(() => {
     onCollapsedChange?.(!isCollapsed)
   }, [isCollapsed, onCollapsedChange])
+
+  const handleNotificationClick = useCallback(() => {
+    if (onNotificationClick) {
+      onNotificationClick()
+    } else {
+      toggleNotifications()
+    }
+  }, [onNotificationClick, toggleNotifications])
 
   const navItems = [
     { id: 'dashboard' as NavItem, icon: <LayoutDashboard className="h-4 w-4" />, label: 'Dashboard' },
@@ -186,8 +200,8 @@ export function Sidebar({
           icon={<Bell className="h-4 w-4" />}
           label="Alerts"
           isCollapsed={isCollapsed}
-          onClick={() => {}}
-          badge={3}
+          onClick={handleNotificationClick}
+          badge={unreadCount}
           index={5}
         />
 

@@ -21,6 +21,8 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     """Upgrade database schema."""
     # Create Invitations table
+    # Note: SQL Server doesn't allow multiple CASCADE paths to same table
+    # So inviter_id and invitee_id use NO ACTION instead of CASCADE
     op.create_table('Invitations',
     sa.Column('id', mssql.UNIQUEIDENTIFIER(), nullable=False),
     sa.Column('application_id', mssql.UNIQUEIDENTIFIER(), nullable=False),
@@ -31,8 +33,8 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.Column('responded_at', sa.DateTime(), nullable=True),
     sa.ForeignKeyConstraint(['application_id'], ['Applications.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['inviter_id'], ['Users.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['invitee_id'], ['Users.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['inviter_id'], ['Users.id'], ondelete='NO ACTION'),
+    sa.ForeignKeyConstraint(['invitee_id'], ['Users.id'], ondelete='NO ACTION'),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('application_id', 'invitee_id', name='uq_invitations_app_invitee')
     )
@@ -44,6 +46,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_Invitations_created_at'), 'Invitations', ['created_at'], unique=False)
 
     # Create ApplicationMembers table
+    # Note: SQL Server doesn't allow multiple CASCADE paths
     op.create_table('ApplicationMembers',
     sa.Column('id', mssql.UNIQUEIDENTIFIER(), nullable=False),
     sa.Column('application_id', mssql.UNIQUEIDENTIFIER(), nullable=False),
@@ -54,8 +57,8 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.ForeignKeyConstraint(['application_id'], ['Applications.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['user_id'], ['Users.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['invitation_id'], ['Invitations.id'], ondelete='SET NULL'),
+    sa.ForeignKeyConstraint(['user_id'], ['Users.id'], ondelete='NO ACTION'),
+    sa.ForeignKeyConstraint(['invitation_id'], ['Invitations.id'], ondelete='NO ACTION'),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('application_id', 'user_id', name='uq_application_members_app_user')
     )
@@ -66,6 +69,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_ApplicationMembers_created_at'), 'ApplicationMembers', ['created_at'], unique=False)
 
     # Create ProjectAssignments table
+    # Note: SQL Server doesn't allow multiple CASCADE paths to same table
     op.create_table('ProjectAssignments',
     sa.Column('id', mssql.UNIQUEIDENTIFIER(), nullable=False),
     sa.Column('project_id', mssql.UNIQUEIDENTIFIER(), nullable=False),
@@ -73,8 +77,8 @@ def upgrade() -> None:
     sa.Column('assigned_by', mssql.UNIQUEIDENTIFIER(), nullable=False),
     sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.ForeignKeyConstraint(['project_id'], ['Projects.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['user_id'], ['Users.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['assigned_by'], ['Users.id']),
+    sa.ForeignKeyConstraint(['user_id'], ['Users.id'], ondelete='NO ACTION'),
+    sa.ForeignKeyConstraint(['assigned_by'], ['Users.id'], ondelete='NO ACTION'),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('project_id', 'user_id', name='uq_project_assignments_project_user')
     )

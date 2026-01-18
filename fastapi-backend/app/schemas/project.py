@@ -78,6 +78,10 @@ class ProjectResponse(ProjectBase):
         ...,
         description="ID of the parent application",
     )
+    created_by: Optional[UUID] = Field(
+        None,
+        description="ID of the user who created the project",
+    )
     created_at: datetime = Field(
         ...,
         description="When the project was created",

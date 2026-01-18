@@ -100,3 +100,5 @@ Desktop.ini
 *.bak
 *.tmp
 *.temp
+
+temp-user-data-*/

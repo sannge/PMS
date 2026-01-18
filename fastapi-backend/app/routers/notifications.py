@@ -13,6 +13,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
+from ..models.invitation import Invitation
 from ..models.notification import Notification
 from ..models.user import User
 from ..schemas.notification import (
@@ -93,7 +94,31 @@ async def list_notifications(
     # Apply pagination
     notifications = query.offset(skip).limit(limit).all()
 
-    return notifications
+    # Enrich notifications with entity status (e.g., invitation status)
+    # Collect invitation entity IDs
+    invitation_ids = [
+        n.entity_id for n in notifications
+        if n.entity_type == EntityType.INVITATION.value and n.entity_id is not None
+    ]
+
+    # Fetch invitation statuses in bulk if there are any
+    invitation_status_map: dict[UUID, str] = {}
+    if invitation_ids:
+        invitations = db.query(Invitation.id, Invitation.status).filter(
+            Invitation.id.in_(invitation_ids)
+        ).all()
+        invitation_status_map = {inv.id: inv.status for inv in invitations}
+
+    # Build response with entity_status
+    result = []
+    for notification in notifications:
+        response = NotificationResponse.model_validate(notification)
+        # Add entity_status for invitation notifications
+        if notification.entity_type == EntityType.INVITATION.value and notification.entity_id:
+            response.entity_status = invitation_status_map.get(notification.entity_id)
+        result.append(response)
+
+    return result
 
 
 @router.get(
@@ -142,7 +167,6 @@ async def get_notification_count(
     responses={
         200: {"description": "Notification retrieved successfully"},
         401: {"description": "Not authenticated"},
-        403: {"description": "Access denied - not your notification"},
         404: {"description": "Notification not found"},
     },
 )
@@ -156,20 +180,17 @@ async def get_notification(
 
     Only the notification's owner can access it.
     """
+    # Filter by user_id in the query to prevent information leakage
+    # (attacker can't discover if notification IDs belonging to other users exist)
     notification = db.query(Notification).filter(
         Notification.id == notification_id,
+        Notification.user_id == current_user.id,
     ).first()
 
     if not notification:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Notification with ID {notification_id} not found",
-        )
-
-    if notification.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. This notification belongs to another user.",
+            detail="Notification not found",
         )
 
     return notification
@@ -183,7 +204,6 @@ async def get_notification(
     responses={
         200: {"description": "Notification updated successfully"},
         401: {"description": "Not authenticated"},
-        403: {"description": "Access denied - not your notification"},
         404: {"description": "Notification not found"},
     },
 )
@@ -201,20 +221,16 @@ async def update_notification(
     Only the notification's owner can update it.
     Broadcasts the read status change via WebSocket to sync across devices.
     """
+    # Filter by user_id in the query to prevent information leakage
     notification = db.query(Notification).filter(
         Notification.id == notification_id,
+        Notification.user_id == current_user.id,
     ).first()
 
     if not notification:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Notification with ID {notification_id} not found",
-        )
-
-    if notification.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. This notification belongs to another user.",
+            detail="Notification not found",
         )
 
     # Update read status if provided
@@ -239,7 +255,6 @@ async def update_notification(
     responses={
         204: {"description": "Notification deleted successfully"},
         401: {"description": "Not authenticated"},
-        403: {"description": "Access denied - not your notification"},
         404: {"description": "Notification not found"},
     },
 )
@@ -254,20 +269,16 @@ async def delete_notification(
     Only the notification's owner can delete it.
     This action is irreversible.
     """
+    # Filter by user_id in the query to prevent information leakage
     notification = db.query(Notification).filter(
         Notification.id == notification_id,
+        Notification.user_id == current_user.id,
     ).first()
 
     if not notification:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Notification with ID {notification_id} not found",
-        )
-
-    if notification.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. This notification belongs to another user.",
+            detail="Notification not found",
         )
 
     db.delete(notification)

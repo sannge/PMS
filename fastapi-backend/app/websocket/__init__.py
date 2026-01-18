@@ -22,6 +22,7 @@ from .handlers import (
     handle_user_presence,
     route_incoming_message,
 )
+from .room_auth import check_room_access
 
 __all__ = [
     # Manager
@@ -44,4 +45,6 @@ __all__ = [
     "handle_task_update",
     "handle_user_presence",
     "route_incoming_message",
+    # Room authorization
+    "check_room_access",
 ]

@@ -12,6 +12,8 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
+import { useWebSocket, MessageType, type MemberAddedEventData, type MemberRemovedEventData, type RoleUpdatedEventData } from '@/hooks/use-websocket'
+import { WebSocketClient } from '@/lib/websocket'
 import {
   useApplicationsStore,
   type Application,
@@ -23,9 +25,12 @@ import {
   type ProjectCreate,
   type ProjectUpdate,
 } from '@/stores/projects-store'
+import { useMembersStore } from '@/stores/members-store'
 import { ApplicationForm } from '@/components/applications/application-form'
 import { ProjectCard } from '@/components/projects/project-card'
 import { ProjectForm } from '@/components/projects/project-form'
+import { MemberAvatarGroup, MemberManagementModal } from '@/components/members'
+import { InvitationModal } from '@/components/invitations/invitation-modal'
 import {
   FolderKanban,
   ChevronRight,
@@ -40,6 +45,7 @@ import {
   X,
   Info,
   ArrowLeft,
+  UserPlus,
 } from 'lucide-react'
 
 // ============================================================================
@@ -387,13 +393,39 @@ export function ApplicationDetailPage({
     clearError: clearProjectsError,
   } = useProjectsStore()
 
+  // Members state
+  const {
+    members,
+    isLoading: isLoadingMembers,
+    isUpdating: isUpdatingMemberRole,
+    isRemoving: isRemovingMember,
+    fetchMembers,
+    updateMemberRole,
+    removeMember,
+    removeMemberFromList,
+    updateMemberRoleInList,
+  } = useMembersStore()
+
+  // Get current user ID
+  const currentUserId = useAuthStore((state) => state.user?.id)
+
+  // Permission checks based on user role
+  const userRole = selectedApplication?.user_role || 'viewer'
+  const isOwner = userRole === 'owner'
+  const canEditProjects = userRole === 'owner' || userRole === 'editor'
+
   // Local state
   const [isEditing, setIsEditing] = useState(false)
+  const [isInviteModalOpen, setIsInviteModalOpen] = useState(false)
+  const [isMemberModalOpen, setIsMemberModalOpen] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [projectModalMode, setProjectModalMode] = useState<'create' | 'edit' | null>(null)
   const [editingProject, setEditingProject] = useState<Project | null>(null)
   const [deletingProject, setDeletingProject] = useState<Project | null>(null)
   const [projectSearchQuery, setProjectSearchQuery] = useState('')
+  // Member management state
+  const [editingMember, setEditingMember] = useState<import('@/stores/members-store').MemberWithUser | null>(null)
+  const [removingMember, setRemovingMember] = useState<import('@/stores/members-store').MemberWithUser | null>(null)
 
   // Fetch application on mount
   useEffect(() => {
@@ -406,6 +438,156 @@ export function ApplicationDetailPage({
       fetchProjects(token, applicationId)
     }
   }, [token, applicationId, selectedApplication?.id, fetchProjects])
+
+  // Fetch members when application is loaded
+  useEffect(() => {
+    if (selectedApplication?.id === applicationId) {
+      fetchMembers(token, applicationId)
+    }
+  }, [token, applicationId, selectedApplication?.id, fetchMembers])
+
+  // Join application room for real-time member updates
+  const { joinRoom, leaveRoom, subscribe, status: wsStatus } = useWebSocket()
+  useEffect(() => {
+    if (!applicationId || !wsStatus.isConnected) {
+      console.log('[WS Room] Not joining room:', { applicationId, isConnected: wsStatus.isConnected })
+      return
+    }
+
+    const roomId = WebSocketClient.getApplicationRoom(applicationId)
+    console.log('[WS Room] Joining room:', roomId)
+    joinRoom(roomId)
+
+    return () => {
+      console.log('[WS Room] Leaving room:', roomId)
+      leaveRoom(roomId)
+    }
+  }, [applicationId, wsStatus.isConnected, joinRoom, leaveRoom])
+
+  // Subscribe to member events directly for real-time updates
+  // This handles the case where members change while viewing the application
+  useEffect(() => {
+    if (!wsStatus.isConnected || !applicationId) {
+      console.log('[WS Subscribe] Not subscribing:', { applicationId, isConnected: wsStatus.isConnected })
+      return
+    }
+
+    console.log('[WS Subscribe] Setting up member event subscriptions for:', applicationId)
+
+    // Handle member added - refresh members list
+    const unsubMemberAdded = subscribe<MemberAddedEventData>(
+      MessageType.MEMBER_ADDED,
+      (data) => {
+        console.log('[WS Event] MEMBER_ADDED received:', data)
+        console.log('[WS Event] Comparing:', { dataAppId: data.application_id, currentAppId: applicationId, match: data.application_id === applicationId })
+        if (data.application_id === applicationId && token) {
+          console.log('[WS Event] Fetching members for:', applicationId)
+          fetchMembers(token, applicationId)
+        }
+      }
+    )
+
+    // Handle member removed - update local state directly (no refetch needed)
+    const unsubMemberRemoved = subscribe<MemberRemovedEventData>(
+      MessageType.MEMBER_REMOVED,
+      (data) => {
+        console.log('[WS Event] MEMBER_REMOVED received:', data)
+        if (data.application_id === applicationId) {
+          // Update local state directly without API call
+          removeMemberFromList(data.user_id)
+        }
+      }
+    )
+
+    // Handle role updated - update local state and refresh application if current user's role changed
+    const unsubRoleUpdated = subscribe<RoleUpdatedEventData>(
+      MessageType.ROLE_UPDATED,
+      (data) => {
+        console.log('[WS Event] ROLE_UPDATED received:', data)
+        if (data.application_id === applicationId) {
+          // Update local state directly without API call
+          updateMemberRoleInList(data.user_id, data.new_role as import('@/stores/members-store').ApplicationRole)
+          // If the current user's role was updated, refresh the application to update permissions
+          if (data.user_id === currentUserId && token) {
+            console.log('[WS Event] Current user role changed, refreshing application')
+            fetchApplication(token, applicationId)
+          }
+        }
+      }
+    )
+
+    return () => {
+      console.log('[WS Subscribe] Cleaning up subscriptions for:', applicationId)
+      unsubMemberAdded()
+      unsubMemberRemoved()
+      unsubRoleUpdated()
+    }
+  }, [wsStatus.isConnected, applicationId, token, subscribe, fetchMembers, currentUserId, fetchApplication, removeMemberFromList, updateMemberRoleInList])
+
+  // Handle invite modal
+  const handleOpenInviteModal = useCallback(() => {
+    setIsInviteModalOpen(true)
+  }, [])
+
+  const handleCloseInviteModal = useCallback(() => {
+    setIsInviteModalOpen(false)
+  }, [])
+
+  const handleInvitationSent = useCallback(() => {
+    // Refresh members list after invitation sent
+    fetchMembers(token, applicationId)
+  }, [token, applicationId, fetchMembers])
+
+  // ============================================================================
+  // Member Handlers
+  // ============================================================================
+
+  // Handle edit member role
+  const handleEditMemberRole = useCallback(
+    (member: import('@/stores/members-store').MemberWithUser) => {
+      setEditingMember(member)
+    },
+    []
+  )
+
+  // Handle remove member click
+  const handleRemoveMemberClick = useCallback(
+    (member: import('@/stores/members-store').MemberWithUser) => {
+      setRemovingMember(member)
+    },
+    []
+  )
+
+  // Handle confirm role change
+  const handleConfirmRoleChange = useCallback(
+    async (newRole: import('@/stores/members-store').ApplicationRole) => {
+      if (!editingMember) return
+
+      await updateMemberRole(token, applicationId, editingMember.user_id, { role: newRole })
+      setEditingMember(null)
+    },
+    [token, applicationId, editingMember, updateMemberRole]
+  )
+
+  // Handle cancel role change
+  const handleCancelRoleChange = useCallback(() => {
+    setEditingMember(null)
+  }, [])
+
+  // Handle confirm remove member
+  const handleConfirmRemoveMember = useCallback(async () => {
+    if (!removingMember) return
+
+    const success = await removeMember(token, applicationId, removingMember.user_id)
+    if (success) {
+      setRemovingMember(null)
+    }
+  }, [token, applicationId, removingMember, removeMember])
+
+  // Handle cancel remove member
+  const handleCancelRemoveMember = useCallback(() => {
+    setRemovingMember(null)
+  }, [])
 
   // Handle edit
   const handleEdit = useCallback(() => {
@@ -636,8 +818,38 @@ export function ApplicationDetailPage({
         {/* Right: Actions */}
         <div className="flex items-center gap-1 flex-shrink-0">
           <InfoTooltip application={application} />
-          <ActionsDropdown onEdit={handleEdit} onDelete={handleDeleteClick} />
+          {isOwner && (
+            <ActionsDropdown onEdit={handleEdit} onDelete={handleDeleteClick} />
+          )}
         </div>
+      </div>
+
+      {/* Team Section - Compact display with avatar group */}
+      <div className="flex items-center justify-between gap-3 py-2">
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-medium text-muted-foreground">Team</span>
+          <MemberAvatarGroup
+            members={members}
+            totalCount={members.length}
+            maxDisplay={5}
+            size="sm"
+            onClick={() => setIsMemberModalOpen(true)}
+            isLoading={isLoadingMembers}
+          />
+        </div>
+        {canEditProjects && (
+          <button
+            onClick={handleOpenInviteModal}
+            className={cn(
+              'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium',
+              'text-primary hover:bg-primary/10 transition-colors',
+              'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+            )}
+          >
+            <UserPlus className="h-3.5 w-3.5" />
+            Invite
+          </button>
+        )}
       </div>
 
       {/* Projects Section - Compact Header */}
@@ -673,17 +885,19 @@ export function ApplicationDetailPage({
               </div>
             )}
           </div>
-          <button
-            onClick={handleCreateProject}
-            className={cn(
-              'inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground',
-              'hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
-              'transition-colors flex-shrink-0'
-            )}
-          >
-            <Plus className="h-3.5 w-3.5" />
-            New Project
-          </button>
+          {canEditProjects && (
+            <button
+              onClick={handleCreateProject}
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground',
+                'hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                'transition-colors flex-shrink-0'
+              )}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              New Project
+            </button>
+          )}
         </div>
 
         {/* Projects Error Display */}
@@ -722,7 +936,7 @@ export function ApplicationDetailPage({
                 ? `No matches for "${projectSearchQuery}"`
                 : 'Get started by creating your first project.'}
             </p>
-            {!projectSearchQuery && (
+            {!projectSearchQuery && canEditProjects && (
               <button
                 onClick={handleCreateProject}
                 className={cn(
@@ -745,8 +959,8 @@ export function ApplicationDetailPage({
                 key={project.id}
                 project={project}
                 onClick={onSelectProject ? handleProjectClick : undefined}
-                onEdit={handleEditProject}
-                onDelete={handleDeleteProjectClick}
+                onEdit={canEditProjects ? handleEditProject : undefined}
+                onDelete={canEditProjects ? handleDeleteProjectClick : undefined}
                 disabled={isDeletingProject}
               />
             ))}
@@ -844,6 +1058,161 @@ export function ApplicationDetailPage({
           </div>
         </div>
       )}
+
+      {/* Member Management Modal */}
+      <MemberManagementModal
+        isOpen={isMemberModalOpen}
+        onClose={() => setIsMemberModalOpen(false)}
+        members={members}
+        isLoading={isLoadingMembers}
+        totalCount={members.length}
+        currentUserId={currentUserId}
+        currentUserRole={userRole}
+        originalOwnerId={selectedApplication?.owner_id}
+        isUpdatingRole={isUpdatingMemberRole}
+        isRemovingMember={isRemovingMember}
+        onEditRole={handleEditMemberRole}
+        onRemoveMember={handleRemoveMemberClick}
+        onInvite={() => {
+          setIsMemberModalOpen(false)
+          handleOpenInviteModal()
+        }}
+        applicationName={selectedApplication?.name}
+      />
+
+      {/* Edit Member Role Dialog */}
+      {editingMember && (() => {
+        // Determine which roles can be selected based on current user's role and member being edited
+        const isUserOwner = userRole === 'owner'
+        const isUserEditor = userRole === 'editor'
+        const memberIsViewer = editingMember.role === 'viewer'
+
+        // Editors can only change viewers to editors (promotion only)
+        // Owners can change to any role
+        let availableRoles: Array<'owner' | 'editor' | 'viewer'> = []
+        if (isUserOwner) {
+          availableRoles = ['owner', 'editor', 'viewer']
+        } else if (isUserEditor && memberIsViewer) {
+          // Editors can only promote viewers to editor
+          availableRoles = ['editor', 'viewer']
+        }
+
+        return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-lg border border-border bg-card p-6 shadow-lg">
+            <h3 className="text-lg font-semibold text-foreground">Change Role</h3>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Select a new role for <strong>{editingMember.user?.full_name || editingMember.user?.email}</strong>
+            </p>
+            <div className="mt-4 space-y-2">
+              {availableRoles.map((role) => (
+                <button
+                  key={role}
+                  onClick={() => handleConfirmRoleChange(role)}
+                  disabled={isUpdatingMemberRole}
+                  className={cn(
+                    'flex w-full items-center justify-between rounded-md border px-4 py-3 text-sm transition-colors',
+                    'disabled:cursor-not-allowed disabled:opacity-50',
+                    editingMember.role === role
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-input hover:bg-accent hover:text-accent-foreground'
+                  )}
+                >
+                  <span className="font-medium capitalize">{role}</span>
+                  {editingMember.role === role && (
+                    <span className="text-xs text-muted-foreground">Current</span>
+                  )}
+                </button>
+              ))}
+            </div>
+            {isUpdatingMemberRole && (
+              <div className="mt-3 flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Updating role...
+              </div>
+            )}
+            <div className="mt-6 flex items-center justify-end">
+              <button
+                onClick={handleCancelRoleChange}
+                disabled={isUpdatingMemberRole}
+                className={cn(
+                  'rounded-md border border-input bg-background px-4 py-2 text-sm font-medium text-foreground',
+                  'hover:bg-accent hover:text-accent-foreground',
+                  'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                  'disabled:cursor-not-allowed disabled:opacity-50',
+                  'transition-colors duration-200'
+                )}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+        )
+      })()}
+
+      {/* Remove Member Confirmation Dialog */}
+      {removingMember && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-lg border border-border bg-card p-6 shadow-lg">
+            <div className="flex items-start gap-4">
+              <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+                <AlertCircle className="h-5 w-5" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold text-foreground">Remove Member</h3>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Are you sure you want to remove <strong>{removingMember.user?.full_name || removingMember.user?.email}</strong> from this application?
+                  They will lose access to all projects and tasks.
+                </p>
+              </div>
+            </div>
+            <div className="mt-6 flex items-center justify-end gap-3">
+              <button
+                onClick={handleCancelRemoveMember}
+                disabled={isRemovingMember}
+                className={cn(
+                  'rounded-md border border-input bg-background px-4 py-2 text-sm font-medium text-foreground',
+                  'hover:bg-accent hover:text-accent-foreground',
+                  'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                  'disabled:cursor-not-allowed disabled:opacity-50',
+                  'transition-colors duration-200'
+                )}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmRemoveMember}
+                disabled={isRemovingMember}
+                className={cn(
+                  'rounded-md bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground',
+                  'hover:bg-destructive/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                  'disabled:cursor-not-allowed disabled:opacity-50',
+                  'transition-colors duration-200'
+                )}
+              >
+                {isRemovingMember ? (
+                  <span className="flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Removing...
+                  </span>
+                ) : (
+                  'Remove'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Invitation Modal */}
+      <InvitationModal
+        isOpen={isInviteModalOpen}
+        applicationId={applicationId}
+        applicationName={application.name}
+        onClose={handleCloseInviteModal}
+        onInvitationSent={handleInvitationSent}
+      />
     </div>
   )
 }

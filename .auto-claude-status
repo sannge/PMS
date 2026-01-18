@@ -1,15 +1,15 @@
 {
   "active": true,
   "spec": "003-be-able-to-invite-other-users-into-applications-us",
-  "state": "building",
+  "state": "complete",
   "subtasks": {
-    "completed": 31,
+    "completed": 35,
     "total": 35,
-    "in_progress": 1,
+    "in_progress": 0,
     "failed": 0
   },
   "phase": {
-    "current": "Member Management UI",
+    "current": "Integration",
     "id": null,
     "total": 3
   },
@@ -18,8 +18,8 @@
     "max": 1
   },
   "session": {
-    "number": 144,
+    "number": 1241,
     "started_at": "2026-01-17T20:36:35.197613"
   },
-  "last_update": "2026-01-17T22:11:26.506598"
+  "last_update": "2026-01-18T02:11:09.478412"
 }

@@ -14,15 +14,15 @@ class Settings(BaseSettings):
     )
 
     # Database settings
-    db_server: str = "10.18.138.240"
-    db_name: str = "PMDB"
-    db_user: str = "pmdbuser"
-    db_password: str = "never!again"
+    db_server: str
+    db_name: str
+    db_user: str
+    db_password: str
 
     # MinIO settings
-    minio_endpoint: str = "10.18.136.10:9000"
-    minio_access_key: str = "minioadmin"
-    minio_secret_key: str = "Windows2"
+    minio_endpoint: str
+    minio_access_key: str
+    minio_secret_key: str
     minio_secure: bool = False
 
     # JWT settings
@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     # Server settings
     host: str = "0.0.0.0"
     port: int = 8000
+
+    # WebSocket settings (DDoS protection)
+    ws_max_connections_per_user: int = 50  # Normal user: ~5-10, attack: 100+
+    ws_max_message_size: int = 65536  # 64KB max message size (DoS protection)
 
     @property
     def database_url(self) -> str:

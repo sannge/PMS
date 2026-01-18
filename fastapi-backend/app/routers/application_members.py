@@ -1,8 +1,13 @@
 """Application Members CRUD API endpoints.
 
 Provides endpoints for managing application members.
-Supports listing members, updating roles, removing members, and manager assignment.
+Supports listing members, updating roles, and removing members.
 All endpoints require authentication.
+
+Role-based permissions:
+- Viewer: Can view members only. Cannot edit roles, invite, or remove members.
+- Editor: Can promote viewers to editors. Can invite with viewer or editor roles.
+- Owner: Full access - can invite with any role, update any role, remove members.
 """
 
 from datetime import datetime
@@ -11,7 +16,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from ..database import get_db
 from ..models.application import Application
@@ -19,7 +24,6 @@ from ..models.application_member import ApplicationMember
 from ..models.notification import Notification
 from ..models.user import User
 from ..schemas.application_member import (
-    ManagerAssignment,
     MemberResponse,
     MemberUpdate,
     MemberWithUser,
@@ -44,16 +48,29 @@ def get_user_application_role(
     db: Session,
     user_id: UUID,
     application_id: UUID,
+    application: Optional[Application] = None,
 ) -> Optional[str]:
     """
     Get the user's role in an application.
 
+    Args:
+        db: Database session
+        user_id: The user's ID
+        application_id: The application's ID
+        application: Optional pre-fetched application to avoid extra query
+
     Returns:
         The role string ('owner', 'editor', 'viewer') or None if not a member.
     """
-    # Check if user is the owner
-    app = db.query(Application).filter(Application.id == application_id).first()
-    if app and app.owner_id == user_id:
+    # If application is provided, use it; otherwise fetch
+    if application is None:
+        application = db.query(Application).filter(Application.id == application_id).first()
+
+    if not application:
+        return None
+
+    # Check if user is the original owner
+    if application.owner_id == user_id:
         return "owner"
 
     # Check ApplicationMembers table
@@ -83,20 +100,14 @@ def is_application_member(
     return get_user_application_role(db, user_id, application_id) is not None
 
 
-def is_application_creator(
+def is_application_editor_or_above(
     db: Session,
     user_id: UUID,
     application_id: UUID,
 ) -> bool:
-    """
-    Check if the user is the original creator of the application.
-
-    The creator is the user referenced by owner_id in the Application table.
-    This is different from being an owner through membership - only the
-    original creator can assign manager roles.
-    """
-    app = db.query(Application).filter(Application.id == application_id).first()
-    return app is not None and app.owner_id == user_id
+    """Check if the user is an editor or owner of the application."""
+    role = get_user_application_role(db, user_id, application_id)
+    return role in ("owner", "editor")
 
 
 def get_owner_count(
@@ -165,15 +176,20 @@ async def list_application_members(
     List members of an application.
 
     Any member of the application can view the member list.
+    The application owner is always included in the list even if not in the
+    ApplicationMembers table.
 
     - **skip**: Number of records to skip for pagination
     - **limit**: Maximum number of records to return (1-100)
     - **role**: Optional filter by member role
 
     Returns members ordered by creation date (oldest first, so original members appear first).
+    The owner appears first.
     """
-    # Verify application exists
-    application = db.query(Application).filter(
+    # Fetch application with owner eagerly loaded in single query
+    application = db.query(Application).options(
+        joinedload(Application.owner)
+    ).filter(
         Application.id == application_id,
     ).first()
 
@@ -183,28 +199,73 @@ async def list_application_members(
             detail=f"Application with ID {application_id} not found",
         )
 
-    # Verify current user is a member
-    if not is_application_member(db, current_user.id, application_id):
+    # Fetch all members with users eagerly loaded in a single optimized query
+    # This also serves to check if current user is a member
+    all_members_query = db.query(ApplicationMember).options(
+        joinedload(ApplicationMember.user)
+    ).filter(
+        ApplicationMember.application_id == application_id,
+    )
+
+    all_members = all_members_query.all()
+
+    # Check if current user is a member (either app owner or in members list)
+    is_app_owner = application.owner_id == current_user.id
+    current_user_member = next(
+        (m for m in all_members if m.user_id == current_user.id),
+        None
+    )
+
+    if not is_app_owner and not current_user_member:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied. You must be a member of this application.",
         )
 
-    query = db.query(ApplicationMember).filter(
-        ApplicationMember.application_id == application_id,
+    result_members = []
+
+    # Check if owner is in the members list
+    owner_in_members = next(
+        (m for m in all_members if m.user_id == application.owner_id),
+        None
     )
 
-    # Apply role filter if provided
+    # If owner is not in members table, create a synthetic member entry
+    # and add them at the beginning (only if not filtering by role or filtering by owner)
+    if not owner_in_members and application.owner_id and application.owner:
+        if role_filter is None or role_filter == ApplicationRole.OWNER:
+            # Create a synthetic member object for the owner
+            # This won't be persisted, just returned in the response
+            synthetic_owner = ApplicationMember(
+                id=application.owner_id,  # Use owner's user_id as member id
+                application_id=application_id,
+                user_id=application.owner_id,
+                role=ApplicationRole.OWNER.value,
+                is_manager=False,
+                created_at=application.created_at,  # Use app creation date
+                updated_at=application.updated_at,
+            )
+            # Manually set the user relationship for serialization
+            synthetic_owner.user = application.owner
+            result_members.append(synthetic_owner)
+
+    # Filter and sort members in memory (already fetched)
+    filtered_members = all_members
     if role_filter:
-        query = query.filter(ApplicationMember.role == role_filter.value)
+        filtered_members = [m for m in all_members if m.role == role_filter.value]
 
-    # Order by creation date (oldest first)
-    query = query.order_by(ApplicationMember.created_at.asc())
+    # Sort by creation date (oldest first)
+    filtered_members = sorted(filtered_members, key=lambda m: m.created_at)
 
-    # Apply pagination
-    members = query.offset(skip).limit(limit).all()
+    # Apply pagination (account for synthetic owner if present)
+    effective_skip = max(0, skip - len(result_members)) if result_members else skip
+    effective_limit = limit - len(result_members) if result_members else limit
 
-    return members
+    if effective_limit > 0:
+        paginated_members = filtered_members[effective_skip:effective_skip + effective_limit]
+        result_members.extend(paginated_members)
+
+    return result_members
 
 
 @router.get(
@@ -268,11 +329,6 @@ async def get_member_count(
         ApplicationMember.role == ApplicationRole.VIEWER.value,
     ).scalar() or 0
 
-    managers = db.query(func.count(ApplicationMember.id)).filter(
-        ApplicationMember.application_id == application_id,
-        ApplicationMember.is_manager == True,
-    ).scalar() or 0
-
     return {
         "total": total,
         "by_role": {
@@ -280,7 +336,6 @@ async def get_member_count(
             "editors": editors,
             "viewers": viewers,
         },
-        "managers": managers,
     }
 
 
@@ -353,7 +408,7 @@ async def get_member(
         200: {"description": "Member updated successfully"},
         400: {"description": "Invalid role change"},
         401: {"description": "Not authenticated"},
-        403: {"description": "Access denied - not an owner"},
+        403: {"description": "Access denied - insufficient permissions"},
         404: {"description": "Application or member not found"},
     },
 )
@@ -367,11 +422,12 @@ async def update_member_role(
     """
     Update a member's role.
 
-    Only application owners can update member roles.
-    Cannot remove the last owner from an application.
+    Role-based permissions:
+    - Viewer: Cannot update roles
+    - Editor: Can only promote viewers to editors
+    - Owner: Can update any role (owner, editor, viewer)
 
-    - **role**: New role (owner, editor, viewer)
-    - **is_manager**: Whether to grant/revoke manager privileges (editors only)
+    Cannot remove the last owner from an application.
     """
     # Verify application exists
     application = db.query(Application).filter(
@@ -384,11 +440,20 @@ async def update_member_role(
             detail=f"Application with ID {application_id} not found",
         )
 
-    # Verify current user is owner
-    if not is_application_owner(db, current_user.id, application_id):
+    # Get current user's role (pass application to avoid re-fetching)
+    current_user_role = get_user_application_role(db, current_user.id, application_id, application)
+
+    if current_user_role is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. Only application owners can update member roles.",
+            detail="Access denied. You must be a member of this application.",
+        )
+
+    # Viewers cannot update roles
+    if current_user_role == "viewer":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. Viewers cannot update member roles.",
         )
 
     # Cannot update your own role
@@ -398,7 +463,10 @@ async def update_member_role(
             detail="You cannot update your own role.",
         )
 
-    member = db.query(ApplicationMember).filter(
+    # Fetch member with user eagerly loaded
+    member = db.query(ApplicationMember).options(
+        joinedload(ApplicationMember.user)
+    ).filter(
         ApplicationMember.application_id == application_id,
         ApplicationMember.user_id == user_id,
     ).first()
@@ -411,10 +479,30 @@ async def update_member_role(
 
     old_role = member.role
 
-    # Validate role change
-    if member_data.role is not None:
-        new_role = member_data.role.value
+    if member_data.role is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Role is required.",
+        )
 
+    new_role = member_data.role.value
+
+    # Editor permission checks
+    if current_user_role == "editor":
+        # Editors can only promote viewers to editors
+        if old_role != ApplicationRole.VIEWER.value:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Editors can only change the role of viewers.",
+            )
+        if new_role != ApplicationRole.EDITOR.value:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Editors can only promote viewers to editors.",
+            )
+
+    # Owner permission checks
+    if current_user_role == "owner":
         # Prevent removing last owner
         if old_role == ApplicationRole.OWNER.value and new_role != ApplicationRole.OWNER.value:
             owner_count = get_owner_count(db, application_id)
@@ -424,36 +512,13 @@ async def update_member_role(
                     detail="Cannot change role. This is the last owner of the application.",
                 )
 
-        member.role = new_role
-
-        # If downgrading from editor to viewer, remove manager role
-        if old_role == ApplicationRole.EDITOR.value and new_role == ApplicationRole.VIEWER.value:
-            member.is_manager = False
-
-    # Handle is_manager separately (only for editors)
-    if member_data.is_manager is not None:
-        # Manager role can only be assigned to editors
-        if member.role != ApplicationRole.EDITOR.value and member_data.is_manager:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Manager role can only be assigned to editors.",
-            )
-
-        # Only the application creator can assign manager role
-        if member_data.is_manager and not is_application_creator(db, current_user.id, application_id):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only the application creator can assign manager role.",
-            )
-
-        member.is_manager = member_data.is_manager
-
+    member.role = new_role
     member.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(member)
 
     # Create notification for affected user
-    if member_data.role is not None and old_role != member.role:
+    if old_role != member.role:
         notification = Notification(
             user_id=user_id,
             type=NotificationType.ROLE_CHANGED.value,
@@ -472,10 +537,11 @@ async def update_member_role(
             role_data={
                 "user_id": str(user_id),
                 "user_name": member.user.display_name or member.user.email if member.user else None,
+                "application_name": application.name,
                 "old_role": old_role,
                 "new_role": member.role,
-                "is_manager": member.is_manager,
                 "updated_by": str(current_user.id),
+                "updated_by_name": current_user.display_name or current_user.email,
             },
         )
 
@@ -491,7 +557,7 @@ async def update_member_role(
         204: {"description": "Member removed successfully"},
         400: {"description": "Cannot remove last owner"},
         401: {"description": "Not authenticated"},
-        403: {"description": "Access denied - not an owner"},
+        403: {"description": "Access denied - insufficient permissions"},
         404: {"description": "Application or member not found"},
     },
 )
@@ -504,9 +570,13 @@ async def remove_member(
     """
     Remove a member from the application.
 
-    Only application owners can remove members.
+    Role-based permissions:
+    - Any member can remove themselves (self-removal)
+    - Viewer: Cannot remove other members
+    - Editor: Cannot remove other members
+    - Owner: Can remove any member
+
     Cannot remove the last owner.
-    Members can remove themselves from an application.
     """
     # Verify application exists
     application = db.query(Application).filter(
@@ -519,17 +589,29 @@ async def remove_member(
             detail=f"Application with ID {application_id} not found",
         )
 
-    # Members can remove themselves, owners can remove anyone
-    is_self_removal = user_id == current_user.id
-    is_owner = is_application_owner(db, current_user.id, application_id)
+    # Get current user's role (pass application to avoid re-fetching)
+    current_user_role = get_user_application_role(db, current_user.id, application_id, application)
 
+    if current_user_role is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. You must be a member of this application.",
+        )
+
+    is_self_removal = user_id == current_user.id
+    is_owner = current_user_role == "owner"
+
+    # Only owners can remove other members (anyone can self-remove)
     if not is_self_removal and not is_owner:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. Only application owners can remove other members.",
+            detail="Access denied. Only owners can remove other members.",
         )
 
-    member = db.query(ApplicationMember).filter(
+    # Fetch member with user eagerly loaded
+    member = db.query(ApplicationMember).options(
+        joinedload(ApplicationMember.user)
+    ).filter(
         ApplicationMember.application_id == application_id,
         ApplicationMember.user_id == user_id,
     ).first()
@@ -556,215 +638,33 @@ async def remove_member(
     db.delete(member)
     db.commit()
 
+    # Create notification for removed user (unless self-removal)
+    if not is_self_removal:
+        remover_name = current_user.display_name or current_user.email
+        notification = Notification(
+            user_id=user_id,
+            type=NotificationType.MEMBER_REMOVED.value,
+            title="Removed from Application",
+            message=f"You were removed from '{application.name}' by {remover_name}",
+            entity_type=EntityType.APPLICATION.value,
+            entity_id=application_id,
+        )
+        db.add(notification)
+        db.commit()
+
     # Send WebSocket notification
+    remover_name = current_user.display_name or current_user.email
     await handle_member_removed(
         application_id=application_id,
         removed_user_id=user_id,
         member_data={
             "user_id": str(user_id),
             "user_name": member_name,
+            "application_name": application.name,
             "removed_by": str(current_user.id),
+            "removed_by_name": remover_name,
             "reason": "self_removal" if is_self_removal else "removed_by_owner",
         },
     )
 
     return None
-
-
-# ============================================================================
-# Manager role endpoints
-# ============================================================================
-
-
-@router.post(
-    "/{application_id}/members/{user_id}/manager",
-    response_model=MemberWithUser,
-    summary="Grant manager role",
-    description="Grant manager role to an editor.",
-    responses={
-        200: {"description": "Manager role granted successfully"},
-        400: {"description": "User is not an editor or already a manager"},
-        401: {"description": "Not authenticated"},
-        403: {"description": "Access denied - not the creator"},
-        404: {"description": "Application or member not found"},
-    },
-)
-async def grant_manager_role(
-    application_id: UUID,
-    user_id: UUID,
-    current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
-) -> MemberWithUser:
-    """
-    Grant manager role to an editor.
-
-    Only the application creator can grant manager role.
-    Manager role can only be assigned to editors.
-    """
-    # Verify application exists
-    application = db.query(Application).filter(
-        Application.id == application_id,
-    ).first()
-
-    if not application:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Application with ID {application_id} not found",
-        )
-
-    # Only creator can assign manager role
-    if not is_application_creator(db, current_user.id, application_id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. Only the application creator can grant manager role.",
-        )
-
-    member = db.query(ApplicationMember).filter(
-        ApplicationMember.application_id == application_id,
-        ApplicationMember.user_id == user_id,
-    ).first()
-
-    if not member:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Member with user ID {user_id} not found in this application",
-        )
-
-    # Manager role is only for editors
-    if member.role != ApplicationRole.EDITOR.value:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Manager role can only be assigned to editors.",
-        )
-
-    if member.is_manager:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="This member is already a manager.",
-        )
-
-    member.is_manager = True
-    member.updated_at = datetime.utcnow()
-    db.commit()
-    db.refresh(member)
-
-    # Create notification for affected user
-    notification = Notification(
-        user_id=user_id,
-        type=NotificationType.ROLE_CHANGED.value,
-        title="Manager Role Granted",
-        message=f"You have been granted manager privileges in '{application.name}'",
-        entity_type=EntityType.APPLICATION_MEMBER.value,
-        entity_id=member.id,
-    )
-    db.add(notification)
-    db.commit()
-
-    # Send WebSocket notification
-    await handle_role_updated(
-        application_id=application_id,
-        user_id=user_id,
-        role_data={
-            "user_id": str(user_id),
-            "user_name": member.user.display_name or member.user.email if member.user else None,
-            "old_role": member.role,
-            "new_role": member.role,
-            "is_manager": True,
-            "updated_by": str(current_user.id),
-        },
-    )
-
-    return member
-
-
-@router.delete(
-    "/{application_id}/members/{user_id}/manager",
-    response_model=MemberWithUser,
-    summary="Revoke manager role",
-    description="Revoke manager role from an editor.",
-    responses={
-        200: {"description": "Manager role revoked successfully"},
-        400: {"description": "User is not a manager"},
-        401: {"description": "Not authenticated"},
-        403: {"description": "Access denied - not the creator"},
-        404: {"description": "Application or member not found"},
-    },
-)
-async def revoke_manager_role(
-    application_id: UUID,
-    user_id: UUID,
-    current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
-) -> MemberWithUser:
-    """
-    Revoke manager role from an editor.
-
-    Only the application creator can revoke manager role.
-    """
-    # Verify application exists
-    application = db.query(Application).filter(
-        Application.id == application_id,
-    ).first()
-
-    if not application:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Application with ID {application_id} not found",
-        )
-
-    # Only creator can revoke manager role
-    if not is_application_creator(db, current_user.id, application_id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. Only the application creator can revoke manager role.",
-        )
-
-    member = db.query(ApplicationMember).filter(
-        ApplicationMember.application_id == application_id,
-        ApplicationMember.user_id == user_id,
-    ).first()
-
-    if not member:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Member with user ID {user_id} not found in this application",
-        )
-
-    if not member.is_manager:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="This member is not a manager.",
-        )
-
-    member.is_manager = False
-    member.updated_at = datetime.utcnow()
-    db.commit()
-    db.refresh(member)
-
-    # Create notification for affected user
-    notification = Notification(
-        user_id=user_id,
-        type=NotificationType.ROLE_CHANGED.value,
-        title="Manager Role Revoked",
-        message=f"Your manager privileges in '{application.name}' have been revoked",
-        entity_type=EntityType.APPLICATION_MEMBER.value,
-        entity_id=member.id,
-    )
-    db.add(notification)
-    db.commit()
-
-    # Send WebSocket notification
-    await handle_role_updated(
-        application_id=application_id,
-        user_id=user_id,
-        role_data={
-            "user_id": str(user_id),
-            "user_name": member.user.display_name or member.user.email if member.user else None,
-            "old_role": member.role,
-            "new_role": member.role,
-            "is_manager": False,
-            "updated_by": str(current_user.id),
-        },
-    )
-
-    return member

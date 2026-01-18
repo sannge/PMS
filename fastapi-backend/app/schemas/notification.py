@@ -24,6 +24,7 @@ class NotificationType(str, Enum):
     INVITATION_ACCEPTED = "invitation_accepted"
     INVITATION_REJECTED = "invitation_rejected"
     ROLE_CHANGED = "role_changed"
+    MEMBER_REMOVED = "member_removed"
     PROJECT_ASSIGNED = "project_assigned"
 
 
@@ -110,6 +111,10 @@ class NotificationResponse(NotificationBase):
         ...,
         description="When the notification was created",
     )
+    entity_status: Optional[str] = Field(
+        None,
+        description="Current status of the related entity (e.g., invitation status: pending, accepted, rejected)",
+    )
 
 
 class NotificationBulkUpdate(BaseModel):
@@ -118,7 +123,8 @@ class NotificationBulkUpdate(BaseModel):
     notification_ids: List[UUID] = Field(
         ...,
         min_length=1,
-        description="List of notification IDs to update",
+        max_length=100,  # Limit to prevent DoS via large bulk operations
+        description="List of notification IDs to update (max 100)",
     )
     is_read: bool = Field(
         ...,

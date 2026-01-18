@@ -3,6 +3,11 @@
 Provides endpoints for managing application invitations.
 Supports creating, listing, accepting, rejecting, and cancelling invitations.
 All endpoints require authentication.
+
+Role-based permissions for creating invitations:
+- Viewer: Cannot invite anyone
+- Editor: Can invite with viewer or editor roles only
+- Owner: Can invite with any role (owner, editor, viewer)
 """
 
 from datetime import datetime
@@ -47,16 +52,29 @@ def get_user_application_role(
     db: Session,
     user_id: UUID,
     application_id: UUID,
+    application: Optional[Application] = None,
 ) -> Optional[str]:
     """
     Get the user's role in an application.
 
+    Args:
+        db: Database session
+        user_id: The user's ID
+        application_id: The application's ID
+        application: Optional pre-fetched application to avoid extra query
+
     Returns:
         The role string ('owner', 'editor', 'viewer') or None if not a member.
     """
-    # Check if user is the owner
-    app = db.query(Application).filter(Application.id == application_id).first()
-    if app and app.owner_id == user_id:
+    # If application is provided, use it; otherwise fetch
+    if application is None:
+        application = db.query(Application).filter(Application.id == application_id).first()
+
+    if not application:
+        return None
+
+    # Check if user is the original owner
+    if application.owner_id == user_id:
         return "owner"
 
     # Check ApplicationMembers table
@@ -243,14 +261,14 @@ async def get_invitation_count(
     Get pending invitation count for the authenticated user.
 
     Returns:
-    - pending: Number of pending invitations
+    - count: Number of pending invitations
     """
-    pending = db.query(func.count(Invitation.id)).filter(
+    count = db.query(func.count(Invitation.id)).filter(
         Invitation.invitee_id == current_user.id,
         Invitation.status == InvitationStatus.PENDING.value,
     ).scalar() or 0
 
-    return {"pending": pending}
+    return {"count": count}
 
 
 # ============================================================================
@@ -266,7 +284,6 @@ async def get_invitation_count(
     responses={
         200: {"description": "Invitation retrieved successfully"},
         401: {"description": "Not authenticated"},
-        403: {"description": "Access denied - not your invitation"},
         404: {"description": "Invitation not found"},
     },
 )
@@ -280,21 +297,20 @@ async def get_invitation(
 
     Only the inviter or invitee can access the invitation.
     """
+    # Include auth check in query to prevent information leakage
+    # (attacker can't discover if invitation IDs exist by comparing error responses)
     invitation = db.query(Invitation).filter(
         Invitation.id == invitation_id,
+        or_(
+            Invitation.inviter_id == current_user.id,
+            Invitation.invitee_id == current_user.id,
+        ),
     ).first()
 
     if not invitation:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Invitation with ID {invitation_id} not found",
-        )
-
-    # Only inviter or invitee can view the invitation
-    if invitation.inviter_id != current_user.id and invitation.invitee_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. You are not authorized to view this invitation.",
+            detail="Invitation not found",
         )
 
     return invitation
@@ -325,36 +341,41 @@ async def accept_invitation(
     1. Update the invitation status to 'accepted'
     2. Create an ApplicationMember record
     3. Notify the inviter
+
+    Uses pessimistic locking to prevent race conditions on concurrent accepts.
     """
+    # Use SELECT FOR UPDATE to prevent race conditions
+    # Filter by invitee_id in the same query for efficiency and security
     invitation = db.query(Invitation).filter(
         Invitation.id == invitation_id,
-    ).first()
+        Invitation.invitee_id == current_user.id,  # Auth check in query
+    ).with_for_update().first()
 
     if not invitation:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Invitation with ID {invitation_id} not found",
-        )
-
-    # Only invitee can accept
-    if invitation.invitee_id != current_user.id:
+        # Check if invitation exists at all (for better error message)
+        exists = db.query(Invitation.id).filter(Invitation.id == invitation_id).first()
+        if not exists:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Invitation with ID {invitation_id} not found",
+            )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied. Only the invitee can accept this invitation.",
         )
 
-    # Must be pending
+    # Must be pending (checked after lock acquired)
     if invitation.status != InvitationStatus.PENDING.value:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invitation is not pending. Current status: {invitation.status}",
         )
 
-    # Check if user is already a member
+    # Check if user is already a member (with lock to prevent race)
     existing_member = db.query(ApplicationMember).filter(
         ApplicationMember.application_id == invitation.application_id,
         ApplicationMember.user_id == current_user.id,
-    ).first()
+    ).with_for_update().first()
 
     if existing_member:
         raise HTTPException(
@@ -410,6 +431,7 @@ async def accept_invitation(
             "user_id": str(current_user.id),
             "user_name": current_user.display_name or current_user.email,
             "user_email": current_user.email,
+            "application_name": invitation.application.name,
             "role": invitation.role,
             "is_manager": False,
             "added_by": str(invitation.inviter_id),
@@ -443,25 +465,29 @@ async def reject_invitation(
     This will:
     1. Update the invitation status to 'rejected'
     2. Notify the inviter
+
+    Uses pessimistic locking to prevent race conditions.
     """
+    # Use SELECT FOR UPDATE with auth check in query
     invitation = db.query(Invitation).filter(
         Invitation.id == invitation_id,
-    ).first()
+        Invitation.invitee_id == current_user.id,  # Auth check in query
+    ).with_for_update().first()
 
     if not invitation:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Invitation with ID {invitation_id} not found",
-        )
-
-    # Only invitee can reject
-    if invitation.invitee_id != current_user.id:
+        # Check if invitation exists at all (for better error message)
+        exists = db.query(Invitation.id).filter(Invitation.id == invitation_id).first()
+        if not exists:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Invitation with ID {invitation_id} not found",
+            )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied. Only the invitee can reject this invitation.",
         )
 
-    # Must be pending
+    # Must be pending (checked after lock acquired)
     if invitation.status != InvitationStatus.PENDING.value:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -527,21 +553,17 @@ async def cancel_invitation(
     Only the inviter can cancel an invitation.
     This will update the invitation status to 'cancelled'.
     """
+    # Use pessimistic locking and include auth check in query to prevent
+    # race conditions and information leakage
     invitation = db.query(Invitation).filter(
         Invitation.id == invitation_id,
-    ).first()
+        Invitation.inviter_id == current_user.id,  # Auth check in query
+    ).with_for_update().first()
 
     if not invitation:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Invitation with ID {invitation_id} not found",
-        )
-
-    # Only inviter can cancel
-    if invitation.inviter_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. Only the inviter can cancel this invitation.",
+            detail="Invitation not found",
         )
 
     # Must be pending
@@ -551,11 +573,28 @@ async def cancel_invitation(
             detail=f"Invitation is not pending. Current status: {invitation.status}",
         )
 
+    # Store invitee_id before update for WebSocket notification
+    invitee_id = invitation.invitee_id
+    application_id = invitation.application_id
+
     # Update status to cancelled
     invitation.status = InvitationStatus.CANCELLED.value
     invitation.responded_at = datetime.utcnow()
 
     db.commit()
+
+    # Notify the invitee that the invitation was cancelled
+    await handle_invitation_response(
+        inviter_id=invitee_id,  # Notify the invitee (not the inviter)
+        application_id=application_id,
+        response_data={
+            "invitation_id": str(invitation_id),
+            "inviter_id": str(current_user.id),
+            "inviter_name": current_user.display_name or current_user.email,
+            "status": "cancelled",
+            "role": invitation.role,
+        },
+    )
 
     return None
 
@@ -575,7 +614,7 @@ async def cancel_invitation(
         201: {"description": "Invitation created successfully"},
         400: {"description": "Invalid invitation (self-invite, duplicate, or already member)"},
         401: {"description": "Not authenticated"},
-        403: {"description": "Access denied - not an owner"},
+        403: {"description": "Access denied - insufficient permissions"},
         404: {"description": "Application or user not found"},
     },
 )
@@ -588,7 +627,10 @@ async def create_invitation(
     """
     Create an invitation to invite a user to an application.
 
-    Only application owners can send invitations.
+    Role-based permissions:
+    - Viewer: Cannot invite anyone
+    - Editor: Can invite with viewer or editor roles only
+    - Owner: Can invite with any role (owner, editor, viewer)
 
     - **invitee_id**: ID of the user to invite
     - **role**: Role to assign (owner, editor, viewer)
@@ -609,12 +651,29 @@ async def create_invitation(
             detail=f"Application with ID {application_id} not found",
         )
 
-    # Verify current user is owner
-    if not is_application_owner(db, current_user.id, application_id):
+    # Get current user's role (pass application to avoid re-fetching)
+    current_user_role = get_user_application_role(db, current_user.id, application_id, application)
+
+    if current_user_role is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. Only application owners can send invitations.",
+            detail="Access denied. You must be a member of this application.",
         )
+
+    # Viewers cannot invite
+    if current_user_role == "viewer":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. Viewers cannot send invitations.",
+        )
+
+    # Editors can only invite with viewer or editor roles
+    if current_user_role == "editor":
+        if invitation_data.role == ApplicationRole.OWNER:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied. Editors cannot invite with owner role. Only viewer or editor roles allowed.",
+            )
 
     # Prevent self-invitation
     if invitation_data.invitee_id == current_user.id:

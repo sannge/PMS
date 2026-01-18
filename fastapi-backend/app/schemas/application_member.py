@@ -17,10 +17,6 @@ class MemberBase(BaseModel):
         description="Role of the member in the application",
         examples=["owner", "editor", "viewer"],
     )
-    is_manager: bool = Field(
-        False,
-        description="Whether the member has manager privileges (editors only)",
-    )
 
 
 class MemberCreate(MemberBase):
@@ -43,10 +39,6 @@ class MemberUpdate(BaseModel):
         None,
         description="New role for the member",
         examples=["editor", "viewer"],
-    )
-    is_manager: Optional[bool] = Field(
-        None,
-        description="Whether to grant/revoke manager privileges",
     )
 
 
@@ -127,10 +119,3 @@ class MemberList(BaseModel):
     )
 
 
-class ManagerAssignment(BaseModel):
-    """Schema for manager role assignment request."""
-
-    is_manager: bool = Field(
-        ...,
-        description="Whether to grant or revoke manager privileges",
-    )

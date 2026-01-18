@@ -10,6 +10,8 @@ from uuid import UUID
 
 from fastapi import WebSocket, WebSocketDisconnect
 
+from ..config import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -133,7 +135,7 @@ class ConnectionManager:
         websocket: WebSocket,
         user_id: UUID,
         initial_rooms: Optional[list[str]] = None,
-    ) -> WebSocketConnection:
+    ) -> Optional[WebSocketConnection]:
         """
         Accept a WebSocket connection and register it.
 
@@ -143,8 +145,18 @@ class ConnectionManager:
             initial_rooms: Optional list of rooms to join immediately
 
         Returns:
-            WebSocketConnection: The connection wrapper object
+            WebSocketConnection: The connection wrapper object, or None if rejected
         """
+        # DDoS protection: reject excessive connections from single user
+        current_connections = len(self._user_connections.get(user_id, set()))
+        if current_connections >= settings.ws_max_connections_per_user:
+            logger.warning(
+                f"DDoS protection: connection limit reached for user {user_id}: "
+                f"{current_connections}/{settings.ws_max_connections_per_user}"
+            )
+            await websocket.close(code=4029, reason="Too many connections")
+            return None
+
         await websocket.accept()
 
         connection = WebSocketConnection(

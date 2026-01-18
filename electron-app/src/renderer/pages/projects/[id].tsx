@@ -11,6 +11,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
+import { useApplicationsStore } from '@/stores/applications-store'
 import {
   useProjectsStore,
   type Project,
@@ -376,6 +377,11 @@ export function ProjectDetailPage({
   // Auth state
   const token = useAuthStore((state) => state.token)
 
+  // Application state - get user's role for permission checks
+  const selectedApplication = useApplicationsStore((state) => state.selectedApplication)
+  const userRole = selectedApplication?.user_role || 'viewer'
+  const canEdit = userRole === 'owner' || userRole === 'editor'
+
   // Projects state
   const {
     selectedProject,
@@ -560,7 +566,9 @@ export function ProjectDetailPage({
         {/* Right: Actions */}
         <div className="flex items-center gap-1 flex-shrink-0">
           <InfoTooltip project={project} />
-          <ActionsDropdown onEdit={handleEdit} onDelete={handleDeleteClick} />
+          {canEdit && (
+            <ActionsDropdown onEdit={handleEdit} onDelete={handleDeleteClick} />
+          )}
         </div>
       </div>
 
@@ -570,7 +578,7 @@ export function ProjectDetailPage({
           projectId={project.id}
           projectKey={project.key}
           onTaskClick={handleTaskClick}
-          onAddTask={handleAddTask}
+          onAddTask={canEdit ? handleAddTask : undefined}
           className="h-full"
         />
       </div>

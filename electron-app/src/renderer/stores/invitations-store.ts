@@ -118,7 +118,7 @@ export interface InvitationsState {
   hasMore: boolean
 
   // Actions
-  fetchReceivedInvitations: (token: string | null, options?: { skip?: number; status?: InvitationStatus }) => Promise<void>
+  fetchReceivedInvitations: (token: string | null, options?: { skip?: number; limit?: number; status?: InvitationStatus }) => Promise<void>
   fetchSentInvitations: (token: string | null, applicationId?: string) => Promise<void>
   fetchPendingCount: (token: string | null) => Promise<number>
   sendInvitation: (token: string | null, applicationId: string, data: InvitationCreate) => Promise<InvitationWithDetails | null>
@@ -218,7 +218,8 @@ export const useInvitationsStore = create<InvitationsState>((set, get) => ({
    * Fetch received invitations (invitations where current user is the invitee)
    */
   fetchReceivedInvitations: async (token, options = {}) => {
-    const { skip = 0, status } = options
+    const { skip = 0, limit, status } = options
+    const effectiveLimit = limit ?? get().limit
 
     set({ isLoading: true, error: null })
 
@@ -229,7 +230,7 @@ export const useInvitationsStore = create<InvitationsState>((set, get) => ({
 
       const params = new URLSearchParams()
       params.append('skip', String(skip))
-      params.append('limit', String(get().limit))
+      params.append('limit', String(effectiveLimit))
       if (status) {
         params.append('status', status)
       }
@@ -249,7 +250,7 @@ export const useInvitationsStore = create<InvitationsState>((set, get) => ({
       set({
         receivedInvitations: skip === 0 ? invitations : [...get().receivedInvitations, ...invitations],
         skip,
-        hasMore: invitations.length === get().limit,
+        hasMore: invitations.length === effectiveLimit,
         isLoading: false,
       })
     } catch (err) {

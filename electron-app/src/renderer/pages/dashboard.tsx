@@ -9,16 +9,21 @@
  * - Smooth staggered animations
  */
 
-import { useState, useCallback, useEffect, ReactNode } from 'react'
+import { useState, useCallback, useEffect, useRef, ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { Sidebar, type NavItem } from '@/components/layout/sidebar'
 import { WindowTitleBar } from '@/components/layout/window-title-bar'
+import { NotificationPanel } from '@/components/layout/notification-panel'
 import { ApplicationsPage } from '@/pages/applications/index'
 import { ApplicationDetailPage } from '@/pages/applications/[id]'
 import { ProjectsPage } from '@/pages/projects/index'
 import { ProjectDetailPage } from '@/pages/projects/[id]'
 import { NotesPage } from '@/pages/notes/index'
-import type { Application } from '@/stores/applications-store'
+import { useInvitationNotifications, useWebSocket, useNotificationReadSync } from '@/hooks/use-websocket'
+import { useNotificationsStore, requestNotificationPermission } from '@/stores/notifications-store'
+import { useAuthStore } from '@/stores/auth-store'
+import { useMembersStore } from '@/stores/members-store'
+import { useApplicationsStore, type Application } from '@/stores/applications-store'
 import type { Project } from '@/stores/projects-store'
 import {
   FolderKanban,
@@ -434,6 +439,157 @@ export function DashboardPage({
     return false
   })
 
+  // Auth store
+  const token = useAuthStore((state) => state.token)
+
+  // Notification store
+  const addNotification = useNotificationsStore((state) => state.addNotification)
+  const fetchNotifications = useNotificationsStore((state) => state.fetchNotifications)
+
+  // WebSocket status for reconnect handling
+  const { status: wsStatus } = useWebSocket()
+
+  // Track previous connection state to detect reconnection vs initial connection
+  const prevConnectedRef = useRef<boolean | null>(null)
+  const fetchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Track current application ID for WebSocket handlers (to detect if user is viewing removed application)
+  const selectedApplicationIdRef = useRef<string | null>(selectedApplicationId)
+  selectedApplicationIdRef.current = selectedApplicationId
+
+  // Sync notification read status across tabs/devices
+  useNotificationReadSync()
+
+  // Request browser notification permission on mount
+  useEffect(() => {
+    requestNotificationPermission()
+  }, [])
+
+  // Fetch notifications on initial load and WebSocket reconnect (with debouncing)
+  useEffect(() => {
+    const wasConnected = prevConnectedRef.current
+    prevConnectedRef.current = wsStatus.isConnected
+
+    // Only fetch if:
+    // 1. We have a token
+    // 2. We're now connected
+    // 3. Either this is the first connection (wasConnected === null) OR we reconnected (wasConnected === false)
+    if (token && wsStatus.isConnected && (wasConnected === null || wasConnected === false)) {
+      // Debounce fetch to prevent multiple rapid calls during reconnection flapping
+      if (fetchTimeoutRef.current) {
+        clearTimeout(fetchTimeoutRef.current)
+      }
+
+      fetchTimeoutRef.current = setTimeout(() => {
+        fetchNotifications(token)
+        fetchTimeoutRef.current = null
+      }, 500) // 500ms debounce
+    }
+
+    return () => {
+      if (fetchTimeoutRef.current) {
+        clearTimeout(fetchTimeoutRef.current)
+      }
+    }
+  }, [token, wsStatus.isConnected, fetchNotifications])
+
+  // Listen for invitation-related WebSocket events
+  useInvitationNotifications({
+    onInvitationReceived: (data) => {
+      // Refresh notifications from backend to get the persisted notification with correct ID
+      // This ensures read state is properly synced
+      if (token) {
+        fetchNotifications(token)
+      }
+    },
+    onInvitationResponse: (data) => {
+      // Refresh notifications from backend to get the persisted notification with correct ID
+      if (token) {
+        fetchNotifications(token)
+      }
+    },
+    onMemberAdded: (data) => {
+      console.log('[Dashboard] onMemberAdded triggered:', data)
+
+      // Check if current user is the one who was added (just joined via invitation)
+      const currentUserId = useAuthStore.getState().user?.id
+      const isCurrentUserAdded = currentUserId === data.user_id
+
+      // Refresh notifications from backend to get persisted notification with correct ID
+      if (token) {
+        fetchNotifications(token)
+      }
+
+      // If current user just joined, refresh applications list to show the new application
+      if (isCurrentUserAdded && token) {
+        console.log('[Dashboard] Current user was added, refreshing applications')
+        useApplicationsStore.getState().fetchApplications(token)
+      }
+
+      // Re-fetch members if viewing this application to get full member data
+      const membersStore = useMembersStore.getState()
+      console.log('[Dashboard] Checking currentApplicationId:', {
+        currentAppId: membersStore.currentApplicationId,
+        dataAppId: data.application_id,
+        match: membersStore.currentApplicationId === data.application_id
+      })
+      if (membersStore.currentApplicationId === data.application_id && token) {
+        console.log('[Dashboard] Fetching members for application:', data.application_id)
+        membersStore.fetchMembers(token, data.application_id)
+      }
+    },
+    onMemberRemoved: (data) => {
+      // Check if current user is the one being removed
+      const currentUserId = useAuthStore.getState().user?.id
+      const isCurrentUserRemoved = currentUserId === data.user_id
+
+      // Refresh notifications from backend to get persisted notification with correct ID
+      if (token) {
+        fetchNotifications(token)
+      }
+
+      // If current user was removed, kick them out if viewing that application
+      if (isCurrentUserRemoved) {
+        // Check if user is currently viewing the application they were removed from
+        if (selectedApplicationIdRef.current === data.application_id) {
+          // Kick user back to applications list
+          setSelectedApplicationId(null)
+          setSelectedApplicationName(null)
+          setSelectedProjectId(null)
+        }
+        // Refresh applications list to remove the application they no longer have access to
+        if (token) {
+          useApplicationsStore.getState().fetchApplications(token)
+        }
+      } else {
+        // Update members store if viewing this application (for other team members)
+        const membersStore = useMembersStore.getState()
+        if (membersStore.currentApplicationId === data.application_id) {
+          membersStore.removeMemberFromList(data.user_id)
+        }
+      }
+    },
+    onRoleUpdated: (data) => {
+      // Refresh notifications from backend to get persisted notification with correct ID
+      if (token) {
+        fetchNotifications(token)
+      }
+
+      // Update members store if viewing this application
+      const membersStore = useMembersStore.getState()
+      if (membersStore.currentApplicationId === data.application_id) {
+        // Find and update the member in the list
+        const member = membersStore.members.find(m => m.user_id === data.user_id)
+        if (member) {
+          membersStore.updateMemberInList({
+            ...member,
+            role: data.new_role,
+          })
+        }
+      }
+    },
+  })
+
   useEffect(() => {
     localStorage.setItem('pm-sidebar-collapsed', String(isCollapsed))
   }, [isCollapsed])
@@ -620,6 +776,9 @@ export function DashboardPage({
           {renderContent()}
         </main>
       </div>
+
+      {/* Notification Panel */}
+      <NotificationPanel sidebarCollapsed={isCollapsed} />
     </div>
   )
 }

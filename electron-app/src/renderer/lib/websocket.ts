@@ -74,6 +74,13 @@ export enum MessageType {
   NOTIFICATION = 'notification',
   NOTIFICATION_READ = 'notification_read',
 
+  // Invitation/member events
+  INVITATION_RECEIVED = 'invitation_received',
+  INVITATION_RESPONSE = 'invitation_response',
+  MEMBER_ADDED = 'member_added',
+  MEMBER_REMOVED = 'member_removed',
+  ROLE_UPDATED = 'role_updated',
+
   // Keepalive
   PING = 'ping',
   PONG = 'pong',
@@ -157,6 +164,85 @@ export interface NoteUpdateEventData {
   timestamp: string
   changed_by?: string
   content_delta?: Record<string, unknown>
+}
+
+/**
+ * Invitation received event data
+ */
+export interface InvitationReceivedEventData {
+  invitation_id: string
+  application_id: string
+  application_name: string
+  inviter_id: string
+  inviter_name: string
+  inviter_email?: string
+  role: string
+  timestamp: string
+}
+
+/**
+ * Invitation response event data
+ */
+export interface InvitationResponseEventData {
+  invitation_id: string
+  application_id: string
+  invitee_id?: string
+  invitee_name?: string
+  invitee_email?: string
+  inviter_id?: string
+  inviter_name?: string
+  status: 'accepted' | 'rejected' | 'cancelled'
+  role: string
+  timestamp: string
+}
+
+/**
+ * Member added event data
+ */
+export interface MemberAddedEventData {
+  application_id: string
+  user_id: string
+  user_name: string
+  user_email?: string
+  role: string
+  is_manager: boolean
+  added_by: string
+  timestamp: string
+}
+
+/**
+ * Member removed event data
+ */
+export interface MemberRemovedEventData {
+  application_id: string
+  user_id: string
+  user_name: string
+  removed_by: string
+  reason?: string
+  timestamp: string
+}
+
+/**
+ * Role updated event data
+ */
+export interface RoleUpdatedEventData {
+  application_id: string
+  user_id: string
+  user_name: string
+  old_role: string
+  new_role: string
+  is_manager: boolean
+  updated_by: string
+  timestamp: string
+}
+
+/**
+ * Notification read event data (for cross-tab sync)
+ */
+export interface NotificationReadEventData {
+  notification_id: string
+  user_id: string
+  timestamp: string
 }
 
 /**
@@ -356,9 +442,11 @@ export class WebSocketClient {
    */
   joinRoom(roomId: string): void {
     if (this.rooms.has(roomId)) {
+      console.log('[WebSocket] Already in room:', roomId)
       return
     }
 
+    console.log('[WebSocket] Joining room:', roomId)
     this.rooms.add(roomId)
     this.send(MessageType.JOIN_ROOM, { room_id: roomId })
   }
@@ -543,6 +631,18 @@ export class WebSocketClient {
       if (message.type === MessageType.PONG) {
         this.handlePong()
         return
+      }
+
+      // Debug log for room events
+      if (message.type === MessageType.ROOM_JOINED) {
+        console.log('[WebSocket] Room joined confirmed:', message.data)
+      }
+
+      // Debug log for member-related events
+      if (message.type === MessageType.MEMBER_ADDED ||
+          message.type === MessageType.MEMBER_REMOVED ||
+          message.type === MessageType.ROLE_UPDATED) {
+        console.log('[WebSocket] Received member event:', message.type, message.data)
       }
 
       // Emit to specific type listeners

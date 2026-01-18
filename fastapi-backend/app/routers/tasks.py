@@ -11,10 +11,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from ..database import get_db
 from ..models.application import Application
+from ..models.application_member import ApplicationMember
 from ..models.project import Project
 from ..models.task import Task
 from ..models.user import User
@@ -32,18 +33,63 @@ from ..services.auth_service import get_current_user
 router = APIRouter(tags=["Tasks"])
 
 
-def verify_project_ownership(
+# ============================================================================
+# Helper Functions for Role-Based Access Control
+# ============================================================================
+
+
+def get_user_application_role(
+    db: Session,
+    user_id: UUID,
+    application_id: UUID,
+    application: Optional[Application] = None,
+) -> Optional[str]:
+    """
+    Get the user's role in an application.
+
+    Args:
+        db: Database session
+        user_id: The user's ID
+        application_id: The application's ID
+        application: Optional pre-fetched application to avoid extra query
+
+    Returns:
+        The role string ('owner', 'editor', 'viewer') or None if not a member.
+    """
+    # If application is provided, use it; otherwise fetch
+    if application is None:
+        application = db.query(Application).filter(Application.id == application_id).first()
+
+    if not application:
+        return None
+
+    # Check if user is the original owner
+    if application.owner_id == user_id:
+        return "owner"
+
+    # Check ApplicationMembers table
+    member = db.query(ApplicationMember).filter(
+        ApplicationMember.application_id == application_id,
+        ApplicationMember.user_id == user_id,
+    ).first()
+
+    return member.role if member else None
+
+
+def verify_project_access(
     project_id: UUID,
     current_user: User,
     db: Session,
+    require_edit: bool = False,
 ) -> Project:
     """
-    Verify that the project exists and the user owns its parent application.
+    Verify that the project exists and the user has access via application membership.
 
     Args:
         project_id: The UUID of the project
         current_user: The authenticated user
         db: Database session
+        require_edit: If True, require owner or editor role (not viewer)
 
     Returns:
         Project: The verified project
@@ -51,7 +97,10 @@ def verify_project_ownership(
     Raises:
         HTTPException: If project not found or user doesn't have access
     """
-    project = db.query(Project).filter(
+    # Fetch project with application in single query using join
+    project = db.query(Project).options(
+        joinedload(Project.application)
+    ).filter(
         Project.id == project_id,
     ).first()
 
@@ -61,15 +110,19 @@ def verify_project_ownership(
             detail=f"Project with ID {project_id} not found",
         )
 
-    # Verify ownership through the parent application
-    application = db.query(Application).filter(
-        Application.id == project.application_id,
-    ).first()
+    # Verify access through the parent application membership (pass application to avoid re-fetching)
+    user_role = get_user_application_role(db, current_user.id, project.application_id, project.application)
 
-    if not application or application.owner_id != current_user.id:
+    if not user_role:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. You are not the owner of this project's application.",
+            detail="Access denied. You are not a member of this project's application.",
+        )
+
+    if require_edit and user_role not in ["owner", "editor"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. Only owners and editors can perform this action.",
         )
 
     return project
@@ -79,14 +132,16 @@ def verify_task_access(
     task_id: UUID,
     current_user: User,
     db: Session,
+    require_edit: bool = False,
 ) -> Task:
     """
-    Verify that the task exists and the user has access via project/application ownership.
+    Verify that the task exists and the user has access via application membership.
 
     Args:
         task_id: The UUID of the task
         current_user: The authenticated user
         db: Database session
+        require_edit: If True, require owner or editor role (not viewer)
 
     Returns:
         Task: The verified task
@@ -94,7 +149,10 @@ def verify_task_access(
     Raises:
         HTTPException: If task not found or user doesn't have access
     """
-    task = db.query(Task).filter(
+    # Fetch task with project and application in single query using joins
+    task = db.query(Task).options(
+        joinedload(Task.project).joinedload(Project.application)
+    ).filter(
         Task.id == task_id,
     ).first()
 
@@ -104,10 +162,8 @@ def verify_task_access(
             detail=f"Task with ID {task_id} not found",
         )
 
-    # Verify ownership through project -> application chain
-    project = db.query(Project).filter(
-        Project.id == task.project_id,
-    ).first()
+    # Project is already loaded via joinedload
+    project = task.project
 
     if not project:
         raise HTTPException(
@@ -115,14 +171,19 @@ def verify_task_access(
             detail="Task's parent project not found",
         )
 
-    application = db.query(Application).filter(
-        Application.id == project.application_id,
-    ).first()
+    # Application is already loaded via chained joinedload (pass it to avoid re-fetching)
+    user_role = get_user_application_role(db, current_user.id, project.application_id, project.application)
 
-    if not application or application.owner_id != current_user.id:
+    if not user_role:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. You are not the owner of this task's application.",
+            detail="Access denied. You are not a member of this task's application.",
+        )
+
+    if require_edit and user_role not in ["owner", "editor"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. Only owners and editors can perform this action.",
         )
 
     return task
@@ -160,11 +221,11 @@ def generate_task_key(project: Project, db: Session) -> str:
     "/api/projects/{project_id}/tasks",
     response_model=List[TaskWithSubtasks],
     summary="List all tasks in a project",
-    description="Get all tasks within a specific project.",
+    description="Get all tasks within a specific project. Any member can view tasks.",
     responses={
         200: {"description": "List of tasks retrieved successfully"},
         401: {"description": "Not authenticated"},
-        403: {"description": "Access denied - not the owner"},
+        403: {"description": "Access denied - not a member"},
         404: {"description": "Project not found"},
     },
 )
@@ -193,9 +254,10 @@ async def list_tasks(
     - **assignee_id**: Optional filter by assigned user
 
     Returns tasks with their subtask counts.
+    Any member (owner, editor, viewer) can list tasks.
     """
-    # Verify project ownership
-    verify_project_ownership(project_id, current_user, db)
+    # Verify project access (any member can view)
+    verify_project_access(project_id, current_user, db)
 
     # Build query for tasks with subtask count
     # Use a subquery for counting subtasks
@@ -276,12 +338,12 @@ async def list_tasks(
     response_model=TaskResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a new task",
-    description="Create a new task within a project.",
+    description="Create a new task within a project. Only owners and editors can create tasks.",
     responses={
         201: {"description": "Task created successfully"},
         400: {"description": "Validation error"},
         401: {"description": "Not authenticated"},
-        403: {"description": "Access denied - not the owner"},
+        403: {"description": "Access denied - not an owner or editor"},
         404: {"description": "Project not found"},
     },
 )
@@ -307,9 +369,10 @@ async def create_task(
 
     The task will be created under the specified project.
     Reporter will be set to the current user if not provided.
+    Only owners and editors can create tasks.
     """
-    # Verify project ownership
-    project = verify_project_ownership(project_id, current_user, db)
+    # Verify project access (require edit permission)
+    project = verify_project_access(project_id, current_user, db, require_edit=True)
 
     # Validate that project_id in body matches URL (if provided)
     if task_data.project_id != project_id:
@@ -371,11 +434,11 @@ async def create_task(
     "/api/tasks/{task_id}",
     response_model=TaskWithSubtasks,
     summary="Get a task by ID",
-    description="Get details of a specific task.",
+    description="Get details of a specific task. Any member can view tasks.",
     responses={
         200: {"description": "Task retrieved successfully"},
         401: {"description": "Not authenticated"},
-        403: {"description": "Access denied - not the owner"},
+        403: {"description": "Access denied - not a member"},
         404: {"description": "Task not found"},
     },
 )
@@ -388,7 +451,7 @@ async def get_task(
     Get a specific task by its ID.
 
     Returns the task with its subtask count.
-    Only the application owner can access their tasks.
+    Any member (owner, editor, viewer) can view tasks.
     """
     # Query task with subtask count
     subtask_count_subquery = db.query(
@@ -418,7 +481,7 @@ async def get_task(
 
     task, subtasks_count = result
 
-    # Verify ownership through project -> application chain
+    # Verify access through project -> application membership chain
     project = db.query(Project).filter(
         Project.id == task.project_id,
     ).first()
@@ -429,14 +492,12 @@ async def get_task(
             detail="Task's parent project not found",
         )
 
-    application = db.query(Application).filter(
-        Application.id == project.application_id,
-    ).first()
+    user_role = get_user_application_role(db, current_user.id, project.application_id)
 
-    if not application or application.owner_id != current_user.id:
+    if not user_role:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. You are not the owner of this task's application.",
+            detail="Access denied. You are not a member of this task's application.",
         )
 
     return TaskWithSubtasks(
@@ -464,12 +525,12 @@ async def get_task(
     "/api/tasks/{task_id}",
     response_model=TaskResponse,
     summary="Update a task",
-    description="Update an existing task's details.",
+    description="Update an existing task's details. Only owners and editors can update tasks.",
     responses={
         200: {"description": "Task updated successfully"},
         400: {"description": "Validation error"},
         401: {"description": "Not authenticated"},
-        403: {"description": "Access denied - not the owner"},
+        403: {"description": "Access denied - not an owner or editor"},
         404: {"description": "Task not found"},
     },
 )
@@ -494,10 +555,10 @@ async def update_task(
     - **sprint_id**: New sprint (optional)
 
     Note: Task key cannot be changed after creation.
-    Only the application owner can update their tasks.
+    Only owners and editors can update tasks.
     """
-    # Verify access and get task
-    task = verify_task_access(task_id, current_user, db)
+    # Verify access and get task (require edit permission)
+    task = verify_task_access(task_id, current_user, db, require_edit=True)
 
     # Update fields if provided
     update_data = task_data.model_dump(exclude_unset=True)
@@ -548,11 +609,11 @@ async def update_task(
     "/api/tasks/{task_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a task",
-    description="Delete a task and all its associated subtasks and attachments.",
+    description="Delete a task and all its associated subtasks and attachments. Only owners and editors can delete tasks.",
     responses={
         204: {"description": "Task deleted successfully"},
         401: {"description": "Not authenticated"},
-        403: {"description": "Access denied - not the owner"},
+        403: {"description": "Access denied - not an owner or editor"},
         404: {"description": "Task not found"},
     },
 )
@@ -570,9 +631,10 @@ async def delete_task(
 
     Only the application owner can delete their tasks.
     This action is irreversible.
+    Only owners and editors can delete tasks.
     """
-    # Verify access and get task
-    task = verify_task_access(task_id, current_user, db)
+    # Verify access and get task (require edit permission)
+    task = verify_task_access(task_id, current_user, db, require_edit=True)
 
     # Delete subtasks first (to handle self-referential cascade)
     db.query(Task).filter(Task.parent_id == task_id).delete(synchronize_session=False)

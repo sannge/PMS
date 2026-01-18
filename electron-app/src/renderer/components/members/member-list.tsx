@@ -9,8 +9,8 @@
  * - Loading skeleton
  * - Scrollable member list
  * - Header with member count
- * - Role badges with manager indicator
- * - Role edit and remove actions (for owners)
+ * - Role badges
+ * - Role edit and remove actions (for owners and editors)
  * - Footer with view all link
  */
 
@@ -24,7 +24,6 @@ import {
   Eye,
   Edit2,
   Trash2,
-  Star,
 } from 'lucide-react'
 import type { MemberWithUser, ApplicationRole } from '@/stores/members-store'
 
@@ -50,13 +49,17 @@ export interface MemberListProps {
    */
   currentUserId?: string
   /**
-   * Whether current user can edit members (is owner)
+   * Current user's role in the application
+   */
+  currentUserRole?: ApplicationRole
+  /**
+   * Original application owner's user ID (cannot be edited by anyone)
+   */
+  originalOwnerId?: string
+  /**
+   * Whether current user can edit members (is owner or editor)
    */
   canEdit?: boolean
-  /**
-   * Whether current user is the application creator (can assign managers)
-   */
-  isCreator?: boolean
   /**
    * Callback when a member is clicked
    */
@@ -69,10 +72,6 @@ export interface MemberListProps {
    * Callback when remove member is clicked
    */
   onRemoveMember?: (member: MemberWithUser) => void
-  /**
-   * Callback when toggle manager is clicked
-   */
-  onToggleManager?: (member: MemberWithUser) => void
   /**
    * Callback when view all is clicked
    */
@@ -239,23 +238,23 @@ function EmptyState(): JSX.Element {
 interface MemberItemProps {
   member: MemberWithUser
   isCurrentUser?: boolean
+  currentUserRole?: ApplicationRole
+  isOriginalOwner?: boolean
   canEdit?: boolean
-  isCreator?: boolean
   onMemberClick?: (member: MemberWithUser) => void
   onEditRole?: (member: MemberWithUser) => void
   onRemoveMember?: (member: MemberWithUser) => void
-  onToggleManager?: (member: MemberWithUser) => void
 }
 
 function MemberItem({
   member,
   isCurrentUser = false,
+  currentUserRole,
+  isOriginalOwner = false,
   canEdit = false,
-  isCreator = false,
   onMemberClick,
   onEditRole,
   onRemoveMember,
-  onToggleManager,
 }: MemberItemProps): JSX.Element {
   const roleConfig = ROLE_CONFIG[member.role]
 
@@ -288,23 +287,34 @@ function MemberItem({
     [member, onRemoveMember]
   )
 
-  // Handle toggle manager
-  const handleToggleManager = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation()
-      if (onToggleManager) {
-        onToggleManager(member)
-      }
-    },
-    [member, onToggleManager]
-  )
+  // Permission logic:
+  // - Original owner (app creator) cannot be edited/removed by anyone
+  // - Owners can edit/remove anyone except themselves and original owner
+  // - Editors can ONLY edit viewers (promote to editor), cannot edit other editors or owners
+  // - Cannot edit/remove yourself
+  const isUserOwner = currentUserRole === 'owner'
+  const isUserEditor = currentUserRole === 'editor'
+  const memberIsOwner = member.role === 'owner'
+  const memberIsEditor = member.role === 'editor'
+  const memberIsViewer = member.role === 'viewer'
 
-  // Check if we can remove this member (cannot remove self or last owner)
-  const canRemove = canEdit && !isCurrentUser && member.role !== 'owner'
-  // Check if we can edit this member's role (cannot change owner's role)
-  const canEditMember = canEdit && !isCurrentUser && member.role !== 'owner'
-  // Can toggle manager only for editors and only if creator
-  const canToggleManager = isCreator && member.role === 'editor'
+  // Original owner cannot be edited/removed by anyone
+  if (isOriginalOwner) {
+    // No one can edit the original owner
+  }
+
+  // Can remove: must have edit permission, not self, not original owner, and (owner OR member is not an owner)
+  const canRemove = canEdit && !isCurrentUser && !isOriginalOwner && (isUserOwner || !memberIsOwner)
+
+  // Can edit role - more specific logic:
+  // - Original owner cannot be edited
+  // - Cannot edit yourself
+  // - Owners can edit anyone except original owner and themselves
+  // - Editors can ONLY edit viewers (to promote them to editor)
+  const canEditMember = canEdit && !isCurrentUser && !isOriginalOwner && (
+    isUserOwner || // Owners can edit non-original-owners
+    (isUserEditor && memberIsViewer) // Editors can only edit viewers
+  )
 
   return (
     <div
@@ -346,15 +356,6 @@ function MemberItem({
               You
             </span>
           )}
-          {member.is_manager && (
-            <span
-              className="flex items-center gap-0.5 text-[10px] font-medium text-amber-600 bg-amber-100 dark:bg-amber-900/30 dark:text-amber-400 px-1.5 py-0.5 rounded"
-              title="Manager - can assign users to projects"
-            >
-              <Star className="h-2.5 w-2.5" />
-              Manager
-            </span>
-          )}
         </div>
 
         {/* Email and joined date */}
@@ -378,26 +379,9 @@ function MemberItem({
         {roleConfig.label}
       </div>
 
-      {/* Actions - visible on hover for owners */}
-      {(canEditMember || canRemove || canToggleManager) && (
-        <div className="flex-shrink-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          {/* Toggle Manager (for editors only, by creator) */}
-          {canToggleManager && onToggleManager && (
-            <button
-              onClick={handleToggleManager}
-              className={cn(
-                'rounded-md p-1.5 text-muted-foreground transition-colors',
-                member.is_manager
-                  ? 'hover:bg-amber-100 hover:text-amber-600 dark:hover:bg-amber-900/30 dark:hover:text-amber-400'
-                  : 'hover:bg-accent hover:text-accent-foreground',
-                'focus:outline-none focus:ring-2 focus:ring-ring'
-              )}
-              title={member.is_manager ? 'Revoke manager role' : 'Grant manager role'}
-            >
-              <Star className={cn('h-3.5 w-3.5', member.is_manager && 'fill-current')} />
-            </button>
-          )}
-
+      {/* Actions - always visible when user has permission */}
+      {(canEditMember || canRemove) && (
+        <div className="flex-shrink-0 flex items-center gap-1">
           {/* Edit Role */}
           {canEditMember && onEditRole && (
             <button
@@ -442,12 +426,12 @@ export function MemberList({
   isLoading = false,
   totalCount,
   currentUserId,
+  currentUserRole,
+  originalOwnerId,
   canEdit = false,
-  isCreator = false,
   onMemberClick,
   onEditRole,
   onRemoveMember,
-  onToggleManager,
   onViewAll,
   maxHeight = 400,
   showHeader = true,
@@ -507,12 +491,12 @@ export function MemberList({
               key={member.id}
               member={member}
               isCurrentUser={member.user_id === currentUserId}
+              currentUserRole={currentUserRole}
+              isOriginalOwner={member.user_id === originalOwnerId}
               canEdit={canEdit}
-              isCreator={isCreator}
               onMemberClick={onMemberClick}
               onEditRole={onEditRole}
               onRemoveMember={onRemoveMember}
-              onToggleManager={onToggleManager}
             />
           ))}
       </div>
