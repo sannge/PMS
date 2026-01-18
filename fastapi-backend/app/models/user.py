@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from .invitation import Invitation
     from .note import Note
     from .notification import Notification
+    from .project_assignment import ProjectAssignment
     from .task import Task
 
 
@@ -131,6 +132,13 @@ class User(Base):
         "Invitation",
         foreign_keys="Invitation.invitee_id",
         back_populates="invitee",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+    project_assignments = relationship(
+        "ProjectAssignment",
+        foreign_keys="ProjectAssignment.user_id",
+        back_populates="user",
         cascade="all, delete-orphan",
         lazy="dynamic",
     )
