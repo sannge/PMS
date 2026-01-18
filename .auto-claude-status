@@ -1,25 +1,25 @@
 {
   "active": true,
-  "spec": "002-application-overview-i-want-to-create-an-app-that-",
-  "state": "complete",
+  "spec": "003-be-able-to-invite-other-users-into-applications-us",
+  "state": "building",
   "subtasks": {
-    "completed": 46,
-    "total": 46,
-    "in_progress": 0,
+    "completed": 19,
+    "total": 35,
+    "in_progress": 1,
     "failed": 0
   },
   "phase": {
-    "current": "Testing & Polish",
+    "current": "Project Assignment API",
     "id": null,
-    "total": 7
+    "total": 2
   },
   "workers": {
     "active": 0,
     "max": 1
   },
   "session": {
-    "number": 764,
-    "started_at": "2026-01-17T02:27:50.287390"
+    "number": 132,
+    "started_at": "2026-01-17T20:36:35.197613"
   },
-  "last_update": "2026-01-17T08:55:32.949025"
+  "last_update": "2026-01-17T21:34:05.866775"
 }

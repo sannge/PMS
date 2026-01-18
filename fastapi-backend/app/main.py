@@ -4,7 +4,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routers import application_members_router, applications_router, auth_router, files_router, invitations_router, notes_router, notifications_router, projects_router, tasks_router
+from .routers import application_members_router, applications_router, auth_router, files_router, invitations_router, notes_router, notifications_router, project_assignments_router, projects_router, tasks_router
 from .websocket import manager, route_incoming_message
 from .services.auth_service import decode_access_token
 
@@ -31,6 +31,7 @@ app.include_router(auth_router)
 app.include_router(applications_router)
 app.include_router(application_members_router)
 app.include_router(projects_router)
+app.include_router(project_assignments_router)
 app.include_router(tasks_router)
 app.include_router(notes_router)
 app.include_router(files_router)
