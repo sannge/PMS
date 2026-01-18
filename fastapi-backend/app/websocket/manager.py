@@ -55,6 +55,13 @@ class MessageType(str, Enum):
     NOTIFICATION = "notification"
     NOTIFICATION_READ = "notification_read"
 
+    # Invitation/member events
+    INVITATION_RECEIVED = "invitation_received"
+    INVITATION_RESPONSE = "invitation_response"
+    MEMBER_ADDED = "member_added"
+    MEMBER_REMOVED = "member_removed"
+    ROLE_UPDATED = "role_updated"
+
     # Ping/pong for keepalive
     PING = "ping"
     PONG = "pong"
