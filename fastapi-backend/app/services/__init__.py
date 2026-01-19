@@ -27,6 +27,10 @@ from .status_derivation_service import (
     derive_project_status,
     derive_project_status_from_model,
 )
+from .permission_service import (
+    PermissionService,
+    get_permission_service,
+)
 
 __all__ = [
     # Auth service
@@ -52,4 +56,7 @@ __all__ = [
     "ProjectAggregation",
     "derive_project_status",
     "derive_project_status_from_model",
+    # Permission service
+    "PermissionService",
+    "get_permission_service",
 ]
