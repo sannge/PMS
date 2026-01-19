@@ -244,3 +244,49 @@ class TaskWithSubtasks(TaskResponse):
         0,
         description="Number of subtasks",
     )
+
+
+class TaskMove(BaseModel):
+    """Schema for moving a task between status columns and/or reordering within a column.
+
+    Supports Kanban-style drag-and-drop operations:
+    - Moving to a different status column (changes status)
+    - Reordering within the same column (changes rank)
+    - Both at once (changes status and rank)
+
+    Rank calculation:
+    - Provide target_rank directly, OR
+    - Provide before_task_id and/or after_task_id to auto-calculate rank
+    """
+
+    # Status change (optional - for moving between columns)
+    target_status: Optional[TaskStatus] = Field(
+        None,
+        description="New status to move the task to (for column change)",
+    )
+    target_status_id: Optional[UUID] = Field(
+        None,
+        description="New task_status_id to move the task to (FK to TaskStatuses)",
+    )
+
+    # Rank positioning (optional - for ordering within column)
+    target_rank: Optional[str] = Field(
+        None,
+        max_length=50,
+        description="Explicit lexorank position for the task",
+    )
+    before_task_id: Optional[UUID] = Field(
+        None,
+        description="ID of the task to position before (for auto rank calculation)",
+    )
+    after_task_id: Optional[UUID] = Field(
+        None,
+        description="ID of the task to position after (for auto rank calculation)",
+    )
+
+    # Concurrency control
+    row_version: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Row version for optimistic concurrency control",
+    )

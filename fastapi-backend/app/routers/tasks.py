@@ -23,6 +23,7 @@ from ..models.task_status import StatusName
 from ..models.user import User
 from ..schemas.task import (
     TaskCreate,
+    TaskMove,
     TaskPriority,
     TaskResponse,
     TaskStatus,
@@ -439,6 +440,173 @@ def update_project_derived_status(
         # If no matching TaskStatus found (shouldn't happen normally),
         # set derived_status_id to None
         project.derived_status_id = None
+
+
+# ============================================================================
+# Lexorank Helper Functions for Task Ordering
+# ============================================================================
+
+
+def calculate_lexorank_between(
+    before_rank: Optional[str],
+    after_rank: Optional[str],
+) -> str:
+    """
+    Calculate a lexorank string that sorts between before_rank and after_rank.
+
+    Lexorank uses a simple alphabetic midpoint calculation for ordering.
+    This implementation uses lowercase letters 'a'-'z' for simplicity.
+
+    Args:
+        before_rank: The rank of the task that should come before (or None if first)
+        after_rank: The rank of the task that should come after (or None if last)
+
+    Returns:
+        A new rank string that sorts between before_rank and after_rank
+
+    Examples:
+        calculate_lexorank_between(None, None) -> "n" (middle of alphabet)
+        calculate_lexorank_between(None, "n") -> "g" (before n)
+        calculate_lexorank_between("n", None) -> "t" (after n)
+        calculate_lexorank_between("a", "c") -> "b" (between a and c)
+    """
+    # Default boundaries if not provided
+    if before_rank is None:
+        before_rank = ""
+    if after_rank is None:
+        after_rank = ""
+
+    # If both empty, start in the middle
+    if not before_rank and not after_rank:
+        return "n"  # Middle of alphabet
+
+    # If only after_rank exists, create rank before it
+    if not before_rank:
+        # Find a rank before after_rank
+        if after_rank[0] > 'b':
+            # Use character between 'a' and first char of after_rank
+            mid_char = chr((ord('a') + ord(after_rank[0])) // 2)
+            return mid_char if mid_char != 'a' else 'a' + 'n'
+        else:
+            # Need to extend with a character
+            return 'a' + 'n'
+
+    # If only before_rank exists, create rank after it
+    if not after_rank:
+        # Find a rank after before_rank
+        if before_rank[-1] < 'y':
+            # Use character after last char of before_rank
+            return before_rank[:-1] + chr(ord(before_rank[-1]) + 1)
+        else:
+            # Extend the rank with middle character
+            return before_rank + 'n'
+
+    # Both ranks exist - find midpoint
+    return _calculate_midpoint_rank(before_rank, after_rank)
+
+
+def _calculate_midpoint_rank(before_rank: str, after_rank: str) -> str:
+    """
+    Calculate the midpoint rank between two existing ranks.
+
+    Args:
+        before_rank: The lower rank
+        after_rank: The higher rank
+
+    Returns:
+        A rank string that sorts between before_rank and after_rank
+    """
+    # Ensure ranks are comparable by padding to same length
+    max_len = max(len(before_rank), len(after_rank))
+    before_padded = before_rank.ljust(max_len, 'a')
+    after_padded = after_rank.ljust(max_len, 'z')
+
+    result = []
+    carry_needed = False
+
+    for i in range(max_len):
+        before_char = before_padded[i]
+        after_char = after_padded[i]
+
+        if before_char == after_char:
+            result.append(before_char)
+            continue
+
+        # Calculate midpoint character
+        mid_ord = (ord(before_char) + ord(after_char)) // 2
+
+        if mid_ord > ord(before_char):
+            result.append(chr(mid_ord))
+            break
+        else:
+            # Characters are adjacent, need to extend
+            result.append(before_char)
+            carry_needed = True
+            continue
+
+    result_str = ''.join(result)
+
+    # If we couldn't find a midpoint, extend with 'n'
+    if carry_needed or result_str == before_rank:
+        result_str = before_rank + 'n'
+
+    return result_str
+
+
+def get_rank_for_position(
+    db: Session,
+    project_id: UUID,
+    target_status: str,
+    before_task_id: Optional[UUID],
+    after_task_id: Optional[UUID],
+) -> str:
+    """
+    Calculate the rank for a task being moved to a specific position.
+
+    Args:
+        db: Database session
+        project_id: The project ID
+        target_status: The target status column
+        before_task_id: ID of the task to position before (or None)
+        after_task_id: ID of the task to position after (or None)
+
+    Returns:
+        The calculated rank string for the new position
+    """
+    before_rank: Optional[str] = None
+    after_rank: Optional[str] = None
+
+    # Get the rank of the task to position before
+    if before_task_id:
+        before_task = db.query(Task).filter(
+            Task.id == before_task_id,
+            Task.project_id == project_id,
+        ).first()
+        if before_task:
+            before_rank = before_task.task_rank
+
+    # Get the rank of the task to position after
+    if after_task_id:
+        after_task = db.query(Task).filter(
+            Task.id == after_task_id,
+            Task.project_id == project_id,
+        ).first()
+        if after_task:
+            after_rank = after_task.task_rank
+
+    # If neither provided, get the last task in the target status to append
+    if not before_task_id and not after_task_id:
+        last_task = db.query(Task).filter(
+            Task.project_id == project_id,
+            Task.status == target_status,
+            Task.task_rank.isnot(None),
+        ).order_by(Task.task_rank.desc()).first()
+
+        if last_task and last_task.task_rank:
+            before_rank = last_task.task_rank
+            after_rank = None
+
+    return calculate_lexorank_between(after_rank, before_rank)
 
 
 # ============================================================================
@@ -949,3 +1117,181 @@ async def delete_task(
     db.commit()
 
     return None
+
+
+@router.put(
+    "/api/tasks/{task_id}/move",
+    response_model=TaskResponse,
+    summary="Move a task to a new status and/or position",
+    description="Move a task between status columns and/or reorder within a column. "
+                "Supports Kanban-style drag-and-drop operations. "
+                "Only owners and editors can move tasks.",
+    responses={
+        200: {"description": "Task moved successfully"},
+        400: {"description": "Validation error or invalid position"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "Access denied - not an owner or editor"},
+        404: {"description": "Task not found"},
+        409: {"description": "Concurrent modification detected (row_version mismatch)"},
+    },
+)
+async def move_task(
+    task_id: UUID,
+    move_data: TaskMove,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+) -> TaskResponse:
+    """
+    Move a task to a new status column and/or reorder within a column.
+
+    This endpoint supports Kanban-style drag-and-drop operations:
+    - **Status change**: Use `target_status` or `target_status_id` to move between columns
+    - **Reordering**: Use `target_rank` directly, or `before_task_id`/`after_task_id` for auto-calculation
+    - **Both**: Change status and position in a single operation
+
+    Rank calculation:
+    - If `target_rank` is provided, it is used directly
+    - If `before_task_id` and/or `after_task_id` are provided, rank is calculated automatically
+    - If neither is provided, task is placed at the end of the target column
+
+    Concurrency control:
+    - Provide `row_version` to enable optimistic locking
+    - If version mismatch, returns 409 Conflict
+
+    Only owners and editors can move tasks.
+    """
+    # Verify access and get task (require edit permission)
+    task = verify_task_access(task_id, current_user, db, require_edit=True)
+
+    # Check for at least one field to update
+    if (move_data.target_status is None and
+        move_data.target_status_id is None and
+        move_data.target_rank is None and
+        move_data.before_task_id is None and
+        move_data.after_task_id is None):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one of target_status, target_status_id, target_rank, "
+                   "before_task_id, or after_task_id must be provided",
+        )
+
+    # Optimistic concurrency check
+    if move_data.row_version is not None:
+        if task.row_version != move_data.row_version:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Concurrent modification detected. Expected version {move_data.row_version}, "
+                       f"but current version is {task.row_version}. Please refresh and try again.",
+            )
+
+    # Track old status for aggregation update
+    old_status = task.status
+    new_status = old_status  # Default to same status
+
+    # Handle status change
+    if move_data.target_status is not None:
+        new_status = move_data.target_status.value
+        task.status = new_status
+
+    # Handle task_status_id change (for new unified status system)
+    if move_data.target_status_id is not None:
+        from ..models.task_status import TaskStatus as TaskStatusModel
+
+        # Verify the target status exists and belongs to this project
+        target_task_status = db.query(TaskStatusModel).filter(
+            TaskStatusModel.id == move_data.target_status_id,
+            TaskStatusModel.project_id == task.project_id,
+        ).first()
+
+        if not target_task_status:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Target task status not found or does not belong to this project",
+            )
+
+        task.task_status_id = move_data.target_status_id
+
+        # Also update the legacy status field to match the new status name
+        # Map status name to legacy status value
+        status_name_to_legacy = {
+            "Todo": "todo",
+            "In Progress": "in_progress",
+            "In Review": "in_review",
+            "Issue": "issue",
+            "Done": "done",
+        }
+        legacy_status = status_name_to_legacy.get(target_task_status.name, "todo")
+        new_status = legacy_status
+        task.status = new_status
+
+    # Validate before_task_id and after_task_id belong to the same project
+    if move_data.before_task_id:
+        before_task = db.query(Task).filter(
+            Task.id == move_data.before_task_id,
+            Task.project_id == task.project_id,
+        ).first()
+        if not before_task:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="before_task_id not found or does not belong to the same project",
+            )
+
+    if move_data.after_task_id:
+        after_task = db.query(Task).filter(
+            Task.id == move_data.after_task_id,
+            Task.project_id == task.project_id,
+        ).first()
+        if not after_task:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="after_task_id not found or does not belong to the same project",
+            )
+
+    # Calculate and set the new rank
+    if move_data.target_rank is not None:
+        # Use the explicitly provided rank
+        task.task_rank = move_data.target_rank
+    elif move_data.before_task_id is not None or move_data.after_task_id is not None:
+        # Auto-calculate rank based on neighboring tasks
+        task.task_rank = get_rank_for_position(
+            db=db,
+            project_id=task.project_id,
+            target_status=new_status,
+            before_task_id=move_data.before_task_id,
+            after_task_id=move_data.after_task_id,
+        )
+    else:
+        # Status change only, no position specified - append to end of column
+        task.task_rank = get_rank_for_position(
+            db=db,
+            project_id=task.project_id,
+            target_status=new_status,
+            before_task_id=None,
+            after_task_id=None,
+        )
+
+    # Update timestamp and version
+    task.updated_at = datetime.utcnow()
+    task.row_version = (task.row_version or 0) + 1
+
+    # Check if status changed and update aggregation
+    if old_status != new_status:
+        old_status_name = get_status_name_from_legacy(old_status)
+        new_status_name = get_status_name_from_legacy(new_status)
+
+        # Get or create aggregation and update counters
+        agg = get_or_create_project_aggregation(db, task.project_id)
+        new_derived_status = update_aggregation_on_task_status_change(
+            agg, old_status_name, new_status_name
+        )
+
+        # Update project's derived status
+        project = db.query(Project).filter(Project.id == task.project_id).first()
+        if project:
+            update_project_derived_status(db, project, new_derived_status)
+
+    # Save changes
+    db.commit()
+    db.refresh(task)
+
+    return task
