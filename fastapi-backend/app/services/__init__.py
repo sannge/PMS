@@ -22,6 +22,11 @@ from .notification_service import (
     notify_task_assigned,
     notify_task_status_changed,
 )
+from .status_derivation_service import (
+    ProjectAggregation,
+    derive_project_status,
+    derive_project_status_from_model,
+)
 
 __all__ = [
     # Auth service
@@ -43,4 +48,8 @@ __all__ = [
     "notify_mentioned",
     "notify_task_assigned",
     "notify_task_status_changed",
+    # Status derivation service
+    "ProjectAggregation",
+    "derive_project_status",
+    "derive_project_status_from_model",
 ]
