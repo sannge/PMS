@@ -354,6 +354,75 @@ async def handle_project_update(
     )
 
 
+async def handle_project_status_changed(
+    application_id: UUID | str,
+    project_id: UUID | str,
+    project_data: dict[str, Any],
+    old_status: str,
+    new_status: str,
+    user_id: Optional[UUID | str] = None,
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Handle project status change events and broadcast to application and project rooms.
+
+    This is a specialized handler for project status transitions that includes
+    both old and new status information for UI state management.
+
+    Args:
+        application_id: The application's UUID
+        project_id: The project's UUID
+        project_data: The project data to broadcast
+        old_status: The previous project status
+        new_status: The new project status
+        user_id: The user who made the change
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_application_room(application_id)
+
+    # Build the message payload with status change details
+    payload: dict[str, Any] = {
+        "project_id": str(project_id),
+        "application_id": str(application_id),
+        "action": UpdateAction.STATUS_CHANGED.value,
+        "project": project_data,
+        "old_status": old_status,
+        "new_status": new_status,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    if user_id:
+        payload["changed_by"] = str(user_id)
+
+    message = {
+        "type": MessageType.PROJECT_STATUS_CHANGED.value,
+        "data": payload,
+    }
+
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    # Also broadcast to the project room for users viewing the project
+    project_room_id = get_project_room(project_id)
+    await mgr.broadcast_to_room(project_room_id, message)
+
+    logger.info(
+        f"Project status changed: project_id={project_id}, "
+        f"{old_status} -> {new_status}, "
+        f"application_room={room_id}, recipients={recipients}"
+    )
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.PROJECT_STATUS_CHANGED.value,
+        success=True,
+    )
+
+
 async def handle_application_update(
     application_id: UUID | str,
     action: UpdateAction,
@@ -952,6 +1021,7 @@ __all__ = [
     "handle_task_update",
     "handle_note_update",
     "handle_project_update",
+    "handle_project_status_changed",
     "handle_application_update",
     "handle_user_presence",
     "handle_notification",
