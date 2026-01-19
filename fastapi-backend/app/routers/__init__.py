@@ -12,6 +12,7 @@ from .invitations import router as invitations_router
 from .notes import router as notes_router
 from .notifications import router as notifications_router
 from .project_assignments import router as project_assignments_router
+from .project_members import router as project_members_router
 from .projects import router as projects_router
 from .tasks import router as tasks_router
 from .users import router as users_router
@@ -25,6 +26,7 @@ __all__ = [
     "notes_router",
     "notifications_router",
     "project_assignments_router",
+    "project_members_router",
     "projects_router",
     "tasks_router",
     "users_router",
