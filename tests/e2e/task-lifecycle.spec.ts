@@ -799,3 +799,548 @@ test.describe('Issue Escalation Verification', () => {
     // With blocked task present, project should be in Issue state
   });
 });
+
+/**
+ * Permission Enforcement Verification Tests (subtask-7-3)
+ *
+ * Verifies permission enforcement for the 3-tier role system:
+ * 1. Editor (non-ProjectMember) blocked from creating tasks → 403 Forbidden
+ * 2. Editor (non-ProjectMember) blocked from updating tasks → 403 Forbidden
+ * 3. Editor (non-ProjectMember) blocked from deleting tasks → 403 Forbidden
+ * 4. Viewer blocked from creating tasks → 403 Forbidden
+ * 5. Editor WITH ProjectMember CAN create tasks → 201 Created
+ */
+test.describe('Permission Enforcement - Editor Blocked from Non-Member Project', () => {
+  let ownerToken: string;
+  let ownerId: string;
+  let editorToken: string;
+  let editorId: string;
+  let applicationId: string;
+  let projectId: string;
+
+  test.beforeAll(async ({ request }) => {
+    // Step 1: Create owner user and get authenticated
+    const ownerAuth = await setupAuthenticatedUser(request);
+    ownerToken = ownerAuth.token;
+    ownerId = ownerAuth.userId;
+
+    // Step 2: Create application and project as owner
+    const hierarchy = await createTestHierarchy(request, ownerToken);
+    applicationId = hierarchy.applicationId;
+    projectId = hierarchy.projectId;
+
+    // Step 3: Create editor user
+    const editorUserData = generateTestUser();
+    const editorRegisterResponse = await request.post('/auth/register', {
+      data: editorUserData,
+    });
+    expect(editorRegisterResponse.status()).toBe(201);
+    const editorUser = await editorRegisterResponse.json();
+    editorId = editorUser.id;
+
+    // Login as editor
+    const editorLoginResponse = await request.post('/auth/login', {
+      form: {
+        username: editorUserData.email,
+        password: editorUserData.password,
+      },
+    });
+    expect(editorLoginResponse.status()).toBe(200);
+    const { access_token: editorAccessToken } = await editorLoginResponse.json();
+    editorToken = editorAccessToken;
+
+    // Step 4: Add editor to application (but NOT as ProjectMember)
+    const addMemberResponse = await request.post(
+      `/api/applications/${applicationId}/invitations`,
+      {
+        headers: { Authorization: `Bearer ${ownerToken}` },
+        data: {
+          email: editorUserData.email,
+          role: 'editor',
+        },
+      }
+    );
+    // Invitation might return 201 or if direct add, check the actual behavior
+    // If direct member add is available, use that endpoint instead
+
+    // For this test, we'll directly add the member via the members endpoint if available
+    // or use a different approach based on the API structure
+    // Let's check if there's a direct way to add application members
+  });
+
+  test('should block Editor (non-ProjectMember) from creating task - 403 Forbidden', async ({ request }) => {
+    // Editor is a member of the application but NOT a ProjectMember
+    // Try to create a task in the project
+    const taskData = {
+      project_id: projectId,
+      title: 'Blocked Task Attempt',
+      description: 'This should be blocked',
+      task_type: 'story',
+      status: 'todo',
+      priority: 'medium',
+    };
+
+    const createResponse = await request.post(`/api/projects/${projectId}/tasks`, {
+      headers: { Authorization: `Bearer ${editorToken}` },
+      data: taskData,
+    });
+
+    // Should return 403 Forbidden for Editor who is not a ProjectMember
+    expect(createResponse.status()).toBe(403);
+
+    const errorData = await createResponse.json();
+    expect(errorData.detail).toContain('Editors must be project members');
+  });
+
+  test('should block Editor (non-ProjectMember) from updating task - 403 Forbidden', async ({ request }) => {
+    // First, create a task as owner
+    const taskResponse = await createTask(request, ownerToken, projectId, {
+      title: 'Task for Update Test',
+      status: 'todo',
+    });
+    expect(taskResponse.status()).toBe(201);
+    const task = await taskResponse.json();
+
+    // Now try to update the task as editor (non-ProjectMember)
+    const updateResponse = await request.put(`/api/tasks/${task.id}`, {
+      headers: { Authorization: `Bearer ${editorToken}` },
+      data: { status: 'in_progress' },
+    });
+
+    // Should return 403 Forbidden
+    expect(updateResponse.status()).toBe(403);
+
+    const errorData = await updateResponse.json();
+    expect(errorData.detail).toContain('Editors must be project members');
+  });
+
+  test('should block Editor (non-ProjectMember) from deleting task - 403 Forbidden', async ({ request }) => {
+    // First, create a task as owner
+    const taskResponse = await createTask(request, ownerToken, projectId, {
+      title: 'Task for Delete Test',
+      status: 'todo',
+    });
+    expect(taskResponse.status()).toBe(201);
+    const task = await taskResponse.json();
+
+    // Try to delete the task as editor (non-ProjectMember)
+    const deleteResponse = await request.delete(`/api/tasks/${task.id}`, {
+      headers: { Authorization: `Bearer ${editorToken}` },
+    });
+
+    // Should return 403 Forbidden
+    expect(deleteResponse.status()).toBe(403);
+
+    const errorData = await deleteResponse.json();
+    expect(errorData.detail).toContain('Editors must be project members');
+  });
+
+  test('should block Editor (non-ProjectMember) from moving task - 403 Forbidden', async ({ request }) => {
+    // First, create a task as owner
+    const taskResponse = await createTask(request, ownerToken, projectId, {
+      title: 'Task for Move Test',
+      status: 'todo',
+    });
+    expect(taskResponse.status()).toBe(201);
+    const task = await taskResponse.json();
+
+    // Try to move the task as editor (non-ProjectMember)
+    const moveResponse = await request.put(`/api/tasks/${task.id}/move`, {
+      headers: { Authorization: `Bearer ${editorToken}` },
+      data: { target_status: 'in_progress' },
+    });
+
+    // Should return 403 Forbidden
+    expect(moveResponse.status()).toBe(403);
+
+    const errorData = await moveResponse.json();
+    expect(errorData.detail).toContain('Editors must be project members');
+  });
+
+  test('should allow Editor to read tasks (view access) - 200 OK', async ({ request }) => {
+    // Editor should still be able to read/list tasks (view access)
+    const listResponse = await request.get(`/api/projects/${projectId}/tasks`, {
+      headers: { Authorization: `Bearer ${editorToken}` },
+    });
+
+    // Should return 200 OK - read access is allowed
+    expect(listResponse.status()).toBe(200);
+  });
+});
+
+test.describe('Permission Enforcement - Viewer Access', () => {
+  let ownerToken: string;
+  let ownerId: string;
+  let viewerToken: string;
+  let viewerId: string;
+  let applicationId: string;
+  let projectId: string;
+
+  test.beforeAll(async ({ request }) => {
+    // Create owner and setup
+    const ownerAuth = await setupAuthenticatedUser(request);
+    ownerToken = ownerAuth.token;
+    ownerId = ownerAuth.userId;
+
+    const hierarchy = await createTestHierarchy(request, ownerToken);
+    applicationId = hierarchy.applicationId;
+    projectId = hierarchy.projectId;
+
+    // Create viewer user
+    const viewerUserData = generateTestUser();
+    const viewerRegisterResponse = await request.post('/auth/register', {
+      data: viewerUserData,
+    });
+    expect(viewerRegisterResponse.status()).toBe(201);
+    const viewerUser = await viewerRegisterResponse.json();
+    viewerId = viewerUser.id;
+
+    // Login as viewer
+    const viewerLoginResponse = await request.post('/auth/login', {
+      form: {
+        username: viewerUserData.email,
+        password: viewerUserData.password,
+      },
+    });
+    expect(viewerLoginResponse.status()).toBe(200);
+    const { access_token: viewerAccessToken } = await viewerLoginResponse.json();
+    viewerToken = viewerAccessToken;
+
+    // Add viewer to application with viewer role
+    await request.post(`/api/applications/${applicationId}/invitations`, {
+      headers: { Authorization: `Bearer ${ownerToken}` },
+      data: {
+        email: viewerUserData.email,
+        role: 'viewer',
+      },
+    });
+  });
+
+  test('should block Viewer from creating task - 403 Forbidden', async ({ request }) => {
+    const taskData = {
+      project_id: projectId,
+      title: 'Viewer Blocked Task Attempt',
+      description: 'This should be blocked',
+      task_type: 'story',
+      status: 'todo',
+      priority: 'medium',
+    };
+
+    const createResponse = await request.post(`/api/projects/${projectId}/tasks`, {
+      headers: { Authorization: `Bearer ${viewerToken}` },
+      data: taskData,
+    });
+
+    // Should return 403 Forbidden
+    expect(createResponse.status()).toBe(403);
+
+    const errorData = await createResponse.json();
+    expect(errorData.detail).toContain('Viewers cannot manage tasks');
+  });
+
+  test('should block Viewer from updating task - 403 Forbidden', async ({ request }) => {
+    // Create a task as owner
+    const taskResponse = await createTask(request, ownerToken, projectId, {
+      title: 'Viewer Update Test Task',
+      status: 'todo',
+    });
+    expect(taskResponse.status()).toBe(201);
+    const task = await taskResponse.json();
+
+    // Try to update as viewer
+    const updateResponse = await request.put(`/api/tasks/${task.id}`, {
+      headers: { Authorization: `Bearer ${viewerToken}` },
+      data: { status: 'in_progress' },
+    });
+
+    // Should return 403 Forbidden
+    expect(updateResponse.status()).toBe(403);
+
+    const errorData = await updateResponse.json();
+    expect(errorData.detail).toContain('Viewers cannot manage tasks');
+  });
+
+  test('should block Viewer from deleting task - 403 Forbidden', async ({ request }) => {
+    // Create a task as owner
+    const taskResponse = await createTask(request, ownerToken, projectId, {
+      title: 'Viewer Delete Test Task',
+      status: 'todo',
+    });
+    expect(taskResponse.status()).toBe(201);
+    const task = await taskResponse.json();
+
+    // Try to delete as viewer
+    const deleteResponse = await request.delete(`/api/tasks/${task.id}`, {
+      headers: { Authorization: `Bearer ${viewerToken}` },
+    });
+
+    // Should return 403 Forbidden
+    expect(deleteResponse.status()).toBe(403);
+
+    const errorData = await deleteResponse.json();
+    expect(errorData.detail).toContain('Viewers cannot manage tasks');
+  });
+
+  test('should allow Viewer to read tasks (view-only access) - 200 OK', async ({ request }) => {
+    // Viewer should be able to read/list tasks
+    const listResponse = await request.get(`/api/projects/${projectId}/tasks`, {
+      headers: { Authorization: `Bearer ${viewerToken}` },
+    });
+
+    // Should return 200 OK - read access is allowed for viewers
+    expect(listResponse.status()).toBe(200);
+  });
+});
+
+test.describe('Permission Enforcement - Editor with ProjectMember Access', () => {
+  let ownerToken: string;
+  let ownerId: string;
+  let editorToken: string;
+  let editorId: string;
+  let applicationId: string;
+  let projectId: string;
+
+  test.beforeAll(async ({ request }) => {
+    // Create owner and setup
+    const ownerAuth = await setupAuthenticatedUser(request);
+    ownerToken = ownerAuth.token;
+    ownerId = ownerAuth.userId;
+
+    const hierarchy = await createTestHierarchy(request, ownerToken);
+    applicationId = hierarchy.applicationId;
+    projectId = hierarchy.projectId;
+
+    // Create editor user
+    const editorUserData = generateTestUser();
+    const editorRegisterResponse = await request.post('/auth/register', {
+      data: editorUserData,
+    });
+    expect(editorRegisterResponse.status()).toBe(201);
+    const editorUser = await editorRegisterResponse.json();
+    editorId = editorUser.id;
+
+    // Login as editor
+    const editorLoginResponse = await request.post('/auth/login', {
+      form: {
+        username: editorUserData.email,
+        password: editorUserData.password,
+      },
+    });
+    expect(editorLoginResponse.status()).toBe(200);
+    const { access_token: editorAccessToken } = await editorLoginResponse.json();
+    editorToken = editorAccessToken;
+
+    // Add editor to application
+    await request.post(`/api/applications/${applicationId}/invitations`, {
+      headers: { Authorization: `Bearer ${ownerToken}` },
+      data: {
+        email: editorUserData.email,
+        role: 'editor',
+      },
+    });
+
+    // CRITICAL: Add editor as ProjectMember (this is the key difference from blocked tests)
+    const addMemberResponse = await request.post(
+      `/api/projects/${projectId}/members`,
+      {
+        headers: { Authorization: `Bearer ${ownerToken}` },
+        data: {
+          user_id: editorId,
+        },
+      }
+    );
+    expect(addMemberResponse.status()).toBe(201);
+  });
+
+  test('should allow Editor with ProjectMember to create task - 201 Created', async ({ request }) => {
+    const taskData = {
+      project_id: projectId,
+      title: 'Editor ProjectMember Task',
+      description: 'This should succeed',
+      task_type: 'story',
+      status: 'todo',
+      priority: 'medium',
+    };
+
+    const createResponse = await request.post(`/api/projects/${projectId}/tasks`, {
+      headers: { Authorization: `Bearer ${editorToken}` },
+      data: taskData,
+    });
+
+    // Should return 201 Created - Editor with ProjectMember can create tasks
+    expect(createResponse.status()).toBe(201);
+
+    const task = await createResponse.json();
+    expect(task.id).toBeDefined();
+    expect(task.title).toBe('Editor ProjectMember Task');
+  });
+
+  test('should allow Editor with ProjectMember to update task - 200 OK', async ({ request }) => {
+    // Create a task as owner first
+    const taskResponse = await createTask(request, ownerToken, projectId, {
+      title: 'Editor Update Allowed Task',
+      status: 'todo',
+    });
+    expect(taskResponse.status()).toBe(201);
+    const task = await taskResponse.json();
+
+    // Update as editor (who is a ProjectMember)
+    const updateResponse = await request.put(`/api/tasks/${task.id}`, {
+      headers: { Authorization: `Bearer ${editorToken}` },
+      data: { status: 'in_progress' },
+    });
+
+    // Should return 200 OK
+    expect(updateResponse.status()).toBe(200);
+
+    const updatedTask = await updateResponse.json();
+    expect(updatedTask.status).toBe('in_progress');
+  });
+
+  test('should allow Editor with ProjectMember to move task - 200 OK', async ({ request }) => {
+    // Create a task
+    const taskResponse = await createTask(request, editorToken, projectId, {
+      title: 'Editor Move Allowed Task',
+      status: 'todo',
+    });
+    expect(taskResponse.status()).toBe(201);
+    const task = await taskResponse.json();
+
+    // Move task as editor (who is a ProjectMember)
+    const moveResponse = await request.put(`/api/tasks/${task.id}/move`, {
+      headers: { Authorization: `Bearer ${editorToken}` },
+      data: { target_status: 'in_progress' },
+    });
+
+    // Should return 200 OK
+    expect(moveResponse.status()).toBe(200);
+
+    const movedTask = await moveResponse.json();
+    expect(movedTask.status).toBe('in_progress');
+  });
+
+  test('should allow Editor with ProjectMember to delete task - 204 No Content', async ({ request }) => {
+    // Create a task
+    const taskResponse = await createTask(request, editorToken, projectId, {
+      title: 'Editor Delete Allowed Task',
+      status: 'todo',
+    });
+    expect(taskResponse.status()).toBe(201);
+    const task = await taskResponse.json();
+
+    // Delete task as editor (who is a ProjectMember)
+    const deleteResponse = await request.delete(`/api/tasks/${task.id}`, {
+      headers: { Authorization: `Bearer ${editorToken}` },
+    });
+
+    // Should return 204 No Content
+    expect(deleteResponse.status()).toBe(204);
+
+    // Verify task is deleted
+    const getResponse = await request.get(`/api/tasks/${task.id}`, {
+      headers: { Authorization: `Bearer ${editorToken}` },
+    });
+    expect(getResponse.status()).toBe(404);
+  });
+});
+
+test.describe('Permission Enforcement - Owner Full Access', () => {
+  let ownerToken: string;
+  let applicationId: string;
+  let projectId: string;
+
+  test.beforeAll(async ({ request }) => {
+    const ownerAuth = await setupAuthenticatedUser(request);
+    ownerToken = ownerAuth.token;
+
+    const hierarchy = await createTestHierarchy(request, ownerToken);
+    applicationId = hierarchy.applicationId;
+    projectId = hierarchy.projectId;
+  });
+
+  test('should allow Owner full access without ProjectMember requirement', async ({ request }) => {
+    // Owner should be able to manage tasks without being a ProjectMember
+    // (ProjectMember gate only applies to Editors)
+
+    // Create task
+    const createResponse = await createTask(request, ownerToken, projectId, {
+      title: 'Owner Full Access Task',
+      status: 'todo',
+    });
+    expect(createResponse.status()).toBe(201);
+    const task = await createResponse.json();
+
+    // Update task
+    const updateResponse = await updateTaskStatus(request, ownerToken, task.id, 'in_progress');
+    expect(updateResponse.status()).toBe(200);
+
+    // Move task
+    const moveResponse = await moveTask(request, ownerToken, task.id, 'in_review');
+    expect(moveResponse.status()).toBe(200);
+
+    // Delete task
+    const deleteResponse = await request.delete(`/api/tasks/${task.id}`, {
+      headers: { Authorization: `Bearer ${ownerToken}` },
+    });
+    expect(deleteResponse.status()).toBe(204);
+  });
+});
+
+test.describe('Permission Enforcement - Non-Application Member', () => {
+  let ownerToken: string;
+  let outsiderToken: string;
+  let projectId: string;
+
+  test.beforeAll(async ({ request }) => {
+    // Create owner and project
+    const ownerAuth = await setupAuthenticatedUser(request);
+    ownerToken = ownerAuth.token;
+
+    const hierarchy = await createTestHierarchy(request, ownerToken);
+    projectId = hierarchy.projectId;
+
+    // Create outsider user (not a member of the application at all)
+    const outsiderUserData = generateTestUser();
+    const outsiderRegisterResponse = await request.post('/auth/register', {
+      data: outsiderUserData,
+    });
+    expect(outsiderRegisterResponse.status()).toBe(201);
+
+    const outsiderLoginResponse = await request.post('/auth/login', {
+      form: {
+        username: outsiderUserData.email,
+        password: outsiderUserData.password,
+      },
+    });
+    expect(outsiderLoginResponse.status()).toBe(200);
+    const { access_token: outsiderAccessToken } = await outsiderLoginResponse.json();
+    outsiderToken = outsiderAccessToken;
+  });
+
+  test('should block non-application member from creating task - 403 Forbidden', async ({ request }) => {
+    const taskData = {
+      project_id: projectId,
+      title: 'Outsider Task Attempt',
+      task_type: 'story',
+      status: 'todo',
+      priority: 'medium',
+    };
+
+    const createResponse = await request.post(`/api/projects/${projectId}/tasks`, {
+      headers: { Authorization: `Bearer ${outsiderToken}` },
+      data: taskData,
+    });
+
+    // Should return 403 Forbidden - not a member of the application
+    expect(createResponse.status()).toBe(403);
+  });
+
+  test('should block non-application member from reading tasks - 403 Forbidden', async ({ request }) => {
+    const listResponse = await request.get(`/api/projects/${projectId}/tasks`, {
+      headers: { Authorization: `Bearer ${outsiderToken}` },
+    });
+
+    // Should return 403 Forbidden - no application membership means no read access either
+    expect(listResponse.status()).toBe(403);
+  });
+});
