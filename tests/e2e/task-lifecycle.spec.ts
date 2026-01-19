@@ -1344,3 +1344,569 @@ test.describe('Permission Enforcement - Non-Application Member', () => {
     expect(listResponse.status()).toBe(403);
   });
 });
+
+/**
+ * Task Assignment Validation Tests (subtask-7-4)
+ *
+ * Verifies assignment validation rules:
+ * 1. Only ProjectMembers with Owner/Editor role can be assigned to tasks
+ * 2. Viewers cannot be assigned (even if ProjectMember)
+ * 3. Non-ProjectMembers cannot be assigned
+ * 4. Assignable users endpoint returns only eligible users
+ */
+test.describe('Assignment Validation - Eligible ProjectMembers Only', () => {
+  let ownerToken: string;
+  let ownerId: string;
+  let editorToken: string;
+  let editorId: string;
+  let viewerToken: string;
+  let viewerId: string;
+  let applicationId: string;
+  let projectId: string;
+
+  test.beforeAll(async ({ request }) => {
+    // Step 1: Create owner user and get authenticated
+    const ownerAuth = await setupAuthenticatedUser(request);
+    ownerToken = ownerAuth.token;
+    ownerId = ownerAuth.userId;
+
+    // Step 2: Create application and project as owner
+    const hierarchy = await createTestHierarchy(request, ownerToken);
+    applicationId = hierarchy.applicationId;
+    projectId = hierarchy.projectId;
+
+    // Step 3: Create editor user
+    const editorUserData = generateTestUser();
+    const editorRegisterResponse = await request.post('/auth/register', {
+      data: editorUserData,
+    });
+    expect(editorRegisterResponse.status()).toBe(201);
+    const editorUser = await editorRegisterResponse.json();
+    editorId = editorUser.id;
+
+    // Login as editor
+    const editorLoginResponse = await request.post('/auth/login', {
+      form: {
+        username: editorUserData.email,
+        password: editorUserData.password,
+      },
+    });
+    expect(editorLoginResponse.status()).toBe(200);
+    const { access_token: editorAccessToken } = await editorLoginResponse.json();
+    editorToken = editorAccessToken;
+
+    // Add editor to application
+    await request.post(`/api/applications/${applicationId}/invitations`, {
+      headers: { Authorization: `Bearer ${ownerToken}` },
+      data: {
+        email: editorUserData.email,
+        role: 'editor',
+      },
+    });
+
+    // Add editor as ProjectMember
+    const addEditorResponse = await request.post(
+      `/api/projects/${projectId}/members`,
+      {
+        headers: { Authorization: `Bearer ${ownerToken}` },
+        data: { user_id: editorId },
+      }
+    );
+    expect(addEditorResponse.status()).toBe(201);
+
+    // Step 4: Create viewer user
+    const viewerUserData = generateTestUser();
+    const viewerRegisterResponse = await request.post('/auth/register', {
+      data: viewerUserData,
+    });
+    expect(viewerRegisterResponse.status()).toBe(201);
+    const viewerUser = await viewerRegisterResponse.json();
+    viewerId = viewerUser.id;
+
+    // Login as viewer
+    const viewerLoginResponse = await request.post('/auth/login', {
+      form: {
+        username: viewerUserData.email,
+        password: viewerUserData.password,
+      },
+    });
+    expect(viewerLoginResponse.status()).toBe(200);
+    const { access_token: viewerAccessToken } = await viewerLoginResponse.json();
+    viewerToken = viewerAccessToken;
+
+    // Add viewer to application (with viewer role)
+    await request.post(`/api/applications/${applicationId}/invitations`, {
+      headers: { Authorization: `Bearer ${ownerToken}` },
+      data: {
+        email: viewerUserData.email,
+        role: 'viewer',
+      },
+    });
+
+    // Add viewer as ProjectMember (but they still shouldn't be assignable)
+    const addViewerResponse = await request.post(
+      `/api/projects/${projectId}/members`,
+      {
+        headers: { Authorization: `Bearer ${ownerToken}` },
+        data: { user_id: viewerId },
+      }
+    );
+    expect(addViewerResponse.status()).toBe(201);
+  });
+
+  test('should return only ProjectMembers with Owner/Editor role in assignable endpoint', async ({ request }) => {
+    // Call the assignable users endpoint
+    const assignableResponse = await request.get(
+      `/api/projects/${projectId}/members/assignable`,
+      {
+        headers: { Authorization: `Bearer ${ownerToken}` },
+      }
+    );
+    expect(assignableResponse.status()).toBe(200);
+
+    const assignableUsers = await assignableResponse.json();
+
+    // Should include owner (always assignable) and editor (ProjectMember + Editor role)
+    // Should NOT include viewer (ProjectMember but Viewer role)
+    const userIds = assignableUsers.map((u: any) => u.user_id);
+
+    // Owner should be in the list (if they are a ProjectMember)
+    // Editor should be in the list (ProjectMember + Editor role)
+    expect(userIds).toContain(editorId);
+
+    // Viewer should NOT be in the list (even though they are a ProjectMember)
+    expect(userIds).not.toContain(viewerId);
+  });
+
+  test('should allow assigning task to ProjectMember with Editor role', async ({ request }) => {
+    // Create task and assign to editor (who is a ProjectMember)
+    const taskData = {
+      project_id: projectId,
+      title: 'Task Assigned to Editor',
+      description: 'This task should be assignable to the editor',
+      task_type: 'story',
+      status: 'todo',
+      priority: 'medium',
+      assignee_id: editorId,
+    };
+
+    const createResponse = await request.post(`/api/projects/${projectId}/tasks`, {
+      headers: { Authorization: `Bearer ${ownerToken}` },
+      data: taskData,
+    });
+
+    // Should succeed - editor is ProjectMember + Editor role
+    expect(createResponse.status()).toBe(201);
+
+    const task = await createResponse.json();
+    expect(task.assignee_id).toBe(editorId);
+  });
+
+  test('should reject assigning task to Viewer (even if ProjectMember) - 400 Bad Request', async ({ request }) => {
+    // Try to create task and assign to viewer
+    const taskData = {
+      project_id: projectId,
+      title: 'Task Blocked Assignment to Viewer',
+      description: 'This task should not be assignable to a viewer',
+      task_type: 'story',
+      status: 'todo',
+      priority: 'medium',
+      assignee_id: viewerId,
+    };
+
+    const createResponse = await request.post(`/api/projects/${projectId}/tasks`, {
+      headers: { Authorization: `Bearer ${ownerToken}` },
+      data: taskData,
+    });
+
+    // Should fail - viewer cannot be assigned even if ProjectMember
+    expect(createResponse.status()).toBe(400);
+
+    const errorData = await createResponse.json();
+    expect(errorData.detail).toContain('Viewers cannot be assigned to tasks');
+  });
+
+  test('should reject assigning task to non-ProjectMember', async ({ request }) => {
+    // Create a new user who is an app member (editor) but NOT a ProjectMember
+    const nonMemberUserData = generateTestUser();
+    const nonMemberRegisterResponse = await request.post('/auth/register', {
+      data: nonMemberUserData,
+    });
+    expect(nonMemberRegisterResponse.status()).toBe(201);
+    const nonMemberUser = await nonMemberRegisterResponse.json();
+
+    // Add them to the application as editor
+    await request.post(`/api/applications/${applicationId}/invitations`, {
+      headers: { Authorization: `Bearer ${ownerToken}` },
+      data: {
+        email: nonMemberUserData.email,
+        role: 'editor',
+      },
+    });
+
+    // Do NOT add them as ProjectMember
+
+    // Try to assign task to this user
+    const taskData = {
+      project_id: projectId,
+      title: 'Task Blocked Assignment to Non-Member',
+      description: 'This task should not be assignable to a non-ProjectMember',
+      task_type: 'story',
+      status: 'todo',
+      priority: 'medium',
+      assignee_id: nonMemberUser.id,
+    };
+
+    const createResponse = await request.post(`/api/projects/${projectId}/tasks`, {
+      headers: { Authorization: `Bearer ${ownerToken}` },
+      data: taskData,
+    });
+
+    // Should fail - user is not a ProjectMember
+    expect(createResponse.status()).toBe(400);
+
+    const errorData = await createResponse.json();
+    expect(errorData.detail).toContain('User must be a project member');
+  });
+
+  test('should reject assigning task to non-application member', async ({ request }) => {
+    // Create a completely new user who is not in the application at all
+    const outsiderUserData = generateTestUser();
+    const outsiderRegisterResponse = await request.post('/auth/register', {
+      data: outsiderUserData,
+    });
+    expect(outsiderRegisterResponse.status()).toBe(201);
+    const outsiderUser = await outsiderRegisterResponse.json();
+
+    // Try to assign task to this outsider
+    const taskData = {
+      project_id: projectId,
+      title: 'Task Blocked Assignment to Outsider',
+      description: 'This task should not be assignable to an outsider',
+      task_type: 'story',
+      status: 'todo',
+      priority: 'medium',
+      assignee_id: outsiderUser.id,
+    };
+
+    const createResponse = await request.post(`/api/projects/${projectId}/tasks`, {
+      headers: { Authorization: `Bearer ${ownerToken}` },
+      data: taskData,
+    });
+
+    // Should fail - user is not even an application member
+    expect(createResponse.status()).toBe(400);
+
+    const errorData = await createResponse.json();
+    expect(errorData.detail).toContain('User is not a member of the application');
+  });
+
+  test('should allow reassigning task from one eligible user to another', async ({ request }) => {
+    // Create task assigned to owner
+    const taskResponse = await createTask(request, ownerToken, projectId, {
+      title: 'Task for Reassignment Test',
+      status: 'todo',
+    });
+    expect(taskResponse.status()).toBe(201);
+    const task = await taskResponse.json();
+
+    // Reassign to editor
+    const updateResponse = await request.put(`/api/tasks/${task.id}`, {
+      headers: { Authorization: `Bearer ${ownerToken}` },
+      data: { assignee_id: editorId },
+    });
+
+    // Should succeed - editor is an eligible assignee
+    expect(updateResponse.status()).toBe(200);
+
+    const updatedTask = await updateResponse.json();
+    expect(updatedTask.assignee_id).toBe(editorId);
+  });
+
+  test('should reject reassigning task to Viewer via update', async ({ request }) => {
+    // Create task first (no assignee)
+    const taskResponse = await createTask(request, ownerToken, projectId, {
+      title: 'Task for Viewer Reassignment Block',
+      status: 'todo',
+    });
+    expect(taskResponse.status()).toBe(201);
+    const task = await taskResponse.json();
+
+    // Try to reassign to viewer via update
+    const updateResponse = await request.put(`/api/tasks/${task.id}`, {
+      headers: { Authorization: `Bearer ${ownerToken}` },
+      data: { assignee_id: viewerId },
+    });
+
+    // Should fail - viewer cannot be assigned
+    expect(updateResponse.status()).toBe(400);
+
+    const errorData = await updateResponse.json();
+    expect(errorData.detail).toContain('Viewers cannot be assigned to tasks');
+  });
+
+  test('should allow unassigning a task (setting assignee_id to null)', async ({ request }) => {
+    // Create task assigned to editor
+    const taskData = {
+      project_id: projectId,
+      title: 'Task to Unassign',
+      description: 'This task will be unassigned',
+      task_type: 'story',
+      status: 'todo',
+      priority: 'medium',
+      assignee_id: editorId,
+    };
+
+    const createResponse = await request.post(`/api/projects/${projectId}/tasks`, {
+      headers: { Authorization: `Bearer ${ownerToken}` },
+      data: taskData,
+    });
+    expect(createResponse.status()).toBe(201);
+    const task = await createResponse.json();
+    expect(task.assignee_id).toBe(editorId);
+
+    // Unassign by setting assignee_id to null
+    const updateResponse = await request.put(`/api/tasks/${task.id}`, {
+      headers: { Authorization: `Bearer ${ownerToken}` },
+      data: { assignee_id: null },
+    });
+
+    // Should succeed - unassigning is always allowed
+    expect(updateResponse.status()).toBe(200);
+
+    const updatedTask = await updateResponse.json();
+    expect(updatedTask.assignee_id).toBeNull();
+  });
+});
+
+test.describe('Assignment Validation - Assignable Dropdown Verification', () => {
+  let ownerToken: string;
+  let ownerId: string;
+  let applicationId: string;
+  let projectId: string;
+
+  // Track all users we create for verification
+  const createdUsers: Array<{
+    id: string;
+    email: string;
+    role: string;
+    isProjectMember: boolean;
+    expectedInAssignable: boolean;
+  }> = [];
+
+  test.beforeAll(async ({ request }) => {
+    // Create owner
+    const ownerAuth = await setupAuthenticatedUser(request);
+    ownerToken = ownerAuth.token;
+    ownerId = ownerAuth.userId;
+
+    // Create application and project
+    const hierarchy = await createTestHierarchy(request, ownerToken);
+    applicationId = hierarchy.applicationId;
+    projectId = hierarchy.projectId;
+
+    // Add owner as project member (if not automatically done)
+    await request.post(`/api/projects/${projectId}/members`, {
+      headers: { Authorization: `Bearer ${ownerToken}` },
+      data: { user_id: ownerId },
+    });
+
+    createdUsers.push({
+      id: ownerId,
+      email: 'owner',
+      role: 'owner',
+      isProjectMember: true,
+      expectedInAssignable: true,
+    });
+
+    // Create various users with different configurations
+    const userConfigs = [
+      { role: 'editor', isProjectMember: true, expectedInAssignable: true },
+      { role: 'editor', isProjectMember: false, expectedInAssignable: false },
+      { role: 'viewer', isProjectMember: true, expectedInAssignable: false },
+      { role: 'viewer', isProjectMember: false, expectedInAssignable: false },
+    ];
+
+    for (const config of userConfigs) {
+      const userData = generateTestUser();
+      const registerResponse = await request.post('/auth/register', {
+        data: userData,
+      });
+      expect(registerResponse.status()).toBe(201);
+      const user = await registerResponse.json();
+
+      // Add to application
+      await request.post(`/api/applications/${applicationId}/invitations`, {
+        headers: { Authorization: `Bearer ${ownerToken}` },
+        data: {
+          email: userData.email,
+          role: config.role,
+        },
+      });
+
+      // Add as project member if configured
+      if (config.isProjectMember) {
+        const addMemberResponse = await request.post(
+          `/api/projects/${projectId}/members`,
+          {
+            headers: { Authorization: `Bearer ${ownerToken}` },
+            data: { user_id: user.id },
+          }
+        );
+        expect(addMemberResponse.status()).toBe(201);
+      }
+
+      createdUsers.push({
+        id: user.id,
+        email: userData.email,
+        role: config.role,
+        isProjectMember: config.isProjectMember,
+        expectedInAssignable: config.expectedInAssignable,
+      });
+    }
+  });
+
+  test('should verify assignable endpoint returns only eligible users (ProjectMember + Owner/Editor)', async ({ request }) => {
+    // Call the assignable endpoint
+    const assignableResponse = await request.get(
+      `/api/projects/${projectId}/members/assignable`,
+      {
+        headers: { Authorization: `Bearer ${ownerToken}` },
+      }
+    );
+    expect(assignableResponse.status()).toBe(200);
+
+    const assignableUsers = await assignableResponse.json();
+    const assignableUserIds = assignableUsers.map((u: any) => u.user_id);
+
+    // Verify each user's presence in the list matches expectations
+    for (const user of createdUsers) {
+      if (user.expectedInAssignable) {
+        expect(assignableUserIds).toContain(user.id);
+      } else {
+        expect(assignableUserIds).not.toContain(user.id);
+      }
+    }
+  });
+
+  test('should verify Viewer (ProjectMember) is NOT in assignable list', async ({ request }) => {
+    // Get assignable users
+    const assignableResponse = await request.get(
+      `/api/projects/${projectId}/members/assignable`,
+      {
+        headers: { Authorization: `Bearer ${ownerToken}` },
+      }
+    );
+    expect(assignableResponse.status()).toBe(200);
+
+    const assignableUsers = await assignableResponse.json();
+    const assignableUserIds = assignableUsers.map((u: any) => u.user_id);
+
+    // Find the viewer who is a project member
+    const viewerProjectMember = createdUsers.find(
+      (u) => u.role === 'viewer' && u.isProjectMember
+    );
+
+    expect(viewerProjectMember).toBeDefined();
+    expect(assignableUserIds).not.toContain(viewerProjectMember!.id);
+  });
+
+  test('should verify Editor (non-ProjectMember) is NOT in assignable list', async ({ request }) => {
+    // Get assignable users
+    const assignableResponse = await request.get(
+      `/api/projects/${projectId}/members/assignable`,
+      {
+        headers: { Authorization: `Bearer ${ownerToken}` },
+      }
+    );
+    expect(assignableResponse.status()).toBe(200);
+
+    const assignableUsers = await assignableResponse.json();
+    const assignableUserIds = assignableUsers.map((u: any) => u.user_id);
+
+    // Find the editor who is NOT a project member
+    const editorNonMember = createdUsers.find(
+      (u) => u.role === 'editor' && !u.isProjectMember
+    );
+
+    expect(editorNonMember).toBeDefined();
+    expect(assignableUserIds).not.toContain(editorNonMember!.id);
+  });
+
+  test('should verify Editor (ProjectMember) IS in assignable list', async ({ request }) => {
+    // Get assignable users
+    const assignableResponse = await request.get(
+      `/api/projects/${projectId}/members/assignable`,
+      {
+        headers: { Authorization: `Bearer ${ownerToken}` },
+      }
+    );
+    expect(assignableResponse.status()).toBe(200);
+
+    const assignableUsers = await assignableResponse.json();
+    const assignableUserIds = assignableUsers.map((u: any) => u.user_id);
+
+    // Find the editor who IS a project member
+    const editorProjectMember = createdUsers.find(
+      (u) => u.role === 'editor' && u.isProjectMember
+    );
+
+    expect(editorProjectMember).toBeDefined();
+    expect(assignableUserIds).toContain(editorProjectMember!.id);
+  });
+
+  test('should verify Owner (ProjectMember) IS in assignable list', async ({ request }) => {
+    // Get assignable users
+    const assignableResponse = await request.get(
+      `/api/projects/${projectId}/members/assignable`,
+      {
+        headers: { Authorization: `Bearer ${ownerToken}` },
+      }
+    );
+    expect(assignableResponse.status()).toBe(200);
+
+    const assignableUsers = await assignableResponse.json();
+    const assignableUserIds = assignableUsers.map((u: any) => u.user_id);
+
+    // Owner should be assignable (since they are a ProjectMember)
+    expect(assignableUserIds).toContain(ownerId);
+  });
+
+  test('should allow any application member to view assignable list', async ({ request }) => {
+    // Create a viewer who can still view the assignable list
+    const viewerUserData = generateTestUser();
+    const viewerRegisterResponse = await request.post('/auth/register', {
+      data: viewerUserData,
+    });
+    expect(viewerRegisterResponse.status()).toBe(201);
+
+    const viewerLoginResponse = await request.post('/auth/login', {
+      form: {
+        username: viewerUserData.email,
+        password: viewerUserData.password,
+      },
+    });
+    expect(viewerLoginResponse.status()).toBe(200);
+    const { access_token: viewerAccessToken } = await viewerLoginResponse.json();
+
+    // Add viewer to application
+    await request.post(`/api/applications/${applicationId}/invitations`, {
+      headers: { Authorization: `Bearer ${ownerToken}` },
+      data: {
+        email: viewerUserData.email,
+        role: 'viewer',
+      },
+    });
+
+    // Viewer should be able to view the assignable list (read-only access)
+    const assignableResponse = await request.get(
+      `/api/projects/${projectId}/members/assignable`,
+      {
+        headers: { Authorization: `Bearer ${viewerAccessToken}` },
+      }
+    );
+
+    // Should return 200 OK - viewer can read assignable list
+    expect(assignableResponse.status()).toBe(200);
+  });
+});
