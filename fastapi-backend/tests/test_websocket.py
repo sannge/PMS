@@ -525,3 +525,268 @@ class TestConnectionManagerHelpers:
 
         result = mgr.get_connection(mock_ws)
         assert result is None
+
+
+class TestProjectStatusChangedHandler:
+    """Tests for handle_project_status_changed WebSocket handler.
+
+    These tests verify the Issue escalation feature (subtask-7-2):
+    - When a task moves to Issue status, the project status changes
+    - A project_status_changed WebSocket event is broadcast
+    """
+
+    @pytest.mark.asyncio
+    async def test_handle_project_status_changed_broadcasts_to_application_room(self):
+        """Test that project status change is broadcast to application room."""
+        from app.websocket.handlers import handle_project_status_changed
+
+        mgr = ConnectionManager()
+        mock_ws = AsyncMock()
+        user_id = uuid4()
+        application_id = uuid4()
+        project_id = uuid4()
+
+        # Connect user and join application room
+        connection = await mgr.connect(mock_ws, user_id)
+        app_room = f"application:{application_id}"
+        await mgr.join_room(connection, app_room)
+
+        mock_ws.send_json.reset_mock()
+
+        # Trigger project status changed event
+        project_data = {
+            "id": str(project_id),
+            "application_id": str(application_id),
+            "name": "Test Project",
+            "key": "TEST",
+            "derived_status": "Issue",
+        }
+
+        result = await handle_project_status_changed(
+            application_id=application_id,
+            project_id=project_id,
+            project_data=project_data,
+            old_status="In Progress",
+            new_status="Issue",
+            user_id=user_id,
+            connection_manager=mgr,
+        )
+
+        # Verify broadcast succeeded
+        assert result.success is True
+        assert result.message_type == "project_status_changed"
+
+        # Verify WebSocket message was sent
+        mock_ws.send_json.assert_called()
+        call_args = mock_ws.send_json.call_args[0][0]
+        assert call_args["type"] == "project_status_changed"
+        assert call_args["data"]["old_status"] == "In Progress"
+        assert call_args["data"]["new_status"] == "Issue"
+        assert call_args["data"]["project"]["derived_status"] == "Issue"
+
+    @pytest.mark.asyncio
+    async def test_handle_project_status_changed_broadcasts_to_project_room(self):
+        """Test that project status change is broadcast to project room."""
+        from app.websocket.handlers import handle_project_status_changed
+
+        mgr = ConnectionManager()
+        mock_ws = AsyncMock()
+        user_id = uuid4()
+        application_id = uuid4()
+        project_id = uuid4()
+
+        # Connect user and join project room (not application room)
+        connection = await mgr.connect(mock_ws, user_id)
+        project_room = f"project:{project_id}"
+        await mgr.join_room(connection, project_room)
+
+        mock_ws.send_json.reset_mock()
+
+        # Trigger project status changed event
+        project_data = {
+            "id": str(project_id),
+            "application_id": str(application_id),
+            "name": "Test Project",
+            "key": "TEST",
+            "derived_status": "Issue",
+        }
+
+        result = await handle_project_status_changed(
+            application_id=application_id,
+            project_id=project_id,
+            project_data=project_data,
+            old_status="Todo",
+            new_status="Issue",
+            connection_manager=mgr,
+        )
+
+        # Verify broadcast succeeded
+        assert result.success is True
+
+        # Verify WebSocket message was sent to project room
+        mock_ws.send_json.assert_called()
+        call_args = mock_ws.send_json.call_args[0][0]
+        assert call_args["type"] == "project_status_changed"
+        assert call_args["data"]["old_status"] == "Todo"
+        assert call_args["data"]["new_status"] == "Issue"
+
+    @pytest.mark.asyncio
+    async def test_handle_project_status_changed_issue_escalation(self):
+        """Test Issue escalation scenario: In Progress -> Issue."""
+        from app.websocket.handlers import handle_project_status_changed
+
+        mgr = ConnectionManager()
+        mock_ws = AsyncMock()
+        user_id = uuid4()
+        application_id = uuid4()
+        project_id = uuid4()
+
+        connection = await mgr.connect(mock_ws, user_id)
+        await mgr.join_room(connection, f"application:{application_id}")
+
+        mock_ws.send_json.reset_mock()
+
+        # Simulate Issue escalation: a task moved to "blocked" status
+        project_data = {
+            "id": str(project_id),
+            "application_id": str(application_id),
+            "name": "Project with Issue",
+            "key": "ISS",
+            "derived_status": "Issue",
+            "derived_status_id": str(uuid4()),
+        }
+
+        result = await handle_project_status_changed(
+            application_id=application_id,
+            project_id=project_id,
+            project_data=project_data,
+            old_status="In Progress",
+            new_status="Issue",
+            user_id=user_id,
+            connection_manager=mgr,
+        )
+
+        assert result.success is True
+        assert result.message_type == "project_status_changed"
+
+        # Verify the event includes all necessary data for UI update
+        call_args = mock_ws.send_json.call_args[0][0]
+        data = call_args["data"]
+
+        assert data["project_id"] == str(project_id)
+        assert data["application_id"] == str(application_id)
+        assert data["action"] == "status_changed"
+        assert data["old_status"] == "In Progress"
+        assert data["new_status"] == "Issue"
+        assert "timestamp" in data
+        assert "project" in data
+        assert data["project"]["derived_status"] == "Issue"
+
+    @pytest.mark.asyncio
+    async def test_handle_project_status_changed_done_to_issue(self):
+        """Test status change from Done to Issue (task moved out of Done to blocked)."""
+        from app.websocket.handlers import handle_project_status_changed
+
+        mgr = ConnectionManager()
+        mock_ws = AsyncMock()
+        user_id = uuid4()
+        application_id = uuid4()
+        project_id = uuid4()
+
+        connection = await mgr.connect(mock_ws, user_id)
+        await mgr.join_room(connection, f"application:{application_id}")
+
+        mock_ws.send_json.reset_mock()
+
+        project_data = {
+            "id": str(project_id),
+            "application_id": str(application_id),
+            "name": "Regressed Project",
+            "key": "REG",
+            "derived_status": "Issue",
+        }
+
+        result = await handle_project_status_changed(
+            application_id=application_id,
+            project_id=project_id,
+            project_data=project_data,
+            old_status="Done",
+            new_status="Issue",
+            user_id=user_id,
+            connection_manager=mgr,
+        )
+
+        assert result.success is True
+        call_args = mock_ws.send_json.call_args[0][0]
+        assert call_args["data"]["old_status"] == "Done"
+        assert call_args["data"]["new_status"] == "Issue"
+
+    @pytest.mark.asyncio
+    async def test_handle_project_status_changed_issue_to_in_progress(self):
+        """Test status change from Issue to In Progress (issue resolved)."""
+        from app.websocket.handlers import handle_project_status_changed
+
+        mgr = ConnectionManager()
+        mock_ws = AsyncMock()
+        user_id = uuid4()
+        application_id = uuid4()
+        project_id = uuid4()
+
+        connection = await mgr.connect(mock_ws, user_id)
+        await mgr.join_room(connection, f"application:{application_id}")
+
+        mock_ws.send_json.reset_mock()
+
+        project_data = {
+            "id": str(project_id),
+            "application_id": str(application_id),
+            "name": "Fixed Project",
+            "key": "FIX",
+            "derived_status": "In Progress",
+        }
+
+        result = await handle_project_status_changed(
+            application_id=application_id,
+            project_id=project_id,
+            project_data=project_data,
+            old_status="Issue",
+            new_status="In Progress",
+            user_id=user_id,
+            connection_manager=mgr,
+        )
+
+        assert result.success is True
+        call_args = mock_ws.send_json.call_args[0][0]
+        assert call_args["data"]["old_status"] == "Issue"
+        assert call_args["data"]["new_status"] == "In Progress"
+
+    @pytest.mark.asyncio
+    async def test_handle_project_status_changed_no_subscribers(self):
+        """Test project status changed with no subscribers in room."""
+        from app.websocket.handlers import handle_project_status_changed
+
+        mgr = ConnectionManager()
+        application_id = uuid4()
+        project_id = uuid4()
+
+        # No connections in the room
+        project_data = {
+            "id": str(project_id),
+            "application_id": str(application_id),
+            "name": "Lonely Project",
+            "key": "LONE",
+            "derived_status": "Issue",
+        }
+
+        result = await handle_project_status_changed(
+            application_id=application_id,
+            project_id=project_id,
+            project_data=project_data,
+            old_status="Todo",
+            new_status="Issue",
+            connection_manager=mgr,
+        )
+
+        # Should still succeed, just with 0 recipients
+        assert result.success is True
+        assert result.recipients == 0
