@@ -43,6 +43,7 @@ class MessageType(str, Enum):
     PROJECT_CREATED = "project_created"
     PROJECT_UPDATED = "project_updated"
     PROJECT_DELETED = "project_deleted"
+    PROJECT_STATUS_CHANGED = "project_status_changed"
 
     APPLICATION_CREATED = "application_created"
     APPLICATION_UPDATED = "application_updated"
