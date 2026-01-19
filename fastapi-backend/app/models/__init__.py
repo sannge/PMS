@@ -9,6 +9,7 @@ from .notification import Notification
 from .project import Project
 from .project_assignment import ProjectAssignment
 from .task import Task
+from .task_status import TaskStatus
 from .user import User
 
 __all__ = [
@@ -21,5 +22,6 @@ __all__ = [
     "Project",
     "ProjectAssignment",
     "Task",
+    "TaskStatus",
     "User",
 ]
