@@ -29,6 +29,7 @@ from ..schemas.task import (
     TaskWithSubtasks,
 )
 from ..services.auth_service import get_current_user
+from ..services.permission_service import PermissionService, get_permission_service
 
 router = APIRouter(tags=["Tasks"])
 
@@ -85,11 +86,16 @@ def verify_project_access(
     """
     Verify that the project exists and the user has access via application membership.
 
+    For edit operations, enforces the ProjectMember gate for Editors:
+    - Application Owners: Always have full access (no ProjectMember gate)
+    - Application Editors: Must be ProjectMembers to edit tasks
+    - Application Viewers: Read-only access only
+
     Args:
         project_id: The UUID of the project
         current_user: The authenticated user
         db: Database session
-        require_edit: If True, require owner or editor role (not viewer)
+        require_edit: If True, require owner or editor role with ProjectMember gate
 
     Returns:
         Project: The verified project
@@ -119,11 +125,30 @@ def verify_project_access(
             detail="Access denied. You are not a member of this project's application.",
         )
 
-    if require_edit and user_role not in ["owner", "editor"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. Only owners and editors can perform this action.",
+    if require_edit:
+        # Use PermissionService to check edit permissions with ProjectMember gate
+        permission_service = get_permission_service(db)
+        can_manage = permission_service.check_can_manage_tasks(
+            current_user, project_id, project.application_id
         )
+
+        if not can_manage:
+            # Provide appropriate error message based on role
+            if user_role == "viewer":
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied. Viewers cannot manage tasks.",
+                )
+            elif user_role == "editor":
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied. Editors must be project members to manage tasks in this project.",
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied. You do not have permission to manage tasks in this project.",
+                )
 
     return project
 
@@ -137,11 +162,16 @@ def verify_task_access(
     """
     Verify that the task exists and the user has access via application membership.
 
+    For edit operations, enforces the ProjectMember gate for Editors:
+    - Application Owners: Always have full access (no ProjectMember gate)
+    - Application Editors: Must be ProjectMembers to edit tasks
+    - Application Viewers: Read-only access only
+
     Args:
         task_id: The UUID of the task
         current_user: The authenticated user
         db: Database session
-        require_edit: If True, require owner or editor role (not viewer)
+        require_edit: If True, require owner or editor role with ProjectMember gate
 
     Returns:
         Task: The verified task
@@ -180,11 +210,30 @@ def verify_task_access(
             detail="Access denied. You are not a member of this task's application.",
         )
 
-    if require_edit and user_role not in ["owner", "editor"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. Only owners and editors can perform this action.",
+    if require_edit:
+        # Use PermissionService to check edit permissions with ProjectMember gate
+        permission_service = get_permission_service(db)
+        can_manage = permission_service.check_can_manage_tasks(
+            current_user, project.id, project.application_id
         )
+
+        if not can_manage:
+            # Provide appropriate error message based on role
+            if user_role == "viewer":
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied. Viewers cannot manage tasks.",
+                )
+            elif user_role == "editor":
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied. Editors must be project members to manage tasks in this project.",
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied. You do not have permission to manage tasks in this project.",
+                )
 
     return task
 
