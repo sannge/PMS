@@ -24,9 +24,12 @@ from ..models.application_member import ApplicationMember
 from ..models.project import Project
 from ..models.task import Task
 from ..models.user import User
+from ..models.task_status import TaskStatus
 from ..schemas.project import (
     ProjectBase,
     ProjectResponse,
+    ProjectStatusOverride,
+    ProjectStatusOverrideClear,
     ProjectUpdate,
     ProjectWithTasks,
 )
@@ -562,3 +565,120 @@ async def delete_project(
     db.commit()
 
     return None
+
+
+# ============================================================================
+# Project Status Override endpoints (Owner-only)
+# ============================================================================
+
+
+@router.put(
+    "/api/projects/{project_id}/override-status",
+    response_model=ProjectResponse,
+    summary="Override project status",
+    description="Manually override the derived project status. Owner-only.",
+    responses={
+        200: {"description": "Project status override set successfully"},
+        400: {"description": "Invalid status ID or validation error"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "Access denied - not an owner"},
+        404: {"description": "Project not found"},
+    },
+)
+async def override_project_status(
+    project_id: UUID,
+    override_data: ProjectStatusOverride,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+) -> ProjectResponse:
+    """
+    Override the derived project status.
+
+    This allows Application Owners to manually set a project's status,
+    overriding the automatically derived status based on task distribution.
+
+    - **override_status_id**: The TaskStatus ID to set (must belong to this project)
+    - **override_reason**: Required explanation for the override
+    - **override_expires_at**: Optional expiration timestamp for the override
+
+    When an override is active, the project displays the override status
+    instead of the derived status. When the override expires (if set),
+    the project reverts to the derived status.
+
+    Only Application Owners can set status overrides.
+    """
+    # Verify owner access and get project
+    project = verify_project_access(project_id, current_user, db, require_owner=True)
+
+    # Validate that the override_status_id belongs to this project
+    task_status = db.query(TaskStatus).filter(
+        TaskStatus.id == override_data.override_status_id,
+        TaskStatus.project_id == project_id,
+    ).first()
+
+    if not task_status:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"TaskStatus with ID {override_data.override_status_id} not found or does not belong to this project",
+        )
+
+    # Set the override fields
+    project.override_status_id = override_data.override_status_id
+    project.override_reason = override_data.override_reason
+    project.override_by_user_id = current_user.id
+    project.override_expires_at = override_data.override_expires_at
+
+    # Update timestamp and row version
+    project.updated_at = datetime.utcnow()
+    project.row_version += 1
+
+    # Save changes
+    db.commit()
+    db.refresh(project)
+
+    return project
+
+
+@router.delete(
+    "/api/projects/{project_id}/override-status",
+    response_model=ProjectResponse,
+    summary="Clear project status override",
+    description="Clear the manual status override, reverting to derived status. Owner-only.",
+    responses={
+        200: {"description": "Project status override cleared successfully"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "Access denied - not an owner"},
+        404: {"description": "Project not found"},
+    },
+)
+async def clear_project_status_override(
+    project_id: UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+) -> ProjectResponse:
+    """
+    Clear the project status override.
+
+    This removes the manual status override, causing the project to
+    display its automatically derived status based on task distribution.
+
+    Only Application Owners can clear status overrides.
+    """
+    # Verify owner access and get project
+    project = verify_project_access(project_id, current_user, db, require_owner=True)
+
+    # Clear the override fields
+    project.override_status_id = None
+    project.override_reason = None
+    project.override_by_user_id = None
+    project.override_expires_at = None
+
+    # Update timestamp and row version
+    project.updated_at = datetime.utcnow()
+    project.row_version += 1
+
+    # Save changes
+    db.commit()
+    db.refresh(project)
+
+    return project
