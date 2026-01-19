@@ -105,6 +105,16 @@ class TaskCreate(TaskBase):
         None,
         description="ID of the sprint",
     )
+    task_status_id: Optional[UUID] = Field(
+        None,
+        description="ID of the task status (FK to TaskStatuses)",
+    )
+    task_rank: Optional[str] = Field(
+        None,
+        max_length=50,
+        description="Lexorank for ordering within status columns",
+        examples=["0|hzzzzz:"],
+    )
 
 
 class TaskUpdate(BaseModel):
@@ -154,6 +164,20 @@ class TaskUpdate(BaseModel):
         None,
         description="ID of the sprint",
     )
+    task_status_id: Optional[UUID] = Field(
+        None,
+        description="ID of the task status (FK to TaskStatuses)",
+    )
+    task_rank: Optional[str] = Field(
+        None,
+        max_length=50,
+        description="Lexorank for ordering within status columns",
+    )
+    row_version: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Row version for optimistic concurrency control",
+    )
 
 
 class TaskResponse(TaskBase):
@@ -189,6 +213,19 @@ class TaskResponse(TaskBase):
     sprint_id: Optional[UUID] = Field(
         None,
         description="ID of the sprint",
+    )
+    task_status_id: Optional[UUID] = Field(
+        None,
+        description="ID of the task status (FK to TaskStatuses)",
+    )
+    task_rank: Optional[str] = Field(
+        None,
+        description="Lexorank for ordering within status columns",
+        examples=["0|hzzzzz:"],
+    )
+    row_version: int = Field(
+        1,
+        description="Row version for optimistic concurrency control",
     )
     created_at: datetime = Field(
         ...,
