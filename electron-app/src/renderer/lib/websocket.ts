@@ -59,6 +59,7 @@ export enum MessageType {
   PROJECT_CREATED = 'project_created',
   PROJECT_UPDATED = 'project_updated',
   PROJECT_DELETED = 'project_deleted',
+  PROJECT_STATUS_CHANGED = 'project_status_changed',
 
   // Application events
   APPLICATION_CREATED = 'application_created',
