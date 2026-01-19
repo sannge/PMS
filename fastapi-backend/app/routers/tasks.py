@@ -17,7 +17,9 @@ from ..database import get_db
 from ..models.application import Application
 from ..models.application_member import ApplicationMember
 from ..models.project import Project
+from ..models.project_task_status_agg import ProjectTaskStatusAgg
 from ..models.task import Task
+from ..models.task_status import StatusName
 from ..models.user import User
 from ..schemas.task import (
     TaskCreate,
@@ -30,6 +32,11 @@ from ..schemas.task import (
 )
 from ..services.auth_service import get_current_user
 from ..services.permission_service import PermissionService, get_permission_service
+from ..services.status_derivation_service import (
+    update_aggregation_on_task_create,
+    update_aggregation_on_task_delete,
+    update_aggregation_on_task_status_change,
+)
 
 router = APIRouter(tags=["Tasks"])
 
@@ -327,6 +334,114 @@ def validate_assignee_eligibility(
 
 
 # ============================================================================
+# Status Derivation Helper Functions
+# ============================================================================
+
+
+# Mapping from legacy status values (lowercase) to StatusName values (Title Case)
+LEGACY_STATUS_TO_STATUS_NAME = {
+    "todo": StatusName.TODO.value,
+    "in_progress": StatusName.IN_PROGRESS.value,
+    "in_review": StatusName.IN_REVIEW.value,
+    "issue": StatusName.ISSUE.value,
+    "blocked": StatusName.ISSUE.value,  # blocked -> issue migration
+    "done": StatusName.DONE.value,
+}
+
+
+def get_status_name_from_legacy(legacy_status: str) -> str:
+    """
+    Convert a legacy task status value to the new StatusName value.
+
+    Legacy statuses are lowercase: 'todo', 'in_progress', 'in_review', 'done', 'blocked'
+    New StatusName values are Title Case: 'Todo', 'In Progress', 'In Review', 'Done', 'Issue'
+
+    Args:
+        legacy_status: The legacy status string (lowercase)
+
+    Returns:
+        The StatusName value string (Title Case)
+    """
+    return LEGACY_STATUS_TO_STATUS_NAME.get(legacy_status, StatusName.TODO.value)
+
+
+def get_or_create_project_aggregation(
+    db: Session,
+    project_id: UUID,
+) -> ProjectTaskStatusAgg:
+    """
+    Get or create the ProjectTaskStatusAgg for a project.
+
+    If the aggregation record doesn't exist, creates one with all counters at zero.
+
+    Args:
+        db: Database session
+        project_id: The UUID of the project
+
+    Returns:
+        ProjectTaskStatusAgg: The aggregation record
+    """
+    agg = db.query(ProjectTaskStatusAgg).filter(
+        ProjectTaskStatusAgg.project_id == project_id
+    ).first()
+
+    if agg is None:
+        # Create new aggregation with zero counts
+        agg = ProjectTaskStatusAgg(
+            project_id=project_id,
+            total_tasks=0,
+            todo_tasks=0,
+            active_tasks=0,
+            review_tasks=0,
+            issue_tasks=0,
+            done_tasks=0,
+        )
+        db.add(agg)
+        # Flush to ensure the record is created before we modify it
+        db.flush()
+
+    return agg
+
+
+def update_project_derived_status(
+    db: Session,
+    project: Project,
+    new_status_name: str,
+) -> None:
+    """
+    Update a project's derived_status based on the newly derived status name.
+
+    Finds the TaskStatus record matching the status name for this project
+    and updates the project's derived_status_id.
+
+    Args:
+        db: Database session
+        project: The Project to update
+        new_status_name: The derived status name ('Todo', 'In Progress', 'Issue', 'Done')
+    """
+    from ..models.task_status import TaskStatus as TaskStatusModel
+
+    # Find the TaskStatus record for this project with the derived status name
+    # Note: derived status is a category, so we look for the first status matching
+    # We map the derived status to a TaskStatus by category/name:
+    # 'Todo' -> TaskStatus with name='Todo'
+    # 'In Progress' -> TaskStatus with name='In Progress'
+    # 'Issue' -> TaskStatus with name='Issue'
+    # 'Done' -> TaskStatus with name='Done'
+    task_status = db.query(TaskStatusModel).filter(
+        TaskStatusModel.project_id == project.id,
+        TaskStatusModel.name == new_status_name,
+    ).first()
+
+    if task_status:
+        project.derived_status_id = task_status.id
+    else:
+        # If no matching TaskStatus found (shouldn't happen normally),
+        # set derived_status_id to None
+        project.derived_status_id = None
+
+
+# ============================================================================
 # Project-nested endpoints (for listing and creating tasks)
 # ============================================================================
 
@@ -542,6 +657,17 @@ async def create_task(
 
     # Save to database
     db.add(task)
+    db.flush()  # Flush to get task ID before updating aggregation
+
+    # Update status aggregation for project status derivation
+    task_status_name = get_status_name_from_legacy(task.status)
+    agg = get_or_create_project_aggregation(db, project_id)
+    new_derived_status = update_aggregation_on_task_create(agg, task_status_name)
+
+    # Update project's derived status
+    update_project_derived_status(db, project, new_derived_status)
+
+    # Commit all changes
     db.commit()
     db.refresh(task)
 
@@ -683,6 +809,9 @@ async def update_task(
     # Verify access and get task (require edit permission)
     task = verify_task_access(task_id, current_user, db, require_edit=True)
 
+    # Track old status for aggregation update
+    old_status = task.status
+
     # Update fields if provided
     update_data = task_data.model_dump(exclude_unset=True)
     if not update_data:
@@ -730,6 +859,24 @@ async def update_task(
     # Update timestamp
     task.updated_at = datetime.utcnow()
 
+    # Check if status changed and update aggregation
+    new_status = task.status
+    if old_status != new_status:
+        old_status_name = get_status_name_from_legacy(old_status)
+        new_status_name = get_status_name_from_legacy(new_status)
+
+        # Get or create aggregation and update counters
+        agg = get_or_create_project_aggregation(db, task.project_id)
+        new_derived_status = update_aggregation_on_task_status_change(
+            agg, old_status_name, new_status_name
+        )
+
+        # Update project's derived status
+        # Need to fetch the project to update derived_status_id
+        project = db.query(Project).filter(Project.id == task.project_id).first()
+        if project:
+            update_project_derived_status(db, project, new_derived_status)
+
     # Save changes
     db.commit()
     db.refresh(task)
@@ -768,11 +915,37 @@ async def delete_task(
     # Verify access and get task (require edit permission)
     task = verify_task_access(task_id, current_user, db, require_edit=True)
 
+    # Store task info for aggregation update before deletion
+    project_id = task.project_id
+    task_status = task.status
+
+    # Get subtasks statuses before deletion (for aggregation update)
+    subtasks = db.query(Task).filter(Task.parent_id == task_id).all()
+    subtask_statuses = [subtask.status for subtask in subtasks]
+
     # Delete subtasks first (to handle self-referential cascade)
     db.query(Task).filter(Task.parent_id == task_id).delete(synchronize_session=False)
 
     # Delete the task (cascade will handle attachments)
     db.delete(task)
+
+    # Update status aggregation for the deleted task and subtasks
+    agg = get_or_create_project_aggregation(db, project_id)
+
+    # Update aggregation for the main task
+    task_status_name = get_status_name_from_legacy(task_status)
+    new_derived_status = update_aggregation_on_task_delete(agg, task_status_name)
+
+    # Update aggregation for each deleted subtask
+    for subtask_status in subtask_statuses:
+        subtask_status_name = get_status_name_from_legacy(subtask_status)
+        new_derived_status = update_aggregation_on_task_delete(agg, subtask_status_name)
+
+    # Update project's derived status
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if project:
+        update_project_derived_status(db, project, new_derived_status)
+
     db.commit()
 
     return None
