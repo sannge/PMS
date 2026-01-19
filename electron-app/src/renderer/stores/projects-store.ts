@@ -10,6 +10,9 @@
  * - Loading and error states
  * - Search and filtering
  * - Application-scoped project fetching
+ * - Derived status from task distribution
+ * - Status override support (Owner-only)
+ * - Real-time status change handling via WebSocket
  */
 
 import { create } from 'zustand'
@@ -25,6 +28,11 @@ import { getAuthHeaders } from './auth-store'
 export type ProjectType = 'kanban' | 'scrum'
 
 /**
+ * Project status values (derived from task distribution)
+ */
+export type ProjectDerivedStatus = 'Todo' | 'In Progress' | 'In Review' | 'Issue' | 'Done'
+
+/**
  * Project data from the API
  */
 export interface Project {
@@ -37,6 +45,21 @@ export interface Project {
   tasks_count: number
   created_at: string
   updated_at: string
+
+  // Owner and permissions
+  project_owner_user_id: string | null
+
+  // Derived status (computed from task distribution)
+  derived_status_id: string | null
+
+  // Status override fields (Owner-only)
+  override_status_id: string | null
+  override_reason: string | null
+  override_by_user_id: string | null
+  override_expires_at: string | null
+
+  // Optimistic concurrency control
+  row_version: number
 }
 
 /**
@@ -47,6 +70,7 @@ export interface ProjectCreate {
   key: string
   description?: string | null
   project_type?: ProjectType
+  project_owner_user_id?: string | null
 }
 
 /**
@@ -56,6 +80,37 @@ export interface ProjectUpdate {
   name?: string
   description?: string | null
   project_type?: ProjectType
+  project_owner_user_id?: string | null
+  row_version?: number
+}
+
+/**
+ * Data for setting a project status override (Owner-only)
+ */
+export interface ProjectStatusOverride {
+  override_status_id: string
+  override_reason?: string | null
+  override_expires_at?: string | null
+}
+
+/**
+ * WebSocket event data for project status changes
+ */
+export interface ProjectStatusChangedEventData {
+  project_id: string
+  application_id: string
+  old_status: string | null
+  new_status: string
+  project: {
+    id: string
+    application_id: string
+    name: string
+    key: string
+    derived_status: string
+    derived_status_id: string | null
+  }
+  timestamp: string
+  changed_by?: string
 }
 
 /**
@@ -112,6 +167,18 @@ export interface ProjectsState {
   setSearchQuery: (query: string) => void
   clearError: () => void
   reset: () => void
+
+  // Status override actions (Owner-only)
+  overrideProjectStatus: (
+    token: string | null,
+    projectId: string,
+    data: ProjectStatusOverride
+  ) => Promise<Project | null>
+  clearStatusOverride: (token: string | null, projectId: string) => Promise<Project | null>
+
+  // Real-time status update handlers
+  updateProjectDerivedStatus: (projectId: string, derivedStatusId: string | null) => void
+  handleProjectStatusChanged: (event: ProjectStatusChangedEventData) => void
 }
 
 // ============================================================================
@@ -432,6 +499,134 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   reset: () => {
     set(initialState)
   },
+
+  /**
+   * Override project status (Owner-only)
+   * Sets a manual status override that takes precedence over the derived status
+   */
+  overrideProjectStatus: async (token, projectId, data) => {
+    set({ isUpdating: true, error: null })
+
+    try {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      const response = await window.electronAPI.put<Project>(
+        `/api/projects/${projectId}/override-status`,
+        data,
+        getAuthHeaders(token)
+      )
+
+      if (response.status !== 200) {
+        const error = parseApiError(response.status, response.data)
+        set({ isUpdating: false, error })
+        return null
+      }
+
+      const project = response.data
+      // Update the project in the list
+      const projects = get().projects.map((p) => (p.id === projectId ? project : p))
+      set({
+        projects,
+        selectedProject: get().selectedProject?.id === projectId ? project : get().selectedProject,
+        isUpdating: false,
+      })
+      return project
+    } catch (err) {
+      const error: ProjectError = {
+        message: err instanceof Error ? err.message : 'Failed to override project status',
+      }
+      set({ isUpdating: false, error })
+      return null
+    }
+  },
+
+  /**
+   * Clear project status override (Owner-only)
+   * Reverts the project to using the derived status from task distribution
+   */
+  clearStatusOverride: async (token, projectId) => {
+    set({ isUpdating: true, error: null })
+
+    try {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      const response = await window.electronAPI.delete<Project>(
+        `/api/projects/${projectId}/override-status`,
+        getAuthHeaders(token)
+      )
+
+      if (response.status !== 200) {
+        const error = parseApiError(response.status, response.data)
+        set({ isUpdating: false, error })
+        return null
+      }
+
+      const project = response.data
+      // Update the project in the list
+      const projects = get().projects.map((p) => (p.id === projectId ? project : p))
+      set({
+        projects,
+        selectedProject: get().selectedProject?.id === projectId ? project : get().selectedProject,
+        isUpdating: false,
+      })
+      return project
+    } catch (err) {
+      const error: ProjectError = {
+        message: err instanceof Error ? err.message : 'Failed to clear status override',
+      }
+      set({ isUpdating: false, error })
+      return null
+    }
+  },
+
+  /**
+   * Update a project's derived status (for real-time updates)
+   * Called when a WebSocket project_status_changed event is received
+   */
+  updateProjectDerivedStatus: (projectId, derivedStatusId) => {
+    const projects = get().projects.map((p) =>
+      p.id === projectId ? { ...p, derived_status_id: derivedStatusId } : p
+    )
+    const selectedProject = get().selectedProject
+    set({
+      projects,
+      selectedProject:
+        selectedProject?.id === projectId
+          ? { ...selectedProject, derived_status_id: derivedStatusId }
+          : selectedProject,
+    })
+  },
+
+  /**
+   * Handle WebSocket project_status_changed event
+   * Updates the project's derived status based on task distribution changes
+   */
+  handleProjectStatusChanged: (event) => {
+    const { project_id, project } = event
+    const currentApplicationId = get().currentApplicationId
+
+    // Only update if the project belongs to the currently viewed application
+    if (currentApplicationId && project.application_id === currentApplicationId) {
+      // Update the project in the list with the new derived status
+      const projects = get().projects.map((p) =>
+        p.id === project_id
+          ? { ...p, derived_status_id: project.derived_status_id }
+          : p
+      )
+      const selectedProject = get().selectedProject
+      set({
+        projects,
+        selectedProject:
+          selectedProject?.id === project_id
+            ? { ...selectedProject, derived_status_id: project.derived_status_id }
+            : selectedProject,
+      })
+    }
+  },
 }))
 
 // ============================================================================
@@ -446,5 +641,58 @@ export const selectSelectedProject = (state: ProjectsState): Project | null =>
 export const selectIsLoading = (state: ProjectsState): boolean => state.isLoading
 
 export const selectError = (state: ProjectsState): ProjectError | null => state.error
+
+/**
+ * Select a project by ID
+ */
+export const selectProjectById =
+  (projectId: string) =>
+  (state: ProjectsState): Project | undefined =>
+    state.projects.find((p) => p.id === projectId)
+
+/**
+ * Select projects with status override
+ */
+export const selectProjectsWithOverride = (state: ProjectsState): Project[] =>
+  state.projects.filter((p) => p.override_status_id !== null)
+
+/**
+ * Check if a project has an active status override
+ */
+export const selectHasStatusOverride =
+  (projectId: string) =>
+  (state: ProjectsState): boolean => {
+    const project = state.projects.find((p) => p.id === projectId)
+    if (!project || !project.override_status_id) return false
+    // Check if override has expired
+    if (project.override_expires_at) {
+      const expiresAt = new Date(project.override_expires_at)
+      if (expiresAt < new Date()) return false
+    }
+    return true
+  }
+
+/**
+ * Get the effective status ID for a project (override if active, otherwise derived)
+ */
+export const selectEffectiveStatusId =
+  (projectId: string) =>
+  (state: ProjectsState): string | null => {
+    const project = state.projects.find((p) => p.id === projectId)
+    if (!project) return null
+    // Check for active override
+    if (project.override_status_id) {
+      // Check if override has expired
+      if (project.override_expires_at) {
+        const expiresAt = new Date(project.override_expires_at)
+        if (expiresAt >= new Date()) {
+          return project.override_status_id
+        }
+      } else {
+        return project.override_status_id
+      }
+    }
+    return project.derived_status_id
+  }
 
 export default useProjectsStore
