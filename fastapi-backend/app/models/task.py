@@ -13,6 +13,7 @@ from ..database import Base
 if TYPE_CHECKING:
     from .attachment import Attachment
     from .project import Project
+    from .task_status import TaskStatus
     from .user import User
 
 
@@ -27,11 +28,12 @@ class Task(Base):
     Attributes:
         id: Unique identifier (UUID)
         project_id: FK to parent project
+        task_status_id: FK to TaskStatuses table (new unified status system)
         task_key: Unique task key (e.g., "PROJ-123")
         title: Task title/summary
         description: Detailed task description
         task_type: Type of task (story, bug, epic, subtask)
-        status: Current status (todo, in_progress, in_review, done)
+        status: Current status (todo, in_progress, in_review, done) - DEPRECATED, use task_status_id
         priority: Priority level (lowest, low, medium, high, highest)
         assignee_id: FK to assigned user
         reporter_id: FK to reporting user
@@ -39,6 +41,8 @@ class Task(Base):
         sprint_id: FK to sprint (for future use)
         story_points: Story point estimate
         due_date: Task due date
+        task_rank: Lexorank string for ordering tasks within a status column
+        row_version: Version for optimistic concurrency control
         created_at: Timestamp when task was created
         updated_at: Timestamp when task was last updated
     """
@@ -81,6 +85,12 @@ class Task(Base):
     )
     sprint_id = Column(
         UNIQUEIDENTIFIER,
+        nullable=True,
+        index=True,
+    )
+    task_status_id = Column(
+        UNIQUEIDENTIFIER,
+        ForeignKey("TaskStatuses.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -129,6 +139,17 @@ class Task(Base):
         nullable=True,
     )
 
+    # Ordering and concurrency
+    task_rank = Column(
+        String(50),
+        nullable=True,
+    )
+    row_version = Column(
+        Integer,
+        nullable=False,
+        default=1,
+    )
+
     # Timestamps
     created_at = Column(
         DateTime,
@@ -145,6 +166,11 @@ class Task(Base):
     # Relationships
     project = relationship(
         "Project",
+        back_populates="tasks",
+        lazy="joined",
+    )
+    task_status = relationship(
+        "TaskStatus",
         back_populates="tasks",
         lazy="joined",
     )
