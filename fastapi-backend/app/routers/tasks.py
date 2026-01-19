@@ -261,6 +261,71 @@ def generate_task_key(project: Project, db: Session) -> str:
     return f"{project.key}-{next_number}"
 
 
+def validate_assignee_eligibility(
+    assignee_id: UUID,
+    project_id: UUID,
+    application_id: UUID,
+    db: Session,
+) -> None:
+    """
+    Validate that a user can be assigned to a task in a project.
+
+    Assignment eligibility rules:
+    - Must be a ProjectMember of the project
+    - Must have Owner or Editor role in the application
+    - Viewers cannot be assigned to tasks
+
+    Args:
+        assignee_id: The UUID of the user to be assigned
+        project_id: The UUID of the project
+        application_id: The UUID of the parent application
+        db: Database session
+
+    Raises:
+        HTTPException: If assignee does not exist or is not eligible
+    """
+    # Verify the assignee user exists
+    from ..models.user import User as UserModel
+    assignee_user = db.query(UserModel).filter(UserModel.id == assignee_id).first()
+    if not assignee_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"User with ID {assignee_id} not found",
+        )
+
+    # Use PermissionService to check assignment eligibility
+    permission_service = get_permission_service(db)
+    can_be_assigned = permission_service.check_can_be_assigned(
+        user_id=assignee_id,
+        project_id=project_id,
+        application_id=application_id,
+    )
+
+    if not can_be_assigned:
+        # Get the user's application role for a more informative error message
+        user_role = permission_service.get_user_application_role(
+            user_id=assignee_id,
+            application_id=application_id,
+        )
+
+        if not user_role:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot assign task to this user. User is not a member of the application.",
+            )
+        elif user_role == "viewer":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot assign task to this user. Viewers cannot be assigned to tasks.",
+            )
+        else:
+            # User is owner/editor but not a ProjectMember
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot assign task to this user. User must be a project member to be assigned tasks.",
+            )
+
+
 # ============================================================================
 # Project-nested endpoints (for listing and creating tasks)
 # ============================================================================
@@ -442,6 +507,15 @@ async def create_task(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Parent task not found or does not belong to this project",
             )
+
+    # Validate assignee eligibility if provided
+    if task_data.assignee_id:
+        validate_assignee_eligibility(
+            assignee_id=task_data.assignee_id,
+            project_id=project_id,
+            application_id=project.application_id,
+            db=db,
+        )
 
     # Generate task key
     task_key = generate_task_key(project, db)
@@ -636,6 +710,15 @@ async def update_task(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Parent task not found or does not belong to the same project",
             )
+
+    # Validate assignee eligibility if being updated
+    if "assignee_id" in update_data and update_data["assignee_id"]:
+        validate_assignee_eligibility(
+            assignee_id=update_data["assignee_id"],
+            project_id=task.project_id,
+            application_id=task.project.application_id,
+            db=db,
+        )
 
     # Apply updates, converting enums to their values
     for field, value in update_data.items():
