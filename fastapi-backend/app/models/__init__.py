@@ -9,6 +9,7 @@ from .notification import Notification
 from .project import Project
 from .project_assignment import ProjectAssignment
 from .project_member import ProjectMember
+from .project_task_status_agg import ProjectTaskStatusAgg
 from .task import Task
 from .task_status import TaskStatus
 from .user import User
@@ -23,6 +24,7 @@ __all__ = [
     "Project",
     "ProjectAssignment",
     "ProjectMember",
+    "ProjectTaskStatusAgg",
     "Task",
     "TaskStatus",
     "User",
