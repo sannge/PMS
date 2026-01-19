@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, List
 
-from sqlalchemy import Column, DateTime, ForeignKey, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.mssql import UNIQUEIDENTIFIER
 from sqlalchemy.orm import relationship
 
@@ -13,7 +13,10 @@ from ..database import Base
 if TYPE_CHECKING:
     from .application import Application
     from .project_assignment import ProjectAssignment
+    from .project_member import ProjectMember
+    from .project_task_status_agg import ProjectTaskStatusAgg
     from .task import Task
+    from .task_status import TaskStatus
     from .user import User
 
 
@@ -27,10 +30,17 @@ class Project(Base):
         id: Unique identifier (UUID)
         application_id: FK to parent application
         created_by: FK to the user who created the project
+        project_owner_user_id: FK to the user who owns the project
         name: Project name
         key: Short project key for task prefixes (e.g., "PROJ")
         description: Optional project description
         project_type: Type of project (scrum, kanban, etc.)
+        derived_status_id: FK to TaskStatus for server-computed project status
+        override_status_id: FK to TaskStatus for manual override (Owner-only)
+        override_reason: Reason for status override
+        override_by_user_id: FK to user who set the override
+        override_expires_at: When the override expires (reverts to derived)
+        row_version: Version for optimistic concurrency control
         created_at: Timestamp when project was created
         updated_at: Timestamp when project was last updated
     """
@@ -59,6 +69,41 @@ class Project(Base):
         nullable=True,
         index=True,
     )
+    project_owner_user_id = Column(
+        UNIQUEIDENTIFIER,
+        ForeignKey("Users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    # Status derivation and override
+    # NOTE: These FKs use ondelete="SET NULL" to avoid SQL Server cascade path issues
+    derived_status_id = Column(
+        UNIQUEIDENTIFIER,
+        ForeignKey("TaskStatuses.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    override_status_id = Column(
+        UNIQUEIDENTIFIER,
+        ForeignKey("TaskStatuses.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    override_reason = Column(
+        String(500),
+        nullable=True,
+    )
+    override_by_user_id = Column(
+        UNIQUEIDENTIFIER,
+        ForeignKey("Users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    override_expires_at = Column(
+        DateTime,
+        nullable=True,
+    )
 
     # Project details
     name = Column(
@@ -79,6 +124,13 @@ class Project(Base):
         String(50),
         nullable=True,
         default="kanban",
+    )
+
+    # Optimistic concurrency control
+    row_version = Column(
+        Integer,
+        nullable=False,
+        default=1,
     )
 
     # Timestamps
@@ -116,6 +168,54 @@ class Project(Base):
         back_populates="project",
         cascade="all, delete-orphan",
         lazy="dynamic",
+    )
+
+    # Project ownership
+    project_owner = relationship(
+        "User",
+        foreign_keys=[project_owner_user_id],
+        lazy="select",
+    )
+
+    # Status derivation relationships
+    derived_status = relationship(
+        "TaskStatus",
+        foreign_keys=[derived_status_id],
+        lazy="joined",
+    )
+    override_status = relationship(
+        "TaskStatus",
+        foreign_keys=[override_status_id],
+        lazy="select",
+    )
+    override_by_user = relationship(
+        "User",
+        foreign_keys=[override_by_user_id],
+        lazy="select",
+    )
+
+    # TaskStatuses for this project
+    task_statuses = relationship(
+        "TaskStatus",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+        foreign_keys="[TaskStatus.project_id]",
+    )
+
+    # Project membership (for permission gate)
+    members = relationship(
+        "ProjectMember",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+
+    # Status aggregation for derivation
+    status_aggregation = relationship(
+        "ProjectTaskStatusAgg",
+        uselist=False,
+        cascade="all, delete-orphan",
+        lazy="select",
     )
 
     def __repr__(self) -> str:
