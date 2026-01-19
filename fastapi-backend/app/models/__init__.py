@@ -8,6 +8,7 @@ from .note import Note
 from .notification import Notification
 from .project import Project
 from .project_assignment import ProjectAssignment
+from .project_member import ProjectMember
 from .task import Task
 from .task_status import TaskStatus
 from .user import User
@@ -21,6 +22,7 @@ __all__ = [
     "Notification",
     "Project",
     "ProjectAssignment",
+    "ProjectMember",
     "Task",
     "TaskStatus",
     "User",
