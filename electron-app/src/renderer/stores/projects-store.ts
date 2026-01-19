@@ -50,6 +50,7 @@ export interface Project {
   project_owner_user_id: string | null
 
   // Derived status (computed from task distribution)
+  derived_status: ProjectDerivedStatus | null
   derived_status_id: string | null
 
   // Status override fields (Owner-only)
@@ -177,7 +178,11 @@ export interface ProjectsState {
   clearStatusOverride: (token: string | null, projectId: string) => Promise<Project | null>
 
   // Real-time status update handlers
-  updateProjectDerivedStatus: (projectId: string, derivedStatusId: string | null) => void
+  updateProjectDerivedStatus: (
+    projectId: string,
+    derivedStatusId: string | null,
+    derivedStatus?: ProjectDerivedStatus | null
+  ) => void
   handleProjectStatusChanged: (event: ProjectStatusChangedEventData) => void
 }
 
@@ -587,16 +592,26 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
    * Update a project's derived status (for real-time updates)
    * Called when a WebSocket project_status_changed event is received
    */
-  updateProjectDerivedStatus: (projectId, derivedStatusId) => {
+  updateProjectDerivedStatus: (projectId, derivedStatusId, derivedStatus) => {
     const projects = get().projects.map((p) =>
-      p.id === projectId ? { ...p, derived_status_id: derivedStatusId } : p
+      p.id === projectId
+        ? {
+            ...p,
+            derived_status_id: derivedStatusId,
+            ...(derivedStatus !== undefined && { derived_status: derivedStatus }),
+          }
+        : p
     )
     const selectedProject = get().selectedProject
     set({
       projects,
       selectedProject:
         selectedProject?.id === projectId
-          ? { ...selectedProject, derived_status_id: derivedStatusId }
+          ? {
+              ...selectedProject,
+              derived_status_id: derivedStatusId,
+              ...(derivedStatus !== undefined && { derived_status: derivedStatus }),
+            }
           : selectedProject,
     })
   },
@@ -611,10 +626,15 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
 
     // Only update if the project belongs to the currently viewed application
     if (currentApplicationId && project.application_id === currentApplicationId) {
-      // Update the project in the list with the new derived status
+      // Update the project in the list with the new derived status (both ID and name)
+      const derivedStatus = project.derived_status as ProjectDerivedStatus | null
       const projects = get().projects.map((p) =>
         p.id === project_id
-          ? { ...p, derived_status_id: project.derived_status_id }
+          ? {
+              ...p,
+              derived_status: derivedStatus,
+              derived_status_id: project.derived_status_id,
+            }
           : p
       )
       const selectedProject = get().selectedProject
@@ -622,7 +642,11 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
         projects,
         selectedProject:
           selectedProject?.id === project_id
-            ? { ...selectedProject, derived_status_id: project.derived_status_id }
+            ? {
+                ...selectedProject,
+                derived_status: derivedStatus,
+                derived_status_id: project.derived_status_id,
+              }
             : selectedProject,
       })
     }

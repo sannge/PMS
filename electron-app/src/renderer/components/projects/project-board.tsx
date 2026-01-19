@@ -37,7 +37,9 @@ import {
   Eye,
   Wifi,
   WifiOff,
+  AlertTriangle,
 } from 'lucide-react'
+import type { ProjectDerivedStatus } from '@/stores/projects-store'
 import {
   SkeletonTaskCard,
   SkeletonListView,
@@ -110,6 +112,10 @@ export interface ProjectBoardProps {
    * Project key for task keys display
    */
   projectKey: string
+  /**
+   * Project's derived status (computed from task distribution)
+   */
+  derivedStatus?: ProjectDerivedStatus | null
   /**
    * Callback when a task is clicked
    */
@@ -212,6 +218,61 @@ function getTaskTypeIcon(taskType: TaskType): JSX.Element {
     case 'task':
     default:
       return <CheckCircle2 className="h-3.5 w-3.5 text-blue-500" />
+  }
+}
+
+/**
+ * Get derived status display info (icon, color, label)
+ */
+function getDerivedStatusInfo(status: ProjectDerivedStatus | null | undefined): {
+  icon: JSX.Element
+  label: string
+  color: string
+  bgColor: string
+  textColor: string
+} {
+  switch (status) {
+    case 'Done':
+      return {
+        icon: <CheckCircle2 className="h-4 w-4" />,
+        label: 'Done',
+        color: 'bg-green-500',
+        bgColor: 'bg-green-500/10',
+        textColor: 'text-green-600 dark:text-green-400',
+      }
+    case 'Issue':
+      return {
+        icon: <AlertTriangle className="h-4 w-4" />,
+        label: 'Issue',
+        color: 'bg-red-500',
+        bgColor: 'bg-red-500/10',
+        textColor: 'text-red-600 dark:text-red-400',
+      }
+    case 'In Review':
+      return {
+        icon: <Eye className="h-4 w-4" />,
+        label: 'In Review',
+        color: 'bg-purple-500',
+        bgColor: 'bg-purple-500/10',
+        textColor: 'text-purple-600 dark:text-purple-400',
+      }
+    case 'In Progress':
+      return {
+        icon: <Timer className="h-4 w-4" />,
+        label: 'In Progress',
+        color: 'bg-blue-500',
+        bgColor: 'bg-blue-500/10',
+        textColor: 'text-blue-600 dark:text-blue-400',
+      }
+    case 'Todo':
+    default:
+      return {
+        icon: <Circle className="h-4 w-4" />,
+        label: 'Todo',
+        color: 'bg-slate-500',
+        bgColor: 'bg-slate-500/10',
+        textColor: 'text-slate-500 dark:text-slate-400',
+      }
   }
 }
 
@@ -504,6 +565,7 @@ function ListView({ tasks, onTaskClick, isLoading }: ListViewProps): JSX.Element
 export function ProjectBoard({
   projectId,
   projectKey,
+  derivedStatus,
   onTaskClick,
   onAddTask,
   className,
@@ -660,6 +722,21 @@ export function ProjectBoard({
               List
             </button>
           </div>
+
+          {/* Project Derived Status Badge */}
+          {derivedStatus && (
+            <div
+              className={cn(
+                'flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium',
+                getDerivedStatusInfo(derivedStatus).bgColor,
+                getDerivedStatusInfo(derivedStatus).textColor
+              )}
+              title={`Project Status: ${derivedStatus}`}
+            >
+              {getDerivedStatusInfo(derivedStatus).icon}
+              <span>{getDerivedStatusInfo(derivedStatus).label}</span>
+            </div>
+          )}
 
           {/* Real-time connection indicator */}
           {enableRealtime && (

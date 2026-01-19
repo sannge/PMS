@@ -22,8 +22,13 @@ import {
   Hash,
   MoreHorizontal,
   ChevronRight,
+  Circle,
+  Timer,
+  Eye,
+  CheckCircle2,
+  AlertCircle,
 } from 'lucide-react'
-import type { Project } from '@/stores/projects-store'
+import type { Project, ProjectDerivedStatus } from '@/stores/projects-store'
 
 // ============================================================================
 // Types
@@ -108,6 +113,55 @@ function getProjectTypeInfo(projectType: string): {
         label: 'Kanban',
         abbrev: 'K',
         color: 'bg-blue-500/15 text-blue-600 dark:text-blue-400',
+      }
+  }
+}
+
+/**
+ * Get derived status display info (icon, color, label)
+ */
+function getDerivedStatusInfo(status: ProjectDerivedStatus | null): {
+  icon: JSX.Element
+  label: string
+  color: string
+  bgColor: string
+} {
+  switch (status) {
+    case 'Done':
+      return {
+        icon: <CheckCircle2 className="h-3 w-3" />,
+        label: 'Done',
+        color: 'text-green-600 dark:text-green-400',
+        bgColor: 'bg-green-500/15',
+      }
+    case 'Issue':
+      return {
+        icon: <AlertCircle className="h-3 w-3" />,
+        label: 'Issue',
+        color: 'text-red-600 dark:text-red-400',
+        bgColor: 'bg-red-500/15',
+      }
+    case 'In Review':
+      return {
+        icon: <Eye className="h-3 w-3" />,
+        label: 'In Review',
+        color: 'text-purple-600 dark:text-purple-400',
+        bgColor: 'bg-purple-500/15',
+      }
+    case 'In Progress':
+      return {
+        icon: <Timer className="h-3 w-3" />,
+        label: 'In Progress',
+        color: 'text-blue-600 dark:text-blue-400',
+        bgColor: 'bg-blue-500/15',
+      }
+    case 'Todo':
+    default:
+      return {
+        icon: <Circle className="h-3 w-3" />,
+        label: 'Todo',
+        color: 'text-slate-500 dark:text-slate-400',
+        bgColor: 'bg-slate-500/15',
       }
   }
 }
@@ -301,6 +355,22 @@ export function ProjectCard({
       {/* Description indicator (dot) - shows if has description */}
       {project.description && (
         <span className="flex-shrink-0 h-1 w-1 rounded-full bg-muted-foreground/40" title="Has description" />
+      )}
+
+      {/* Derived Status Badge */}
+      {project.derived_status && (
+        <div
+          className={cn(
+            'flex-shrink-0 flex items-center gap-1 rounded px-1.5 py-0.5',
+            'text-[10px] font-medium',
+            getDerivedStatusInfo(project.derived_status).bgColor,
+            getDerivedStatusInfo(project.derived_status).color
+          )}
+          title={`Status: ${project.derived_status}`}
+        >
+          {getDerivedStatusInfo(project.derived_status).icon}
+          <span className="hidden xl:inline">{getDerivedStatusInfo(project.derived_status).label}</span>
+        </div>
       )}
 
       {/* Spacer */}
