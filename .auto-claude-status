@@ -1,25 +1,25 @@
 {
   "active": true,
-  "spec": "003-be-able-to-invite-other-users-into-applications-us",
-  "state": "complete",
+  "spec": "017-project-task-management-and-permissions",
+  "state": "building",
   "subtasks": {
-    "completed": 35,
-    "total": 35,
-    "in_progress": 0,
+    "completed": 25,
+    "total": 34,
+    "in_progress": 1,
     "failed": 0
   },
   "phase": {
-    "current": "Integration",
+    "current": "Frontend Implementation",
     "id": null,
-    "total": 3
+    "total": 7
   },
   "workers": {
     "active": 0,
     "max": 1
   },
   "session": {
-    "number": 1241,
-    "started_at": "2026-01-17T20:36:35.197613"
+    "number": 11,
+    "started_at": "2026-01-18T22:35:54.865799"
   },
-  "last_update": "2026-01-18T02:11:09.478412"
+  "last_update": "2026-01-18T23:07:11.460948"
 }

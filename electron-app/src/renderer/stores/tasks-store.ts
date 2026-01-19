@@ -11,6 +11,9 @@
  * - Search and filtering
  * - Status transitions
  * - Project-scoped task fetching
+ * - Task status_id and rank for Kanban board
+ * - Drag-and-drop task move operations
+ * - Real-time task updates via WebSocket
  */
 
 import { create } from 'zustand'
@@ -56,6 +59,13 @@ export interface Task {
   created_at: string
   updated_at: string
   subtasks_count?: number
+
+  // Kanban board fields
+  task_status_id: string | null
+  task_rank: string | null
+
+  // Optimistic concurrency control
+  row_version: number
 }
 
 /**
@@ -73,6 +83,8 @@ export interface TaskCreate {
   sprint_id?: string | null
   story_points?: number | null
   due_date?: string | null
+  task_status_id?: string | null
+  task_rank?: string | null
 }
 
 /**
@@ -89,6 +101,38 @@ export interface TaskUpdate {
   due_date?: string | null
   parent_id?: string | null
   sprint_id?: string | null
+  task_status_id?: string | null
+  task_rank?: string | null
+  row_version?: number
+}
+
+/**
+ * Data for moving a task (Kanban drag-and-drop)
+ */
+export interface TaskMove {
+  target_status?: TaskStatus
+  target_status_id?: string
+  target_rank?: string
+  before_task_id?: string
+  after_task_id?: string
+  row_version?: number
+}
+
+/**
+ * WebSocket event data for task moved events
+ */
+export interface TaskMovedEventData {
+  task_id: string
+  project_id: string
+  old_status: string | null
+  new_status: string
+  old_status_id: string | null
+  new_status_id: string | null
+  old_rank: string | null
+  new_rank: string
+  task: Task
+  timestamp: string
+  changed_by?: string
 }
 
 /**
@@ -108,6 +152,7 @@ export interface TaskFilters {
   priority?: TaskPriority
   task_type?: TaskType
   assignee_id?: string
+  task_status_id?: string
 }
 
 /**
@@ -121,6 +166,7 @@ export interface TasksState {
   isCreating: boolean
   isUpdating: boolean
   isDeleting: boolean
+  isMoving: boolean
   error: TaskError | null
 
   // Pagination
@@ -163,6 +209,17 @@ export interface TasksState {
   clearFilters: () => void
   clearError: () => void
   reset: () => void
+
+  // Kanban board actions
+  moveTask: (
+    token: string | null,
+    taskId: string,
+    data: TaskMove
+  ) => Promise<Task | null>
+
+  // Real-time update handlers
+  handleTaskMoved: (event: TaskMovedEventData) => void
+  updateTaskInStore: (task: Task) => void
 }
 
 // ============================================================================
@@ -226,6 +283,7 @@ const initialState = {
   isCreating: false,
   isUpdating: false,
   isDeleting: false,
+  isMoving: false,
   error: null,
   skip: 0,
   limit: 50,
@@ -278,6 +336,9 @@ export const useTasksStore = create<TasksState>((set, get) => ({
       }
       if (filters?.assignee_id) {
         params.append('assignee_id', filters.assignee_id)
+      }
+      if (filters?.task_status_id) {
+        params.append('task_status_id', filters.task_status_id)
       }
 
       const response = await window.electronAPI.get<Task[]>(
@@ -509,6 +570,105 @@ export const useTasksStore = create<TasksState>((set, get) => ({
   reset: () => {
     set(initialState)
   },
+
+  /**
+   * Move a task to a new status column and/or position (Kanban drag-and-drop)
+   * Supports both status changes and reordering within the same column
+   */
+  moveTask: async (token, taskId, data) => {
+    set({ isMoving: true, error: null })
+
+    try {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      const response = await window.electronAPI.put<Task>(
+        `/api/tasks/${taskId}/move`,
+        data,
+        getAuthHeaders(token)
+      )
+
+      if (response.status !== 200) {
+        const error = parseApiError(response.status, response.data)
+        set({ isMoving: false, error })
+        return null
+      }
+
+      const task = response.data
+      // Update the task in the list
+      const tasks = get().tasks.map((t) => (t.id === taskId ? task : t))
+      set({
+        tasks,
+        selectedTask: get().selectedTask?.id === taskId ? task : get().selectedTask,
+        isMoving: false,
+      })
+      return task
+    } catch (err) {
+      const error: TaskError = {
+        message: err instanceof Error ? err.message : 'Failed to move task',
+      }
+      set({ isMoving: false, error })
+      return null
+    }
+  },
+
+  /**
+   * Handle WebSocket task_moved event
+   * Updates the task's status and rank based on real-time changes from other users
+   */
+  handleTaskMoved: (event) => {
+    const { task_id, task } = event
+    const currentProjectId = get().currentProjectId
+
+    // Only update if the task belongs to the currently viewed project
+    if (currentProjectId && task.project_id === currentProjectId) {
+      // Update the task in the list with the new status and rank
+      const tasks = get().tasks.map((t) =>
+        t.id === task_id
+          ? {
+              ...t,
+              status: task.status,
+              task_status_id: task.task_status_id,
+              task_rank: task.task_rank,
+              row_version: task.row_version,
+            }
+          : t
+      )
+      const selectedTask = get().selectedTask
+      set({
+        tasks,
+        selectedTask:
+          selectedTask?.id === task_id
+            ? {
+                ...selectedTask,
+                status: task.status,
+                task_status_id: task.task_status_id,
+                task_rank: task.task_rank,
+                row_version: task.row_version,
+              }
+            : selectedTask,
+      })
+    }
+  },
+
+  /**
+   * Update a task in the store (for real-time updates)
+   * Called when a WebSocket event updates a task
+   */
+  updateTaskInStore: (task) => {
+    const currentProjectId = get().currentProjectId
+
+    // Only update if the task belongs to the currently viewed project
+    if (currentProjectId && task.project_id === currentProjectId) {
+      const tasks = get().tasks.map((t) => (t.id === task.id ? task : t))
+      const selectedTask = get().selectedTask
+      set({
+        tasks,
+        selectedTask: selectedTask?.id === task.id ? task : selectedTask,
+      })
+    }
+  },
 }))
 
 // ============================================================================
@@ -526,5 +686,71 @@ export const selectError = (state: TasksState): TaskError | null => state.error
 
 export const selectTasksByStatus = (status: TaskStatus) => (state: TasksState): Task[] =>
   state.tasks.filter((task) => task.status === status)
+
+/**
+ * Select tasks by task_status_id (for Kanban columns)
+ */
+export const selectTasksByStatusId =
+  (taskStatusId: string) =>
+  (state: TasksState): Task[] =>
+    state.tasks.filter((task) => task.task_status_id === taskStatusId)
+
+/**
+ * Select tasks by task_status_id, sorted by task_rank (for Kanban columns)
+ * Tasks without rank are sorted to the end
+ */
+export const selectTasksByStatusIdSorted =
+  (taskStatusId: string) =>
+  (state: TasksState): Task[] =>
+    state.tasks
+      .filter((task) => task.task_status_id === taskStatusId)
+      .sort((a, b) => {
+        // Tasks without rank go to the end
+        if (!a.task_rank && !b.task_rank) return 0
+        if (!a.task_rank) return 1
+        if (!b.task_rank) return -1
+        return a.task_rank.localeCompare(b.task_rank)
+      })
+
+/**
+ * Select a task by ID
+ */
+export const selectTaskById =
+  (taskId: string) =>
+  (state: TasksState): Task | undefined =>
+    state.tasks.find((task) => task.id === taskId)
+
+/**
+ * Select if the store is currently moving a task
+ */
+export const selectIsMoving = (state: TasksState): boolean => state.isMoving
+
+/**
+ * Select all tasks sorted by task_rank within each status
+ * Returns tasks grouped by task_status_id
+ */
+export const selectTasksGroupedByStatusId = (state: TasksState): Map<string | null, Task[]> => {
+  const grouped = new Map<string | null, Task[]>()
+
+  for (const task of state.tasks) {
+    const statusId = task.task_status_id
+    if (!grouped.has(statusId)) {
+      grouped.set(statusId, [])
+    }
+    grouped.get(statusId)!.push(task)
+  }
+
+  // Sort tasks within each group by task_rank
+  for (const [, tasks] of grouped) {
+    tasks.sort((a, b) => {
+      if (!a.task_rank && !b.task_rank) return 0
+      if (!a.task_rank) return 1
+      if (!b.task_rank) return -1
+      return a.task_rank.localeCompare(b.task_rank)
+    })
+  }
+
+  return grouped
+}
 
 export default useTasksStore
