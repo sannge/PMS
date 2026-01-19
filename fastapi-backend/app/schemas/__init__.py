@@ -12,6 +12,12 @@ from .project import (
     ProjectUpdate,
     ProjectWithTasks,
 )
+from .project_member import (
+    ProjectMemberCreate,
+    ProjectMemberResponse,
+    ProjectMemberUpdate,
+    ProjectMemberWithUser,
+)
 from .task import (
     TaskCreate,
     TaskPriority,
@@ -39,6 +45,11 @@ __all__ = [
     "ProjectResponse",
     "ProjectUpdate",
     "ProjectWithTasks",
+    # Project member schemas
+    "ProjectMemberCreate",
+    "ProjectMemberResponse",
+    "ProjectMemberUpdate",
+    "ProjectMemberWithUser",
     # Task schemas
     "TaskCreate",
     "TaskPriority",
