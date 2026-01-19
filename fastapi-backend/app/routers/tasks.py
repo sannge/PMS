@@ -34,10 +34,12 @@ from ..schemas.task import (
 from ..services.auth_service import get_current_user
 from ..services.permission_service import PermissionService, get_permission_service
 from ..services.status_derivation_service import (
+    derive_project_status_from_model,
     update_aggregation_on_task_create,
     update_aggregation_on_task_delete,
     update_aggregation_on_task_status_change,
 )
+from ..websocket.handlers import handle_project_status_changed
 
 router = APIRouter(tags=["Tasks"])
 
@@ -442,6 +444,75 @@ def update_project_derived_status(
         project.derived_status_id = None
 
 
+def get_current_derived_status_name(
+    db: Session,
+    project: Project,
+) -> Optional[str]:
+    """
+    Get the current derived status name for a project.
+
+    Args:
+        db: Database session
+        project: The Project to check
+
+    Returns:
+        The current derived status name or None if not set
+    """
+    if project.derived_status_id is None:
+        return None
+
+    from ..models.task_status import TaskStatus as TaskStatusModel
+
+    task_status = db.query(TaskStatusModel).filter(
+        TaskStatusModel.id == project.derived_status_id
+    ).first()
+
+    return task_status.name if task_status else None
+
+
+async def emit_project_status_changed_if_needed(
+    project: Project,
+    old_status: Optional[str],
+    new_status: str,
+    user_id: UUID,
+) -> None:
+    """
+    Emit a project_status_changed WebSocket event if the status actually changed.
+
+    This should be called after db.commit() to ensure the data is persisted
+    before broadcasting to connected clients.
+
+    Args:
+        project: The Project whose status may have changed
+        old_status: The previous derived status name (or None)
+        new_status: The new derived status name
+        user_id: The ID of the user who triggered the change
+    """
+    # Only emit if the status actually changed
+    if old_status == new_status:
+        return
+
+    # Build project data for the WebSocket message
+    project_data = {
+        "id": str(project.id),
+        "application_id": str(project.application_id),
+        "name": project.name,
+        "key": project.key,
+        "derived_status": new_status,
+        "derived_status_id": str(project.derived_status_id) if project.derived_status_id else None,
+    }
+
+    # Emit the WebSocket event
+    await handle_project_status_changed(
+        application_id=project.application_id,
+        project_id=project.id,
+        project_data=project_data,
+        old_status=old_status or "Unknown",
+        new_status=new_status,
+        user_id=user_id,
+    )
+
+
 # ============================================================================
 # Lexorank Helper Functions for Task Ordering
 # ============================================================================
@@ -827,6 +898,9 @@ async def create_task(
     db.add(task)
     db.flush()  # Flush to get task ID before updating aggregation
 
+    # Capture old derived status before update
+    old_derived_status = get_current_derived_status_name(db, project)
+
     # Update status aggregation for project status derivation
     task_status_name = get_status_name_from_legacy(task.status)
     agg = get_or_create_project_aggregation(db, project_id)
@@ -838,6 +912,14 @@ async def create_task(
     # Commit all changes
     db.commit()
     db.refresh(task)
+
+    # Emit WebSocket event if derived status changed (after commit)
+    await emit_project_status_changed_if_needed(
+        project=project,
+        old_status=old_derived_status,
+        new_status=new_derived_status,
+        user_id=current_user.id,
+    )
 
     return task
 
@@ -1029,9 +1111,20 @@ async def update_task(
 
     # Check if status changed and update aggregation
     new_status = task.status
+    old_derived_status: Optional[str] = None
+    new_derived_status: Optional[str] = None
+    project: Optional[Project] = None
+
     if old_status != new_status:
         old_status_name = get_status_name_from_legacy(old_status)
         new_status_name = get_status_name_from_legacy(new_status)
+
+        # Need to fetch the project to update derived_status_id
+        project = db.query(Project).filter(Project.id == task.project_id).first()
+
+        # Capture old derived status before update
+        if project:
+            old_derived_status = get_current_derived_status_name(db, project)
 
         # Get or create aggregation and update counters
         agg = get_or_create_project_aggregation(db, task.project_id)
@@ -1040,14 +1133,21 @@ async def update_task(
         )
 
         # Update project's derived status
-        # Need to fetch the project to update derived_status_id
-        project = db.query(Project).filter(Project.id == task.project_id).first()
         if project:
             update_project_derived_status(db, project, new_derived_status)
 
     # Save changes
     db.commit()
     db.refresh(task)
+
+    # Emit WebSocket event if derived status changed (after commit)
+    if project and old_derived_status is not None and new_derived_status is not None:
+        await emit_project_status_changed_if_needed(
+            project=project,
+            old_status=old_derived_status,
+            new_status=new_derived_status,
+            user_id=current_user.id,
+        )
 
     return task
 
@@ -1087,6 +1187,12 @@ async def delete_task(
     project_id = task.project_id
     task_status = task.status
 
+    # Get the project and capture old derived status before deletion
+    project = db.query(Project).filter(Project.id == project_id).first()
+    old_derived_status: Optional[str] = None
+    if project:
+        old_derived_status = get_current_derived_status_name(db, project)
+
     # Get subtasks statuses before deletion (for aggregation update)
     subtasks = db.query(Task).filter(Task.parent_id == task_id).all()
     subtask_statuses = [subtask.status for subtask in subtasks]
@@ -1110,11 +1216,19 @@ async def delete_task(
         new_derived_status = update_aggregation_on_task_delete(agg, subtask_status_name)
 
     # Update project's derived status
-    project = db.query(Project).filter(Project.id == project_id).first()
     if project:
         update_project_derived_status(db, project, new_derived_status)
 
     db.commit()
+
+    # Emit WebSocket event if derived status changed (after commit)
+    if project and old_derived_status is not None:
+        await emit_project_status_changed_if_needed(
+            project=project,
+            old_status=old_derived_status,
+            new_status=new_derived_status,
+            user_id=current_user.id,
+        )
 
     return None
 
@@ -1275,9 +1389,20 @@ async def move_task(
     task.row_version = (task.row_version or 0) + 1
 
     # Check if status changed and update aggregation
+    old_derived_status: Optional[str] = None
+    new_derived_status: Optional[str] = None
+    project: Optional[Project] = None
+
     if old_status != new_status:
         old_status_name = get_status_name_from_legacy(old_status)
         new_status_name = get_status_name_from_legacy(new_status)
+
+        # Fetch the project to update derived_status_id
+        project = db.query(Project).filter(Project.id == task.project_id).first()
+
+        # Capture old derived status before update
+        if project:
+            old_derived_status = get_current_derived_status_name(db, project)
 
         # Get or create aggregation and update counters
         agg = get_or_create_project_aggregation(db, task.project_id)
@@ -1286,12 +1411,20 @@ async def move_task(
         )
 
         # Update project's derived status
-        project = db.query(Project).filter(Project.id == task.project_id).first()
         if project:
             update_project_derived_status(db, project, new_derived_status)
 
     # Save changes
     db.commit()
     db.refresh(task)
+
+    # Emit WebSocket event if derived status changed (after commit)
+    if project and old_derived_status is not None and new_derived_status is not None:
+        await emit_project_status_changed_if_needed(
+            project=project,
+            old_status=old_derived_status,
+            new_status=new_derived_status,
+            user_id=current_user.id,
+        )
 
     return task
