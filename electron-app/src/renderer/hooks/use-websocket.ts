@@ -37,6 +37,20 @@ import {
   type NotificationReadEventData,
 } from '@/lib/websocket'
 
+/**
+ * Project status update event data
+ */
+export interface ProjectStatusUpdateEventData {
+  project_id: string
+  application_id: string
+  action: 'created' | 'updated' | 'deleted' | 'status_changed'
+  project: Record<string, unknown>
+  timestamp: string
+  changed_by?: string
+  old_status?: string
+  new_status?: string
+}
+
 // ============================================================================
 // Utilities
 // ============================================================================
@@ -340,6 +354,79 @@ export function useTaskUpdates(
       leaveRoom(roomId)
     }
   }, [projectId, status.isConnected, subscribe, joinRoom, leaveRoom])
+}
+
+/**
+ * Hook for subscribing to project status updates in an application
+ *
+ * @example
+ * ```tsx
+ * function ProjectList({ applicationId }) {
+ *   const { projects } = useProjectStore()
+ *
+ *   useProjectStatusUpdates(applicationId, (update) => {
+ *     if (update.action === 'created') {
+ *       // Add new project
+ *     } else if (update.action === 'updated') {
+ *       // Update existing project
+ *     } else if (update.action === 'deleted') {
+ *       // Remove project
+ *     } else if (update.action === 'status_changed') {
+ *       // Handle status change
+ *     }
+ *   })
+ * }
+ * ```
+ */
+export function useProjectStatusUpdates(
+  applicationId: string | null,
+  onUpdate: (data: ProjectStatusUpdateEventData) => void
+): void {
+  const { subscribe, joinRoom, leaveRoom, status } = useWebSocket()
+  const callbackRef = useRef(onUpdate)
+
+  // Keep callback ref up to date
+  useEffect(() => {
+    callbackRef.current = onUpdate
+  }, [onUpdate])
+
+  // Join application room and subscribe to project events
+  useEffect(() => {
+    if (!applicationId || !status.isConnected) {
+      return
+    }
+
+    const roomId = WebSocketClient.getApplicationRoom(applicationId)
+    joinRoom(roomId)
+
+    const unsubscribeCreated = subscribe<ProjectStatusUpdateEventData>(
+      MessageType.PROJECT_CREATED,
+      (data) => callbackRef.current(data)
+    )
+
+    const unsubscribeUpdated = subscribe<ProjectStatusUpdateEventData>(
+      MessageType.PROJECT_UPDATED,
+      (data) => callbackRef.current(data)
+    )
+
+    const unsubscribeDeleted = subscribe<ProjectStatusUpdateEventData>(
+      MessageType.PROJECT_DELETED,
+      (data) => callbackRef.current(data)
+    )
+
+    const unsubscribeStatus = subscribe<ProjectStatusUpdateEventData>(
+      MessageType.PROJECT_STATUS_CHANGED,
+      (data) => callbackRef.current(data)
+    )
+
+    return () => {
+      unsubscribeCreated()
+      unsubscribeUpdated()
+      unsubscribeDeleted()
+      unsubscribeStatus()
+      leaveRoom(roomId)
+    }
+  }, [applicationId, status.isConnected, subscribe, joinRoom, leaveRoom])
 }
 
 /**
