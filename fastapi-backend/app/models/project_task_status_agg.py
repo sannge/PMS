@@ -86,7 +86,7 @@ class ProjectTaskStatusAgg(Base):
     # Relationships
     project = relationship(
         "Project",
-        back_populates="task_status_agg",
+        back_populates="status_aggregation",
         lazy="select",
     )
 

@@ -178,11 +178,18 @@ interface ActionsDropdownProps {
 
 function ActionsDropdown({ onEdit, onDelete, disabled }: ActionsDropdownProps): JSX.Element {
   const [isOpen, setIsOpen] = useState(false)
+  const buttonRef = useRef<HTMLButtonElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
+  const [position, setPosition] = useState({ top: 0, left: 0 })
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(event.target as Node) &&
+        buttonRef.current &&
+        !buttonRef.current.contains(event.target as Node)
+      ) {
         setIsOpen(false)
       }
     }
@@ -192,12 +199,20 @@ function ActionsDropdown({ onEdit, onDelete, disabled }: ActionsDropdownProps): 
 
   const handleToggle = (e: React.MouseEvent) => {
     e.stopPropagation()
+    if (!isOpen && buttonRef.current) {
+      const rect = buttonRef.current.getBoundingClientRect()
+      setPosition({
+        top: rect.bottom + 4,
+        left: rect.right - 120, // 120px is min-w of dropdown
+      })
+    }
     setIsOpen(!isOpen)
   }
 
   return (
-    <div ref={dropdownRef} className="relative">
+    <div className="relative">
       <button
+        ref={buttonRef}
         onClick={handleToggle}
         disabled={disabled}
         className={cn(
@@ -214,8 +229,10 @@ function ActionsDropdown({ onEdit, onDelete, disabled }: ActionsDropdownProps): 
 
       {isOpen && (
         <div
+          ref={dropdownRef}
+          style={{ top: position.top, left: position.left }}
           className={cn(
-            'absolute right-0 top-full z-50 mt-1 min-w-[120px]',
+            'fixed z-[100] min-w-[120px]',
             'rounded-md border border-border bg-popover shadow-lg',
             'animate-in fade-in-0 zoom-in-95 duration-100'
           )}
@@ -294,6 +311,7 @@ export function ProjectCard({
   }
 
   const typeInfo = getProjectTypeInfo(project.project_type)
+  const statusInfo = getDerivedStatusInfo(project.derived_status || null)
 
   return (
     <div
@@ -309,7 +327,7 @@ export function ProjectCard({
         }
       }}
       className={cn(
-        'group relative flex h-11 items-center gap-2 rounded-lg border border-border/60 bg-card px-3 overflow-hidden',
+        'group relative rounded-lg border border-border/60 bg-card p-2.5',
         'transition-all duration-150 ease-out',
         onClick && !disabled && [
           'cursor-pointer',
@@ -323,116 +341,118 @@ export function ProjectCard({
       )}
       style={{ animationDelay: `${index * 40}ms` }}
     >
-      {/* Icon */}
-      <div
-        className={cn(
-          'flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md',
-          'bg-violet-500/10 text-violet-600 dark:text-violet-400',
-          'transition-transform duration-150',
-          'group-hover:scale-105'
-        )}
-      >
-        <LayoutDashboard className="h-3.5 w-3.5" />
-      </div>
-
-      {/* Name */}
-      <span className="flex-shrink-0 max-w-[140px] truncate text-sm font-medium text-foreground group-hover:text-violet-600 dark:group-hover:text-violet-400 transition-colors">
-        {project.name}
-      </span>
-
-      {/* Project Key */}
-      <span
-        className={cn(
-          'flex-shrink-0 inline-flex items-center gap-0.5 rounded px-1.5 py-0.5',
-          'bg-muted/70 text-[10px] font-mono font-medium text-muted-foreground',
-          'border border-border/50'
-        )}
-      >
-        <Hash className="h-2.5 w-2.5" />
-        {project.key}
-      </span>
-
-      {/* Description indicator (dot) - shows if has description */}
-      {project.description && (
-        <span className="flex-shrink-0 h-1 w-1 rounded-full bg-muted-foreground/40" title="Has description" />
-      )}
-
-      {/* Derived Status Badge */}
-      {project.derived_status && (
+      {/* Row 1: Icon, Name, Actions */}
+      <div className="flex items-center gap-2">
+        {/* Icon */}
         <div
           className={cn(
-            'flex-shrink-0 flex items-center gap-1 rounded px-1.5 py-0.5',
-            'text-[10px] font-medium',
-            getDerivedStatusInfo(project.derived_status).bgColor,
-            getDerivedStatusInfo(project.derived_status).color
+            'flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md',
+            'bg-violet-500/10 text-violet-600 dark:text-violet-400',
+            'transition-transform duration-150',
+            'group-hover:scale-105'
           )}
-          title={`Status: ${project.derived_status}`}
         >
-          {getDerivedStatusInfo(project.derived_status).icon}
-          <span className="hidden xl:inline">{getDerivedStatusInfo(project.derived_status).label}</span>
+          <LayoutDashboard className="h-3.5 w-3.5" />
         </div>
-      )}
 
-      {/* Spacer */}
-      <div className="flex-1 min-w-0" />
+        {/* Name */}
+        <span className="flex-1 min-w-0 truncate text-sm font-medium text-foreground group-hover:text-violet-600 dark:group-hover:text-violet-400 transition-colors">
+          {project.name}
+        </span>
 
-      {/* Task Count */}
-      <div
-        className={cn(
-          'flex-shrink-0 flex items-center gap-1 text-[10px] font-medium text-muted-foreground',
-          'transition-colors',
-          'group-hover:text-violet-600/70 dark:group-hover:text-violet-400/70'
-        )}
-      >
-        <ListTodo className="h-3 w-3" />
-        <span>{project.tasks_count}</span>
-      </div>
+        {/* Actions (hover-reveal) */}
+        <div
+          className={cn(
+            'flex-shrink-0 opacity-0 transition-opacity duration-100',
+            'group-hover:opacity-100'
+          )}
+        >
+          {(onEdit || onDelete) && (
+            <ActionsDropdown
+              onEdit={onEdit ? () => onEdit(project) : undefined}
+              onDelete={onDelete ? () => onDelete(project) : undefined}
+              disabled={disabled}
+            />
+          )}
+        </div>
 
-      {/* Project Type Badge */}
-      <div
-        className={cn(
-          'flex-shrink-0 flex h-5 w-5 items-center justify-center rounded',
-          'text-[10px] font-bold',
-          typeInfo.color
-        )}
-        title={typeInfo.label}
-      >
-        {typeInfo.abbrev}
-      </div>
-
-      {/* Timestamp */}
-      <div className="flex-shrink-0 flex items-center gap-1 text-[10px] text-muted-foreground/70">
-        <Clock className="h-2.5 w-2.5" />
-        <span className="whitespace-nowrap">{formatDate(project.updated_at)}</span>
-      </div>
-
-      {/* Actions */}
-      <div
-        className={cn(
-          'flex-shrink-0 opacity-0 transition-opacity duration-100',
-          'group-hover:opacity-100'
-        )}
-      >
-        {(onEdit || onDelete) && (
-          <ActionsDropdown
-            onEdit={onEdit ? () => onEdit(project) : undefined}
-            onDelete={onDelete ? () => onDelete(project) : undefined}
-            disabled={disabled}
+        {/* Arrow indicator */}
+        {onClick && !disabled && (
+          <ChevronRight
+            className={cn(
+              'h-3.5 w-3.5 flex-shrink-0 text-muted-foreground/50',
+              'opacity-0 -translate-x-1 transition-all duration-150',
+              'group-hover:opacity-100 group-hover:translate-x-0',
+              'group-hover:text-violet-500'
+            )}
           />
         )}
       </div>
 
-      {/* Arrow indicator */}
-      {onClick && !disabled && (
-        <ChevronRight
+      {/* Row 2: Metadata */}
+      <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+        {/* Project Key */}
+        <span
           className={cn(
-            'h-3.5 w-3.5 flex-shrink-0 text-muted-foreground/50',
-            'opacity-0 -translate-x-1 transition-all duration-150',
-            'group-hover:opacity-100 group-hover:translate-x-0',
-            'group-hover:text-violet-500'
+            'inline-flex items-center gap-0.5 rounded px-1.5 py-0.5',
+            'bg-muted/70 text-[10px] font-mono font-medium text-muted-foreground',
+            'border border-border/50'
           )}
-        />
-      )}
+        >
+          <Hash className="h-2.5 w-2.5" />
+          {project.key}
+        </span>
+
+        {/* Task Count */}
+        <div
+          className={cn(
+            'flex items-center gap-1 text-[10px] font-medium text-muted-foreground',
+            'transition-colors',
+            'group-hover:text-violet-600/70 dark:group-hover:text-violet-400/70'
+          )}
+        >
+          <ListTodo className="h-3 w-3" />
+          <span>{project.tasks_count}</span>
+        </div>
+
+        {/* Project Type Badge */}
+        <div
+          className={cn(
+            'flex h-5 items-center justify-center rounded px-1',
+            'text-[10px] font-bold',
+            typeInfo.color
+          )}
+          title={typeInfo.label}
+        >
+          {typeInfo.abbrev}
+        </div>
+
+        {/* Derived Status Badge */}
+        {project.derived_status && (
+          <div
+            className={cn(
+              'flex items-center gap-1 rounded px-1.5 py-0.5',
+              'text-[10px] font-medium',
+              statusInfo.bgColor,
+              statusInfo.color
+            )}
+            title={`Status: ${project.derived_status}`}
+          >
+            {statusInfo.icon}
+          </div>
+        )}
+
+        {/* Description indicator (dot) */}
+        {project.description && (
+          <span className="h-1 w-1 rounded-full bg-muted-foreground/40" title="Has description" />
+        )}
+
+        {/* Timestamp */}
+        <div className="flex items-center gap-1 text-[10px] text-muted-foreground/70 ml-auto">
+          <Clock className="h-2.5 w-2.5" />
+          <span className="whitespace-nowrap">{formatDate(project.updated_at)}</span>
+        </div>
+      </div>
 
       {/* Description Tooltip */}
       {showTooltip && project.description && (

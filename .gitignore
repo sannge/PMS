@@ -10,6 +10,12 @@
 .worktrees/
 
 # --------------------------------
+# Specify (spec workflow tooling)
+# --------------------------------
+.specify/
+specs/
+
+# --------------------------------
 # Python / FastAPI Backend
 # --------------------------------
 __pycache__/
@@ -102,3 +108,4 @@ Desktop.ini
 *.temp
 
 temp-user-data-*/
+tmp-user-data-*/

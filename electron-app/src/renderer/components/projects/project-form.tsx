@@ -130,6 +130,19 @@ export function ProjectForm({
     setErrors(validateForm(formData))
   }, [formData])
 
+  // Update form data when project prop changes (e.g., via WebSocket real-time update)
+  // Use specific fields as dependencies to avoid unnecessary updates
+  useEffect(() => {
+    if (project) {
+      setFormData({
+        name: project.name || '',
+        key: project.key || '',
+        description: project.description || '',
+        project_type: project.project_type || 'kanban',
+      })
+    }
+  }, [project?.name, project?.key, project?.description, project?.project_type])
+
   // Auto-generate key from name in create mode
   useEffect(() => {
     if (autoGenerateKey && !isEditMode && formData.name) {

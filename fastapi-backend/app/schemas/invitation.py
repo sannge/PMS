@@ -67,9 +67,13 @@ class UserSummary(BaseModel):
         ...,
         description="User email address",
     )
-    full_name: Optional[str] = Field(
+    display_name: Optional[str] = Field(
         None,
-        description="User full name",
+        description="User display name",
+    )
+    avatar_url: Optional[str] = Field(
+        None,
+        description="User avatar URL",
     )
 
 

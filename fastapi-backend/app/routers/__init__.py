@@ -16,6 +16,8 @@ from .project_members import router as project_members_router
 from .projects import router as projects_router
 from .tasks import router as tasks_router
 from .users import router as users_router
+from .comments import router as comments_router
+from .checklists import router as checklists_router
 
 __all__ = [
     "application_members_router",
@@ -30,4 +32,6 @@ __all__ = [
     "projects_router",
     "tasks_router",
     "users_router",
+    "comments_router",
+    "checklists_router",
 ]

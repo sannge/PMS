@@ -28,7 +28,6 @@ import {
   Trash2,
   AlertCircle,
   Loader2,
-  Clock,
   User,
   Calendar,
   Hash,
@@ -46,9 +45,13 @@ import {
   WifiOff,
 } from 'lucide-react'
 import type { Task, TaskStatus, TaskUpdate, TaskPriority, TaskType } from '@/stores/tasks-store'
+import { useProjectMembersStore } from '@/stores/project-members-store'
+import { useAuthStore } from '@/stores/auth-store'
 import { TaskStatusBadge } from './task-status-badge'
 import { FileUpload } from '@/components/files/file-upload'
 import { AttachmentList } from '@/components/files/attachment-list'
+import { CommentThread } from '@/components/comments'
+import { ChecklistPanel } from '@/components/checklists'
 import {
   useWebSocket,
   MessageType,
@@ -425,6 +428,17 @@ export function TaskDetail({
   const panelRef = useRef<HTMLDivElement>(null)
   const [externalUpdateNotice, setExternalUpdateNotice] = useState<string | null>(null)
 
+  // Auth and project members for assignee selector
+  const token = useAuthStore((s) => s.token)
+  const { members, fetchMembers } = useProjectMembersStore()
+
+  // Fetch project members when panel opens
+  useEffect(() => {
+    if (isOpen && token && task.project_id) {
+      fetchMembers(token, task.project_id)
+    }
+  }, [isOpen, token, task.project_id, fetchMembers])
+
   // WebSocket connection for real-time updates
   const { status, subscribe, joinRoom, leaveRoom } = useWebSocket()
   const callbackRefs = useRef({ onExternalUpdate, onExternalDelete })
@@ -544,6 +558,17 @@ export function TaskDetail({
         if (value === null || (!isNaN(value) && value >= 0 && value <= 100)) {
           onUpdate({ story_points: value })
         }
+      }
+    },
+    [onUpdate]
+  )
+
+  // Handle assignee change
+  const handleAssigneeChange = useCallback(
+    (e: React.ChangeEvent<HTMLSelectElement>) => {
+      if (onUpdate) {
+        const value = e.target.value || null
+        onUpdate({ assignee_id: value })
       }
     },
     [onUpdate]
@@ -784,24 +809,51 @@ export function TaskDetail({
               />
             </div>
 
-            {/* Assignee (read-only for now) */}
+            {/* Assignee */}
             <div className="space-y-2">
               <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1">
                 <User className="h-3.5 w-3.5" />
                 Assignee
               </label>
-              <div className="flex items-center gap-2 px-3 py-2 rounded-md border border-input bg-muted/50">
-                {task.assignee_id ? (
-                  <>
-                    <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center">
-                      <User className="h-3.5 w-3.5 text-primary" />
-                    </div>
-                    <span className="text-sm text-muted-foreground">Assigned</span>
-                  </>
-                ) : (
-                  <span className="text-sm text-muted-foreground italic">Unassigned</span>
-                )}
-              </div>
+              {onUpdate ? (
+                <select
+                  value={task.assignee_id || ''}
+                  onChange={handleAssigneeChange}
+                  disabled={isUpdating}
+                  className={cn(
+                    'w-full rounded-md border border-input bg-background px-3 py-2 text-foreground',
+                    'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1',
+                    'disabled:cursor-not-allowed disabled:opacity-50'
+                  )}
+                >
+                  <option value="">Unassigned</option>
+                  {members.map((member) => (
+                    <option key={member.user_id} value={member.user_id}>
+                      {member.user?.display_name || member.user?.email?.split('@')[0] || 'Unknown'} ({member.user?.email})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-md border border-input bg-muted/50">
+                  {task.assignee ? (
+                    <>
+                      <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center">
+                        <User className="h-3.5 w-3.5 text-primary" />
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-sm text-foreground">
+                          {task.assignee.display_name || task.assignee.email.split('@')[0]}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {task.assignee.email}
+                        </span>
+                      </div>
+                    </>
+                  ) : (
+                    <span className="text-sm text-muted-foreground italic">Unassigned</span>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Divider */}
@@ -842,14 +894,16 @@ export function TaskDetail({
                   <span className="text-muted-foreground">Updated</span>
                   <span className="text-foreground">{formatDate(task.updated_at)}</span>
                 </div>
-                {task.reporter_id && (
+                {task.reporter && (
                   <div className="flex items-center justify-between">
                     <span className="text-muted-foreground">Reporter</span>
                     <div className="flex items-center gap-1.5">
                       <div className="h-5 w-5 rounded-full bg-primary/10 flex items-center justify-center">
                         <User className="h-3 w-3 text-primary" />
                       </div>
-                      <span className="text-foreground">Reported</span>
+                      <span className="text-foreground">
+                        {task.reporter.display_name || task.reporter.email.split('@')[0]}
+                      </span>
                     </div>
                   </div>
                 )}
@@ -861,6 +915,22 @@ export function TaskDetail({
 
             {/* Attachments Section */}
             <TaskAttachmentsSection taskId={task.id} />
+
+            {/* Divider */}
+            <div className="border-t border-border" />
+
+            {/* Checklists Section */}
+            <div className="space-y-2">
+              <ChecklistPanel taskId={task.id} className="min-h-[200px]" />
+            </div>
+
+            {/* Divider */}
+            <div className="border-t border-border" />
+
+            {/* Comments Section */}
+            <div className="space-y-2">
+              <CommentThread taskId={task.id} className="min-h-[300px]" />
+            </div>
           </div>
         </div>
 

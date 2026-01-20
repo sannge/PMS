@@ -405,3 +405,52 @@ async def notify_comment_added(
     return await NotificationService.notify_comment_added(
         db, task, commenter, notify_users, comment_preview
     )
+
+
+async def create_mention_notification(
+    db: Session,
+    mentioned_user_id: UUID,
+    mentioner_id: UUID,
+    task_id: UUID,
+    comment_id: UUID,
+) -> Optional[Notification]:
+    """
+    Create a mention notification for a user mentioned in a comment.
+
+    This is a simplified wrapper that fetches the required entities
+    and delegates to notify_mentioned.
+
+    Args:
+        db: Database session
+        mentioned_user_id: ID of the user who was mentioned
+        mentioner_id: ID of the user who mentioned them
+        task_id: ID of the task the comment is on
+        comment_id: ID of the comment containing the mention
+
+    Returns:
+        Optional[Notification]: The created notification, or None if self-mention
+    """
+    # Don't notify if user mentions themselves
+    if mentioned_user_id == mentioner_id:
+        return None
+
+    # Fetch required entities
+    mentioned_user = db.query(User).filter(User.id == mentioned_user_id).first()
+    mentioner = db.query(User).filter(User.id == mentioner_id).first()
+    task = db.query(Task).filter(Task.id == task_id).first()
+
+    if not mentioned_user or not mentioner or not task:
+        logger.warning(
+            f"create_mention_notification: Missing entity - "
+            f"mentioned_user={mentioned_user_id}, mentioner={mentioner_id}, task={task_id}"
+        )
+        return None
+
+    return await NotificationService.notify_mentioned(
+        db=db,
+        mentioned_user=mentioned_user,
+        mentioner=mentioner,
+        entity_type=EntityType.COMMENT,
+        entity_id=comment_id,
+        entity_title=f"{task.task_key}: {task.title}",
+    )

@@ -1,5 +1,6 @@
 """FastAPI application entry point."""
 
+import asyncio
 import json
 import logging
 from uuid import UUID
@@ -10,9 +11,37 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 
 logger = logging.getLogger(__name__)
-from .routers import application_members_router, applications_router, auth_router, files_router, invitations_router, notes_router, notifications_router, project_assignments_router, project_members_router, projects_router, tasks_router, users_router
+
+# ============================================================================
+# STARTUP BANNER - Confirms which backend is running
+# ============================================================================
+print("\n" + "=" * 60, flush=True)
+print("  PM API - WORKTREE 017-project-task-management-and-permissions", flush=True)
+print("  WebSocket logging ENABLED", flush=True)
+print("=" * 60 + "\n", flush=True)
+from contextlib import asynccontextmanager
+
+from .routers import application_members_router, applications_router, auth_router, checklists_router, comments_router, files_router, invitations_router, notes_router, notifications_router, project_assignments_router, project_members_router, projects_router, tasks_router, users_router
 from .websocket import manager, route_incoming_message, check_room_access
+from .websocket.presence import presence_manager
 from .services.auth_service import decode_access_token
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan manager for startup/shutdown tasks."""
+    # Startup
+    logger.info("Starting presence manager...")
+    await presence_manager.start()
+    logger.info("Presence manager started")
+
+    yield
+
+    # Shutdown
+    logger.info("Stopping presence manager...")
+    await presence_manager.stop()
+    logger.info("Presence manager stopped")
+
 
 # Create FastAPI application
 app = FastAPI(
@@ -21,6 +50,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # CORS Middleware - required for Electron app requests
@@ -45,6 +75,8 @@ app.include_router(files_router)
 app.include_router(notifications_router)
 app.include_router(invitations_router)
 app.include_router(users_router)
+app.include_router(comments_router)
+app.include_router(checklists_router)
 
 
 @app.get("/")
@@ -89,31 +121,114 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = None):
     """
     # Validate token
     if not token:
+        logger.debug("WebSocket connection attempt without token")
         await websocket.close(code=4001, reason="Authentication required")
         return
 
     try:
         token_data = decode_access_token(token)
         if token_data is None or token_data.user_id is None:
+            logger.debug("WebSocket connection with invalid token")
             await websocket.close(code=4001, reason="Invalid token")
             return
-        # Convert user_id to UUID for consistent type handling
         user_id = UUID(token_data.user_id)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"WebSocket token validation error: {e}")
         await websocket.close(code=4001, reason="Invalid token")
         return
 
     # Accept connection and register
     connection = await manager.connect(websocket, user_id)
     if connection is None:
+        logger.warning(f"WebSocket connection rejected (limit) for user: {user_id}")
         return  # Connection rejected (DDoS protection)
 
-    try:
-        while True:
-            # Receive raw text first to check size (DoS protection)
-            raw_message = await websocket.receive_text()
+    logger.info(f"WebSocket connection established for user: {user_id}")
 
-            # Validate message size before parsing
+    # Connection configuration
+    RECEIVE_TIMEOUT = 45  # 45s timeout for receiving messages
+    SERVER_PING_INTERVAL = 30  # Send server ping every 30s
+    TOKEN_REVALIDATION_INTERVAL = 1800  # Re-validate token every 30 minutes
+    RATE_LIMIT_MESSAGES = 100  # Max messages per window
+    RATE_LIMIT_WINDOW = 10  # Window in seconds (100 msg/10s = 10 msg/sec avg)
+
+    # Rate limiting state
+    message_timestamps: list[float] = []
+
+    # Token validity tracking
+    token_valid = True
+    last_token_check = asyncio.get_event_loop().time()
+
+    async def server_ping_task():
+        """Background task to send periodic pings and validate token."""
+        nonlocal token_valid, last_token_check
+        try:
+            while True:
+                await asyncio.sleep(SERVER_PING_INTERVAL)
+                try:
+                    # Send ping
+                    await websocket.send_json({"type": "ping", "data": {}})
+
+                    # Check if token needs re-validation
+                    current_time = asyncio.get_event_loop().time()
+                    if current_time - last_token_check > TOKEN_REVALIDATION_INTERVAL:
+                        # Re-validate token
+                        token_data = decode_access_token(token)
+                        if token_data is None or token_data.user_id is None:
+                            logger.warning(f"Token expired for user {user_id}, closing connection")
+                            token_valid = False
+                            await websocket.send_json({
+                                "type": "error",
+                                "data": {"error": "TOKEN_EXPIRED", "message": "Session expired, please re-authenticate"},
+                            })
+                            await websocket.close(code=4001, reason="Token expired")
+                            break
+                        last_token_check = current_time
+
+                except Exception:
+                    break  # Connection is dead, exit task
+        except asyncio.CancelledError:
+            pass
+
+    # Start server-initiated ping task
+    ping_task = asyncio.create_task(server_ping_task())
+
+    try:
+        while token_valid:
+            # Receive with timeout to detect stale connections
+            try:
+                raw_message = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=RECEIVE_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                # No message received within timeout - send ping to verify
+                try:
+                    await websocket.send_json({"type": "ping", "data": {}})
+                    raw_message = await asyncio.wait_for(
+                        websocket.receive_text(),
+                        timeout=10
+                    )
+                except (asyncio.TimeoutError, Exception):
+                    logger.info(f"Connection timeout for user: {user_id}")
+                    break
+
+            # Rate limiting check
+            current_time = asyncio.get_event_loop().time()
+            # Remove timestamps outside the window
+            message_timestamps[:] = [t for t in message_timestamps if current_time - t < RATE_LIMIT_WINDOW]
+
+            if len(message_timestamps) >= RATE_LIMIT_MESSAGES:
+                logger.warning(f"Rate limit exceeded for user {user_id}")
+                await websocket.send_json({
+                    "type": "error",
+                    "data": {"error": "RATE_LIMIT", "message": "Too many messages, slow down"},
+                })
+                continue
+
+            message_timestamps.append(current_time)
+
+            # Validate message size
             if len(raw_message) > settings.ws_max_message_size:
                 logger.warning(
                     f"Message too large from user {user_id}: "
@@ -128,7 +243,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = None):
                 })
                 continue
 
-            # Parse JSON after size validation
+            # Parse JSON
             try:
                 data = json.loads(raw_message)
             except json.JSONDecodeError:
@@ -142,6 +257,14 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = None):
             await route_incoming_message(connection, data, room_authorizer=check_room_access)
 
     except WebSocketDisconnect:
-        await manager.disconnect(websocket)
-    except Exception:
+        logger.info(f"WebSocket disconnect for user: {user_id}")
+    except Exception as e:
+        logger.error(f"WebSocket exception for user {user_id}: {e}")
+    finally:
+        # Cancel ping task and cleanup
+        ping_task.cancel()
+        try:
+            await ping_task
+        except asyncio.CancelledError:
+            pass
         await manager.disconnect(websocket)

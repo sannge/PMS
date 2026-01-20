@@ -46,7 +46,8 @@ export interface Project {
   created_at: string
   updated_at: string
 
-  // Owner and permissions
+  // Creator and owner
+  created_by: string | null
   project_owner_user_id: string | null
 
   // Derived status (computed from task distribution)
@@ -112,6 +113,30 @@ export interface ProjectStatusChangedEventData {
   }
   timestamp: string
   changed_by?: string
+}
+
+/**
+ * WebSocket event data for project deletion
+ */
+export interface ProjectDeletedEventData {
+  project_id: string
+  application_id: string
+  project_name: string
+  project_key: string
+  deleted_by: string
+}
+
+/**
+ * WebSocket event data for project update
+ */
+export interface ProjectUpdatedEventData {
+  project_id: string
+  name: string
+  description: string | null
+  project_type: string
+  project_key: string
+  updated_at: string | null
+  updated_by: string
 }
 
 /**
@@ -184,6 +209,8 @@ export interface ProjectsState {
     derivedStatus?: ProjectDerivedStatus | null
   ) => void
   handleProjectStatusChanged: (event: ProjectStatusChangedEventData) => void
+  handleProjectDeleted: (event: ProjectDeletedEventData) => void
+  handleProjectUpdated: (event: ProjectUpdatedEventData) => void
 }
 
 // ============================================================================
@@ -328,7 +355,13 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
    * Fetch a single project by ID
    */
   fetchProject: async (token, id) => {
-    set({ isLoading: true, error: null })
+    // Clear selectedProject if fetching a different project to avoid showing stale data
+    const currentSelected = get().selectedProject
+    if (currentSelected && currentSelected.id !== id) {
+      set({ selectedProject: null, isLoading: true, error: null })
+    } else {
+      set({ isLoading: true, error: null })
+    }
 
     try {
       if (!window.electronAPI) {
@@ -650,6 +683,63 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
             : selectedProject,
       })
     }
+  },
+
+  /**
+   * Handle WebSocket project_deleted event
+   * Removes the project from the list and clears selectedProject if it was deleted
+   */
+  handleProjectDeleted: (event) => {
+    const { project_id, application_id } = event
+    const currentApplicationId = get().currentApplicationId
+
+    // Only update if the project belongs to the currently viewed application
+    if (currentApplicationId && application_id === currentApplicationId) {
+      const projects = get().projects.filter((p) => p.id !== project_id)
+      const selectedProject = get().selectedProject
+
+      set({
+        projects,
+        // Clear selectedProject if it was the deleted project
+        selectedProject: selectedProject?.id === project_id ? null : selectedProject,
+      })
+    }
+  },
+
+  handleProjectUpdated: (event) => {
+    const { project_id, name, description, project_type, updated_at } = event
+
+    // Update the project in the list
+    const projects = get().projects.map((p) => {
+      if (p.id === project_id) {
+        return {
+          ...p,
+          name,
+          description,
+          project_type: project_type as ProjectType,
+          updated_at: updated_at || p.updated_at,
+        }
+      }
+      return p
+    })
+
+    // Update selectedProject if it's the updated project
+    const selectedProject = get().selectedProject
+    const updatedSelectedProject =
+      selectedProject?.id === project_id
+        ? {
+            ...selectedProject,
+            name,
+            description,
+            project_type: project_type as ProjectType,
+            updated_at: updated_at || selectedProject.updated_at,
+          }
+        : selectedProject
+
+    set({
+      projects,
+      selectedProject: updatedSelectedProject,
+    })
   },
 }))
 

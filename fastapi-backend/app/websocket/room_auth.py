@@ -1,10 +1,22 @@
 """Room authorization for WebSocket connections.
 
 Validates that users have access to rooms they attempt to join.
+
+IMPORTANT: Database operations are run in a thread pool to avoid blocking
+the asyncio event loop, which would cause WebSocket ping/pong timeouts.
+
+Features:
+- TTL-based caching to prevent DB overload during reconnection storms
+- Thread pool for non-blocking DB operations
+- Hierarchical access checks (application -> project -> task)
 """
 
+import asyncio
 import logging
-from typing import Optional
+import time
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
+from typing import Optional, Dict, Tuple
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -12,10 +24,72 @@ from sqlalchemy.orm import Session
 from ..database import SessionLocal
 from ..models.application_member import ApplicationMember
 from ..models.project import Project
+from ..models.project_member import ProjectMember
 from ..models.task import Task
 from ..models.note import Note
 
 logger = logging.getLogger(__name__)
+
+# Thread pool for running blocking DB operations without blocking the event loop
+# Increased from 4 to 20 to handle concurrent room auth checks at scale (5000+ users)
+_db_executor = ThreadPoolExecutor(max_workers=20, thread_name_prefix="room_auth_db")
+
+# ============================================================================
+# Auth Result Caching
+# ============================================================================
+# Cache (user_id, room_id) -> (result: bool, expires_at: float)
+# This prevents DB overload during reconnection storms (5000 users × 5 rooms each)
+
+_auth_cache: Dict[Tuple[str, str], Tuple[bool, float]] = {}
+_AUTH_CACHE_TTL = 300  # 5 minutes TTL
+_AUTH_CACHE_MAX_SIZE = 50000  # Max cache entries
+_cache_lock = asyncio.Lock()
+
+
+async def _get_cached_auth(user_id: UUID, room_id: str) -> Optional[bool]:
+    """Get cached auth result if valid, None if not cached or expired."""
+    cache_key = (str(user_id), room_id)
+    cached = _auth_cache.get(cache_key)
+    if cached is None:
+        return None
+    result, expires_at = cached
+    if time.time() > expires_at:
+        # Expired - remove from cache
+        _auth_cache.pop(cache_key, None)
+        return None
+    return result
+
+
+async def _set_cached_auth(user_id: UUID, room_id: str, result: bool) -> None:
+    """Cache an auth result with TTL."""
+    cache_key = (str(user_id), room_id)
+    expires_at = time.time() + _AUTH_CACHE_TTL
+
+    # Enforce max cache size (simple eviction: clear half when full)
+    if len(_auth_cache) >= _AUTH_CACHE_MAX_SIZE:
+        async with _cache_lock:
+            # Clear oldest half of entries
+            sorted_entries = sorted(_auth_cache.items(), key=lambda x: x[1][1])
+            entries_to_remove = len(sorted_entries) // 2
+            for key, _ in sorted_entries[:entries_to_remove]:
+                _auth_cache.pop(key, None)
+
+    _auth_cache[cache_key] = (result, expires_at)
+
+
+def invalidate_user_cache(user_id: UUID) -> None:
+    """Invalidate all cached auth results for a user (call on membership changes)."""
+    user_id_str = str(user_id)
+    keys_to_remove = [k for k in _auth_cache.keys() if k[0] == user_id_str]
+    for key in keys_to_remove:
+        _auth_cache.pop(key, None)
+
+
+def invalidate_room_cache(room_id: str) -> None:
+    """Invalidate all cached auth results for a room (call on room permission changes)."""
+    keys_to_remove = [k for k in _auth_cache.keys() if k[1] == room_id]
+    for key in keys_to_remove:
+        _auth_cache.pop(key, None)
 
 
 async def check_room_access(user_id: UUID, room_id: str) -> bool:
@@ -37,21 +111,47 @@ async def check_room_access(user_id: UUID, room_id: str) -> bool:
         bool: True if user has access, False otherwise
     """
     if not room_id or ":" not in room_id:
-        # Invalid room format - deny
+        logger.warning(f"[Room Auth] DENIED - invalid room format: {room_id}")
         return False
 
     try:
         room_type, resource_id_str = room_id.split(":", 1)
         resource_id = UUID(resource_id_str)
     except (ValueError, AttributeError):
-        logger.warning(f"Invalid room ID format: {room_id}")
+        logger.warning(f"[Room Auth] DENIED - invalid room ID format: {room_id}")
         return False
 
-    # User-specific rooms - only allow access to own room
+    # User-specific rooms - only allow access to own room (no DB needed, no caching)
     if room_type == "user":
         return resource_id == user_id
 
-    # Database access required for other room types
+    # Check cache first (prevents DB overload during reconnection storms)
+    cached_result = await _get_cached_auth(user_id, room_id)
+    if cached_result is not None:
+        return cached_result
+
+    # Run blocking DB operations in thread pool to avoid blocking event loop
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(
+            _db_executor,
+            partial(_check_room_access_sync, user_id, room_type, resource_id)
+        )
+        # Cache the result
+        await _set_cached_auth(user_id, room_id, result)
+        return result
+    except Exception as e:
+        logger.error(f"[Room Auth] ERROR checking room access: {e}")
+        return False
+
+
+def _check_room_access_sync(user_id: UUID, room_type: str, resource_id: UUID) -> bool:
+    """
+    Synchronous room access check - runs in thread pool.
+
+    This function performs blocking database operations and should only
+    be called via run_in_executor to avoid blocking the event loop.
+    """
     db: Optional[Session] = None
     try:
         db = SessionLocal()
@@ -65,12 +165,11 @@ async def check_room_access(user_id: UUID, room_id: str) -> bool:
         elif room_type == "note":
             return _check_note_access(db, user_id, resource_id)
         else:
-            # Unknown room type - deny
-            logger.warning(f"Unknown room type: {room_type}")
+            logger.warning(f"[Room Auth] DENIED - unknown room type: {room_type}")
             return False
 
     except Exception as e:
-        logger.error(f"Error checking room access: {e}")
+        logger.error(f"[Room Auth] DB error: {e}")
         return False
     finally:
         if db:
@@ -78,7 +177,16 @@ async def check_room_access(user_id: UUID, room_id: str) -> bool:
 
 
 def _check_application_access(db: Session, user_id: UUID, application_id: UUID) -> bool:
-    """Check if user is a member of the application."""
+    """Check if user is a member of the application or the owner."""
+    from ..models.application import Application
+
+    # First check if user is the application owner (for backwards compatibility
+    # with applications created before ApplicationMember records were created for owners)
+    application = db.query(Application).filter(Application.id == application_id).first()
+    if application and application.owner_id == user_id:
+        return True
+
+    # Then check ApplicationMember table
     member = db.query(ApplicationMember).filter(
         ApplicationMember.application_id == application_id,
         ApplicationMember.user_id == user_id,
@@ -87,11 +195,21 @@ def _check_application_access(db: Session, user_id: UUID, application_id: UUID) 
 
 
 def _check_project_access(db: Session, user_id: UUID, project_id: UUID) -> bool:
-    """Check if user has access to the project via application membership."""
+    """Check if user has access to the project via application or project membership."""
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         return False
-    return _check_application_access(db, user_id, project.application_id)
+
+    # Check if user is an application member (has access to all projects)
+    if _check_application_access(db, user_id, project.application_id):
+        return True
+
+    # Check if user is a project member (has access to this specific project)
+    project_member = db.query(ProjectMember).filter(
+        ProjectMember.project_id == project_id,
+        ProjectMember.user_id == user_id,
+    ).first()
+    return project_member is not None
 
 
 def _check_task_access(db: Session, user_id: UUID, task_id: UUID) -> bool:

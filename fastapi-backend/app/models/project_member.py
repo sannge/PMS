@@ -2,9 +2,10 @@
 
 import uuid
 from datetime import datetime
+from enum import Enum
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Column, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, DateTime, ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.dialects.mssql import UNIQUEIDENTIFIER
 from sqlalchemy.orm import relationship
 
@@ -13,6 +14,17 @@ from ..database import Base
 if TYPE_CHECKING:
     from .project import Project
     from .user import User
+
+
+class ProjectMemberRole(str, Enum):
+    """Enum for project member roles.
+
+    - ADMIN: Full control, can manage project members
+    - MEMBER: Can edit/move tasks but cannot manage members
+    """
+
+    ADMIN = "admin"
+    MEMBER = "member"
 
 
 class ProjectMember(Base):
@@ -31,19 +43,26 @@ class ProjectMember(Base):
         id: Unique identifier (UUID)
         project_id: FK to the project
         user_id: FK to the member user
+        role: Member role (admin, member) - admins can manage members
         added_by_user_id: FK to the user who added this member (optional)
         created_at: Timestamp when membership was created
+        updated_at: Timestamp when membership was last updated
     """
 
     __tablename__ = "ProjectMembers"
     __allow_unmapped__ = True
 
-    # Unique constraint on project_id + user_id
+    # Unique constraint on project_id + user_id, plus index for role lookups
     __table_args__ = (
         UniqueConstraint(
             "project_id",
             "user_id",
             name="UQ_ProjectMembers_Project_User",
+        ),
+        Index(
+            "ix_ProjectMembers_project_role",
+            "project_id",
+            "role",
         ),
     )
 
@@ -75,6 +94,13 @@ class ProjectMember(Base):
         index=True,
     )
 
+    # Role - admin can manage members, member can only edit tasks
+    role = Column(
+        String(20),
+        nullable=False,
+        default=ProjectMemberRole.MEMBER.value,
+    )
+
     # Timestamps
     created_at = Column(
         DateTime,
@@ -82,12 +108,17 @@ class ProjectMember(Base):
         nullable=False,
         index=True,
     )
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
 
     # Relationships
-    # Note: back_populates will be added to Project and User models
-    # when their relationships are extended in a subsequent subtask
     project = relationship(
         "Project",
+        back_populates="members",
         lazy="joined",
     )
     user = relationship(

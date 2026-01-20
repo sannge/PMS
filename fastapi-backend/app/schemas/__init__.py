@@ -6,6 +6,22 @@ from .application import (
     ApplicationUpdate,
     ApplicationWithProjects,
 )
+from .checklist import (
+    ChecklistCreate,
+    ChecklistItemCreate,
+    ChecklistItemResponse,
+    ChecklistItemUpdate,
+    ChecklistResponse,
+    ChecklistUpdate,
+    ReorderRequest,
+)
+from .comment import (
+    CommentCreate,
+    CommentListResponse,
+    CommentResponse,
+    CommentUpdate,
+    MentionResponse,
+)
 from .project import (
     ProjectCreate,
     ProjectResponse,
@@ -20,11 +36,13 @@ from .project_member import (
 )
 from .task import (
     TaskCreate,
+    TaskMove,
     TaskPriority,
     TaskResponse,
     TaskStatus,
     TaskType,
     TaskUpdate,
+    TaskUserInfo,
     TaskWithSubtasks,
 )
 from .user import (
@@ -40,6 +58,20 @@ __all__ = [
     "ApplicationResponse",
     "ApplicationUpdate",
     "ApplicationWithProjects",
+    # Checklist schemas
+    "ChecklistCreate",
+    "ChecklistItemCreate",
+    "ChecklistItemResponse",
+    "ChecklistItemUpdate",
+    "ChecklistResponse",
+    "ChecklistUpdate",
+    "ReorderRequest",
+    # Comment schemas
+    "CommentCreate",
+    "CommentListResponse",
+    "CommentResponse",
+    "CommentUpdate",
+    "MentionResponse",
     # Project schemas
     "ProjectCreate",
     "ProjectResponse",
@@ -52,11 +84,13 @@ __all__ = [
     "ProjectMemberWithUser",
     # Task schemas
     "TaskCreate",
+    "TaskMove",
     "TaskPriority",
     "TaskResponse",
     "TaskStatus",
     "TaskType",
     "TaskUpdate",
+    "TaskUserInfo",
     "TaskWithSubtasks",
     # User schemas
     "UserCreate",

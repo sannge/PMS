@@ -48,7 +48,7 @@ def upgrade() -> None:
     # ==========================================================================
     # 2. Create ProjectMembers table
     # Note: SQL Server doesn't allow multiple CASCADE paths to same table
-    # So user_id uses CASCADE but added_by_user_id uses SET NULL
+    # So user_id and added_by_user_id both use NO ACTION to avoid conflicts
     # ==========================================================================
     op.create_table('ProjectMembers',
         sa.Column('id', mssql.UNIQUEIDENTIFIER(), nullable=False),
@@ -57,8 +57,8 @@ def upgrade() -> None:
         sa.Column('added_by_user_id', mssql.UNIQUEIDENTIFIER(), nullable=True),
         sa.Column('created_at', sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(['project_id'], ['Projects.id'], ondelete='CASCADE'),
-        sa.ForeignKeyConstraint(['user_id'], ['Users.id'], ondelete='CASCADE'),
-        sa.ForeignKeyConstraint(['added_by_user_id'], ['Users.id'], ondelete='SET NULL'),
+        sa.ForeignKeyConstraint(['user_id'], ['Users.id'], ondelete='NO ACTION'),
+        sa.ForeignKeyConstraint(['added_by_user_id'], ['Users.id'], ondelete='NO ACTION'),
         sa.PrimaryKeyConstraint('id'),
         sa.UniqueConstraint('project_id', 'user_id', name='UQ_ProjectMembers_Project_User')
     )
@@ -93,7 +93,7 @@ def upgrade() -> None:
         'fk_Tasks_task_status_id_TaskStatuses',
         'Tasks', 'TaskStatuses',
         ['task_status_id'], ['id'],
-        ondelete='SET NULL'
+        ondelete='NO ACTION'
     )
 
     # Add task_rank column for lexorank ordering
@@ -114,7 +114,7 @@ def upgrade() -> None:
         'fk_Projects_project_owner_user_id_Users',
         'Projects', 'Users',
         ['project_owner_user_id'], ['id'],
-        ondelete='SET NULL'
+        ondelete='NO ACTION'
     )
 
     # Add derived_status_id column
@@ -124,7 +124,7 @@ def upgrade() -> None:
         'fk_Projects_derived_status_id_TaskStatuses',
         'Projects', 'TaskStatuses',
         ['derived_status_id'], ['id'],
-        ondelete='SET NULL'
+        ondelete='NO ACTION'
     )
 
     # Add override_status_id column
@@ -134,7 +134,7 @@ def upgrade() -> None:
         'fk_Projects_override_status_id_TaskStatuses',
         'Projects', 'TaskStatuses',
         ['override_status_id'], ['id'],
-        ondelete='SET NULL'
+        ondelete='NO ACTION'
     )
 
     # Add override_reason column
@@ -147,7 +147,7 @@ def upgrade() -> None:
         'fk_Projects_override_by_user_id_Users',
         'Projects', 'Users',
         ['override_by_user_id'], ['id'],
-        ondelete='SET NULL'
+        ondelete='NO ACTION'
     )
 
     # Add override_expires_at column

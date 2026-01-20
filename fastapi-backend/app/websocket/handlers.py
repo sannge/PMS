@@ -638,15 +638,15 @@ async def route_incoming_message(
     mgr = connection_manager or manager
     message_type = data.get("type")
 
+    logger.debug(f"Routing message: user={connection.user_id}, type={message_type}")
+
     # Intercept JOIN_ROOM to enforce authorization
-    if message_type == MessageType.JOIN_ROOM.value:
+    if message_type == MessageType.JOIN_ROOM.value or message_type == "join_room":
         room_id = data.get("data", {}).get("room_id")
         if room_id and room_authorizer:
             is_authorized = await room_authorizer(connection.user_id, room_id)
             if not is_authorized:
-                logger.warning(
-                    f"Room join denied: user={connection.user_id}, room={room_id}"
-                )
+                logger.warning(f"Room access denied: user={connection.user_id}, room={room_id}")
                 await mgr.send_personal(
                     connection,
                     {
@@ -1010,6 +1010,783 @@ async def handle_role_updated(
     )
 
 
+# =============================================================================
+# Project Member Event Handlers
+# =============================================================================
+
+
+async def handle_project_member_added(
+    project_id: UUID | str,
+    member_data: dict[str, Any],
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Broadcast when a member is added to a project.
+
+    Args:
+        project_id: The project's UUID
+        member_data: The member payload containing:
+            - user_id: UUID of the new member
+            - user_name: Name of the new member
+            - role: The member's project role (admin/member)
+            - added_by: UUID of who added the member
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_project_room(project_id)
+
+    payload: dict[str, Any] = {
+        "message_id": str(uuid4()),
+        "project_id": str(project_id),
+        **member_data,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    message = {
+        "type": MessageType.PROJECT_MEMBER_ADDED.value,
+        "data": payload,
+    }
+
+    # Target: new member + person who added them
+    target_users: list[UUID] = []
+
+    new_user_id = member_data.get("user_id")
+    if new_user_id:
+        try:
+            target_users.append(
+                UUID(new_user_id) if isinstance(new_user_id, str) else new_user_id
+            )
+        except (ValueError, TypeError):
+            pass
+
+    added_by = member_data.get("added_by")
+    if added_by:
+        try:
+            added_by_uuid = UUID(added_by) if isinstance(added_by, str) else added_by
+            if added_by_uuid not in target_users:
+                target_users.append(added_by_uuid)
+        except (ValueError, TypeError):
+            pass
+
+    recipients = await broadcast_to_target_users(mgr, room_id, message, target_users)
+
+    logger.debug(
+        f"project_member_added: project={project_id}, user={new_user_id}, recipients={recipients}"
+    )
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.PROJECT_MEMBER_ADDED.value,
+        success=True,
+    )
+
+
+async def handle_project_member_removed(
+    project_id: UUID | str,
+    removed_user_id: UUID,
+    member_data: dict[str, Any],
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Broadcast when a member is removed from a project.
+
+    Args:
+        project_id: The project's UUID
+        removed_user_id: The UUID of the removed user
+        member_data: The removal payload containing:
+            - removed_by: UUID of who removed the member
+            - tasks_unassigned: Number of tasks that were unassigned
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_project_room(project_id)
+
+    payload: dict[str, Any] = {
+        "message_id": str(uuid4()),
+        "project_id": str(project_id),
+        "user_id": str(removed_user_id),
+        **member_data,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    message = {
+        "type": MessageType.PROJECT_MEMBER_REMOVED.value,
+        "data": payload,
+    }
+
+    # Target: removed user + person who removed them
+    target_users: list[UUID] = [removed_user_id]
+
+    removed_by = member_data.get("removed_by")
+    if removed_by:
+        try:
+            removed_by_uuid = UUID(removed_by) if isinstance(removed_by, str) else removed_by
+            if removed_by_uuid != removed_user_id:
+                target_users.append(removed_by_uuid)
+        except (ValueError, TypeError):
+            pass
+
+    recipients = await broadcast_to_target_users(mgr, room_id, message, target_users)
+
+    logger.debug(
+        f"project_member_removed: project={project_id}, user={removed_user_id}, recipients={recipients}"
+    )
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.PROJECT_MEMBER_REMOVED.value,
+        success=True,
+    )
+
+
+async def handle_project_member_role_changed(
+    project_id: UUID | str,
+    user_id: UUID,
+    role_data: dict[str, Any],
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Broadcast when a project member's role is changed.
+
+    Args:
+        project_id: The project's UUID
+        user_id: The UUID of the user whose role changed
+        role_data: The role update payload containing:
+            - old_role: Previous role (admin/member)
+            - new_role: New role (admin/member)
+            - changed_by: UUID of who changed the role
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_project_room(project_id)
+
+    payload: dict[str, Any] = {
+        "message_id": str(uuid4()),
+        "project_id": str(project_id),
+        "user_id": str(user_id),
+        **role_data,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    message = {
+        "type": MessageType.PROJECT_ROLE_CHANGED.value,
+        "data": payload,
+    }
+
+    # Target: affected user + person who changed the role
+    target_users: list[UUID] = [user_id]
+
+    changed_by = role_data.get("changed_by")
+    if changed_by:
+        try:
+            changed_by_uuid = UUID(changed_by) if isinstance(changed_by, str) else changed_by
+            if changed_by_uuid != user_id:
+                target_users.append(changed_by_uuid)
+        except (ValueError, TypeError):
+            pass
+
+    recipients = await broadcast_to_target_users(mgr, room_id, message, target_users)
+
+    logger.debug(
+        f"project_member_role_changed: project={project_id}, user={user_id}, recipients={recipients}"
+    )
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.PROJECT_ROLE_CHANGED.value,
+        success=True,
+    )
+
+
+# =============================================================================
+# Comment Event Handlers
+# =============================================================================
+
+
+async def handle_comment_added(
+    task_id: UUID | str,
+    comment_data: dict[str, Any],
+    mentioned_user_ids: list[UUID] | None = None,
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Handle comment_added event and broadcast to task room.
+
+    Args:
+        task_id: The task's UUID
+        comment_data: The comment payload
+        mentioned_user_ids: List of mentioned users to notify directly
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_task_room(task_id)
+
+    payload: dict[str, Any] = {
+        "t": "ca",  # Minified type for efficiency
+        "d": {
+            "id": str(comment_data.get("id", "")),
+            "tid": str(task_id),
+            "a": str(comment_data.get("author_id", "")),
+            "an": comment_data.get("author_name", ""),
+            "b": (comment_data.get("body_text", "") or "")[:100],  # Preview
+            "m": [str(uid) for uid in (mentioned_user_ids or [])],
+            "ts": int(datetime.utcnow().timestamp()),
+        },
+    }
+
+    message = {
+        "type": MessageType.COMMENT_ADDED.value,
+        "data": payload,
+    }
+
+    # Broadcast to task room + notify mentioned users directly
+    target_users = mentioned_user_ids or []
+    recipients = await broadcast_to_target_users(mgr, room_id, message, target_users)
+
+    logger.info(
+        f"Comment added: task_id={task_id}, comment_id={comment_data.get('id')}, "
+        f"mentions={len(target_users)}, recipients={recipients}"
+    )
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.COMMENT_ADDED.value,
+        success=True,
+    )
+
+
+async def handle_comment_updated(
+    task_id: UUID | str,
+    comment_id: UUID | str,
+    comment_data: dict[str, Any],
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Handle comment_updated event and broadcast to task room.
+
+    Args:
+        task_id: The task's UUID
+        comment_id: The comment's UUID
+        comment_data: The updated comment payload
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_task_room(task_id)
+
+    payload = {
+        "t": "cu",
+        "d": {
+            "id": str(comment_id),
+            "b": (comment_data.get("body_text", "") or "")[:100],
+            "ts": int(datetime.utcnow().timestamp()),
+        },
+    }
+
+    message = {
+        "type": MessageType.COMMENT_UPDATED.value,
+        "data": payload,
+    }
+
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    logger.debug(f"Comment updated: task_id={task_id}, comment_id={comment_id}")
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.COMMENT_UPDATED.value,
+        success=True,
+    )
+
+
+async def handle_comment_deleted(
+    task_id: UUID | str,
+    comment_id: UUID | str,
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Handle comment_deleted event and broadcast to task room.
+
+    Args:
+        task_id: The task's UUID
+        comment_id: The comment's UUID
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_task_room(task_id)
+
+    payload = {
+        "t": "cd",
+        "d": {
+            "id": str(comment_id),
+            "ts": int(datetime.utcnow().timestamp()),
+        },
+    }
+
+    message = {
+        "type": MessageType.COMMENT_DELETED.value,
+        "data": payload,
+    }
+
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    logger.debug(f"Comment deleted: task_id={task_id}, comment_id={comment_id}")
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.COMMENT_DELETED.value,
+        success=True,
+    )
+
+
+# =============================================================================
+# Checklist Event Handlers
+# =============================================================================
+
+
+async def handle_checklist_created(
+    task_id: UUID | str,
+    checklist_data: dict[str, Any],
+    user_id: UUID | str,
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Handle checklist_created event and broadcast to task room.
+
+    Args:
+        task_id: The task's UUID
+        checklist_data: The checklist payload
+        user_id: The user who created the checklist
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_task_room(task_id)
+
+    payload = {
+        "t": "clc",
+        "d": {
+            "id": str(checklist_data.get("id", "")),
+            "tid": str(task_id),
+            "title": checklist_data.get("title", ""),
+            "by": str(user_id),
+            "ts": int(datetime.utcnow().timestamp()),
+        },
+    }
+
+    message = {
+        "type": MessageType.CHECKLIST_CREATED.value,
+        "data": payload,
+    }
+
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    # Also broadcast to project room for task card updates
+    project_id = checklist_data.get("project_id")
+    if project_id:
+        project_room = get_project_room(project_id)
+        await mgr.broadcast_to_room(project_room, message)
+
+    logger.debug(f"Checklist created: task_id={task_id}, checklist_id={checklist_data.get('id')}")
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.CHECKLIST_CREATED.value,
+        success=True,
+    )
+
+
+async def handle_checklist_updated(
+    task_id: UUID | str,
+    checklist_id: UUID | str,
+    checklist_data: dict[str, Any],
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Handle checklist_updated event and broadcast to task room.
+
+    Args:
+        task_id: The task's UUID
+        checklist_id: The checklist's UUID
+        checklist_data: The updated checklist payload
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_task_room(task_id)
+
+    payload = {
+        "t": "clu",
+        "d": {
+            "id": str(checklist_id),
+            "title": checklist_data.get("title", ""),
+            "ts": int(datetime.utcnow().timestamp()),
+        },
+    }
+
+    message = {
+        "type": MessageType.CHECKLIST_UPDATED.value,
+        "data": payload,
+    }
+
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    logger.debug(f"Checklist updated: task_id={task_id}, checklist_id={checklist_id}")
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.CHECKLIST_UPDATED.value,
+        success=True,
+    )
+
+
+async def handle_checklist_deleted(
+    task_id: UUID | str,
+    checklist_id: UUID | str,
+    project_id: UUID | str | None = None,
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Handle checklist_deleted event and broadcast to task and project rooms.
+
+    Args:
+        task_id: The task's UUID
+        checklist_id: The checklist's UUID
+        project_id: Optional project ID for task card update
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_task_room(task_id)
+
+    payload = {
+        "t": "cld",
+        "d": {
+            "id": str(checklist_id),
+            "ts": int(datetime.utcnow().timestamp()),
+        },
+    }
+
+    message = {
+        "type": MessageType.CHECKLIST_DELETED.value,
+        "data": payload,
+    }
+
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    # Also broadcast to project room for task card updates
+    if project_id:
+        project_room = get_project_room(project_id)
+        await mgr.broadcast_to_room(project_room, message)
+
+    logger.debug(f"Checklist deleted: task_id={task_id}, checklist_id={checklist_id}")
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.CHECKLIST_DELETED.value,
+        success=True,
+    )
+
+
+async def handle_checklist_item_toggled(
+    task_id: UUID | str,
+    checklist_id: UUID | str,
+    item_id: UUID | str,
+    is_done: bool,
+    user_id: UUID | str,
+    project_id: UUID | str | None = None,
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Handle checklist_item_toggled event and broadcast to task and project rooms.
+
+    Args:
+        task_id: The task's UUID
+        checklist_id: The checklist's UUID
+        item_id: The item's UUID
+        is_done: New completion status
+        user_id: The user who toggled the item
+        project_id: Optional project ID for task card update
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_task_room(task_id)
+
+    payload = {
+        "t": "cit",
+        "d": {
+            "id": str(item_id),
+            "clid": str(checklist_id),
+            "done": is_done,
+            "by": str(user_id),
+            "ts": int(datetime.utcnow().timestamp()),
+        },
+    }
+
+    message = {
+        "type": MessageType.CHECKLIST_ITEM_TOGGLED.value,
+        "data": payload,
+    }
+
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    # Also broadcast to project room for task card progress updates
+    if project_id:
+        project_room = get_project_room(project_id)
+        await mgr.broadcast_to_room(project_room, message)
+
+    logger.debug(
+        f"Checklist item toggled: task_id={task_id}, item_id={item_id}, done={is_done}"
+    )
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.CHECKLIST_ITEM_TOGGLED.value,
+        success=True,
+    )
+
+
+# =============================================================================
+# Presence Event Handlers (Ephemeral)
+# =============================================================================
+
+
+async def handle_presence_update(
+    room_id: str,
+    users: list[dict[str, Any]],
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Broadcast presence update with list of users in room.
+
+    Args:
+        room_id: The room (project or task)
+        users: List of user presence info (id, name, avatar, idle)
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+
+    payload = {
+        "t": "pr",
+        "d": {
+            "users": users,
+        },
+    }
+
+    message = {
+        "type": MessageType.PRESENCE_UPDATE.value,
+        "data": payload,
+    }
+
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.PRESENCE_UPDATE.value,
+        success=True,
+    )
+
+
+async def handle_typing_indicator(
+    task_id: UUID | str,
+    user_id: UUID | str,
+    user_name: str,
+    ttl_ms: int = 3000,
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Broadcast typing indicator for comment composition.
+
+    Args:
+        task_id: The task's UUID
+        user_id: The typing user's UUID
+        user_name: The typing user's name
+        ttl_ms: Time-to-live in milliseconds (default 3000)
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_task_room(task_id)
+
+    payload = {
+        "t": "ty",
+        "d": {
+            "uid": str(user_id),
+            "un": user_name,
+            "ttl": ttl_ms,
+        },
+    }
+
+    message = {
+        "type": MessageType.USER_TYPING.value,
+        "data": payload,
+    }
+
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.USER_TYPING.value,
+        success=True,
+    )
+
+
+async def handle_task_viewers(
+    task_id: UUID | str,
+    viewer_ids: list[UUID],
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Broadcast list of users currently viewing a task.
+
+    Args:
+        task_id: The task's UUID
+        viewer_ids: List of user IDs viewing the task
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_task_room(task_id)
+
+    payload = {
+        "t": "tv",
+        "d": {
+            "tid": str(task_id),
+            "users": [str(uid) for uid in viewer_ids],
+        },
+    }
+
+    message = {
+        "type": MessageType.TASK_VIEWERS.value,
+        "data": payload,
+    }
+
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.TASK_VIEWERS.value,
+        success=True,
+    )
+
+
+async def handle_task_moved(
+    project_id: UUID | str,
+    task_id: UUID | str,
+    old_status_id: UUID | str,
+    new_status_id: UUID | str,
+    new_rank: str,
+    user_id: UUID | str,
+    task_data: Optional[dict] = None,
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Handle task_moved event for Kanban drag-and-drop.
+
+    Args:
+        project_id: The project's UUID
+        task_id: The task's UUID
+        old_status_id: Previous status ID
+        new_status_id: New status ID
+        new_rank: New Lexorank position
+        user_id: User who moved the task
+        task_data: Optional serialized task data to include
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_project_room(project_id)
+
+    # Use expanded field names to match frontend expectations
+    payload = {
+        "task_id": str(task_id),
+        "project_id": str(project_id),
+        "old_status_id": str(old_status_id),
+        "new_status_id": str(new_status_id),
+        "old_rank": None,
+        "new_rank": new_rank,
+        "task": task_data or {},
+        "timestamp": datetime.utcnow().isoformat(),
+        "changed_by": str(user_id),
+    }
+
+    message = {
+        "type": MessageType.TASK_MOVED.value,
+        "data": payload,
+    }
+
+    # Log room membership before broadcast
+    room_connections = mgr._rooms.get(room_id, set())
+    room_user_ids = [str(conn.user_id) for conn in room_connections]
+    logger.info(
+        f"Broadcasting TASK_MOVED: task_id={task_id}, room_id={room_id}, "
+        f"old_status={old_status_id} -> new_status={new_status_id}, "
+        f"room_members={room_user_ids}, triggered_by={user_id}"
+    )
+
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    logger.info(
+        f"Task moved broadcast complete: task_id={task_id}, "
+        f"project_room={room_id}, recipients={recipients}"
+    )
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.TASK_MOVED.value,
+        success=True,
+    )
+
+
 # Export all handlers and utilities
 __all__ = [
     "UpdateAction",
@@ -1019,6 +1796,7 @@ __all__ = [
     "get_task_room",
     "get_note_room",
     "handle_task_update",
+    "handle_task_moved",
     "handle_note_update",
     "handle_project_update",
     "handle_project_status_changed",
@@ -1032,4 +1810,21 @@ __all__ = [
     "handle_member_removed",
     "handle_role_updated",
     "route_incoming_message",
+    # Project member handlers
+    "handle_project_member_added",
+    "handle_project_member_removed",
+    "handle_project_member_role_changed",
+    # Comment handlers
+    "handle_comment_added",
+    "handle_comment_updated",
+    "handle_comment_deleted",
+    # Checklist handlers
+    "handle_checklist_created",
+    "handle_checklist_updated",
+    "handle_checklist_deleted",
+    "handle_checklist_item_toggled",
+    # Presence handlers
+    "handle_presence_update",
+    "handle_typing_indicator",
+    "handle_task_viewers",
 ]

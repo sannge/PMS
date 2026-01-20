@@ -34,6 +34,25 @@ class MessageType(str, Enum):
     TASK_UPDATED = "task_updated"
     TASK_DELETED = "task_deleted"
     TASK_STATUS_CHANGED = "task_status_changed"
+    TASK_MOVED = "task_moved"
+
+    # Comment events
+    COMMENT_ADDED = "comment_added"
+    COMMENT_UPDATED = "comment_updated"
+    COMMENT_DELETED = "comment_deleted"
+
+    # Checklist events
+    CHECKLIST_CREATED = "checklist_created"
+    CHECKLIST_UPDATED = "checklist_updated"
+    CHECKLIST_DELETED = "checklist_deleted"
+    CHECKLIST_ITEM_TOGGLED = "checklist_item_toggled"
+    CHECKLIST_ITEM_ADDED = "checklist_item_added"
+    CHECKLIST_ITEM_UPDATED = "checklist_item_updated"
+    CHECKLIST_ITEM_DELETED = "checklist_item_deleted"
+
+    # Presence events (ephemeral)
+    PRESENCE_UPDATE = "presence_update"
+    TASK_VIEWERS = "task_viewers"
 
     NOTE_CREATED = "note_created"
     NOTE_UPDATED = "note_updated"
@@ -58,12 +77,17 @@ class MessageType(str, Enum):
     NOTIFICATION = "notification"
     NOTIFICATION_READ = "notification_read"
 
-    # Invitation/member events
+    # Invitation/member events (application level)
     INVITATION_RECEIVED = "invitation_received"
     INVITATION_RESPONSE = "invitation_response"
     MEMBER_ADDED = "member_added"
     MEMBER_REMOVED = "member_removed"
     ROLE_UPDATED = "role_updated"
+
+    # Project member events (project level)
+    PROJECT_MEMBER_ADDED = "project_member_added"
+    PROJECT_MEMBER_REMOVED = "project_member_removed"
+    PROJECT_ROLE_CHANGED = "project_role_changed"
 
     # Ping/pong for keepalive
     PING = "ping"
@@ -249,10 +273,7 @@ class ConnectionManager:
             self._rooms[room_id].add(connection)
             connection.rooms.add(room_id)
 
-        logger.debug(
-            f"User {connection.user_id} joined room {room_id} "
-            f"(room_size={self.get_room_count(room_id)})"
-        )
+        room_size = self.get_room_count(room_id)
 
         # Confirm to the joining user
         await self.send_personal(
@@ -303,7 +324,7 @@ class ConnectionManager:
                     del self._rooms[room_id]
             connection.rooms.discard(room_id)
 
-        logger.debug(
+        logger.info(
             f"User {connection.user_id} left room {room_id} "
             f"(room_size={self.get_room_count(room_id)})"
         )
@@ -350,10 +371,7 @@ class ConnectionManager:
         try:
             await connection.websocket.send_json(message)
             return True
-        except Exception as e:
-            logger.warning(
-                f"Failed to send message to user {connection.user_id}: {e}"
-            )
+        except Exception:
             return False
 
     async def broadcast_to_room(
@@ -469,13 +487,13 @@ class ConnectionManager:
         """
         message_type = data.get("type")
 
-        if message_type == MessageType.PING:
+        if message_type == MessageType.PING or message_type == "ping":
             await self.send_personal(
                 connection,
                 {"type": MessageType.PONG, "data": {}},
             )
 
-        elif message_type == MessageType.JOIN_ROOM:
+        elif message_type == MessageType.JOIN_ROOM or message_type == "join_room":
             room_id = data.get("data", {}).get("room_id")
             if room_id:
                 await self.join_room(connection, room_id)

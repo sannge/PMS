@@ -62,7 +62,7 @@ interface StatusConfig {
 // Constants
 // ============================================================================
 
-const STATUS_ORDER: TaskStatus[] = ['todo', 'in_progress', 'in_review', 'done', 'blocked']
+const STATUS_ORDER: TaskStatus[] = ['todo', 'in_progress', 'in_review', 'issue', 'done']
 
 const STATUS_CONFIG: Record<TaskStatus, StatusConfig> = {
   todo: {
@@ -86,19 +86,19 @@ const STATUS_CONFIG: Record<TaskStatus, StatusConfig> = {
     textColor: 'text-purple-700 dark:text-purple-300',
     borderColor: 'border-purple-300 dark:border-purple-700',
   },
+  issue: {
+    label: 'Issue',
+    icon: <XCircle className="h-3.5 w-3.5" />,
+    bgColor: 'bg-red-100 dark:bg-red-900/50',
+    textColor: 'text-red-700 dark:text-red-300',
+    borderColor: 'border-red-300 dark:border-red-700',
+  },
   done: {
     label: 'Done',
     icon: <CheckCircle2 className="h-3.5 w-3.5" />,
     bgColor: 'bg-green-100 dark:bg-green-900/50',
     textColor: 'text-green-700 dark:text-green-300',
     borderColor: 'border-green-300 dark:border-green-700',
-  },
-  blocked: {
-    label: 'Blocked',
-    icon: <XCircle className="h-3.5 w-3.5" />,
-    bgColor: 'bg-red-100 dark:bg-red-900/50',
-    textColor: 'text-red-700 dark:text-red-300',
-    borderColor: 'border-red-300 dark:border-red-700',
   },
 }
 

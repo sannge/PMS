@@ -29,9 +29,11 @@ from ..schemas.task import (
     TaskStatus,
     TaskType,
     TaskUpdate,
+    TaskUserInfo,
     TaskWithSubtasks,
 )
 from ..services.auth_service import get_current_user
+from ..services.notification_service import NotificationService
 from ..services.permission_service import PermissionService, get_permission_service
 from ..services.status_derivation_service import (
     derive_project_status_from_model,
@@ -39,7 +41,12 @@ from ..services.status_derivation_service import (
     update_aggregation_on_task_delete,
     update_aggregation_on_task_status_change,
 )
-from ..websocket.handlers import handle_project_status_changed
+from ..websocket.handlers import (
+    UpdateAction,
+    handle_project_status_changed,
+    handle_task_moved,
+    handle_task_update,
+)
 
 router = APIRouter(tags=["Tasks"])
 
@@ -269,6 +276,30 @@ def generate_task_key(project: Project, db: Session) -> str:
     # Generate the next task key
     next_number = task_count + 1
     return f"{project.key}-{next_number}"
+
+
+def get_user_info(user: Optional[User]) -> Optional[TaskUserInfo]:
+    """Convert a User model to TaskUserInfo schema for API responses."""
+    if user is None:
+        return None
+    return TaskUserInfo(
+        id=user.id,
+        email=user.email,
+        display_name=user.display_name,
+        avatar_url=user.avatar_url,
+    )
+
+
+def serialize_user_for_ws(user: Optional[User]) -> Optional[dict]:
+    """Serialize a User model to dict for WebSocket broadcasts."""
+    if user is None:
+        return None
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "display_name": user.display_name,
+        "avatar_url": user.avatar_url,
+    }
 
 
 def validate_assignee_eligibility(
@@ -738,9 +769,13 @@ async def list_tasks(
         Task.parent_id,
     ).subquery()
 
+    # Query tasks with assignee and reporter eagerly loaded
     query = db.query(
         Task,
         func.coalesce(subtask_count_subquery.c.subtasks_count, 0).label("subtasks_count"),
+    ).options(
+        joinedload(Task.assignee),
+        joinedload(Task.reporter),
     ).outerjoin(
         subtask_count_subquery,
         Task.id == subtask_count_subquery.c.parent_id,
@@ -789,7 +824,9 @@ async def list_tasks(
             story_points=task.story_points,
             due_date=task.due_date,
             assignee_id=task.assignee_id,
+            assignee=get_user_info(task.assignee),
             reporter_id=task.reporter_id,
+            reporter=get_user_info(task.reporter),
             parent_id=task.parent_id,
             sprint_id=task.sprint_id,
             created_at=task.created_at,
@@ -921,6 +958,50 @@ async def create_task(
         user_id=current_user.id,
     )
 
+    # Load assignee/reporter relationships for WebSocket broadcast and response
+    _ = task.assignee  # Trigger lazy load
+    _ = task.reporter  # Trigger lazy load
+
+    # Broadcast task creation to project room for real-time updates
+    task_data = {
+        "id": str(task.id),
+        "project_id": str(task.project_id),
+        "task_key": task.task_key,
+        "title": task.title,
+        "description": task.description,
+        "task_type": task.task_type,
+        "status": task.status,
+        "priority": task.priority,
+        "story_points": task.story_points,
+        "due_date": task.due_date.isoformat() if task.due_date else None,
+        "assignee_id": str(task.assignee_id) if task.assignee_id else None,
+        "reporter_id": str(task.reporter_id) if task.reporter_id else None,
+        "assignee": serialize_user_for_ws(task.assignee),
+        "reporter": serialize_user_for_ws(task.reporter),
+        "parent_id": str(task.parent_id) if task.parent_id else None,
+        "sprint_id": str(task.sprint_id) if task.sprint_id else None,
+        "created_at": task.created_at.isoformat() if task.created_at else None,
+        "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+    }
+    await handle_task_update(
+        project_id=project_id,
+        task_id=task.id,
+        action=UpdateAction.CREATED,
+        task_data=task_data,
+        user_id=current_user.id,
+    )
+
+    # Send notification to assignee if task is assigned to someone other than self
+    if task.assignee_id and task.assignee_id != current_user.id:
+        assignee = db.query(User).filter(User.id == task.assignee_id).first()
+        if assignee:
+            await NotificationService.notify_task_assigned(
+                db=db,
+                task=task,
+                assignee=assignee,
+                assigner=current_user,
+            )
+
     return task
 
 
@@ -952,7 +1033,7 @@ async def get_task(
     Returns the task with its subtask count.
     Any member (owner, editor, viewer) can view tasks.
     """
-    # Query task with subtask count
+    # Query task with subtask count and user info
     subtask_count_subquery = db.query(
         Task.parent_id,
         func.count(Task.id).label("subtasks_count"),
@@ -965,6 +1046,9 @@ async def get_task(
     result = db.query(
         Task,
         func.coalesce(subtask_count_subquery.c.subtasks_count, 0).label("subtasks_count"),
+    ).options(
+        joinedload(Task.assignee),
+        joinedload(Task.reporter),
     ).outerjoin(
         subtask_count_subquery,
         Task.id == subtask_count_subquery.c.parent_id,
@@ -1011,7 +1095,9 @@ async def get_task(
         story_points=task.story_points,
         due_date=task.due_date,
         assignee_id=task.assignee_id,
+        assignee=get_user_info(task.assignee),
         reporter_id=task.reporter_id,
+        reporter=get_user_info(task.reporter),
         parent_id=task.parent_id,
         sprint_id=task.sprint_id,
         created_at=task.created_at,
@@ -1061,6 +1147,9 @@ async def update_task(
 
     # Track old status for aggregation update
     old_status = task.status
+
+    # Track old assignee for notification
+    old_assignee_id = task.assignee_id
 
     # Update fields if provided
     update_data = task_data.model_dump(exclude_unset=True)
@@ -1149,6 +1238,54 @@ async def update_task(
             user_id=current_user.id,
         )
 
+    # Load assignee/reporter relationships for WebSocket broadcast and response
+    _ = task.assignee  # Trigger lazy load
+    _ = task.reporter  # Trigger lazy load
+
+    # Broadcast task update to project room for real-time updates
+    task_data = {
+        "id": str(task.id),
+        "project_id": str(task.project_id),
+        "task_key": task.task_key,
+        "title": task.title,
+        "description": task.description,
+        "task_type": task.task_type,
+        "status": task.status,
+        "priority": task.priority,
+        "story_points": task.story_points,
+        "due_date": task.due_date.isoformat() if task.due_date else None,
+        "assignee_id": str(task.assignee_id) if task.assignee_id else None,
+        "reporter_id": str(task.reporter_id) if task.reporter_id else None,
+        "assignee": serialize_user_for_ws(task.assignee),
+        "reporter": serialize_user_for_ws(task.reporter),
+        "parent_id": str(task.parent_id) if task.parent_id else None,
+        "sprint_id": str(task.sprint_id) if task.sprint_id else None,
+        "created_at": task.created_at.isoformat() if task.created_at else None,
+        "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+    }
+    await handle_task_update(
+        project_id=task.project_id,
+        task_id=task.id,
+        action=UpdateAction.UPDATED,
+        task_data=task_data,
+        user_id=current_user.id,
+    )
+
+    # Send notification to new assignee if assignee changed and not self-assigned
+    if (
+        task.assignee_id
+        and task.assignee_id != old_assignee_id
+        and task.assignee_id != current_user.id
+    ):
+        new_assignee = db.query(User).filter(User.id == task.assignee_id).first()
+        if new_assignee:
+            await NotificationService.notify_task_assigned(
+                db=db,
+                task=task,
+                assignee=new_assignee,
+                assigner=current_user,
+            )
+
     return task
 
 
@@ -1229,6 +1366,15 @@ async def delete_task(
             new_status=new_derived_status,
             user_id=current_user.id,
         )
+
+    # Broadcast task deletion to project room for real-time updates
+    await handle_task_update(
+        project_id=project_id,
+        task_id=task_id,
+        action=UpdateAction.DELETED,
+        task_data={"id": str(task_id), "project_id": str(project_id)},
+        user_id=current_user.id,
+    )
 
     return None
 
@@ -1388,6 +1534,9 @@ async def move_task(
     task.updated_at = datetime.utcnow()
     task.row_version = (task.row_version or 0) + 1
 
+    # Store old task_status_id before commit (for WebSocket event)
+    old_task_status_id = task.task_status_id
+
     # Check if status changed and update aggregation
     old_derived_status: Optional[str] = None
     new_derived_status: Optional[str] = None
@@ -1417,6 +1566,42 @@ async def move_task(
     # Save changes
     db.commit()
     db.refresh(task)
+
+    # Load assignee/reporter relationships for WebSocket broadcast and response
+    _ = task.assignee  # Trigger lazy load
+    _ = task.reporter  # Trigger lazy load
+
+    # Emit WebSocket task_moved event for real-time Kanban updates
+    # Serialize task data for WebSocket broadcast
+    task_dict = {
+        "id": str(task.id),
+        "project_id": str(task.project_id),
+        "title": task.title,
+        "description": task.description,
+        "task_type": task.task_type,
+        "status": task.status,
+        "priority": task.priority,
+        "task_key": task.task_key,
+        "task_rank": task.task_rank,
+        "task_status_id": str(task.task_status_id) if task.task_status_id else None,
+        "assignee_id": str(task.assignee_id) if task.assignee_id else None,
+        "reporter_id": str(task.reporter_id) if task.reporter_id else None,
+        "assignee": serialize_user_for_ws(task.assignee),
+        "reporter": serialize_user_for_ws(task.reporter),
+        "story_points": task.story_points,
+        "due_date": task.due_date.isoformat() if task.due_date else None,
+        "created_at": task.created_at.isoformat() if task.created_at else None,
+        "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+    }
+    await handle_task_moved(
+        project_id=task.project_id,
+        task_id=task.id,
+        old_status_id=old_task_status_id or task.project_id,
+        new_status_id=task.task_status_id or task.project_id,
+        new_rank=task.task_rank or "",
+        user_id=current_user.id,
+        task_data=task_dict,
+    )
 
     # Emit WebSocket event if derived status changed (after commit)
     if project and old_derived_status is not None and new_derived_status is not None:

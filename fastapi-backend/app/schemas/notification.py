@@ -26,6 +26,11 @@ class NotificationType(str, Enum):
     ROLE_CHANGED = "role_changed"
     MEMBER_REMOVED = "member_removed"
     PROJECT_ASSIGNED = "project_assigned"
+    # Project member management notification types
+    PROJECT_MEMBER_ADDED = "project_member_added"
+    PROJECT_MEMBER_REMOVED = "project_member_removed"
+    PROJECT_ROLE_CHANGED = "project_role_changed"
+    TASK_REASSIGNMENT_NEEDED = "task_reassignment_needed"
 
 
 class EntityType(str, Enum):
@@ -39,6 +44,7 @@ class EntityType(str, Enum):
     # New entity types for invitation system
     INVITATION = "invitation"
     APPLICATION_MEMBER = "application_member"
+    PROJECT_MEMBER = "project_member"
 
 
 class NotificationBase(BaseModel):

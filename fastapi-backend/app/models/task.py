@@ -12,6 +12,8 @@ from ..database import Base
 
 if TYPE_CHECKING:
     from .attachment import Attachment
+    from .checklist import Checklist
+    from .comment import Comment
     from .project import Project
     from .task_status import TaskStatus
     from .user import User
@@ -43,6 +45,8 @@ class Task(Base):
         due_date: Task due date
         task_rank: Lexorank string for ordering tasks within a status column
         row_version: Version for optimistic concurrency control
+        checklist_total: Total checklist items across all checklists
+        checklist_done: Completed checklist items
         created_at: Timestamp when task was created
         updated_at: Timestamp when task was last updated
     """
@@ -150,6 +154,18 @@ class Task(Base):
         default=1,
     )
 
+    # Denormalized checklist counts for efficient display on task cards
+    checklist_total = Column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
+    checklist_done = Column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
+
     # Timestamps
     created_at = Column(
         DateTime,
@@ -199,6 +215,18 @@ class Task(Base):
     )
     attachments = relationship(
         "Attachment",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+    comments = relationship(
+        "Comment",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+    checklists = relationship(
+        "Checklist",
         back_populates="task",
         cascade="all, delete-orphan",
         lazy="dynamic",

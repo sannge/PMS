@@ -206,6 +206,7 @@ class Project(Base):
     # Project membership (for permission gate)
     members = relationship(
         "ProjectMember",
+        back_populates="project",
         cascade="all, delete-orphan",
         lazy="dynamic",
     )

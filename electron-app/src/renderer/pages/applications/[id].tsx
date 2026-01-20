@@ -29,8 +29,10 @@ import { useMembersStore } from '@/stores/members-store'
 import { ApplicationForm } from '@/components/applications/application-form'
 import { ProjectCard } from '@/components/projects/project-card'
 import { ProjectForm } from '@/components/projects/project-form'
+import { ProjectKanbanBoard } from '@/components/projects/project-kanban-board'
 import { MemberAvatarGroup, MemberManagementModal } from '@/components/members'
 import { InvitationModal } from '@/components/invitations/invitation-modal'
+import { SkeletonProjectGrid, SkeletonProjectKanbanBoard } from '@/components/ui/skeleton'
 import {
   FolderKanban,
   ChevronRight,
@@ -46,6 +48,8 @@ import {
   Info,
   ArrowLeft,
   UserPlus,
+  LayoutGrid,
+  Columns,
 } from 'lucide-react'
 
 // ============================================================================
@@ -412,7 +416,12 @@ export function ApplicationDetailPage({
   // Permission checks based on user role
   const userRole = selectedApplication?.user_role || 'viewer'
   const isOwner = userRole === 'owner'
-  const canEditProjects = userRole === 'owner' || userRole === 'editor'
+  const isEditor = userRole === 'editor'
+  // Owners and editors can edit projects
+  const canEditProjects = isOwner || isEditor
+  // Only owners can delete projects from application view
+  // (Project admins can delete from project detail page)
+  const canDeleteProjects = isOwner
 
   // Local state
   const [isEditing, setIsEditing] = useState(false)
@@ -423,13 +432,18 @@ export function ApplicationDetailPage({
   const [editingProject, setEditingProject] = useState<Project | null>(null)
   const [deletingProject, setDeletingProject] = useState<Project | null>(null)
   const [projectSearchQuery, setProjectSearchQuery] = useState('')
+  const [projectViewMode, setProjectViewMode] = useState<'kanban' | 'grid'>('kanban')
   // Member management state
   const [editingMember, setEditingMember] = useState<import('@/stores/members-store').MemberWithUser | null>(null)
   const [removingMember, setRemovingMember] = useState<import('@/stores/members-store').MemberWithUser | null>(null)
+  const [hasFetched, setHasFetched] = useState(false)
 
   // Fetch application on mount
   useEffect(() => {
-    fetchApplication(token, applicationId)
+    setHasFetched(false)
+    fetchApplication(token, applicationId).finally(() => {
+      setHasFetched(true)
+    })
   }, [token, applicationId, fetchApplication])
 
   // Fetch projects when application is loaded
@@ -447,42 +461,42 @@ export function ApplicationDetailPage({
   }, [token, applicationId, selectedApplication?.id, fetchMembers])
 
   // Join application room for real-time member updates
+  // Use refs to store callback functions to avoid dependency array issues
   const { joinRoom, leaveRoom, subscribe, status: wsStatus } = useWebSocket()
+
+  // Store callbacks in refs to avoid effect re-runs
+  const fetchMembersRef = useRef(fetchMembers)
+  const fetchApplicationRef = useRef(fetchApplication)
+  const removeMemberFromListRef = useRef(removeMemberFromList)
+  const updateMemberRoleInListRef = useRef(updateMemberRoleInList)
+  const tokenRef = useRef(token)
+  const currentUserIdRef = useRef(currentUserId)
+
+  // Keep refs up to date
+  useEffect(() => {
+    fetchMembersRef.current = fetchMembers
+    fetchApplicationRef.current = fetchApplication
+    removeMemberFromListRef.current = removeMemberFromList
+    updateMemberRoleInListRef.current = updateMemberRoleInList
+    tokenRef.current = token
+    currentUserIdRef.current = currentUserId
+  })
+
+  // Combined room join and subscription effect - only depends on connection state and applicationId
   useEffect(() => {
     if (!applicationId || !wsStatus.isConnected) {
-      console.log('[WS Room] Not joining room:', { applicationId, isConnected: wsStatus.isConnected })
       return
     }
 
     const roomId = WebSocketClient.getApplicationRoom(applicationId)
-    console.log('[WS Room] Joining room:', roomId)
     joinRoom(roomId)
-
-    return () => {
-      console.log('[WS Room] Leaving room:', roomId)
-      leaveRoom(roomId)
-    }
-  }, [applicationId, wsStatus.isConnected, joinRoom, leaveRoom])
-
-  // Subscribe to member events directly for real-time updates
-  // This handles the case where members change while viewing the application
-  useEffect(() => {
-    if (!wsStatus.isConnected || !applicationId) {
-      console.log('[WS Subscribe] Not subscribing:', { applicationId, isConnected: wsStatus.isConnected })
-      return
-    }
-
-    console.log('[WS Subscribe] Setting up member event subscriptions for:', applicationId)
 
     // Handle member added - refresh members list
     const unsubMemberAdded = subscribe<MemberAddedEventData>(
       MessageType.MEMBER_ADDED,
       (data) => {
-        console.log('[WS Event] MEMBER_ADDED received:', data)
-        console.log('[WS Event] Comparing:', { dataAppId: data.application_id, currentAppId: applicationId, match: data.application_id === applicationId })
-        if (data.application_id === applicationId && token) {
-          console.log('[WS Event] Fetching members for:', applicationId)
-          fetchMembers(token, applicationId)
+        if (data.application_id === applicationId && tokenRef.current) {
+          fetchMembersRef.current(tokenRef.current, applicationId)
         }
       }
     )
@@ -491,10 +505,8 @@ export function ApplicationDetailPage({
     const unsubMemberRemoved = subscribe<MemberRemovedEventData>(
       MessageType.MEMBER_REMOVED,
       (data) => {
-        console.log('[WS Event] MEMBER_REMOVED received:', data)
         if (data.application_id === applicationId) {
-          // Update local state directly without API call
-          removeMemberFromList(data.user_id)
+          removeMemberFromListRef.current(data.user_id)
         }
       }
     )
@@ -503,26 +515,22 @@ export function ApplicationDetailPage({
     const unsubRoleUpdated = subscribe<RoleUpdatedEventData>(
       MessageType.ROLE_UPDATED,
       (data) => {
-        console.log('[WS Event] ROLE_UPDATED received:', data)
         if (data.application_id === applicationId) {
-          // Update local state directly without API call
-          updateMemberRoleInList(data.user_id, data.new_role as import('@/stores/members-store').ApplicationRole)
-          // If the current user's role was updated, refresh the application to update permissions
-          if (data.user_id === currentUserId && token) {
-            console.log('[WS Event] Current user role changed, refreshing application')
-            fetchApplication(token, applicationId)
+          updateMemberRoleInListRef.current(data.user_id, data.new_role as import('@/stores/members-store').ApplicationRole)
+          if (data.user_id === currentUserIdRef.current && tokenRef.current) {
+            fetchApplicationRef.current(tokenRef.current, applicationId)
           }
         }
       }
     )
 
     return () => {
-      console.log('[WS Subscribe] Cleaning up subscriptions for:', applicationId)
       unsubMemberAdded()
       unsubMemberRemoved()
       unsubRoleUpdated()
+      leaveRoom(roomId)
     }
-  }, [wsStatus.isConnected, applicationId, token, subscribe, fetchMembers, currentUserId, fetchApplication, removeMemberFromList, updateMemberRoleInList])
+  }, [applicationId, wsStatus.isConnected, joinRoom, leaveRoom, subscribe])
 
   // Handle invite modal
   const handleOpenInviteModal = useCallback(() => {
@@ -714,8 +722,11 @@ export function ApplicationDetailPage({
     [token, applicationId, fetchProjects]
   )
 
+  // Show loading if actively loading OR if we haven't fetched yet
+  const showLoading = isLoading || !hasFetched
+
   // Loading state
-  if (isLoading && !selectedApplication) {
+  if (showLoading && !selectedApplication) {
     return (
       <div className="flex flex-col items-center justify-center py-12">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -751,8 +762,8 @@ export function ApplicationDetailPage({
     )
   }
 
-  // Not found state
-  if (!selectedApplication) {
+  // Not found state (only show after fetch completed)
+  if (!selectedApplication && hasFetched) {
     return (
       <div className="flex flex-col items-center justify-center py-12">
         <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted">
@@ -853,7 +864,7 @@ export function ApplicationDetailPage({
       </div>
 
       {/* Projects Section - Compact Header */}
-      <div className="space-y-3">
+      <div className="space-y-3 flex-1 flex flex-col min-h-0">
         <div className="flex items-center justify-between gap-3">
           {/* Search inline with title */}
           <div className="flex items-center gap-3 flex-1">
@@ -885,19 +896,49 @@ export function ApplicationDetailPage({
               </div>
             )}
           </div>
-          {canEditProjects && (
-            <button
-              onClick={handleCreateProject}
-              className={cn(
-                'inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground',
-                'hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
-                'transition-colors flex-shrink-0'
-              )}
-            >
-              <Plus className="h-3.5 w-3.5" />
-              New Project
-            </button>
-          )}
+          {/* View Toggle + New Project */}
+          <div className="flex items-center gap-2">
+            {/* View Toggle */}
+            <div className="flex items-center rounded-md border border-input bg-background p-0.5">
+              <button
+                onClick={() => setProjectViewMode('kanban')}
+                className={cn(
+                  'flex h-7 w-7 items-center justify-center rounded transition-colors',
+                  projectViewMode === 'kanban'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+                title="Kanban view"
+              >
+                <Columns className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={() => setProjectViewMode('grid')}
+                className={cn(
+                  'flex h-7 w-7 items-center justify-center rounded transition-colors',
+                  projectViewMode === 'grid'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+                title="Grid view"
+              >
+                <LayoutGrid className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            {canEditProjects && (
+              <button
+                onClick={handleCreateProject}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground',
+                  'hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                  'transition-colors flex-shrink-0'
+                )}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                New Project
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Projects Error Display */}
@@ -914,12 +955,15 @@ export function ApplicationDetailPage({
           </div>
         )}
 
-        {/* Loading Projects State */}
+        {/* Loading Projects State - Skeleton */}
         {isLoadingProjects && projects.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-8">
-            <Loader2 className="h-6 w-6 animate-spin text-primary" />
-            <p className="mt-2 text-sm text-muted-foreground">Loading projects...</p>
-          </div>
+          projectViewMode === 'kanban' ? (
+            <div className="flex-1 overflow-x-auto">
+              <SkeletonProjectKanbanBoard />
+            </div>
+          ) : (
+            <SkeletonProjectGrid count={6} />
+          )
         )}
 
         {/* Empty Projects State */}
@@ -951,20 +995,36 @@ export function ApplicationDetailPage({
           </div>
         )}
 
-        {/* Projects Grid */}
+        {/* Projects View */}
         {!isLoadingProjects && projects.length > 0 && (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {projects.map((project) => (
-              <ProjectCard
-                key={project.id}
-                project={project}
-                onClick={onSelectProject ? handleProjectClick : undefined}
+          projectViewMode === 'kanban' ? (
+            <div className="flex-1 overflow-x-auto">
+              <ProjectKanbanBoard
+                projects={projects}
+                isLoading={isLoadingProjects}
+                onProjectClick={onSelectProject ? handleProjectClick : undefined}
                 onEdit={canEditProjects ? handleEditProject : undefined}
-                onDelete={canEditProjects ? handleDeleteProjectClick : undefined}
+                onDelete={canDeleteProjects ? handleDeleteProjectClick : undefined}
+                onAddProject={canEditProjects ? handleCreateProject : undefined}
                 disabled={isDeletingProject}
+                canEditProjects={canEditProjects}
+                canDeleteProjects={canDeleteProjects}
               />
-            ))}
-          </div>
+            </div>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {projects.map((project) => (
+                <ProjectCard
+                  key={project.id}
+                  project={project}
+                  onClick={onSelectProject ? handleProjectClick : undefined}
+                  onEdit={canEditProjects ? handleEditProject : undefined}
+                  onDelete={canDeleteProjects ? handleDeleteProjectClick : undefined}
+                  disabled={isDeletingProject}
+                />
+              ))}
+            </div>
+          )
         )}
       </div>
 

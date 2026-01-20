@@ -30,6 +30,11 @@ export type NotificationType =
   | 'member_joined'
   | 'member_left'
   | 'role_changed'
+  // Project member notification types
+  | 'project_member_added'
+  | 'project_member_removed'
+  | 'project_role_changed'
+  | 'task_reassignment_needed'
   // UI-only types (not persisted)
   | 'invitation_received'
   | 'member_added'

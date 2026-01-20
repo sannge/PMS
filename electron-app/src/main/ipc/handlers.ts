@@ -21,7 +21,7 @@ import {
 } from 'electron'
 
 // API base URL - configurable via environment
-const API_BASE_URL = process.env.VITE_API_URL || 'http://localhost:8000'
+const API_BASE_URL = process.env.VITE_API_URL || 'http://localhost:8001'
 
 // Timeout for API requests (30 seconds)
 const API_TIMEOUT = 30000

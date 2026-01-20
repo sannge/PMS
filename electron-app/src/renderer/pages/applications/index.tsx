@@ -185,8 +185,9 @@ export function ApplicationsPage({
 
   // Fetch applications on mount
   useEffect(() => {
-    fetchApplications(token)
-    setHasFetched(true)
+    fetchApplications(token).finally(() => {
+      setHasFetched(true)
+    })
   }, [token, fetchApplications])
 
   // Handle search
@@ -384,7 +385,7 @@ export function ApplicationsPage({
               onClick={onSelectApplication ? handleApplicationClick : undefined}
               onEdit={handleEdit}
               onDelete={handleDeleteClick}
-              disabled={isDeleting}
+              disabled={isDeleting || isLoading}
               index={index}
             />
           ))}

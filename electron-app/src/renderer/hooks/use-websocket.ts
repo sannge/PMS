@@ -15,6 +15,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAuthStore } from '@/stores/auth-store'
 import { useNotificationsStore } from '@/stores/notifications-store'
+import { useProjectsStore } from '@/stores/projects-store'
+import { useProjectMembersStore } from '@/stores/project-members-store'
 import {
   wsClient,
   WebSocketClient,
@@ -25,6 +27,7 @@ import {
   type WebSocketEventListener,
   type Unsubscribe,
   type TaskUpdateEventData,
+  type TaskMovedEventData,
   type NoteUpdateEventData,
   type UserPresenceEventData,
   type RoomJoinedEventData,
@@ -354,6 +357,57 @@ export function useTaskUpdates(
       leaveRoom(roomId)
     }
   }, [projectId, status.isConnected, subscribe, joinRoom, leaveRoom])
+}
+
+/**
+ * Hook for subscribing to task moved events (Kanban drag-and-drop)
+ *
+ * Listens for task_moved WebSocket events and calls the callback with
+ * the task's new position and status information.
+ *
+ * @example
+ * ```tsx
+ * function KanbanBoard({ projectId }) {
+ *   useTaskMoved(projectId, (data) => {
+ *     // Update task position in local state
+ *     updateTaskPosition(data.task_id, data.new_status_id, data.new_rank)
+ *   })
+ * }
+ * ```
+ */
+export function useTaskMoved(
+  projectId: string | null,
+  onMoved: (data: TaskMovedEventData) => void
+): void {
+  const { subscribe, status } = useWebSocket()
+  const callbackRef = useRef(onMoved)
+
+  // Keep callback ref up to date
+  useEffect(() => {
+    callbackRef.current = onMoved
+  }, [onMoved])
+
+  // Subscribe to task_moved events (room is already joined by useTaskUpdates)
+  useEffect(() => {
+    if (!projectId || !status.isConnected) {
+      return
+    }
+
+    const unsubscribeMoved = subscribe<TaskMovedEventData>(
+      MessageType.TASK_MOVED,
+      (data) => {
+        // Only process events for this project
+        if (data.project_id === projectId) {
+          callbackRef.current(data)
+        }
+      }
+    )
+
+    return () => {
+      unsubscribeMoved()
+      // Don't leave room here - useTaskUpdates manages the room lifecycle
+    }
+  }, [projectId, status.isConnected, subscribe])
 }
 
 /**
@@ -823,6 +877,190 @@ export function useNotificationReadSync(): void {
   }, [status.isConnected, subscribe])
 }
 
+/**
+ * Event data for project update
+ */
+export interface ProjectUpdatedEventData {
+  project_id: string
+  name: string
+  description: string | null
+  project_type: string
+  project_key: string
+  updated_at: string | null
+  updated_by: string
+}
+
+/**
+ * Event data for project member added
+ */
+export interface ProjectMemberAddedEventData {
+  project_id: string
+  member_id: string
+  user_id: string
+  role: string
+  user: {
+    id: string
+    email: string
+    display_name: string | null
+    avatar_url: string | null
+  }
+  added_by: string
+}
+
+/**
+ * Event data for project member removed
+ */
+export interface ProjectMemberRemovedEventData {
+  project_id: string
+  user_id: string
+  removed_by: string
+  tasks_unassigned: number
+}
+
+/**
+ * Event data for project role changed
+ */
+export interface ProjectRoleChangedEventData {
+  project_id: string
+  user_id: string
+  old_role: string
+  new_role: string
+  changed_by: string
+}
+
+/**
+ * Hook to sync project updates (name, description, type) across tabs/windows.
+ *
+ * When a project is updated, this hook receives the event via WebSocket
+ * and updates the local projects store.
+ *
+ * @param projectId - The project ID to sync updates for
+ */
+export function useProjectUpdatedSync(projectId: string | undefined): void {
+  const { subscribe, status, joinRoom, leaveRoom } = useWebSocket()
+
+  useEffect(() => {
+    if (!status.isConnected || !projectId) {
+      return
+    }
+
+    const roomId = WebSocketClient.getProjectRoom(projectId)
+    joinRoom(roomId)
+
+    const unsubscribe = subscribe<ProjectUpdatedEventData>(
+      MessageType.PROJECT_UPDATED,
+      (data) => {
+        if (data.project_id === projectId) {
+          useProjectsStore.getState().handleProjectUpdated(data)
+        }
+      }
+    )
+
+    return () => {
+      unsubscribe()
+      leaveRoom(roomId)
+    }
+  }, [status.isConnected, projectId, subscribe, joinRoom, leaveRoom])
+}
+
+/**
+ * Hook to sync project member changes across tabs/windows.
+ *
+ * When project members are added, removed, or their roles change,
+ * this hook receives the events via WebSocket and updates the local store.
+ *
+ * @param projectId - The project ID to sync member changes for
+ */
+export function useProjectMemberSync(projectId: string | undefined): void {
+  const { subscribe, status, joinRoom, leaveRoom } = useWebSocket()
+
+  useEffect(() => {
+    if (!status.isConnected || !projectId) {
+      return
+    }
+
+    const roomId = WebSocketClient.getProjectRoom(projectId)
+    joinRoom(roomId)
+
+    // Subscribe to member added
+    const unsubscribeMemberAdded = subscribe<ProjectMemberAddedEventData>(
+      MessageType.PROJECT_MEMBER_ADDED,
+      (data) => {
+        if (data.project_id === projectId) {
+          useProjectMembersStore.getState().handleMemberAdded(data)
+        }
+      }
+    )
+
+    // Subscribe to member removed
+    const unsubscribeMemberRemoved = subscribe<ProjectMemberRemovedEventData>(
+      MessageType.PROJECT_MEMBER_REMOVED,
+      (data) => {
+        if (data.project_id === projectId) {
+          useProjectMembersStore.getState().handleMemberRemoved(data)
+        }
+      }
+    )
+
+    // Subscribe to role changed
+    const unsubscribeRoleChanged = subscribe<ProjectRoleChangedEventData>(
+      MessageType.PROJECT_ROLE_CHANGED,
+      (data) => {
+        if (data.project_id === projectId) {
+          useProjectMembersStore.getState().handleRoleChanged(data)
+        }
+      }
+    )
+
+    return () => {
+      unsubscribeMemberAdded()
+      unsubscribeMemberRemoved()
+      unsubscribeRoleChanged()
+      leaveRoom(roomId)
+    }
+  }, [status.isConnected, projectId, subscribe, joinRoom, leaveRoom])
+}
+
+/**
+ * Hook for syncing project deletion across tabs/devices
+ *
+ * When a project is deleted, this hook receives the event via WebSocket
+ * and updates the local projects store. The event is sent directly to
+ * affected users (project members and application owners).
+ *
+ * @example
+ * ```tsx
+ * function App() {
+ *   useProjectDeletedSync()
+ *   // Now project deletions sync across all open tabs
+ * }
+ * ```
+ */
+export function useProjectDeletedSync(): void {
+  const { subscribe, status } = useWebSocket()
+
+  useEffect(() => {
+    if (!status.isConnected) {
+      return
+    }
+
+    const unsubscribe = subscribe<{
+      project_id: string
+      application_id: string
+      project_name: string
+      project_key: string
+      deleted_by: string
+    }>(
+      MessageType.PROJECT_DELETED,
+      (data) => {
+        useProjectsStore.getState().handleProjectDeleted(data)
+      }
+    )
+
+    return unsubscribe
+  }, [status.isConnected, subscribe])
+}
+
 // ============================================================================
 // Exports
 // ============================================================================
@@ -838,6 +1076,7 @@ export {
   type WebSocketEventListener,
   type Unsubscribe,
   type TaskUpdateEventData,
+  type TaskMovedEventData,
   type NoteUpdateEventData,
   type UserPresenceEventData,
   type ConnectedEventData,

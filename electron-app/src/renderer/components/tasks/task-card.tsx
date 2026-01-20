@@ -27,9 +27,12 @@ import {
   ArrowRight,
   Layers,
   MoreHorizontal,
+  CheckSquare,
+  History,
 } from 'lucide-react'
 import type { Task, TaskType, TaskPriority, TaskStatus } from '@/stores/tasks-store'
-import { TaskStatusBadge } from './task-status-badge'
+import { TaskViewerDots } from './TaskViewerDots'
+import type { TaskViewer } from '@/hooks/use-task-viewers'
 
 // ============================================================================
 // Types
@@ -41,6 +44,7 @@ export interface TaskCardProps {
   onEdit?: (task: Task) => void
   onDelete?: (task: Task) => void
   onStatusChange?: (task: Task, status: TaskStatus) => void
+  viewers?: TaskViewer[]
   disabled?: boolean
   showDragHandle?: boolean
   variant?: 'default' | 'compact'
@@ -148,6 +152,64 @@ function formatDueDate(dateString: string): { text: string; isOverdue: boolean; 
   }
 }
 
+/**
+ * Format a timestamp into a compact relative time string
+ * e.g., "2m", "1h", "3d", "1w", "2mo"
+ */
+/**
+ * Get initials from a name or email
+ */
+function getInitials(displayName: string | null, email: string): string {
+  if (displayName) {
+    const parts = displayName.trim().split(/\s+/)
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+    }
+    return displayName.slice(0, 2).toUpperCase()
+  }
+  // Fallback to email
+  return email.slice(0, 2).toUpperCase()
+}
+
+/**
+ * Get display name from assignee info
+ */
+function getAssigneeDisplayName(assignee: { display_name: string | null; email: string }): string {
+  return assignee.display_name || assignee.email.split('@')[0]
+}
+
+function formatRelativeTime(dateString: string): string {
+  // Ensure UTC parsing - append 'Z' if no timezone indicator
+  let dateStr = dateString
+  if (!dateStr.endsWith('Z') && !dateStr.includes('+') && !dateStr.includes('-', 10)) {
+    dateStr = dateStr + 'Z'
+  }
+
+  const date = new Date(dateStr)
+  const now = new Date()
+  const diffMs = now.getTime() - date.getTime()
+
+  // Handle invalid dates or future dates
+  if (isNaN(diffMs) || diffMs < 0) {
+    return 'now'
+  }
+
+  const diffSec = Math.floor(diffMs / 1000)
+  const diffMin = Math.floor(diffSec / 60)
+  const diffHr = Math.floor(diffMin / 60)
+  const diffDay = Math.floor(diffHr / 24)
+  const diffWeek = Math.floor(diffDay / 7)
+  const diffMonth = Math.floor(diffDay / 30)
+
+  if (diffSec < 60) return 'now'
+  if (diffMin < 60) return `${diffMin}m`
+  if (diffHr < 24) return `${diffHr}h`
+  if (diffDay < 7) return `${diffDay}d`
+  if (diffWeek < 4) return `${diffWeek}w`
+  if (diffMonth < 12) return `${diffMonth}mo`
+  return `${Math.floor(diffMonth / 12)}y`
+}
+
 // ============================================================================
 // Actions Dropdown Component
 // ============================================================================
@@ -252,6 +314,7 @@ export function TaskCard({
   onEdit,
   onDelete,
   onStatusChange,
+  viewers = [],
   disabled = false,
   variant = 'default',
   className,
@@ -305,13 +368,8 @@ export function TaskCard({
         {/* Task Type Icon */}
         <div className="flex-shrink-0">{getTaskTypeIcon(task.task_type)}</div>
 
-        {/* Task Key */}
-        <span className="flex-shrink-0 text-[10px] font-medium text-muted-foreground font-mono">
-          {task.task_key}
-        </span>
-
         {/* Title */}
-        <span className="flex-1 min-w-0 text-xs text-foreground truncate">{task.title}</span>
+        <span className="flex-1 min-w-0 text-xs font-medium text-foreground truncate">{task.title}</span>
 
         {/* Priority */}
         <span className={cn('flex-shrink-0', priorityConfig.color)} title={priorityConfig.label}>
@@ -319,9 +377,36 @@ export function TaskCard({
         </span>
 
         {/* Assignee */}
-        {task.assignee_id && (
-          <div className="flex-shrink-0 flex h-5 w-5 items-center justify-center rounded-full bg-primary/10 text-primary">
-            <User className="h-2.5 w-2.5" />
+        {task.assignee ? (
+          <div className="flex-shrink-0 relative group/assignee">
+            <div
+              className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/10 text-primary text-[9px] font-semibold"
+            >
+              {getInitials(task.assignee.display_name, task.assignee.email)}
+            </div>
+            {/* Hover tooltip */}
+            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 rounded bg-popover border border-border shadow-md text-xs whitespace-nowrap opacity-0 invisible group-hover/assignee:opacity-100 group-hover/assignee:visible transition-opacity z-50">
+              <div className="font-medium text-foreground">{getAssigneeDisplayName(task.assignee)}</div>
+              <div className="text-muted-foreground text-[10px]">{task.assignee.email}</div>
+              {/* Arrow */}
+              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-border" />
+              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-popover -mt-[1px]" />
+            </div>
+          </div>
+        ) : (
+          <div className="flex-shrink-0 relative group/assignee">
+            <div
+              className="flex h-5 w-5 items-center justify-center rounded-full bg-muted/50 border border-dashed border-muted-foreground/30"
+            >
+              <User className="h-2.5 w-2.5 text-muted-foreground/50" />
+            </div>
+            {/* Hover tooltip */}
+            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 rounded bg-popover border border-border shadow-md text-xs whitespace-nowrap opacity-0 invisible group-hover/assignee:opacity-100 group-hover/assignee:visible transition-opacity z-50">
+              <div className="text-muted-foreground">Unassigned</div>
+              {/* Arrow */}
+              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-border" />
+              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-popover -mt-[1px]" />
+            </div>
           </div>
         )}
 
@@ -363,25 +448,15 @@ export function TaskCard({
         {getTaskTypeIcon(task.task_type)}
       </div>
 
-      {/* Task Key */}
-      <span className="flex-shrink-0 text-[10px] font-medium text-muted-foreground font-mono min-w-[60px]">
-        {task.task_key}
-      </span>
+      {/* Viewer indicators */}
+      {viewers.length > 0 && (
+        <TaskViewerDots viewers={viewers} maxDots={3} className="flex-shrink-0" />
+      )}
 
       {/* Title */}
-      <span className="flex-1 min-w-0 text-sm text-foreground truncate group-hover:text-primary transition-colors">
+      <span className="flex-1 min-w-0 text-sm font-medium text-foreground truncate group-hover:text-primary transition-colors">
         {task.title}
       </span>
-
-      {/* Status Badge */}
-      <div className="flex-shrink-0" onClick={(e) => e.stopPropagation()}>
-        <TaskStatusBadge
-          status={task.status}
-          onStatusChange={onStatusChange ? handleStatusChange : undefined}
-          disabled={disabled}
-          size="sm"
-        />
-      </div>
 
       {/* Priority */}
       <span className={cn('flex-shrink-0', priorityConfig.color)} title={priorityConfig.label}>
@@ -421,10 +496,66 @@ export function TaskCard({
         </span>
       )}
 
+      {/* Checklist progress indicator */}
+      {task.checklist_total != null && task.checklist_total > 0 && (
+        <span
+          className={cn(
+            'flex-shrink-0 flex items-center gap-1 text-[10px]',
+            task.checklist_done === task.checklist_total
+              ? 'text-green-600 dark:text-green-500'
+              : 'text-muted-foreground'
+          )}
+          title={`${task.checklist_done}/${task.checklist_total} checklist items done`}
+        >
+          <CheckSquare className="h-2.5 w-2.5" />
+          <span className="tabular-nums">
+            {task.checklist_done}/{task.checklist_total}
+          </span>
+        </span>
+      )}
+
+      {/* Last updated indicator - always visible */}
+      {task.updated_at && (
+        <span
+          className="flex-shrink-0 flex items-center gap-0.5 text-[9px] text-muted-foreground/70"
+          title={`Updated ${new Date(task.updated_at).toLocaleString()}`}
+        >
+          <History className="h-2.5 w-2.5" />
+          {formatRelativeTime(task.updated_at)}
+        </span>
+      )}
+
       {/* Assignee */}
-      {task.assignee_id && (
-        <div className="flex-shrink-0 flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary">
-          <User className="h-3 w-3" />
+      {task.assignee ? (
+        <div className="flex-shrink-0 relative group/assignee">
+          <div
+            className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary text-[10px] font-semibold"
+          >
+            {getInitials(task.assignee.display_name, task.assignee.email)}
+          </div>
+          {/* Hover tooltip */}
+          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 rounded bg-popover border border-border shadow-md text-xs whitespace-nowrap opacity-0 invisible group-hover/assignee:opacity-100 group-hover/assignee:visible transition-opacity z-50">
+            <div className="font-medium text-foreground">{getAssigneeDisplayName(task.assignee)}</div>
+            <div className="text-muted-foreground text-[10px]">{task.assignee.email}</div>
+            {/* Arrow */}
+            <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-border" />
+            <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-popover -mt-[1px]" />
+          </div>
+        </div>
+      ) : (
+        <div className="flex-shrink-0 relative group/assignee">
+          <div
+            className="flex h-6 w-6 items-center justify-center rounded-full bg-muted/50 border border-dashed border-muted-foreground/30"
+          >
+            <User className="h-3 w-3 text-muted-foreground/50" />
+          </div>
+          {/* Hover tooltip */}
+          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 rounded bg-popover border border-border shadow-md text-xs whitespace-nowrap opacity-0 invisible group-hover/assignee:opacity-100 group-hover/assignee:visible transition-opacity z-50">
+            <div className="text-muted-foreground">Unassigned</div>
+            {/* Arrow */}
+            <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-border" />
+            <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-popover -mt-[1px]" />
+          </div>
         </div>
       )}
 

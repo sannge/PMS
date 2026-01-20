@@ -55,13 +55,18 @@ function getNotificationIcon(type: InAppNotification['type']) {
       return <X className="h-4 w-4 text-red-500" />
     case 'member_added':
     case 'member_joined':
+    case 'project_member_added':
       return <UserPlus className="h-4 w-4 text-blue-500" />
     case 'member_removed':
     case 'member_left':
+    case 'project_member_removed':
       return <UserMinus className="h-4 w-4 text-orange-500" />
     case 'role_updated':
     case 'role_changed':
+    case 'project_role_changed':
       return <Shield className="h-4 w-4 text-violet-500" />
+    case 'task_reassignment_needed':
+      return <AlertCircle className="h-4 w-4 text-amber-500" />
     case 'success':
       return <CheckCircle className="h-4 w-4 text-emerald-500" />
     case 'warning':
@@ -165,7 +170,7 @@ function NotificationItem({
         <p className="text-sm font-medium text-foreground">
           {notification.title}
         </p>
-        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+        <p className="text-xs text-muted-foreground mt-0.5">
           {notification.message}
         </p>
         <div className="flex items-center gap-2 mt-1.5">

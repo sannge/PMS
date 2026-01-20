@@ -48,6 +48,7 @@ export enum MessageType {
   TASK_UPDATED = 'task_updated',
   TASK_DELETED = 'task_deleted',
   TASK_STATUS_CHANGED = 'task_status_changed',
+  TASK_MOVED = 'task_moved',
 
   // Note events
   NOTE_CREATED = 'note_created',
@@ -75,12 +76,17 @@ export enum MessageType {
   NOTIFICATION = 'notification',
   NOTIFICATION_READ = 'notification_read',
 
-  // Invitation/member events
+  // Invitation/member events (application level)
   INVITATION_RECEIVED = 'invitation_received',
   INVITATION_RESPONSE = 'invitation_response',
   MEMBER_ADDED = 'member_added',
   MEMBER_REMOVED = 'member_removed',
   ROLE_UPDATED = 'role_updated',
+
+  // Project member events (project level)
+  PROJECT_MEMBER_ADDED = 'project_member_added',
+  PROJECT_MEMBER_REMOVED = 'project_member_removed',
+  PROJECT_ROLE_CHANGED = 'project_role_changed',
 
   // Keepalive
   PING = 'ping',
@@ -152,6 +158,21 @@ export interface TaskUpdateEventData {
   changed_by?: string
   old_status?: string
   new_status?: string
+}
+
+/**
+ * Task moved event data (Kanban drag-and-drop)
+ */
+export interface TaskMovedEventData {
+  task_id: string
+  project_id: string
+  old_status_id: string | null
+  new_status_id: string | null
+  old_rank: string | null
+  new_rank: string
+  task: Record<string, unknown>
+  timestamp: string
+  changed_by?: string
 }
 
 /**
@@ -285,14 +306,14 @@ export type Unsubscribe = () => void
 // ============================================================================
 
 const DEFAULT_CONFIG: Required<WebSocketConfig> = {
-  url: 'ws://localhost:8000/ws',
+  url: 'ws://localhost:8001/ws',
   token: '',
   autoReconnect: true,
   maxReconnectAttempts: 10,
   reconnectDelay: 1000,
   maxReconnectDelay: 30000,
-  pingInterval: 30000,
-  pongTimeout: 5000,
+  pingInterval: 30000,  // 30 seconds keepalive interval
+  pongTimeout: 10000,   // 10 seconds pong timeout
   maxQueueSize: 100,
 }
 
@@ -311,13 +332,110 @@ export class WebSocketClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private pingTimer: ReturnType<typeof setInterval> | null = null
   private pongTimer: ReturnType<typeof setTimeout> | null = null
+  private dedupCleanupTimer: ReturnType<typeof setInterval> | null = null
   private messageQueue: WebSocketMessage[] = []
   private rooms: Set<string> = new Set()
+  private roomRefs: Map<string, number> = new Map() // Reference counting for rooms
   private listeners: Map<string, Set<WebSocketEventListener>> = new Map()
   private stateListeners: Set<WebSocketEventListener<WebSocketState>> = new Set()
 
+  // Message deduplication - stores message IDs with their timestamps
+  private processedMessageIds: Map<string, number> = new Map()
+  private readonly MESSAGE_DEDUP_TTL_MS = 60000 // 1 minute TTL
+  private readonly MAX_DEDUP_CACHE_SIZE = 1000
+
+  // Visibility and network state tracking
+  private isPageVisible: boolean = true
+  private wasConnectedBeforeHidden: boolean = false
+  private visibilityHandler: (() => void) | null = null
+  private onlineHandler: (() => void) | null = null
+  private offlineHandler: (() => void) | null = null
+
   constructor(config: WebSocketConfig = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config }
+    this.setupBrowserEventListeners()
+  }
+
+  /**
+   * Set up browser event listeners for visibility and network changes
+   */
+  private setupBrowserEventListeners(): void {
+    if (typeof document === 'undefined' || typeof window === 'undefined') {
+      return // Not in browser environment
+    }
+
+    // Handle page visibility changes (tab switch, minimize)
+    this.visibilityHandler = () => {
+      const wasVisible = this.isPageVisible
+      this.isPageVisible = document.visibilityState === 'visible'
+
+      if (!wasVisible && this.isPageVisible) {
+        // Page became visible - verify connection is still alive
+        this.handleVisibilityResume()
+      } else if (wasVisible && !this.isPageVisible) {
+        // Page became hidden - track connection state
+        this.wasConnectedBeforeHidden = this.isConnected()
+      }
+    }
+    document.addEventListener('visibilitychange', this.visibilityHandler)
+
+    // Handle network online/offline events
+    this.onlineHandler = () => {
+      console.log('[WebSocket] Network online, attempting reconnect')
+      // Reset reconnect attempts on network recovery
+      this.reconnectAttempts = 0
+      if (this.config.token && this.state !== WebSocketState.CONNECTED) {
+        this.connect()
+      }
+    }
+    window.addEventListener('online', this.onlineHandler)
+
+    this.offlineHandler = () => {
+      console.log('[WebSocket] Network offline')
+      // Don't try to reconnect while offline
+    }
+    window.addEventListener('offline', this.offlineHandler)
+  }
+
+  /**
+   * Clean up browser event listeners
+   */
+  private cleanupBrowserEventListeners(): void {
+    if (typeof document !== 'undefined' && this.visibilityHandler) {
+      document.removeEventListener('visibilitychange', this.visibilityHandler)
+    }
+    if (typeof window !== 'undefined') {
+      if (this.onlineHandler) {
+        window.removeEventListener('online', this.onlineHandler)
+      }
+      if (this.offlineHandler) {
+        window.removeEventListener('offline', this.offlineHandler)
+      }
+    }
+  }
+
+  /**
+   * Handle page becoming visible again
+   */
+  private handleVisibilityResume(): void {
+    console.log('[WebSocket] Page visible, verifying connection')
+
+    // If we were connected before hidden, verify connection is still alive
+    if (this.wasConnectedBeforeHidden || this.state === WebSocketState.CONNECTED) {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        // Send immediate ping to verify connection is responsive
+        this.sendPing()
+      } else {
+        // Connection is stale - reconnect
+        console.log('[WebSocket] Connection stale after visibility resume, reconnecting')
+        this.reconnectAttempts = 0
+        this.ws = null
+        this.setState(WebSocketState.DISCONNECTED)
+        if (this.config.token) {
+          this.connect()
+        }
+      }
+    }
   }
 
   // ============================================================================
@@ -335,7 +453,10 @@ export class WebSocketClient {
    * Check if connected
    */
   isConnected(): boolean {
-    return this.state === WebSocketState.CONNECTED
+    // Check both internal state AND actual WebSocket readyState
+    return this.state === WebSocketState.CONNECTED &&
+           this.ws !== null &&
+           this.ws.readyState === WebSocket.OPEN
   }
 
   /**
@@ -374,9 +495,20 @@ export class WebSocketClient {
       return
     }
 
-    // Don't connect if already connecting or connected
-    if (this.state === WebSocketState.CONNECTING || this.state === WebSocketState.CONNECTED) {
+    // Don't connect if already connecting
+    if (this.state === WebSocketState.CONNECTING) {
       return
+    }
+
+    // If already "connected", verify the connection is actually alive
+    if (this.state === WebSocketState.CONNECTED) {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        return
+      } else {
+        // Connection state is out of sync - force reconnect
+        this.ws = null
+        this.setState(WebSocketState.DISCONNECTED)
+      }
     }
 
     this.setState(WebSocketState.CONNECTING)
@@ -394,6 +526,7 @@ export class WebSocketClient {
       this.ws.onerror = this.handleError.bind(this)
       this.ws.onmessage = this.handleMessage.bind(this)
     } catch (error) {
+      console.error('[WebSocket] Connection error:', error)
       this.handleError(error as Event)
     }
   }
@@ -414,6 +547,16 @@ export class WebSocketClient {
 
     this.setState(WebSocketState.CLOSED)
     this.rooms.clear()
+  }
+
+  /**
+   * Full cleanup including browser event listeners
+   * Call this when the client instance is no longer needed
+   */
+  destroy(): void {
+    this.disconnect()
+    this.cleanupBrowserEventListeners()
+    this.removeAllListeners()
   }
 
   /**
@@ -439,29 +582,44 @@ export class WebSocketClient {
   }
 
   /**
-   * Join a room for targeted updates
+   * Join a room for targeted updates (with reference counting)
+   * Multiple components can join the same room - actual join happens on first ref
    */
   joinRoom(roomId: string): void {
-    if (this.rooms.has(roomId)) {
-      console.log('[WebSocket] Already in room:', roomId)
-      return
-    }
+    const currentRefs = this.roomRefs.get(roomId) || 0
+    this.roomRefs.set(roomId, currentRefs + 1)
 
-    console.log('[WebSocket] Joining room:', roomId)
-    this.rooms.add(roomId)
-    this.send(MessageType.JOIN_ROOM, { room_id: roomId })
+    // Only actually join if this is the first reference
+    if (currentRefs === 0) {
+      this.rooms.add(roomId)
+      this.send(MessageType.JOIN_ROOM, { room_id: roomId })
+    }
   }
 
   /**
-   * Leave a room
+   * Leave a room (with reference counting)
+   * Room is only actually left when all references are released
    */
   leaveRoom(roomId: string): void {
-    if (!this.rooms.has(roomId)) {
+    const currentRefs = this.roomRefs.get(roomId) || 0
+    if (currentRefs <= 0) {
       return
     }
 
-    this.rooms.delete(roomId)
-    this.send(MessageType.LEAVE_ROOM, { room_id: roomId })
+    const newRefs = currentRefs - 1
+    this.roomRefs.set(roomId, newRefs)
+
+    // Only actually leave if no more references
+    if (newRefs === 0) {
+      this.roomRefs.delete(roomId)
+      // Only remove from local set if we can actually send the leave message
+      // This ensures rooms persist across reconnections
+      if (this.isConnected()) {
+        this.rooms.delete(roomId)
+        this.send(MessageType.LEAVE_ROOM, { room_id: roomId })
+      }
+      // If not connected, keep in rooms set so it's rejoined on reconnection
+    }
   }
 
   /**
@@ -586,8 +744,14 @@ export class WebSocketClient {
     this.setState(WebSocketState.CONNECTED)
     this.reconnectAttempts = 0
 
+    // Send immediate ping to verify connection is alive
+    this.sendPing()
+
     // Start ping interval
     this.startPingInterval()
+
+    // Start dedup cache cleanup interval
+    this.startDedupCleanupInterval()
 
     // Flush queued messages
     this.flushMessageQueue()
@@ -628,22 +792,22 @@ export class WebSocketClient {
     try {
       const message: WebSocketMessage = JSON.parse(event.data)
 
-      // Handle pong response
+      // Handle pong response (from our ping)
       if (message.type === MessageType.PONG) {
         this.handlePong()
         return
       }
 
-      // Debug log for room events
-      if (message.type === MessageType.ROOM_JOINED) {
-        console.log('[WebSocket] Room joined confirmed:', message.data)
+      // Handle ping from server - respond with pong
+      if (message.type === MessageType.PING) {
+        this.send(MessageType.PONG, {})
+        return
       }
 
-      // Debug log for member-related events
-      if (message.type === MessageType.MEMBER_ADDED ||
-          message.type === MessageType.MEMBER_REMOVED ||
-          message.type === MessageType.ROLE_UPDATED) {
-        console.log('[WebSocket] Received member event:', message.type, message.data)
+      // Message deduplication - check if we've already processed this message
+      const messageId = this.getMessageId(message)
+      if (messageId && this.isDuplicateMessage(messageId)) {
+        return // Skip duplicate message
       }
 
       // Emit to specific type listeners
@@ -653,6 +817,73 @@ export class WebSocketClient {
       this.emit('*', message)
     } catch {
       // Ignore parse errors
+    }
+  }
+
+  /**
+   * Extract a unique message ID from a message for deduplication
+   */
+  private getMessageId(message: WebSocketMessage): string | null {
+    const data = message.data as Record<string, unknown>
+
+    // First, check if the message has an explicit message_id
+    if (data && typeof data.message_id === 'string') {
+      return data.message_id
+    }
+
+    // Generate an ID from entity-related messages based on entity ID + action + timestamp
+    if (data && typeof data.timestamp === 'string') {
+      const entityId = data.task_id || data.project_id || data.note_id ||
+                       data.comment_id || data.checklist_id || data.notification_id
+      if (entityId) {
+        return `${message.type}:${entityId}:${data.action || 'unknown'}:${data.timestamp}`
+      }
+    }
+
+    return null // No deduplication for messages without identifiable data
+  }
+
+  /**
+   * Check if a message has been recently processed
+   */
+  private isDuplicateMessage(messageId: string): boolean {
+    const now = Date.now()
+
+    // Clean up expired entries periodically
+    if (this.processedMessageIds.size > this.MAX_DEDUP_CACHE_SIZE / 2) {
+      this.cleanupDedupCache(now)
+    }
+
+    // Check if we've seen this message
+    if (this.processedMessageIds.has(messageId)) {
+      return true
+    }
+
+    // Record this message
+    this.processedMessageIds.set(messageId, now)
+    return false
+  }
+
+  /**
+   * Remove expired entries from the deduplication cache
+   */
+  private cleanupDedupCache(now: number): void {
+    const expireTime = now - this.MESSAGE_DEDUP_TTL_MS
+
+    for (const [id, timestamp] of this.processedMessageIds) {
+      if (timestamp < expireTime) {
+        this.processedMessageIds.delete(id)
+      }
+    }
+
+    // If still too large, remove oldest entries
+    if (this.processedMessageIds.size > this.MAX_DEDUP_CACHE_SIZE) {
+      const entries = Array.from(this.processedMessageIds.entries())
+        .sort((a, b) => a[1] - b[1])
+      const toRemove = entries.slice(0, entries.length - this.MAX_DEDUP_CACHE_SIZE)
+      for (const [id] of toRemove) {
+        this.processedMessageIds.delete(id)
+      }
     }
   }
 
@@ -684,17 +915,38 @@ export class WebSocketClient {
   }
 
   private flushMessageQueue(): void {
+    if (!this.ws || !this.isConnected() || this.messageQueue.length === 0) {
+      return
+    }
+
+    // Process queue without losing messages on partial failure
+    const failedMessages: WebSocketMessage[] = []
+
     while (this.messageQueue.length > 0) {
       const message = this.messageQueue.shift()
-      if (message && this.ws && this.isConnected()) {
-        try {
-          this.ws.send(JSON.stringify(message))
-        } catch {
-          // Re-queue if failed
-          this.messageQueue.unshift(message)
-          break
-        }
+      if (!message) continue
+
+      // Check connection is still valid before each send
+      if (!this.ws || !this.isConnected()) {
+        // Connection lost mid-flush - re-queue remaining messages
+        failedMessages.push(message)
+        failedMessages.push(...this.messageQueue.splice(0))
+        break
       }
+
+      try {
+        this.ws.send(JSON.stringify(message))
+      } catch {
+        // Send failed - collect this message and remaining queue
+        failedMessages.push(message)
+        failedMessages.push(...this.messageQueue.splice(0))
+        break
+      }
+    }
+
+    // Re-queue all failed messages at front (preserving order)
+    if (failedMessages.length > 0) {
+      this.messageQueue.unshift(...failedMessages)
     }
   }
 
@@ -730,6 +982,13 @@ export class WebSocketClient {
         this.sendPing()
       }
     }, this.config.pingInterval)
+  }
+
+  private startDedupCleanupInterval(): void {
+    // Clean up dedup cache every 30 seconds to prevent memory leaks
+    this.dedupCleanupTimer = setInterval(() => {
+      this.cleanupDedupCache(Date.now())
+    }, 30000)
   }
 
   private sendPing(): void {
@@ -773,17 +1032,43 @@ export class WebSocketClient {
       clearTimeout(this.pongTimer)
       this.pongTimer = null
     }
+    if (this.dedupCleanupTimer) {
+      clearInterval(this.dedupCleanupTimer)
+      this.dedupCleanupTimer = null
+    }
   }
 }
 
 // ============================================================================
-// Singleton Instance
+// Singleton Instance (HMR-safe)
 // ============================================================================
+
+// Use window to persist the singleton across HMR reloads
+declare global {
+  interface Window {
+    __wsClient?: WebSocketClient
+  }
+}
+
+/**
+ * Get or create the WebSocket client singleton
+ * This survives Vite HMR reloads to prevent multiple instances
+ */
+function getOrCreateClient(): WebSocketClient {
+  if (typeof window !== 'undefined') {
+    if (!window.__wsClient) {
+      window.__wsClient = new WebSocketClient()
+    }
+    return window.__wsClient
+  }
+  // Fallback for non-browser environments
+  return new WebSocketClient()
+}
 
 /**
  * Default WebSocket client instance
  */
-export const wsClient = new WebSocketClient()
+export const wsClient = getOrCreateClient()
 
 /**
  * Create a new WebSocket client instance

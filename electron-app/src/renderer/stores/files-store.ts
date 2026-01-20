@@ -256,7 +256,7 @@ export const useFilesStore = create<FilesState>()((set, get) => ({
       }))
 
       // Use fetch directly for multipart/form-data since IPC doesn't handle it well
-      const response = await fetch(`http://localhost:8000/api/files/upload`, {
+      const response = await fetch(`http://localhost:8001/api/files/upload`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${parsedToken}`,

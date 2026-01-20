@@ -26,6 +26,7 @@ import {
   Bug,
   Bookmark,
   Layers,
+  User,
 } from 'lucide-react'
 import type {
   Task,
@@ -36,6 +37,17 @@ import type {
   TaskPriority,
 } from '@/stores/tasks-store'
 import { getStatusOptions } from './task-status-badge'
+
+// ============================================================================
+// Assignee Types
+// ============================================================================
+
+export interface AssigneeOption {
+  id: string
+  display_name?: string | null
+  email?: string
+  avatar_url?: string | null
+}
 
 // ============================================================================
 // Types
@@ -50,6 +62,10 @@ export interface TaskFormProps {
    * Initial status when creating a task
    */
   initialStatus?: TaskStatus
+  /**
+   * Available assignees (project members)
+   */
+  assignees?: AssigneeOption[]
   /**
    * Whether the form is submitting
    */
@@ -76,6 +92,7 @@ interface FormData {
   priority: TaskPriority
   story_points: string
   due_date: string
+  assignee_id: string
 }
 
 interface FormErrors {
@@ -157,6 +174,7 @@ function formatDateForInput(dateString: string | null): string {
 export function TaskForm({
   task,
   initialStatus = 'todo',
+  assignees = [],
   isSubmitting = false,
   error,
   onSubmit,
@@ -173,6 +191,7 @@ export function TaskForm({
     priority: task?.priority || 'medium',
     story_points: task?.story_points?.toString() || '',
     due_date: formatDateForInput(task?.due_date || null),
+    assignee_id: task?.assignee_id || '',
   })
   const [touched, setTouched] = useState<Record<string, boolean>>({})
   const [errors, setErrors] = useState<FormErrors>({})
@@ -249,6 +268,10 @@ export function TaskForm({
         if (formData.due_date !== formatDateForInput(task?.due_date || null)) {
           updateData.due_date = formData.due_date || null
         }
+        // Include assignee_id if changed
+        if (formData.assignee_id !== (task?.assignee_id || '')) {
+          updateData.assignee_id = formData.assignee_id || null
+        }
         onSubmit(updateData)
       } else {
         const createData: TaskCreate = {
@@ -259,6 +282,7 @@ export function TaskForm({
           priority: formData.priority,
           story_points: storyPoints,
           due_date: formData.due_date || undefined,
+          assignee_id: formData.assignee_id || undefined,
         }
         onSubmit(createData)
       }
@@ -442,32 +466,68 @@ export function TaskForm({
           </div>
         </div>
 
-        {/* Due Date */}
-        <div>
-          <label htmlFor="due_date" className="block text-sm font-medium text-foreground mb-1.5">
-            Due Date
-          </label>
-          <div className="relative">
-            <input
-              type="date"
-              id="due_date"
-              name="due_date"
-              value={formData.due_date}
-              onChange={handleChange}
-              onBlur={handleBlur}
-              disabled={isSubmitting}
-              className={cn(
-                'w-full rounded-md border bg-background px-3 py-2 text-foreground',
-                'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background',
-                'disabled:cursor-not-allowed disabled:opacity-50',
-                touched.due_date && errors.due_date ? 'border-destructive' : 'border-input'
-              )}
-            />
-            <Calendar className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+        {/* Due Date and Assignee Row */}
+        <div className="grid grid-cols-2 gap-4">
+          {/* Due Date */}
+          <div>
+            <label htmlFor="due_date" className="block text-sm font-medium text-foreground mb-1.5">
+              Due Date
+            </label>
+            <div className="relative">
+              <input
+                type="date"
+                id="due_date"
+                name="due_date"
+                value={formData.due_date}
+                onChange={handleChange}
+                onBlur={handleBlur}
+                disabled={isSubmitting}
+                className={cn(
+                  'w-full rounded-md border bg-background px-3 py-2 text-foreground',
+                  'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background',
+                  'disabled:cursor-not-allowed disabled:opacity-50',
+                  touched.due_date && errors.due_date ? 'border-destructive' : 'border-input'
+                )}
+              />
+              <Calendar className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+            </div>
+            {touched.due_date && errors.due_date && (
+              <p className="mt-1 text-sm text-destructive">{errors.due_date}</p>
+            )}
           </div>
-          {touched.due_date && errors.due_date && (
-            <p className="mt-1 text-sm text-destructive">{errors.due_date}</p>
-          )}
+
+          {/* Assignee */}
+          <div>
+            <label htmlFor="assignee_id" className="block text-sm font-medium text-foreground mb-1.5">
+              Assignee
+            </label>
+            <div className="relative">
+              <select
+                id="assignee_id"
+                name="assignee_id"
+                value={formData.assignee_id}
+                onChange={handleChange}
+                disabled={isSubmitting || assignees.length === 0}
+                className={cn(
+                  'w-full rounded-md border border-input bg-background px-3 py-2 text-foreground',
+                  'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background',
+                  'disabled:cursor-not-allowed disabled:opacity-50',
+                  'appearance-none'
+                )}
+              >
+                <option value="">Unassigned</option>
+                {assignees.map((assignee) => (
+                  <option key={assignee.id} value={assignee.id}>
+                    {assignee.display_name || assignee.email || 'Unknown user'}
+                  </option>
+                ))}
+              </select>
+              <User className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+            </div>
+            {assignees.length === 0 && (
+              <p className="mt-1 text-xs text-muted-foreground">No team members available</p>
+            )}
+          </div>
         </div>
 
         {/* Description Field */}

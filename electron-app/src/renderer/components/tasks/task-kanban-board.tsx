@@ -2,20 +2,10 @@
  * Task Kanban Board Component
  *
  * Kanban-style board view for managing tasks within a project.
- * Displays tasks organized by 5 status columns with drag-and-drop support.
- *
- * Features:
- * - 5 status columns (To Do, In Progress, In Review, Done, Blocked)
- * - Drag-and-drop task movement between columns
- * - Task cards with status badges
- * - Column task counts
- * - Add task button per column
- * - Empty state handling
- * - Real-time updates via WebSocket
- * - Optimistic UI updates during drag operations
+ * Uses @dnd-kit for reliable drag-and-drop in Electron.
  */
 
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { useAuthStore, getAuthHeaders } from '@/stores/auth-store'
 import {
@@ -24,6 +14,18 @@ import {
   type TaskStatus,
   type TaskMove,
 } from '@/stores/tasks-store'
+import {
+  DndContext,
+  DragOverlay,
+  closestCenter,
+  MouseSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  type DragStartEvent,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import { useDraggable, useDroppable } from '@dnd-kit/core'
 import {
   LayoutGrid,
   Plus,
@@ -35,7 +37,6 @@ import {
   XCircle,
   Wifi,
   WifiOff,
-  GripVertical,
 } from 'lucide-react'
 import { SkeletonTaskCard, ProgressBar } from '@/components/ui/skeleton'
 import {
@@ -49,9 +50,6 @@ import { TaskCard } from './task-card'
 // Types
 // ============================================================================
 
-/**
- * Board column definition
- */
 interface BoardColumn {
   id: TaskStatus
   title: string
@@ -61,33 +59,12 @@ interface BoardColumn {
 }
 
 export interface TaskKanbanBoardProps {
-  /**
-   * Project ID to display tasks for
-   */
   projectId: string
-  /**
-   * Project key for task keys display
-   */
   projectKey: string
-  /**
-   * Callback when a task is clicked
-   */
   onTaskClick?: (task: Task) => void
-  /**
-   * Callback when add task is clicked
-   */
   onAddTask?: (status?: TaskStatus) => void
-  /**
-   * Callback when task status changes via drag-drop
-   */
   onTaskStatusChange?: (task: Task, newStatus: TaskStatus) => void
-  /**
-   * Additional CSS classes
-   */
   className?: string
-  /**
-   * Whether to enable real-time updates
-   */
   enableRealtime?: boolean
 }
 
@@ -118,18 +95,18 @@ const BOARD_COLUMNS: BoardColumn[] = [
     bgColor: 'bg-purple-500/10',
   },
   {
+    id: 'issue',
+    title: 'Issue',
+    icon: <XCircle className="h-4 w-4" />,
+    color: 'bg-red-500',
+    bgColor: 'bg-red-500/10',
+  },
+  {
     id: 'done',
     title: 'Done',
     icon: <CheckCircle2 className="h-4 w-4" />,
     color: 'bg-green-500',
     bgColor: 'bg-green-500/10',
-  },
-  {
-    id: 'blocked',
-    title: 'Blocked',
-    icon: <XCircle className="h-4 w-4" />,
-    color: 'bg-red-500',
-    bgColor: 'bg-red-500/10',
   },
 ]
 
@@ -140,84 +117,82 @@ const BOARD_COLUMNS: BoardColumn[] = [
 interface DraggableTaskCardProps {
   task: Task
   onClick?: (task: Task) => void
-  onDragStart: (e: React.DragEvent, task: Task) => void
-  onDragEnd: (e: React.DragEvent) => void
-  isDragging: boolean
 }
 
-function DraggableTaskCard({
-  task,
-  onClick,
-  onDragStart,
-  onDragEnd,
-  isDragging,
-}: DraggableTaskCardProps): JSX.Element {
+function DraggableTaskCard({ task, onClick }: DraggableTaskCardProps): JSX.Element {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: task.id,
+    data: { task },
+  })
+
+  // Track drag state to differentiate from click
+  const isDraggingRef = useRef(false)
+
+  // When drag actually starts, mark it
+  useEffect(() => {
+    if (isDragging) {
+      isDraggingRef.current = true
+    }
+  }, [isDragging])
+
+  const handleClick = useCallback(() => {
+    // Only fire click if we didn't drag
+    setTimeout(() => {
+      if (!isDraggingRef.current && onClick) {
+        onClick(task)
+      }
+      isDraggingRef.current = false
+    }, 0)
+  }, [onClick, task])
+
   return (
     <div
-      draggable
-      onDragStart={(e) => onDragStart(e, task)}
-      onDragEnd={onDragEnd}
+      ref={setNodeRef}
+      {...attributes}
+      {...listeners}
+      onClick={handleClick}
+      style={{ touchAction: 'none' }}
       className={cn(
-        'group relative transition-all duration-150',
-        isDragging && 'opacity-50 scale-95'
+        'cursor-grab active:cursor-grabbing',
+        isDragging && 'opacity-50'
       )}
     >
-      {/* Drag handle indicator */}
-      <div
-        className={cn(
-          'absolute left-0 top-1/2 -translate-y-1/2 -translate-x-1 opacity-0 transition-opacity',
-          'group-hover:opacity-50 cursor-grab active:cursor-grabbing'
-        )}
-      >
-        <GripVertical className="h-4 w-4 text-muted-foreground" />
-      </div>
-      <TaskCard task={task} onClick={onClick} variant="default" />
+      <TaskCard task={task} variant="default" />
     </div>
   )
 }
 
 // ============================================================================
-// Board Column Component
+// Droppable Column Component
 // ============================================================================
 
-interface BoardColumnProps {
+interface DroppableColumnProps {
   column: BoardColumn
   tasks: Task[]
   onTaskClick?: (task: Task) => void
   onAddTask?: (status: TaskStatus) => void
-  onDragStart: (e: React.DragEvent, task: Task) => void
-  onDragEnd: (e: React.DragEvent) => void
-  onDragOver: (e: React.DragEvent) => void
-  onDragLeave: (e: React.DragEvent) => void
-  onDrop: (e: React.DragEvent, status: TaskStatus) => void
-  draggingTaskId: string | null
-  isDragOver: boolean
   isLoading?: boolean
 }
 
-function BoardColumnComponent({
+function DroppableColumn({
   column,
   tasks,
   onTaskClick,
   onAddTask,
-  onDragStart,
-  onDragEnd,
-  onDragOver,
-  onDragLeave,
-  onDrop,
-  draggingTaskId,
-  isDragOver,
   isLoading,
-}: BoardColumnProps): JSX.Element {
+}: DroppableColumnProps): JSX.Element {
+  const { setNodeRef, isOver } = useDroppable({
+    id: column.id,
+    data: { status: column.id },
+  })
+
   return (
     <div
+      ref={setNodeRef}
       className={cn(
         'flex h-full w-72 flex-shrink-0 flex-col rounded-lg bg-muted/30 transition-all duration-200',
-        isDragOver && 'ring-2 ring-primary/50 bg-primary/5'
+        isOver && 'ring-2 ring-primary/50 bg-primary/5'
       )}
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={(e) => onDrop(e, column.id)}
     >
       {/* Column Header */}
       <div className="flex items-center justify-between p-3 border-b border-border">
@@ -261,7 +236,7 @@ function BoardColumnComponent({
           <div
             className={cn(
               'flex flex-col items-center justify-center py-8 text-center transition-all',
-              isDragOver && 'bg-primary/10 rounded-lg border-2 border-dashed border-primary/50'
+              isOver && 'bg-primary/10 rounded-lg border-2 border-dashed border-primary/50'
             )}
           >
             <div
@@ -273,7 +248,7 @@ function BoardColumnComponent({
               {column.icon}
             </div>
             <p className="mt-2 text-sm text-muted-foreground">
-              {isDragOver ? 'Drop task here' : 'No tasks'}
+              {isOver ? 'Drop task here' : 'No tasks'}
             </p>
           </div>
         ) : (
@@ -283,13 +258,10 @@ function BoardColumnComponent({
                 key={task.id}
                 task={task}
                 onClick={onTaskClick}
-                onDragStart={onDragStart}
-                onDragEnd={onDragEnd}
-                isDragging={draggingTaskId === task.id}
               />
             ))}
-            {/* Drop zone indicator at the bottom when dragging */}
-            {isDragOver && draggingTaskId && (
+            {/* Drop indicator at bottom */}
+            {isOver && (
               <div className="h-12 rounded-lg border-2 border-dashed border-primary/50 bg-primary/10 flex items-center justify-center">
                 <span className="text-xs text-primary">Drop here</span>
               </div>
@@ -297,6 +269,22 @@ function BoardColumnComponent({
           </>
         )}
       </div>
+    </div>
+  )
+}
+
+// ============================================================================
+// Drag Overlay Card (shown while dragging)
+// ============================================================================
+
+interface DragOverlayCardProps {
+  task: Task
+}
+
+function DragOverlayCard({ task }: DragOverlayCardProps): JSX.Element {
+  return (
+    <div className="opacity-90 shadow-lg rotate-2 scale-105">
+      <TaskCard task={task} variant="default" />
     </div>
   )
 }
@@ -319,10 +307,7 @@ export function TaskKanbanBoard({
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [realtimeNotice, setRealtimeNotice] = useState<string | null>(null)
-
-  // Drag state
-  const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null)
-  const [dragOverColumn, setDragOverColumn] = useState<TaskStatus | null>(null)
+  const [activeTask, setActiveTask] = useState<Task | null>(null)
 
   // Auth
   const token = useAuthStore((state) => state.token)
@@ -333,6 +318,22 @@ export function TaskKanbanBoard({
   // WebSocket status
   const { status } = useWebSocket()
 
+  // Configure dnd-kit sensors - use MouseSensor for desktop
+  const sensors = useSensors(
+    useSensor(MouseSensor, {
+      activationConstraint: {
+        // Require small movement before starting drag
+        distance: 5,
+      },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: {
+        delay: 250,
+        tolerance: 5,
+      },
+    })
+  )
+
   // Handle real-time task updates
   const handleTaskUpdate = useCallback(
     (data: TaskUpdateEventData) => {
@@ -340,7 +341,6 @@ export function TaskKanbanBoard({
 
       setTasks((currentTasks) => {
         if (data.action === 'created' && data.task) {
-          // Add new task if not already present
           const exists = currentTasks.some((t) => t.id === data.task_id)
           if (!exists) {
             setRealtimeNotice('New task added')
@@ -349,7 +349,6 @@ export function TaskKanbanBoard({
           }
           return currentTasks
         } else if (data.action === 'updated' && data.task) {
-          // Update existing task
           const index = currentTasks.findIndex((t) => t.id === data.task_id)
           if (index !== -1) {
             setRealtimeNotice('Task updated')
@@ -360,7 +359,6 @@ export function TaskKanbanBoard({
           }
           return currentTasks
         } else if (data.action === 'deleted') {
-          // Remove deleted task
           const index = currentTasks.findIndex((t) => t.id === data.task_id)
           if (index !== -1) {
             setRealtimeNotice('Task removed')
@@ -369,7 +367,6 @@ export function TaskKanbanBoard({
           }
           return currentTasks
         } else if (data.action === 'status_changed' && data.task) {
-          // Update task status
           const index = currentTasks.findIndex((t) => t.id === data.task_id)
           if (index !== -1) {
             setRealtimeNotice('Task status changed')
@@ -420,14 +417,13 @@ export function TaskKanbanBoard({
     fetchTasks()
   }, [projectId, token])
 
-  // Group tasks by status for board view, sorted by task_rank
+  // Group tasks by status
   const tasksByStatus = useMemo(() => {
     return BOARD_COLUMNS.reduce(
       (acc, column) => {
         acc[column.id] = tasks
           .filter((t) => t.status === column.id)
           .sort((a, b) => {
-            // Tasks without rank go to the end
             if (!a.task_rank && !b.task_rank) return 0
             if (!a.task_rank) return 1
             if (!b.task_rank) return -1
@@ -439,49 +435,35 @@ export function TaskKanbanBoard({
     )
   }, [tasks])
 
-  // Drag handlers
-  const handleDragStart = useCallback((e: React.DragEvent, task: Task) => {
-    setDraggingTaskId(task.id)
-    e.dataTransfer.effectAllowed = 'move'
-    e.dataTransfer.setData('text/plain', task.id)
-  }, [])
-
-  const handleDragEnd = useCallback(() => {
-    setDraggingTaskId(null)
-    setDragOverColumn(null)
-  }, [])
-
-  const handleDragOver = useCallback(
-    (e: React.DragEvent, columnId: TaskStatus) => {
-      e.preventDefault()
-      e.dataTransfer.dropEffect = 'move'
-      if (dragOverColumn !== columnId) {
-        setDragOverColumn(columnId)
+  // Handle drag start
+  const handleDragStart = useCallback(
+    (event: DragStartEvent) => {
+      const { active } = event
+      const task = tasks.find((t) => t.id === active.id)
+      if (task) {
+        setActiveTask(task)
       }
     },
-    [dragOverColumn]
+    [tasks]
   )
 
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    // Only clear if leaving the column entirely (not just moving to a child element)
-    const relatedTarget = e.relatedTarget as HTMLElement
-    const currentTarget = e.currentTarget as HTMLElement
-    if (!currentTarget.contains(relatedTarget)) {
-      setDragOverColumn(null)
-    }
-  }, [])
+  // Handle drag end
+  const handleDragEnd = useCallback(
+    async (event: DragEndEvent) => {
+      const { active, over } = event
+      setActiveTask(null)
 
-  const handleDrop = useCallback(
-    async (e: React.DragEvent, targetStatus: TaskStatus) => {
-      e.preventDefault()
-      const taskId = e.dataTransfer.getData('text/plain')
+      if (!over) return
+
+      const taskId = active.id as string
       const task = tasks.find((t) => t.id === taskId)
+      if (!task) return
 
-      if (!task || task.status === targetStatus) {
-        setDraggingTaskId(null)
-        setDragOverColumn(null)
-        return
-      }
+      // Get target status from drop zone
+      const targetStatus = over.id as TaskStatus
+
+      // Skip if dropping on same column
+      if (task.status === targetStatus) return
 
       // Optimistic update
       setTasks((currentTasks) =>
@@ -490,16 +472,12 @@ export function TaskKanbanBoard({
         )
       )
 
-      // Reset drag state
-      setDraggingTaskId(null)
-      setDragOverColumn(null)
-
-      // Call the status change callback
+      // Callback
       if (onTaskStatusChange) {
         onTaskStatusChange(task, targetStatus)
       }
 
-      // Make API call to move task
+      // API call
       const moveData: TaskMove = {
         target_status: targetStatus,
         row_version: task.row_version,
@@ -519,21 +497,14 @@ export function TaskKanbanBoard({
     [tasks, token, moveTask, onTaskStatusChange]
   )
 
-  // Render error state
+  // Error state
   if (error && !isLoading && tasks.length === 0) {
     return (
-      <div
-        className={cn(
-          'flex flex-col items-center justify-center py-12',
-          className
-        )}
-      >
+      <div className={cn('flex flex-col items-center justify-center py-12', className)}>
         <div className="flex h-16 w-16 items-center justify-center rounded-full bg-destructive/10">
           <AlertCircle className="h-8 w-8 text-destructive" />
         </div>
-        <h3 className="mt-4 text-lg font-semibold text-foreground">
-          Failed to load tasks
-        </h3>
+        <h3 className="mt-4 text-lg font-semibold text-foreground">Failed to load tasks</h3>
         <p className="mt-2 text-muted-foreground">{error}</p>
       </div>
     )
@@ -544,7 +515,6 @@ export function TaskKanbanBoard({
       {/* Toolbar */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
-          {/* Real-time connection indicator */}
           {enableRealtime && (
             <div
               className={cn(
@@ -553,11 +523,6 @@ export function TaskKanbanBoard({
                   ? 'bg-green-500/10 text-green-600 dark:text-green-400'
                   : 'bg-muted text-muted-foreground'
               )}
-              title={
-                status.isConnected
-                  ? 'Real-time updates active'
-                  : 'Not connected to real-time updates'
-              }
             >
               {status.isConnected ? (
                 <Wifi className="h-3.5 w-3.5" />
@@ -570,7 +535,6 @@ export function TaskKanbanBoard({
             </div>
           )}
 
-          {/* Real-time update notice */}
           {realtimeNotice && (
             <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-400 text-xs animate-in fade-in slide-in-from-left-2 duration-200">
               <Wifi className="h-3.5 w-3.5" />
@@ -578,7 +542,6 @@ export function TaskKanbanBoard({
             </div>
           )}
 
-          {/* Moving indicator */}
           {isMoving && (
             <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 text-xs animate-pulse">
               <span>Moving task...</span>
@@ -586,7 +549,6 @@ export function TaskKanbanBoard({
           )}
         </div>
 
-        {/* Add Task Button */}
         {onAddTask && (
           <button
             onClick={() => onAddTask()}
@@ -602,31 +564,35 @@ export function TaskKanbanBoard({
         )}
       </div>
 
-      {/* Subtle progress bar when refreshing with existing data */}
       <ProgressBar isActive={isLoading && tasks.length > 0} />
 
-      {/* Board View */}
-      <div className="flex-1 overflow-x-auto">
-        <div className="flex gap-4 pb-4 min-w-max">
-          {BOARD_COLUMNS.map((column) => (
-            <BoardColumnComponent
-              key={column.id}
-              column={column}
-              tasks={tasksByStatus[column.id] || []}
-              onTaskClick={onTaskClick}
-              onAddTask={onAddTask}
-              onDragStart={handleDragStart}
-              onDragEnd={handleDragEnd}
-              onDragOver={(e) => handleDragOver(e, column.id)}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
-              draggingTaskId={draggingTaskId}
-              isDragOver={dragOverColumn === column.id}
-              isLoading={isLoading && tasks.length === 0}
-            />
-          ))}
+      {/* Kanban Board with DnD Context */}
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+      >
+        <div className="flex-1 overflow-x-auto">
+          <div className="flex gap-4 pb-4 min-w-max h-full">
+            {BOARD_COLUMNS.map((column) => (
+              <DroppableColumn
+                key={column.id}
+                column={column}
+                tasks={tasksByStatus[column.id] || []}
+                onTaskClick={onTaskClick}
+                onAddTask={onAddTask}
+                isLoading={isLoading && tasks.length === 0}
+              />
+            ))}
+          </div>
         </div>
-      </div>
+
+        {/* Drag Overlay - shows the card being dragged */}
+        <DragOverlay>
+          {activeTask ? <DragOverlayCard task={activeTask} /> : null}
+        </DragOverlay>
+      </DndContext>
 
       {/* Empty State */}
       {!isLoading && tasks.length === 0 && (
@@ -634,9 +600,7 @@ export function TaskKanbanBoard({
           <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted">
             <LayoutGrid className="h-8 w-8 text-muted-foreground" />
           </div>
-          <h3 className="mt-4 text-lg font-semibold text-foreground">
-            No tasks yet
-          </h3>
+          <h3 className="mt-4 text-lg font-semibold text-foreground">No tasks yet</h3>
           <p className="mt-2 text-center text-muted-foreground">
             Create your first task to get started with this project.
           </p>

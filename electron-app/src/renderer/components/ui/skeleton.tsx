@@ -477,6 +477,110 @@ export function SkeletonProjectDetail({ className }: { className?: string }): JS
 }
 
 /**
+ * Project card skeleton (for grid view)
+ */
+export function SkeletonProjectCard({ className }: { className?: string }): JSX.Element {
+  return (
+    <div className={cn(
+      'rounded-lg border border-border bg-card p-4 space-y-3',
+      className
+    )}>
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-8 w-8 rounded-md" />
+          <div className="space-y-1">
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="h-3 w-12" />
+          </div>
+        </div>
+        <Skeleton className="h-6 w-6 rounded" />
+      </div>
+      {/* Description */}
+      <div className="space-y-1.5">
+        <Skeleton className="h-3 w-full" />
+        <Skeleton className="h-3 w-3/4" />
+      </div>
+      {/* Footer */}
+      <div className="flex items-center justify-between pt-2">
+        <Skeleton className="h-5 w-16 rounded-full" />
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-3 w-8" />
+          <Skeleton className="h-5 w-5 rounded-full" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Project grid skeleton
+ */
+export function SkeletonProjectGrid({
+  count = 6,
+  className
+}: {
+  count?: number
+  className?: string
+}): JSX.Element {
+  return (
+    <div className={cn('grid gap-4 sm:grid-cols-2 lg:grid-cols-3', className)}>
+      {Array.from({ length: count }).map((_, i) => (
+        <SkeletonProjectCard key={i} />
+      ))}
+    </div>
+  )
+}
+
+/**
+ * Project kanban column skeleton
+ */
+export function SkeletonProjectKanbanColumn({
+  cardCount = 2,
+  className
+}: {
+  cardCount?: number
+  className?: string
+}): JSX.Element {
+  return (
+    <div className={cn(
+      'flex h-full w-64 flex-shrink-0 flex-col rounded-lg bg-muted/30',
+      className
+    )}>
+      {/* Column Header */}
+      <div className="flex items-center justify-between p-3 border-b border-border">
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-5 w-5 rounded" />
+          <Skeleton className="h-4 w-20" />
+          <Skeleton className="h-5 w-6 rounded-full" />
+        </div>
+      </div>
+      {/* Cards */}
+      <div className="flex-1 overflow-hidden p-2 space-y-2">
+        {Array.from({ length: cardCount }).map((_, i) => (
+          <SkeletonProjectCard key={i} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Project kanban board skeleton (5 columns)
+ */
+export function SkeletonProjectKanbanBoard({ className }: { className?: string }): JSX.Element {
+  const cardCounts = [2, 3, 1, 1, 2]
+
+  return (
+    <div className={cn('flex gap-4 pb-4 min-w-max', className)}>
+      {cardCounts.map((count, i) => (
+        <SkeletonProjectKanbanColumn key={i} cardCount={count} />
+      ))}
+    </div>
+  )
+}
+
+/**
  * List view row skeleton
  */
 export function SkeletonListRow({ className }: { className?: string }): JSX.Element {

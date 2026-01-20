@@ -19,7 +19,7 @@ import { ApplicationDetailPage } from '@/pages/applications/[id]'
 import { ProjectsPage } from '@/pages/projects/index'
 import { ProjectDetailPage } from '@/pages/projects/[id]'
 import { NotesPage } from '@/pages/notes/index'
-import { useInvitationNotifications, useWebSocket, useNotificationReadSync } from '@/hooks/use-websocket'
+import { useInvitationNotifications, useWebSocket, useNotificationReadSync, useProjectDeletedSync, useNotifications } from '@/hooks/use-websocket'
 import { useNotificationsStore, requestNotificationPermission } from '@/stores/notifications-store'
 import { useAuthStore } from '@/stores/auth-store'
 import { useMembersStore } from '@/stores/members-store'
@@ -460,6 +460,9 @@ export function DashboardPage({
   // Sync notification read status across tabs/devices
   useNotificationReadSync()
 
+  // Sync project deletions across tabs/devices
+  useProjectDeletedSync()
+
   // Request browser notification permission on mount
   useEffect(() => {
     requestNotificationPermission()
@@ -588,6 +591,15 @@ export function DashboardPage({
         }
       }
     },
+  })
+
+  // Listen for generic notification messages (project role changes, task assignments, etc.)
+  useNotifications((data) => {
+    // Refresh notifications from backend when any notification is received
+    // This ensures project-level notifications (role changes, etc.) are captured
+    if (token) {
+      fetchNotifications(token)
+    }
   })
 
   useEffect(() => {

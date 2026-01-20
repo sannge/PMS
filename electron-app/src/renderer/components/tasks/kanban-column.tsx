@@ -13,7 +13,7 @@
  * - Sorted task display by task_rank
  */
 
-import { useCallback, useMemo } from 'react'
+import { useCallback, useMemo, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import {
   Plus,
@@ -136,18 +136,18 @@ export const DEFAULT_COLUMNS: KanbanColumnConfig[] = [
     bgColor: 'bg-purple-500/10',
   },
   {
+    id: 'issue',
+    title: 'Issue',
+    icon: <XCircle className="h-4 w-4" />,
+    color: 'bg-red-500',
+    bgColor: 'bg-red-500/10',
+  },
+  {
     id: 'done',
     title: 'Done',
     icon: <CheckCircle2 className="h-4 w-4" />,
     color: 'bg-green-500',
     bgColor: 'bg-green-500/10',
-  },
-  {
-    id: 'blocked',
-    title: 'Blocked',
-    icon: <XCircle className="h-4 w-4" />,
-    color: 'bg-red-500',
-    bgColor: 'bg-red-500/10',
   },
 ]
 
@@ -188,12 +188,16 @@ function DraggableTaskCard({
   isDragging,
   disabled,
 }: DraggableTaskCardProps): JSX.Element {
+  // Track whether a drag actually started to differentiate click vs drag
+  const didDragRef = useRef(false)
+
   const handleDragStart = useCallback(
     (e: React.DragEvent) => {
       if (disabled) {
         e.preventDefault()
         return
       }
+      didDragRef.current = true
       e.dataTransfer.effectAllowed = 'move'
       e.dataTransfer.setData('text/plain', task.id)
       e.dataTransfer.setData('application/json', JSON.stringify({
@@ -206,15 +210,51 @@ function DraggableTaskCard({
     [task, disabled, onDragStart]
   )
 
+  const handleDragEnd = useCallback(
+    (e: React.DragEvent) => {
+      onDragEnd?.(e)
+      // Reset after a short delay to allow click event to check the flag
+      setTimeout(() => {
+        didDragRef.current = false
+      }, 0)
+    },
+    [onDragEnd]
+  )
+
+  const handleMouseDown = useCallback(() => {
+    // Reset the drag flag on mousedown
+    didDragRef.current = false
+  }, [])
+
+  const handleClickWrapper = useCallback(
+    (e: React.MouseEvent) => {
+      // Ignore clicks on buttons inside the card
+      if ((e.target as HTMLElement).closest('button')) {
+        return
+      }
+      // Only trigger click if no drag occurred
+      if (!didDragRef.current && onClick) {
+        onClick(task)
+      }
+    },
+    [onClick, task]
+  )
+
   return (
     <div
-      draggable={!disabled}
+      draggable={!disabled ? 'true' : 'false'}
       onDragStart={handleDragStart}
-      onDragEnd={onDragEnd}
+      onDragEnd={handleDragEnd}
+      onMouseDown={handleMouseDown}
+      onClick={handleClickWrapper}
+      style={{
+        WebkitUserDrag: disabled ? 'none' : 'element',
+        userSelect: 'none',
+      } as React.CSSProperties}
       className={cn(
-        'group relative transition-all duration-150',
+        'group relative transition-all duration-150 app-no-drag',
         isDragging && 'opacity-50 scale-95',
-        disabled && 'cursor-not-allowed'
+        disabled ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'
       )}
     >
       {/* Drag handle indicator */}
@@ -222,13 +262,16 @@ function DraggableTaskCard({
         <div
           className={cn(
             'absolute left-0 top-1/2 -translate-y-1/2 -translate-x-1 opacity-0 transition-opacity',
-            'group-hover:opacity-50 cursor-grab active:cursor-grabbing'
+            'group-hover:opacity-50'
           )}
         >
           <GripVertical className="h-4 w-4 text-muted-foreground" />
         </div>
       )}
-      <TaskCard task={task} onClick={onClick} variant="default" disabled={disabled} />
+      {/* TaskCard - pointer events disabled so drag works from anywhere */}
+      <div style={{ pointerEvents: 'none' }}>
+        <TaskCard task={task} variant="default" disabled={disabled} />
+      </div>
     </div>
   )
 }

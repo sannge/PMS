@@ -272,6 +272,16 @@ async def create_application(
     db.commit()
     db.refresh(application)
 
+    # Create ApplicationMember record for the owner
+    # This ensures consistency with WebSocket room authorization which checks ApplicationMember table
+    owner_member = ApplicationMember(
+        application_id=application.id,
+        user_id=current_user.id,
+        role="owner",
+    )
+    db.add(owner_member)
+    db.commit()
+
     return application
 
 

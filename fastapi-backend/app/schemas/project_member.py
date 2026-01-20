@@ -1,10 +1,22 @@
 """Pydantic schemas for ProjectMember model validation."""
 
 from datetime import datetime
+from enum import Enum
 from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class ProjectMemberRole(str, Enum):
+    """Enum for project member roles.
+
+    - ADMIN: Full control, can manage project members
+    - MEMBER: Can edit/move tasks but cannot manage members
+    """
+
+    ADMIN = "admin"
+    MEMBER = "member"
 
 
 class ProjectMemberBase(BaseModel):
@@ -23,6 +35,10 @@ class ProjectMemberCreate(ProjectMemberBase):
         ...,
         description="ID of the project to add the member to",
     )
+    role: ProjectMemberRole = Field(
+        ProjectMemberRole.MEMBER,
+        description="Role of the member (admin or member)",
+    )
     added_by_user_id: Optional[UUID] = Field(
         None,
         description="ID of the user adding this member (usually set by the system)",
@@ -32,13 +48,24 @@ class ProjectMemberCreate(ProjectMemberBase):
 class ProjectMemberUpdate(BaseModel):
     """Schema for updating a project member.
 
-    Note: Project membership is mostly immutable. This schema exists
-    for API consistency but has limited use cases.
+    Currently supports updating the member's role.
     """
 
-    # Currently no updatable fields for project membership
-    # The relationship is either active (exists) or removed (deleted)
-    pass
+    role: Optional[ProjectMemberRole] = Field(
+        None,
+        description="New role for the member (admin or member)",
+    )
+
+
+class UserSummary(BaseModel):
+    """User summary for display in member lists."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID = Field(..., description="User ID")
+    email: str = Field(..., description="User email")
+    display_name: Optional[str] = Field(None, description="User's display name")
+    avatar_url: Optional[str] = Field(None, description="User's avatar URL")
 
 
 class ProjectMemberResponse(BaseModel):
@@ -58,6 +85,10 @@ class ProjectMemberResponse(BaseModel):
         ...,
         description="ID of the member user",
     )
+    role: ProjectMemberRole = Field(
+        ...,
+        description="Role of the member (admin or member)",
+    )
     added_by_user_id: Optional[UUID] = Field(
         None,
         description="ID of the user who added this member",
@@ -66,16 +97,16 @@ class ProjectMemberResponse(BaseModel):
         ...,
         description="When the membership was created",
     )
+    updated_at: datetime = Field(
+        ...,
+        description="When the membership was last updated",
+    )
 
 
 class ProjectMemberWithUser(ProjectMemberResponse):
     """Schema for project member response with nested user info."""
 
-    user_email: Optional[str] = Field(
+    user: Optional[UserSummary] = Field(
         None,
-        description="Email of the member user",
-    )
-    user_display_name: Optional[str] = Field(
-        None,
-        description="Display name of the member user",
+        description="User details of the member",
     )

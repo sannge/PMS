@@ -17,8 +17,13 @@ import {
   type Project,
   type ProjectUpdate,
 } from '@/stores/projects-store'
+import { useTasksStore, type TaskCreate, type TaskUpdate } from '@/stores/tasks-store'
+import { useProjectMembersStore } from '@/stores/project-members-store'
 import { ProjectForm } from '@/components/projects/project-form'
-import { ProjectBoard, type Task, type TaskStatus } from '@/components/projects/project-board'
+import { KanbanBoard } from '@/components/kanban/KanbanBoard'
+import type { Task, TaskStatus } from '@/stores/tasks-store'
+import { TaskForm, type AssigneeOption } from '@/components/tasks/task-form'
+import { TaskDetail } from '@/components/tasks/task-detail'
 import {
   LayoutDashboard,
   ChevronRight,
@@ -32,8 +37,16 @@ import {
   RefreshCw,
   Info,
   ArrowLeft,
+  Users,
+  X,
+  Shield,
 } from 'lucide-react'
 import { SkeletonProjectDetail, PulseIndicator } from '@/components/ui/skeleton'
+import { ProjectMemberPanel } from '@/components/projects/ProjectMemberPanel'
+import { ProjectStatusOverride } from '@/components/projects/ProjectStatusOverride'
+import { PresenceAvatars } from '@/components/presence'
+import { usePresence, useTaskViewers } from '@/hooks'
+import { useProjectUpdatedSync, useProjectMemberSync } from '@/hooks/use-websocket'
 
 // ============================================================================
 // Types
@@ -126,8 +139,8 @@ function getProjectTypeInfo(projectType: string): { icon: JSX.Element; label: st
 // ============================================================================
 
 interface ActionsDropdownProps {
-  onEdit: () => void
-  onDelete: () => void
+  onEdit?: () => void
+  onDelete?: () => void
 }
 
 function ActionsDropdown({ onEdit, onDelete }: ActionsDropdownProps): JSX.Element {
@@ -145,6 +158,11 @@ function ActionsDropdown({ onEdit, onDelete }: ActionsDropdownProps): JSX.Elemen
     }
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [isOpen])
+
+  // Don't render if no actions available
+  if (!onEdit && !onDelete) {
+    return <></>
+  }
 
   return (
     <div ref={dropdownRef} className="relative">
@@ -165,26 +183,30 @@ function ActionsDropdown({ onEdit, onDelete }: ActionsDropdownProps): JSX.Elemen
           'rounded-lg border border-border bg-card shadow-lg',
           'animate-fade-in py-1'
         )}>
-          <button
-            onClick={() => { onEdit(); setIsOpen(false) }}
-            className={cn(
-              'flex w-full items-center gap-2 px-3 py-1.5 text-sm',
-              'text-foreground hover:bg-muted transition-colors'
-            )}
-          >
-            <Edit2 className="h-3.5 w-3.5" />
-            Settings
-          </button>
-          <button
-            onClick={() => { onDelete(); setIsOpen(false) }}
-            className={cn(
-              'flex w-full items-center gap-2 px-3 py-1.5 text-sm',
-              'text-destructive hover:bg-destructive/10 transition-colors'
-            )}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            Delete
-          </button>
+          {onEdit && (
+            <button
+              onClick={() => { onEdit(); setIsOpen(false) }}
+              className={cn(
+                'flex w-full items-center gap-2 px-3 py-1.5 text-sm',
+                'text-foreground hover:bg-muted transition-colors'
+              )}
+            >
+              <Edit2 className="h-3.5 w-3.5" />
+              Settings
+            </button>
+          )}
+          {onDelete && (
+            <button
+              onClick={() => { onDelete(); setIsOpen(false) }}
+              className={cn(
+                'flex w-full items-center gap-2 px-3 py-1.5 text-sm',
+                'text-destructive hover:bg-destructive/10 transition-colors'
+              )}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -376,11 +398,55 @@ export function ProjectDetailPage({
 }: ProjectDetailPageProps): JSX.Element {
   // Auth state
   const token = useAuthStore((state) => state.token)
+  const currentUserId = useAuthStore((state) => state.user?.id)
 
   // Application state - get user's role for permission checks
   const selectedApplication = useApplicationsStore((state) => state.selectedApplication)
   const userRole = selectedApplication?.user_role || 'viewer'
-  const canEdit = userRole === 'owner' || userRole === 'editor'
+  const isAppOwner = userRole === 'owner'
+  const isAppEditor = userRole === 'editor'
+
+  // Project members state - to check if user can view/manage team
+  const {
+    members: projectMembers,
+    fetchMembers: fetchProjectMembers,
+    canManageMembers,
+  } = useProjectMembersStore()
+
+  // Check if current user is a project member
+  const currentUserMembership = projectMembers.find((m) => m.user_id === currentUserId)
+  const isProjectMember = !!currentUserMembership
+  const isProjectAdmin = currentUserMembership?.role === 'admin'
+
+  // Permission checks:
+  // - Edit project: App owner can edit any project, OR (app editor AND project member)
+  const canEditProject = isAppOwner || (isAppEditor && isProjectMember)
+  // - Delete project: Only app owner or project admin can delete
+  const canDeleteProject = isAppOwner || isProjectAdmin
+
+  // User can view team if: app owner, or project member
+  const canViewTeam = isAppOwner || isProjectMember
+
+  // User can manage team if: app owner, or project admin
+  const canManageTeam = canManageMembers(currentUserId || '', isAppOwner)
+
+  // User can edit tasks if: app owner, OR (app editor AND project member)
+  // Editors need to be project members to edit tasks within a project
+  const canEditTasks = isAppOwner || (isAppEditor && isProjectMember)
+
+  // Real-time sync hooks for project updates and member changes
+  useProjectUpdatedSync(projectId)
+  useProjectMemberSync(projectId)
+
+  // Convert project members to assignee options for task form
+  const assigneeOptions: AssigneeOption[] = projectMembers
+    .filter((m) => m.user)
+    .map((m) => ({
+      id: m.user_id,
+      display_name: m.user?.display_name,
+      email: m.user?.email,
+      avatar_url: m.user?.avatar_url,
+    }))
 
   // Projects state
   const {
@@ -395,14 +461,58 @@ export function ProjectDetailPage({
     clearError,
   } = useProjectsStore()
 
+  // Tasks state
+  const {
+    createTask,
+    updateTask,
+    deleteTask: deleteTaskFromStore,
+    isCreating: isCreatingTask,
+    isUpdating: isUpdatingTask,
+    isDeleting: isDeletingTask,
+    error: taskError,
+    clearError: clearTaskError,
+  } = useTasksStore()
+
   // Local state
   const [isEditing, setIsEditing] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [showTeamPanel, setShowTeamPanel] = useState(false)
+  const [showStatusPanel, setShowStatusPanel] = useState(false)
+  const [hasFetched, setHasFetched] = useState(false)
+  const [showTaskForm, setShowTaskForm] = useState(false)
+  const [initialTaskStatus, setInitialTaskStatus] = useState<TaskStatus>('todo')
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null)
+
+  // Ref to hold the board refresh function
+  const refreshBoardRef = useRef<(() => void) | null>(null)
+
+  // Presence hook for real-time collaboration
+  const { viewers: presenceUsers, isConnected } = usePresence({
+    roomId: projectId,
+    roomType: 'project',
+    enabled: true,
+  })
+
+  // Task viewers hook for tracking who's viewing which task
+  const { getViewers, setViewing } = useTaskViewers({
+    projectId,
+    enabled: true,
+  })
 
   // Fetch project on mount
   useEffect(() => {
-    fetchProject(token, projectId)
+    setHasFetched(false)
+    fetchProject(token, projectId).finally(() => {
+      setHasFetched(true)
+    })
   }, [token, projectId, fetchProject])
+
+  // Fetch project members to check permissions
+  useEffect(() => {
+    if (projectId) {
+      fetchProjectMembers(token, projectId)
+    }
+  }, [token, projectId, fetchProjectMembers])
 
   // Handle edit
   const handleEdit = useCallback(() => {
@@ -446,21 +556,88 @@ export function ProjectDetailPage({
     setShowDeleteDialog(false)
   }, [])
 
-  // Handle add task (placeholder for now)
+  // Handle add task
   const handleAddTask = useCallback((status?: TaskStatus) => {
-    // TODO: Implement task creation modal in subtask-4-7
-  }, [])
+    clearTaskError()
+    setInitialTaskStatus(status || 'todo')
+    setShowTaskForm(true)
+  }, [clearTaskError])
+
+  // Handle create task submission
+  const handleCreateTask = useCallback(
+    async (data: TaskCreate) => {
+      const task = await createTask(token, projectId, data)
+      if (task) {
+        setShowTaskForm(false)
+        // Refresh the project to update task count
+        fetchProject(token, projectId)
+        // Refresh the board to show the new task immediately
+        if (refreshBoardRef.current) {
+          refreshBoardRef.current()
+        }
+      }
+    },
+    [token, projectId, createTask, fetchProject]
+  )
+
+  // Handle close task form
+  const handleCloseTaskForm = useCallback(() => {
+    setShowTaskForm(false)
+    clearTaskError()
+  }, [clearTaskError])
 
   // Handle task click
   const handleTaskClick = useCallback(
     (task: Task) => {
+      // Notify other users that we're viewing this task
+      setViewing(task.id)
+      setSelectedTask(task)
       onSelectTask?.(task)
     },
-    [onSelectTask]
+    [onSelectTask, setViewing]
   )
 
+  // Handle close task detail
+  const handleCloseTaskDetail = useCallback(() => {
+    setSelectedTask(null)
+  }, [])
+
+  // Handle task update
+  const handleTaskUpdate = useCallback(
+    async (data: TaskUpdate) => {
+      if (!selectedTask) return
+      const updatedTask = await updateTask(token, selectedTask.id, data)
+      if (updatedTask) {
+        setSelectedTask(updatedTask)
+        // Refresh board to reflect changes
+        if (refreshBoardRef.current) {
+          refreshBoardRef.current()
+        }
+      }
+    },
+    [token, selectedTask, updateTask]
+  )
+
+  // Handle task delete
+  const handleTaskDelete = useCallback(async () => {
+    if (!selectedTask) return
+    const success = await deleteTaskFromStore(token, selectedTask.id)
+    if (success) {
+      setSelectedTask(null)
+      // Refresh project to update task count
+      fetchProject(token, projectId)
+      // Refresh board to remove the deleted task
+      if (refreshBoardRef.current) {
+        refreshBoardRef.current()
+      }
+    }
+  }, [token, selectedTask, deleteTaskFromStore, fetchProject, projectId])
+
+  // Show loading if actively loading OR if we haven't fetched yet
+  const showLoading = isLoading || !hasFetched
+
   // Loading state - modern skeleton
-  if (isLoading && !selectedProject) {
+  if (showLoading && !selectedProject) {
     return <SkeletonProjectDetail />
   }
 
@@ -491,8 +668,8 @@ export function ProjectDetailPage({
     )
   }
 
-  // Not found state
-  if (!selectedProject) {
+  // Not found state (only show after fetch completed)
+  if (!selectedProject && hasFetched) {
     return (
       <div className="flex flex-col items-center justify-center py-12">
         <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted">
@@ -564,22 +741,70 @@ export function ProjectDetailPage({
         </div>
 
         {/* Right: Actions */}
-        <div className="flex items-center gap-1 flex-shrink-0">
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {/* Presence Avatars */}
+          {presenceUsers.length > 0 && (
+            <PresenceAvatars viewers={presenceUsers} maxVisible={4} size="sm" />
+          )}
+
+          {/* Divider */}
+          {presenceUsers.length > 0 && (
+            <div className="h-5 w-px bg-border" />
+          )}
+
+          {/* Team Button (visible to app owners and project members) */}
+          {canViewTeam && (
+            <button
+              onClick={() => setShowTeamPanel(true)}
+              className={cn(
+                'flex h-7 items-center gap-1.5 px-2 rounded-md transition-colors',
+                'text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted'
+              )}
+              title={canManageTeam ? 'Manage Team' : 'View Team'}
+            >
+              <Users className="h-3.5 w-3.5" />
+              Team
+            </button>
+          )}
+
+          {/* Status Button (Owners only) */}
+          {userRole === 'owner' && (
+            <button
+              onClick={() => setShowStatusPanel(true)}
+              className={cn(
+                'flex h-7 items-center gap-1.5 px-2 rounded-md transition-colors',
+                'text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted'
+              )}
+              title="Status Override"
+            >
+              <Shield className="h-3.5 w-3.5" />
+              Status
+            </button>
+          )}
+
           <InfoTooltip project={project} />
-          {canEdit && (
-            <ActionsDropdown onEdit={handleEdit} onDelete={handleDeleteClick} />
+          {(canEditProject || canDeleteProject) && (
+            <ActionsDropdown
+              onEdit={canEditProject ? handleEdit : undefined}
+              onDelete={canDeleteProject ? handleDeleteClick : undefined}
+            />
           )}
         </div>
       </div>
 
       {/* Board / Tasks Section */}
       <div className="flex-1 min-h-0">
-        <ProjectBoard
+        <KanbanBoard
           projectId={project.id}
           projectKey={project.key}
           onTaskClick={handleTaskClick}
-          onAddTask={canEdit ? handleAddTask : undefined}
+          onAddTask={canEditTasks ? handleAddTask : undefined}
+          canEdit={canEditTasks}
           className="h-full"
+          enableRealtime
+          onRefresh={(refreshFn) => {
+            refreshBoardRef.current = refreshFn
+          }}
         />
       </div>
 
@@ -603,6 +828,128 @@ export function ProjectDetailPage({
           isDeleting={isDeleting}
           onConfirm={handleConfirmDelete}
           onCancel={handleCancelDelete}
+        />
+      )}
+
+      {/* Team Panel Slide-over */}
+      {showTeamPanel && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-black/50"
+            onClick={() => setShowTeamPanel(false)}
+          />
+          <div
+            className={cn(
+              'fixed right-0 top-0 z-50 h-full w-full max-w-sm',
+              'bg-background shadow-xl border-l border-border',
+              'transform transition-transform duration-200 ease-out'
+            )}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+              <h2 className="text-sm font-semibold text-foreground">Manage Team</h2>
+              <button
+                onClick={() => setShowTeamPanel(false)}
+                className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="h-[calc(100%-52px)] overflow-y-auto">
+              <ProjectMemberPanel
+                projectId={project.id}
+                applicationId={selectedApplication?.id || ''}
+                isOwner={isAppOwner}
+                creatorId={project.created_by}
+              />
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Status Override Panel Slide-over */}
+      {showStatusPanel && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-black/50"
+            onClick={() => setShowStatusPanel(false)}
+          />
+          <div
+            className={cn(
+              'fixed right-0 top-0 z-50 h-full w-full max-w-sm',
+              'bg-background shadow-xl border-l border-border',
+              'transform transition-transform duration-200 ease-out'
+            )}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+              <h2 className="text-sm font-semibold text-foreground">Status Override</h2>
+              <button
+                onClick={() => setShowStatusPanel(false)}
+                className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="p-4">
+              <ProjectStatusOverride
+                project={{
+                  id: project.id,
+                  name: project.name,
+                  derived_status_id: project.derived_status_id || null,
+                  override_status_id: project.override_status_id || null,
+                  override_reason: project.override_reason || null,
+                  override_by_user_id: project.override_by_user_id || null,
+                  override_expires_at: project.override_expires_at || null,
+                }}
+                statuses={[]}
+                isOwner={userRole === 'owner'}
+                onOverrideSet={() => {
+                  fetchProject(token, projectId)
+                  setShowStatusPanel(false)
+                }}
+                onOverrideCleared={() => {
+                  fetchProject(token, projectId)
+                  setShowStatusPanel(false)
+                }}
+              />
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Task Creation Modal */}
+      {showTaskForm && (
+        <Modal onClose={handleCloseTaskForm}>
+          <TaskForm
+            initialStatus={initialTaskStatus}
+            assignees={assigneeOptions}
+            isSubmitting={isCreatingTask}
+            error={taskError?.message}
+            onSubmit={handleCreateTask}
+            onCancel={handleCloseTaskForm}
+          />
+        </Modal>
+      )}
+
+      {/* Task Detail Slide-over */}
+      {selectedTask && (
+        <TaskDetail
+          task={selectedTask}
+          isOpen={true}
+          isUpdating={isUpdatingTask}
+          isDeleting={isDeletingTask}
+          error={taskError?.message}
+          onClose={handleCloseTaskDetail}
+          onUpdate={canEditTasks ? handleTaskUpdate : undefined}
+          onDelete={canEditTasks ? handleTaskDelete : undefined}
+          onExternalUpdate={(updatedTask) => {
+            setSelectedTask(updatedTask)
+            fetchProject(token, projectId)
+          }}
+          onExternalDelete={() => {
+            setSelectedTask(null)
+            fetchProject(token, projectId)
+          }}
+          enableRealtime
         />
       )}
     </div>

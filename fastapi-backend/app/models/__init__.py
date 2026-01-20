@@ -3,7 +3,11 @@
 from .application import Application
 from .application_member import ApplicationMember
 from .attachment import Attachment
+from .checklist import Checklist
+from .checklist_item import ChecklistItem
+from .comment import Comment
 from .invitation import Invitation
+from .mention import Mention
 from .note import Note
 from .notification import Notification
 from .project import Project
@@ -18,7 +22,11 @@ __all__ = [
     "Application",
     "ApplicationMember",
     "Attachment",
+    "Checklist",
+    "ChecklistItem",
+    "Comment",
     "Invitation",
+    "Mention",
     "Note",
     "Notification",
     "Project",

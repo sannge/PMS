@@ -7,7 +7,7 @@ All endpoints require authentication.
 Access Control:
 - List/Get projects: Any member (owner, editor, viewer)
 - Create/Update projects: Only owners and editors
-- Delete projects: Only owners
+- Delete projects: Application owners or project admins
 """
 
 from datetime import datetime
@@ -22,6 +22,7 @@ from ..database import get_db
 from ..models.application import Application
 from ..models.application_member import ApplicationMember
 from ..models.project import Project
+from ..models.project_member import ProjectMember
 from ..models.task import Task
 from ..models.user import User
 from ..models.task_status import TaskStatus
@@ -34,6 +35,8 @@ from ..schemas.project import (
     ProjectWithTasks,
 )
 from ..services.auth_service import get_current_user
+from ..services.notification_service import NotificationService
+from ..websocket.manager import MessageType, manager
 
 router = APIRouter(tags=["Projects"])
 
@@ -317,6 +320,12 @@ async def list_projects(
             description=project.description,
             project_type=project.project_type,
             application_id=project.application_id,
+            created_by=project.created_by,
+            derived_status_id=project.derived_status_id,
+            override_status_id=project.override_status_id,
+            override_reason=project.override_reason,
+            override_by_user_id=project.override_by_user_id,
+            override_expires_at=project.override_expires_at,
             created_at=project.created_at,
             updated_at=project.updated_at,
             tasks_count=counts_map.get(str(project.id), 0),
@@ -382,8 +391,21 @@ async def create_project(
         created_by=current_user.id,
     )
 
-    # Save to database
+    # Save project to database
     db.add(project)
+    db.flush()  # Get the project ID without committing
+
+    # Auto-add creator as a project admin
+    from ..models.project_member import ProjectMemberRole
+    project_member = ProjectMember(
+        project_id=project.id,
+        user_id=current_user.id,
+        role=ProjectMemberRole.ADMIN.value,  # Creator is project admin
+        added_by_user_id=current_user.id,  # Self-added as creator
+    )
+    db.add(project_member)
+
+    # Commit both project and member
     db.commit()
     db.refresh(project)
 
@@ -435,6 +457,12 @@ async def get_project(
         description=project.description,
         project_type=project.project_type,
         application_id=project.application_id,
+        created_by=project.created_by,
+        derived_status_id=project.derived_status_id,
+        override_status_id=project.override_status_id,
+        override_reason=project.override_reason,
+        override_by_user_id=project.override_by_user_id,
+        override_expires_at=project.override_expires_at,
         created_at=project.created_at,
         updated_at=project.updated_at,
         tasks_count=tasks_count,
@@ -491,6 +519,24 @@ async def update_project(
     db.commit()
     db.refresh(project)
 
+    # Broadcast project update to project room for real-time updates
+    room_id = f"project:{project_id}"
+    await manager.broadcast_to_room(
+        room_id,
+        {
+            "type": MessageType.PROJECT_UPDATED,
+            "data": {
+                "project_id": str(project_id),
+                "name": project.name,
+                "description": project.description,
+                "project_type": project.project_type,
+                "project_key": project.key,
+                "updated_at": project.updated_at.isoformat() if project.updated_at else None,
+                "updated_by": str(current_user.id),
+            },
+        },
+    )
+
     return project
 
 
@@ -498,11 +544,11 @@ async def update_project(
     "/api/projects/{project_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a project",
-    description="Delete a project and all its associated tasks.",
+    description="Delete a project and all its associated tasks. Application owners or project admins can delete.",
     responses={
         204: {"description": "Project deleted successfully"},
         401: {"description": "Not authenticated"},
-        403: {"description": "Access denied - insufficient permissions"},
+        403: {"description": "Access denied - must be application owner or project admin"},
         404: {"description": "Project not found"},
     },
 )
@@ -519,9 +565,8 @@ async def delete_project(
     - Attachments linked to those tasks
 
     Permissions:
-    - Owners: Can delete any project
-    - Editors: Can only delete projects they created
-    - Viewers: Cannot delete any project
+    - Application owners can delete any project
+    - Project admins can delete the project they administer
 
     This action is irreversible.
     """
@@ -543,26 +588,73 @@ async def delete_project(
             detail="Access denied. You are not a member of this project's application.",
         )
 
-    # Viewers cannot delete any project
-    if user_role == "viewer":
+    # Check if user is a project admin
+    project_member = db.query(ProjectMember).filter(
+        ProjectMember.project_id == project_id,
+        ProjectMember.user_id == current_user.id,
+    ).first()
+    is_project_admin = project_member and project_member.role == "admin"
+
+    # Application owners or project admins can delete projects
+    if user_role != "owner" and not is_project_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. Viewers cannot delete projects.",
+            detail="Access denied. Only application owners or project admins can delete projects.",
         )
 
-    # Editors can only delete projects they created
-    if user_role == "editor":
-        if project.created_by != current_user.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied. Editors can only delete projects they created.",
-            )
+    # Capture info for WebSocket broadcast before deletion
+    application_id = project.application_id
+    project_name = project.name
+    project_key = project.key
 
-    # Owners can delete any project (no additional check needed)
+    # Get all project members' user IDs
+    project_member_ids = [
+        pm.user_id for pm in db.query(ProjectMember.user_id).filter(
+            ProjectMember.project_id == project_id
+        ).all()
+    ]
+
+    # Get all application owners' user IDs (they should also be notified)
+    application_owner_ids = [
+        am.user_id for am in db.query(ApplicationMember.user_id).filter(
+            ApplicationMember.application_id == application_id,
+            ApplicationMember.role == "owner",
+        ).all()
+    ]
+
+    # Combine unique user IDs to notify (excluding the user who deleted)
+    users_to_notify = (set(project_member_ids) | set(application_owner_ids)) - {current_user.id}
 
     # Delete the project (cascade will handle related records)
     db.delete(project)
     db.commit()
+
+    # Send notifications and broadcast to all affected users (excluding deleter)
+    for user_id in users_to_notify:
+        # Create stored notification
+        await NotificationService.notify_system(
+            db=db,
+            user_id=user_id,
+            title="Project Deleted",
+            message=f"Project '{project_name}' ({project_key}) was deleted by {current_user.display_name or current_user.email}.",
+            entity_type=None,  # Project no longer exists
+            entity_id=None,
+        )
+
+        # Broadcast WebSocket event
+        await manager.broadcast_to_user(
+            user_id,
+            {
+                "type": MessageType.PROJECT_DELETED,
+                "data": {
+                    "project_id": str(project_id),
+                    "application_id": str(application_id),
+                    "project_name": project_name,
+                    "project_key": project_key,
+                    "deleted_by": str(current_user.id),
+                },
+            },
+        )
 
     return None
 

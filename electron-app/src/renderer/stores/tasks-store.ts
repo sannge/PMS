@@ -26,7 +26,7 @@ import { getAuthHeaders } from './auth-store'
 /**
  * Task status enumeration
  */
-export type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'done' | 'blocked'
+export type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'issue' | 'done'
 
 /**
  * Task priority enumeration
@@ -37,6 +37,15 @@ export type TaskPriority = 'lowest' | 'low' | 'medium' | 'high' | 'highest'
  * Task type enumeration
  */
 export type TaskType = 'story' | 'bug' | 'epic' | 'subtask' | 'task'
+
+/**
+ * Minimal user information for task assignee/reporter display
+ */
+export interface TaskUserInfo {
+  id: string
+  email: string
+  display_name: string | null
+}
 
 /**
  * Task data from the API
@@ -52,6 +61,8 @@ export interface Task {
   priority: TaskPriority
   assignee_id: string | null
   reporter_id: string | null
+  assignee: TaskUserInfo | null
+  reporter: TaskUserInfo | null
   parent_id: string | null
   sprint_id: string | null
   story_points: number | null
@@ -72,6 +83,7 @@ export interface Task {
  * Data for creating a task
  */
 export interface TaskCreate {
+  project_id?: string
   title: string
   description?: string | null
   task_type?: TaskType
@@ -311,7 +323,13 @@ export const useTasksStore = create<TasksState>((set, get) => ({
   fetchTasks: async (token, projectId, options = {}) => {
     const { skip = 0, search, filters } = options
 
-    set({ isLoading: true, error: null, currentProjectId: projectId })
+    // Clear tasks if fetching a different project to avoid showing stale data
+    const currentId = get().currentProjectId
+    if (currentId && currentId !== projectId) {
+      set({ tasks: [], selectedTask: null, isLoading: true, error: null, currentProjectId: projectId })
+    } else {
+      set({ isLoading: true, error: null, currentProjectId: projectId })
+    }
 
     try {
       if (!window.electronAPI) {
@@ -414,9 +432,12 @@ export const useTasksStore = create<TasksState>((set, get) => ({
         throw new Error('Electron API not available')
       }
 
+      // Include project_id in the request body (required by backend)
+      const requestData = { ...data, project_id: projectId }
+
       const response = await window.electronAPI.post<Task>(
         `/api/projects/${projectId}/tasks`,
-        data,
+        requestData,
         getAuthHeaders(token)
       )
 

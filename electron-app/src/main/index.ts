@@ -9,10 +9,23 @@
  */
 
 import { app, BrowserWindow, shell, session, Menu, MenuItemConstructorOptions } from 'electron'
-import { join } from 'path'
+import { join, resolve } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
 import { registerNotificationHandlers, isNotificationSupported } from './notifications'
+
+// Support custom user data directory via environment variable (must be set before app ready)
+if (process.env.ELECTRON_USER_DATA_DIR) {
+  const userDataPath = resolve(process.env.ELECTRON_USER_DATA_DIR)
+  app.setPath('userData', userDataPath)
+}
+
+// Enable remote debugging for development/testing with dynamic port
+if (is.dev) {
+  // Use port from env or default to 9222, allowing multiple instances
+  const debugPort = process.env.ELECTRON_DEBUG_PORT || '9222'
+  app.commandLine.appendSwitch('remote-debugging-port', debugPort)
+}
 
 // Keep a global reference of the window object to prevent garbage collection
 let mainWindow: BrowserWindow | null = null
@@ -131,7 +144,7 @@ function setupContentSecurityPolicy(): void {
               "style-src 'self' 'unsafe-inline'; " +
               "img-src 'self' data: blob:; " +
               "font-src 'self' data:; " +
-              "connect-src 'self' http://localhost:8000 ws://localhost:8000; " +
+              "connect-src 'self' http://localhost:8001 ws://localhost:8001; " +
               "media-src 'self' blob:;"
         ]
       }

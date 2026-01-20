@@ -24,8 +24,8 @@ class TaskStatus(str, Enum):
     TODO = "todo"
     IN_PROGRESS = "in_progress"
     IN_REVIEW = "in_review"
+    ISSUE = "issue"
     DONE = "done"
-    BLOCKED = "blocked"
 
 
 class TaskPriority(str, Enum):
@@ -36,6 +36,17 @@ class TaskPriority(str, Enum):
     MEDIUM = "medium"
     HIGH = "high"
     HIGHEST = "highest"
+
+
+class TaskUserInfo(BaseModel):
+    """Minimal user information for task assignee/reporter display."""
+
+    id: UUID = Field(..., description="User ID")
+    email: str = Field(..., description="User email")
+    display_name: Optional[str] = Field(None, description="User display name")
+    avatar_url: Optional[str] = Field(None, description="User avatar URL")
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TaskBase(BaseModel):
@@ -206,6 +217,14 @@ class TaskResponse(TaskBase):
         None,
         description="ID of the reporting user",
     )
+    assignee: Optional[TaskUserInfo] = Field(
+        None,
+        description="Assignee user information",
+    )
+    reporter: Optional[TaskUserInfo] = Field(
+        None,
+        description="Reporter user information",
+    )
     parent_id: Optional[UUID] = Field(
         None,
         description="ID of the parent task",
@@ -226,6 +245,14 @@ class TaskResponse(TaskBase):
     row_version: int = Field(
         1,
         description="Row version for optimistic concurrency control",
+    )
+    checklist_total: int = Field(
+        0,
+        description="Total checklist items across all checklists",
+    )
+    checklist_done: int = Field(
+        0,
+        description="Completed checklist items across all checklists",
     )
     created_at: datetime = Field(
         ...,
