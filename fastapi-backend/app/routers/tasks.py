@@ -37,6 +37,7 @@ from ..services.notification_service import NotificationService
 from ..services.permission_service import PermissionService, get_permission_service
 from ..services.status_derivation_service import (
     derive_project_status_from_model,
+    recalculate_aggregation_from_tasks,
     update_aggregation_on_task_create,
     update_aggregation_on_task_delete,
     update_aggregation_on_task_status_change,
@@ -406,7 +407,9 @@ def get_or_create_project_aggregation(
     """
     Get or create the ProjectTaskStatusAgg for a project.
 
-    If the aggregation record doesn't exist, creates one with all counters at zero.
+    If the aggregation record doesn't exist, creates one and recalculates
+    counters from existing tasks. This ensures data integrity when the
+    aggregation system is added to a project with existing tasks.
 
     Args:
         db: Database session
@@ -420,7 +423,7 @@ def get_or_create_project_aggregation(
     ).first()
 
     if agg is None:
-        # Create new aggregation with zero counts
+        # Create new aggregation
         agg = ProjectTaskStatusAgg(
             project_id=project_id,
             total_tasks=0,
@@ -431,8 +434,21 @@ def get_or_create_project_aggregation(
             done_tasks=0,
         )
         db.add(agg)
-        # Flush to ensure the record is created before we modify it
         db.flush()
+
+        # Recalculate from existing tasks to ensure data integrity
+        # This handles the case where tasks exist before aggregation was added
+        # Use joinedload to ensure task_status relationship is loaded
+        existing_tasks = db.query(Task).options(
+            joinedload(Task.task_status)
+        ).filter(
+            Task.project_id == project_id,
+            Task.parent_id.is_(None),  # Only count parent tasks, not subtasks
+        ).all()
+
+        if existing_tasks:
+            recalculate_aggregation_from_tasks(agg, existing_tasks)
+            db.flush()
 
     return agg
 
@@ -446,7 +462,8 @@ def update_project_derived_status(
     Update a project's derived_status based on the newly derived status name.
 
     Finds the TaskStatus record matching the status name for this project
-    and updates the project's derived_status_id.
+    and updates the project's derived_status_id. Creates default TaskStatuses
+    if they don't exist (for legacy projects).
 
     Args:
         db: Database session
@@ -455,13 +472,19 @@ def update_project_derived_status(
     """
     from ..models.task_status import TaskStatus as TaskStatusModel
 
+    # Ensure TaskStatuses exist for this project
+    existing_count = db.query(TaskStatusModel).filter(
+        TaskStatusModel.project_id == project.id
+    ).count()
+
+    if existing_count == 0:
+        # Create default TaskStatuses for legacy project
+        default_statuses = TaskStatusModel.create_default_statuses(project.id)
+        for status in default_statuses:
+            db.add(status)
+        db.flush()
+
     # Find the TaskStatus record for this project with the derived status name
-    # Note: derived status is a category, so we look for the first status matching
-    # We map the derived status to a TaskStatus by category/name:
-    # 'Todo' -> TaskStatus with name='Todo'
-    # 'In Progress' -> TaskStatus with name='In Progress'
-    # 'Issue' -> TaskStatus with name='Issue'
-    # 'Done' -> TaskStatus with name='Done'
     task_status = db.query(TaskStatusModel).filter(
         TaskStatusModel.project_id == project.id,
         TaskStatusModel.name == new_status_name,
@@ -470,7 +493,7 @@ def update_project_derived_status(
     if task_status:
         project.derived_status_id = task_status.id
     else:
-        # If no matching TaskStatus found (shouldn't happen normally),
+        # If no matching TaskStatus found (shouldn't happen after creating defaults),
         # set derived_status_id to None
         project.derived_status_id = None
 
@@ -1230,7 +1253,7 @@ async def update_task(
     db.refresh(task)
 
     # Emit WebSocket event if derived status changed (after commit)
-    if project and old_derived_status is not None and new_derived_status is not None:
+    if project and new_derived_status is not None:
         await emit_project_status_changed_if_needed(
             project=project,
             old_status=old_derived_status,
@@ -1359,7 +1382,7 @@ async def delete_task(
     db.commit()
 
     # Emit WebSocket event if derived status changed (after commit)
-    if project and old_derived_status is not None:
+    if project and new_derived_status is not None:
         await emit_project_status_changed_if_needed(
             project=project,
             old_status=old_derived_status,
@@ -1604,7 +1627,7 @@ async def move_task(
     )
 
     # Emit WebSocket event if derived status changed (after commit)
-    if project and old_derived_status is not None and new_derived_status is not None:
+    if project and new_derived_status is not None:
         await emit_project_status_changed_if_needed(
             project=project,
             old_status=old_derived_status,

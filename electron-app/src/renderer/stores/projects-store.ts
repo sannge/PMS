@@ -29,8 +29,10 @@ export type ProjectType = 'kanban' | 'scrum'
 
 /**
  * Project status values (derived from task distribution)
+ * Note: "In Review" is a task status only, not a project status.
+ * Project status is derived: Todo, In Progress (includes tasks in review), Issue, Done
  */
-export type ProjectDerivedStatus = 'Todo' | 'In Progress' | 'In Review' | 'Issue' | 'Done'
+export type ProjectDerivedStatus = 'Todo' | 'In Progress' | 'Issue' | 'Done'
 
 /**
  * Project data from the API

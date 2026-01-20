@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAuthStore } from '@/stores/auth-store'
 import { useNotificationsStore } from '@/stores/notifications-store'
-import { useProjectsStore } from '@/stores/projects-store'
+import { useProjectsStore, type ProjectStatusChangedEventData } from '@/stores/projects-store'
 import { useProjectMembersStore } from '@/stores/project-members-store'
 import {
   wsClient,
@@ -929,10 +929,10 @@ export interface ProjectRoleChangedEventData {
 }
 
 /**
- * Hook to sync project updates (name, description, type) across tabs/windows.
+ * Hook to sync project updates (name, description, type, derived status) across tabs/windows.
  *
- * When a project is updated, this hook receives the event via WebSocket
- * and updates the local projects store.
+ * When a project is updated or its derived status changes (due to task changes),
+ * this hook receives the event via WebSocket and updates the local projects store.
  *
  * @param projectId - The project ID to sync updates for
  */
@@ -947,7 +947,8 @@ export function useProjectUpdatedSync(projectId: string | undefined): void {
     const roomId = WebSocketClient.getProjectRoom(projectId)
     joinRoom(roomId)
 
-    const unsubscribe = subscribe<ProjectUpdatedEventData>(
+    // Subscribe to project property updates (name, description, type)
+    const unsubscribeUpdated = subscribe<ProjectUpdatedEventData>(
       MessageType.PROJECT_UPDATED,
       (data) => {
         if (data.project_id === projectId) {
@@ -956,8 +957,19 @@ export function useProjectUpdatedSync(projectId: string | undefined): void {
       }
     )
 
+    // Subscribe to project status changes (derived status from task distribution)
+    const unsubscribeStatusChanged = subscribe<ProjectStatusChangedEventData>(
+      MessageType.PROJECT_STATUS_CHANGED,
+      (data) => {
+        if (data.project_id === projectId) {
+          useProjectsStore.getState().handleProjectStatusChanged(data)
+        }
+      }
+    )
+
     return () => {
-      unsubscribe()
+      unsubscribeUpdated()
+      unsubscribeStatusChanged()
       leaveRoom(roomId)
     }
   }, [status.isConnected, projectId, subscribe, joinRoom, leaveRoom])

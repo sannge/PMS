@@ -310,24 +310,23 @@ async def get_member_count(
             detail="Access denied. You must be a member of this application.",
         )
 
-    total = db.query(func.count(ApplicationMember.id)).filter(
+    # Single query with GROUP BY instead of 4 separate queries
+    role_counts = db.query(
+        ApplicationMember.role,
+        func.count(ApplicationMember.id).label("count"),
+    ).filter(
         ApplicationMember.application_id == application_id,
-    ).scalar() or 0
+    ).group_by(
+        ApplicationMember.role,
+    ).all()
 
-    owners = db.query(func.count(ApplicationMember.id)).filter(
-        ApplicationMember.application_id == application_id,
-        ApplicationMember.role == ApplicationRole.OWNER.value,
-    ).scalar() or 0
+    # Convert to dict for easy lookup
+    counts_by_role = {role: count for role, count in role_counts}
 
-    editors = db.query(func.count(ApplicationMember.id)).filter(
-        ApplicationMember.application_id == application_id,
-        ApplicationMember.role == ApplicationRole.EDITOR.value,
-    ).scalar() or 0
-
-    viewers = db.query(func.count(ApplicationMember.id)).filter(
-        ApplicationMember.application_id == application_id,
-        ApplicationMember.role == ApplicationRole.VIEWER.value,
-    ).scalar() or 0
+    owners = counts_by_role.get(ApplicationRole.OWNER.value, 0)
+    editors = counts_by_role.get(ApplicationRole.EDITOR.value, 0)
+    viewers = counts_by_role.get(ApplicationRole.VIEWER.value, 0)
+    total = owners + editors + viewers
 
     return {
         "total": total,

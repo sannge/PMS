@@ -5,7 +5,7 @@
  * Projects are automatically organized based on their task distribution.
  *
  * Features:
- * - 5 status columns: Todo, In Progress, In Review, Issue, Done
+ * - 4 status columns: Todo, In Progress, Issue, Done
  * - Project cards with status badges and task counts
  * - Column project counts
  * - Empty state handling
@@ -17,7 +17,6 @@ import { cn } from '@/lib/utils'
 import {
   Circle,
   Timer,
-  Eye,
   AlertTriangle,
   CheckCircle2,
   LayoutDashboard,
@@ -100,13 +99,6 @@ const PROJECT_COLUMNS: ProjectKanbanColumn[] = [
     icon: <Timer className="h-4 w-4" />,
     color: 'text-blue-500',
     bgColor: 'bg-blue-500/10',
-  },
-  {
-    id: 'In Review',
-    title: 'In Review',
-    icon: <Eye className="h-4 w-4" />,
-    color: 'text-purple-500',
-    bgColor: 'bg-purple-500/10',
   },
   {
     id: 'Issue',
@@ -253,12 +245,11 @@ export function ProjectKanbanBoard({
   canDeleteProjects = false,
   className,
 }: ProjectKanbanBoardProps): JSX.Element {
-  // Group projects by derived status
+  // Group projects by derived status (4 statuses: Todo, In Progress, Issue, Done)
   const projectsByStatus = useMemo(() => {
-    const grouped: Record<ProjectDerivedStatus, Project[]> = {
+    const grouped: Record<string, Project[]> = {
       'Todo': [],
       'In Progress': [],
-      'In Review': [],
       'Issue': [],
       'Done': [],
     }
@@ -269,6 +260,7 @@ export function ProjectKanbanBoard({
       if (grouped[status]) {
         grouped[status].push(project)
       } else {
+        // Any unknown status goes to Todo
         grouped['Todo'].push(project)
       }
     })

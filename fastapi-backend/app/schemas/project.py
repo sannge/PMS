@@ -103,6 +103,10 @@ class ProjectResponse(ProjectBase):
         None,
         description="ID of the derived status (FK to TaskStatuses)",
     )
+    derived_status: Optional[str] = Field(
+        None,
+        description="Name of the derived status (Todo, In Progress, Issue, Done)",
+    )
     override_status_id: Optional[UUID] = Field(
         None,
         description="ID of the override status (FK to TaskStatuses)",

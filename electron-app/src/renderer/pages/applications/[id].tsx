@@ -24,6 +24,7 @@ import {
   type Project,
   type ProjectCreate,
   type ProjectUpdate,
+  type ProjectStatusChangedEventData,
 } from '@/stores/projects-store'
 import { useMembersStore } from '@/stores/members-store'
 import { ApplicationForm } from '@/components/applications/application-form'
@@ -524,10 +525,21 @@ export function ApplicationDetailPage({
       }
     )
 
+    // Handle project status changed - update project's derived status in the list
+    const unsubProjectStatusChanged = subscribe<ProjectStatusChangedEventData>(
+      MessageType.PROJECT_STATUS_CHANGED,
+      (data) => {
+        if (data.application_id === applicationId) {
+          useProjectsStore.getState().handleProjectStatusChanged(data)
+        }
+      }
+    )
+
     return () => {
       unsubMemberAdded()
       unsubMemberRemoved()
       unsubRoleUpdated()
+      unsubProjectStatusChanged()
       leaveRoom(roomId)
     }
   }, [applicationId, wsStatus.isConnected, joinRoom, leaveRoom, subscribe])
@@ -1018,8 +1030,6 @@ export function ApplicationDetailPage({
                   key={project.id}
                   project={project}
                   onClick={onSelectProject ? handleProjectClick : undefined}
-                  onEdit={canEditProjects ? handleEditProject : undefined}
-                  onDelete={canDeleteProjects ? handleDeleteProjectClick : undefined}
                   disabled={isDeletingProject}
                 />
               ))}

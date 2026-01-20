@@ -538,8 +538,11 @@ export class WebSocketClient {
     this.clearTimers()
     this.reconnectAttempts = 0
 
+    // Store current autoReconnect setting and temporarily disable
+    const wasAutoReconnect = this.config.autoReconnect
+
     if (this.ws) {
-      // Prevent reconnection on intentional close
+      // Temporarily prevent reconnection on intentional close
       this.config.autoReconnect = false
       this.ws.close(1000, 'Client disconnected')
       this.ws = null
@@ -547,6 +550,9 @@ export class WebSocketClient {
 
     this.setState(WebSocketState.CLOSED)
     this.rooms.clear()
+
+    // Restore autoReconnect setting so future connections work
+    this.config.autoReconnect = wasAutoReconnect
   }
 
   /**

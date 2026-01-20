@@ -16,7 +16,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_
-from sqlalchemy.orm import Session, lazyload
+from sqlalchemy.orm import Session, lazyload, joinedload
 
 from ..database import get_db
 from ..models.application import Application
@@ -26,6 +26,8 @@ from ..models.project_member import ProjectMember
 from ..models.task import Task
 from ..models.user import User
 from ..models.task_status import TaskStatus
+from ..models.project_task_status_agg import ProjectTaskStatusAgg
+from ..services.status_derivation_service import recalculate_aggregation_from_tasks
 from ..schemas.project import (
     ProjectBase,
     ProjectResponse,
@@ -310,9 +312,22 @@ async def list_projects(
     # Create a map of project_id -> count
     counts_map = {str(proj_id): count for proj_id, count in counts_query}
 
+    # Get status names for derived_status_id values
+    derived_status_ids = [p.derived_status_id for p in projects_list if p.derived_status_id]
+    status_names_map: dict[str, str] = {}
+    if derived_status_ids:
+        status_records = db.query(TaskStatus.id, TaskStatus.name).filter(
+            TaskStatus.id.in_(derived_status_ids)
+        ).all()
+        status_names_map = {str(s.id): s.name for s in status_records}
+
     # Convert to response format
     projects = []
     for project in projects_list:
+        derived_status_name = None
+        if project.derived_status_id:
+            derived_status_name = status_names_map.get(str(project.derived_status_id))
+
         project_response = ProjectWithTasks(
             id=project.id,
             name=project.name,
@@ -322,6 +337,7 @@ async def list_projects(
             application_id=project.application_id,
             created_by=project.created_by,
             derived_status_id=project.derived_status_id,
+            derived_status=derived_status_name,
             override_status_id=project.override_status_id,
             override_reason=project.override_reason,
             override_by_user_id=project.override_by_user_id,
@@ -395,6 +411,17 @@ async def create_project(
     db.add(project)
     db.flush()  # Get the project ID without committing
 
+    # Create default TaskStatuses for the project
+    default_statuses = TaskStatus.create_default_statuses(project.id)
+    for status in default_statuses:
+        db.add(status)
+    db.flush()
+
+    # Set initial derived status to "Todo" (first status)
+    todo_status = next((s for s in default_statuses if s.name == "Todo"), None)
+    if todo_status:
+        project.derived_status_id = todo_status.id
+
     # Auto-add creator as a project admin
     from ..models.project_member import ProjectMemberRole
     project_member = ProjectMember(
@@ -405,7 +432,7 @@ async def create_project(
     )
     db.add(project_member)
 
-    # Commit both project and member
+    # Commit project, statuses, and member
     db.commit()
     db.refresh(project)
 
@@ -439,16 +466,89 @@ async def get_project(
 
     Returns the project with its task count.
     Any member (owner, editor, viewer) can access the project.
+
+    Auto-recalculates the project's derived status if the aggregation
+    is out of sync with actual task counts.
     """
     # Verify access (any member can view) and get project
     project = verify_project_access(project_id, current_user, db)
 
-    # Get task count separately
+    # Get task count (parent tasks only, excluding subtasks)
     tasks_count = (
         db.query(func.count(Task.id))
-        .filter(Task.project_id == project_id)
+        .filter(Task.project_id == project_id, Task.parent_id.is_(None))
         .scalar()
     ) or 0
+
+    # Check if aggregation exists and is in sync
+    agg = db.query(ProjectTaskStatusAgg).filter(
+        ProjectTaskStatusAgg.project_id == project_id
+    ).first()
+
+    needs_recalculation = (
+        agg is None or
+        agg.total_tasks != tasks_count
+    )
+
+    derived_status_name: Optional[str] = None
+
+    if needs_recalculation:
+        # Recalculate the aggregation from actual tasks
+        # Use joinedload to ensure task_status relationship is loaded
+        tasks = db.query(Task).options(
+            joinedload(Task.task_status)
+        ).filter(
+            Task.project_id == project_id,
+            Task.parent_id.is_(None),
+        ).all()
+
+        if agg is None:
+            agg = ProjectTaskStatusAgg(
+                project_id=project_id,
+                total_tasks=0,
+                todo_tasks=0,
+                active_tasks=0,
+                review_tasks=0,
+                issue_tasks=0,
+                done_tasks=0,
+            )
+            db.add(agg)
+            db.flush()
+
+        derived_status_name = recalculate_aggregation_from_tasks(agg, tasks)
+
+        # Ensure TaskStatuses exist for this project (handles legacy projects)
+        existing_statuses_count = db.query(TaskStatus).filter(
+            TaskStatus.project_id == project_id
+        ).count()
+
+        if existing_statuses_count == 0:
+            # Create default TaskStatuses for legacy project
+            default_statuses = TaskStatus.create_default_statuses(project_id)
+            for status in default_statuses:
+                db.add(status)
+            db.flush()
+
+        # Update project's derived_status_id
+        task_status = db.query(TaskStatus).filter(
+            TaskStatus.project_id == project_id,
+            TaskStatus.name == derived_status_name,
+        ).first()
+
+        if task_status:
+            project.derived_status_id = task_status.id
+        else:
+            project.derived_status_id = None
+
+        db.commit()
+        db.refresh(project)
+    else:
+        # Get status name from existing derived_status_id
+        if project.derived_status_id:
+            task_status = db.query(TaskStatus).filter(
+                TaskStatus.id == project.derived_status_id
+            ).first()
+            derived_status_name = task_status.name if task_status else None
 
     return ProjectWithTasks(
         id=project.id,
@@ -459,6 +559,7 @@ async def get_project(
         application_id=project.application_id,
         created_by=project.created_by,
         derived_status_id=project.derived_status_id,
+        derived_status=derived_status_name,
         override_status_id=project.override_status_id,
         override_reason=project.override_reason,
         override_by_user_id=project.override_by_user_id,
