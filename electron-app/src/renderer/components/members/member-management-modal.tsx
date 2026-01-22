@@ -25,7 +25,6 @@ import {
   Trash2,
   Loader2,
   Users,
-  Check,
 } from 'lucide-react'
 import type { MemberWithUser, ApplicationRole } from '@/stores/members-store'
 

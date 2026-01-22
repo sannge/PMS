@@ -65,6 +65,10 @@ interface FilesState {
   getDownloadUrl: (id: string) => Promise<string | null>
   clearError: () => void
   clearUploads: () => void
+
+  // WebSocket handlers for real-time updates
+  handleAttachmentUploaded: (entityType: string, entityId: string, attachment: Attachment) => void
+  handleAttachmentDeleted: (entityType: string, entityId: string, attachmentId: string) => void
 }
 
 // ============================================================================
@@ -157,7 +161,7 @@ export function getFileIconType(fileType: string | null, fileName: string): stri
 // Store
 // ============================================================================
 
-export const useFilesStore = create<FilesState>()((set, get) => ({
+export const useFilesStore = create<FilesState>()((set, _get) => ({
   // Initial state
   attachments: {},
   uploads: [],
@@ -201,7 +205,7 @@ export const useFilesStore = create<FilesState>()((set, get) => ({
 
   // Upload a file
   uploadFile: async ({ file, entityType, entityId }: FileUploadData) => {
-    const uploadId = `upload-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+    const uploadId = `upload-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
 
     // Add to uploads list
     set((state) => ({
@@ -231,9 +235,6 @@ export const useFilesStore = create<FilesState>()((set, get) => ({
         ),
       }))
 
-      // Read file as ArrayBuffer
-      const arrayBuffer = await file.arrayBuffer()
-
       // Update progress
       set((state) => ({
         uploads: state.uploads.map((u) =>
@@ -255,8 +256,21 @@ export const useFilesStore = create<FilesState>()((set, get) => ({
         ),
       }))
 
+      // Build query params for entity association
+      const params = new URLSearchParams()
+      if (entityType === 'task' && entityId) {
+        params.append('task_id', entityId)
+      } else if (entityType === 'note' && entityId) {
+        params.append('note_id', entityId)
+      } else if (entityType && entityId) {
+        params.append('entity_type', entityType)
+        params.append('entity_id', entityId)
+      }
+      const queryString = params.toString() ? `?${params.toString()}` : ''
+
       // Use fetch directly for multipart/form-data since IPC doesn't handle it well
-      const response = await fetch(`http://localhost:8001/api/files/upload`, {
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8001'
+      const response = await fetch(`${apiUrl}/api/files/upload${queryString}`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${parsedToken}`,
@@ -276,8 +290,7 @@ export const useFilesStore = create<FilesState>()((set, get) => ({
         throw new Error(errorData.detail || 'Failed to upload file')
       }
 
-      const data = await response.json()
-      const attachment = data.attachment as Attachment
+      const attachment = await response.json() as Attachment
 
       // Update upload status to completed
       set((state) => ({
@@ -286,16 +299,15 @@ export const useFilesStore = create<FilesState>()((set, get) => ({
         ),
       }))
 
-      // Add to attachments cache if entity info provided
-      if (entityType && entityId) {
-        const key = getEntityKey(entityType, entityId)
+      // NOTE: Don't add to attachments cache here - let the WebSocket event handle it
+      // to avoid duplicates. The WebSocket handler has duplicate detection.
+
+      // Auto-clear the completed upload after a brief moment so user sees success
+      setTimeout(() => {
         set((state) => ({
-          attachments: {
-            ...state.attachments,
-            [key]: [...(state.attachments[key] || []), attachment],
-          },
+          uploads: state.uploads.filter((u) => u.fileId !== uploadId),
         }))
-      }
+      }, 1000)
 
       return attachment
     } catch (error) {
@@ -352,14 +364,15 @@ export const useFilesStore = create<FilesState>()((set, get) => ({
     }
   },
 
-  // Get download URL for an attachment
+  // Get download URL for an attachment (presigned URL from MinIO)
   getDownloadUrl: async (id: string) => {
     try {
       const token = localStorage.getItem('pm-desktop-auth')
       const parsedToken = token ? JSON.parse(token)?.state?.token : null
 
       if (!parsedToken) {
-        throw new Error('Not authenticated')
+        console.error('[Files] getDownloadUrl: Not authenticated')
+        return null
       }
 
       const response = await window.electronAPI.get<{ download_url: string }>(
@@ -367,12 +380,15 @@ export const useFilesStore = create<FilesState>()((set, get) => ({
         getAuthHeaders(parsedToken)
       )
 
-      if (response.status >= 200 && response.status < 300) {
+      if (response.status >= 200 && response.status < 300 && response.data?.download_url) {
+        console.log('[Files] getDownloadUrl: Success', response.data.download_url)
         return response.data.download_url
       }
 
+      console.error('[Files] getDownloadUrl: Failed', response.status, response.data)
       return null
-    } catch {
+    } catch (error) {
+      console.error('[Files] getDownloadUrl: Error', error)
       return null
     }
   },
@@ -384,6 +400,35 @@ export const useFilesStore = create<FilesState>()((set, get) => ({
   clearUploads: () => set((state) => ({
     uploads: state.uploads.filter((u) => u.status === 'uploading' || u.status === 'pending'),
   })),
+
+  // WebSocket handler: attachment uploaded by another user
+  handleAttachmentUploaded: (entityType: string, entityId: string, attachment: Attachment) => {
+    const key = `${entityType}:${entityId}`
+    set((state) => {
+      // Check if attachment already exists (avoid duplicates from own uploads)
+      const existing = state.attachments[key] || []
+      if (existing.some((a) => a.id === attachment.id)) {
+        return state
+      }
+      return {
+        attachments: {
+          ...state.attachments,
+          [key]: [...existing, attachment],
+        },
+      }
+    })
+  },
+
+  // WebSocket handler: attachment deleted by another user
+  handleAttachmentDeleted: (entityType: string, entityId: string, attachmentId: string) => {
+    const key = `${entityType}:${entityId}`
+    set((state) => ({
+      attachments: {
+        ...state.attachments,
+        [key]: (state.attachments[key] || []).filter((a) => a.id !== attachmentId),
+      },
+    }))
+  },
 }))
 
 // ============================================================================

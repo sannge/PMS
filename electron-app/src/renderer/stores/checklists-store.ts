@@ -25,9 +25,12 @@ import { getAuthHeaders } from './auth-store'
 export interface ChecklistItem {
   id: string
   checklist_id: string
-  text: string
+  content: string
   is_done: boolean
-  position: number
+  completed_by?: string | null
+  completed_by_name?: string | null
+  completed_at?: string | null
+  rank: string
   created_at: string
   updated_at: string | null
 }
@@ -39,11 +42,11 @@ export interface Checklist {
   id: string
   task_id: string
   title: string
-  position: number
+  rank: string
   total_items: number
-  done_items: number
+  completed_items: number
+  progress_percent: number
   created_at: string
-  updated_at: string | null
   items: ChecklistItem[]
 }
 
@@ -58,8 +61,7 @@ export interface ChecklistCreate {
  * Data for creating a checklist item
  */
 export interface ChecklistItemCreate {
-  text: string
-  is_done?: boolean
+  content: string
 }
 
 /**
@@ -99,9 +101,16 @@ export interface ChecklistsState {
   reorderItems: (token: string | null, checklistId: string, itemIds: string[]) => Promise<boolean>
   reorderChecklists: (token: string | null, taskId: string, checklistIds: string[]) => Promise<boolean>
 
-  // Real-time updates
+  // Real-time updates (WebSocket handlers)
   handleChecklistCreated: (checklist: Checklist) => void
+  handleChecklistUpdated: (checklistId: string, title: string) => void
+  handleChecklistDeleted: (checklistId: string) => void
+  handleChecklistsReordered: (checklistIds: string[]) => void
   handleItemToggled: (checklistId: string, itemId: string, isDone: boolean) => void
+  handleItemAdded: (checklistId: string, item: ChecklistItem) => void
+  handleItemUpdated: (itemId: string, content: string) => void
+  handleItemDeleted: (checklistId: string, itemId: string) => void
+  handleItemsReordered: (checklistId: string, itemIds: string[]) => void
 
   // Utilities
   setCurrentTask: (taskId: string | null) => void
@@ -181,8 +190,16 @@ export const useChecklistsStore = create<ChecklistsState>((set, get) => ({
         return
       }
 
+      // Sort checklists and items by rank on initial load
+      const checklists = (response.data || [])
+        .sort((a: Checklist, b: Checklist) => a.rank.localeCompare(b.rank))
+        .map((checklist: Checklist) => ({
+          ...checklist,
+          items: [...checklist.items].sort((a, b) => a.rank.localeCompare(b.rank)),
+        }))
+
       set({
-        checklists: response.data || [],
+        checklists,
         isLoading: false,
       })
     } catch (err) {
@@ -194,10 +211,29 @@ export const useChecklistsStore = create<ChecklistsState>((set, get) => ({
   },
 
   /**
-   * Create a new checklist
+   * Create a new checklist with optimistic update
    */
   createChecklist: async (token, taskId, data) => {
-    set({ isCreating: true, error: null })
+    // Create optimistic checklist
+    const tempId = `temp-${Date.now()}`
+    const optimisticChecklist: Checklist = {
+      id: tempId,
+      task_id: taskId,
+      title: data.title,
+      rank: 'zzz', // Will be at end
+      total_items: 0,
+      completed_items: 0,
+      progress_percent: 0,
+      created_at: new Date().toISOString(),
+      items: [],
+    }
+
+    const previous = get().checklists
+    set({
+      checklists: [...previous, optimisticChecklist],
+      isCreating: true,
+      error: null,
+    })
 
     try {
       if (!window.electronAPI) {
@@ -212,13 +248,17 @@ export const useChecklistsStore = create<ChecklistsState>((set, get) => ({
 
       if (response.status !== 201) {
         const error = parseApiError(response.status, response.data)
-        set({ isCreating: false, error })
+        // Rollback
+        set({ checklists: previous, isCreating: false, error })
         return null
       }
 
       const checklist = response.data
+      // Replace temp with real checklist
       set({
-        checklists: [...get().checklists, checklist],
+        checklists: get().checklists.map((c) =>
+          c.id === tempId ? checklist : c
+        ),
         isCreating: false,
       })
 
@@ -227,7 +267,8 @@ export const useChecklistsStore = create<ChecklistsState>((set, get) => ({
       const error: ChecklistError = {
         message: err instanceof Error ? err.message : 'Failed to create checklist',
       }
-      set({ isCreating: false, error })
+      // Rollback
+      set({ checklists: previous, isCreating: false, error })
       return null
     }
   },
@@ -327,10 +368,42 @@ export const useChecklistsStore = create<ChecklistsState>((set, get) => ({
   },
 
   /**
-   * Create a new item in a checklist
+   * Create a new item in a checklist with optimistic update
    */
   createItem: async (token, checklistId, data) => {
-    set({ isCreating: true, error: null })
+    const checklists = get().checklists
+    const checklist = checklists.find((c) => c.id === checklistId)
+    if (!checklist) return null
+
+    // Create optimistic item
+    const tempId = `temp-${Date.now()}`
+    const optimisticItem: ChecklistItem = {
+      id: tempId,
+      checklist_id: checklistId,
+      content: data.content,
+      is_done: false,
+      completed_by: null,
+      completed_by_name: null,
+      completed_at: null,
+      rank: 'zzz', // Will be at end
+      created_at: new Date().toISOString(),
+      updated_at: null,
+    }
+
+    const previous = checklists
+    set({
+      checklists: checklists.map((c) =>
+        c.id === checklistId
+          ? {
+              ...c,
+              items: [...c.items, optimisticItem],
+              total_items: c.total_items + 1,
+            }
+          : c
+      ),
+      isCreating: true,
+      error: null,
+    })
 
     try {
       if (!window.electronAPI) {
@@ -345,19 +418,19 @@ export const useChecklistsStore = create<ChecklistsState>((set, get) => ({
 
       if (response.status !== 201) {
         const error = parseApiError(response.status, response.data)
-        set({ isCreating: false, error })
+        // Rollback
+        set({ checklists: previous, isCreating: false, error })
         return null
       }
 
       const item = response.data
+      // Replace temp item with real item
       set({
         checklists: get().checklists.map((c) =>
           c.id === checklistId
             ? {
                 ...c,
-                items: [...c.items, item],
-                total_items: c.total_items + 1,
-                done_items: item.is_done ? c.done_items + 1 : c.done_items,
+                items: c.items.map((i) => (i.id === tempId ? item : i)),
               }
             : c
         ),
@@ -369,15 +442,16 @@ export const useChecklistsStore = create<ChecklistsState>((set, get) => ({
       const error: ChecklistError = {
         message: err instanceof Error ? err.message : 'Failed to create item',
       }
-      set({ isCreating: false, error })
+      // Rollback
+      set({ checklists: previous, isCreating: false, error })
       return null
     }
   },
 
   /**
-   * Update an item's text
+   * Update an item's content
    */
-  updateItem: async (token, itemId, text) => {
+  updateItem: async (token, itemId, content) => {
     const checklists = get().checklists
     let checklistId: string | null = null
     let existingItem: ChecklistItem | null = null
@@ -398,7 +472,7 @@ export const useChecklistsStore = create<ChecklistsState>((set, get) => ({
     set({
       checklists: checklists.map((c) =>
         c.id === checklistId
-          ? { ...c, items: c.items.map((i) => (i.id === itemId ? { ...i, text } : i)) }
+          ? { ...c, items: c.items.map((i) => (i.id === itemId ? { ...i, content } : i)) }
           : c
       ),
       isUpdating: true,
@@ -412,7 +486,7 @@ export const useChecklistsStore = create<ChecklistsState>((set, get) => ({
 
       const response = await window.electronAPI.put<ChecklistItem>(
         `/api/checklist-items/${itemId}`,
-        { text },
+        { content },
         getAuthHeaders(token)
       )
 
@@ -473,7 +547,7 @@ export const useChecklistsStore = create<ChecklistsState>((set, get) => ({
               items: c.items.map((i) =>
                 i.id === itemId ? { ...i, is_done: newIsDone } : i
               ),
-              done_items: newIsDone ? c.done_items + 1 : Math.max(0, c.done_items - 1),
+              completed_items: newIsDone ? c.completed_items + 1 : Math.max(0, c.completed_items - 1),
             }
           : c
       ),
@@ -549,7 +623,7 @@ export const useChecklistsStore = create<ChecklistsState>((set, get) => ({
               ...c,
               items: c.items.filter((i) => i.id !== itemId),
               total_items: Math.max(0, c.total_items - 1),
-              done_items: existingItem!.is_done ? Math.max(0, c.done_items - 1) : c.done_items,
+              completed_items: existingItem!.is_done ? Math.max(0, c.completed_items - 1) : c.completed_items,
             }
           : c
       ),
@@ -592,12 +666,11 @@ export const useChecklistsStore = create<ChecklistsState>((set, get) => ({
     const checklist = checklists.find((c) => c.id === checklistId)
     if (!checklist) return false
 
-    // Optimistic reorder
+    // Optimistic reorder - keep items but in new order
     const previous = checklists
     const reorderedItems = itemIds
       .map((id) => checklist.items.find((i) => i.id === id))
       .filter((i): i is ChecklistItem => !!i)
-      .map((item, index) => ({ ...item, position: index + 1 }))
 
     set({
       checklists: checklists.map((c) =>
@@ -641,12 +714,11 @@ export const useChecklistsStore = create<ChecklistsState>((set, get) => ({
   reorderChecklists: async (token, taskId, checklistIds) => {
     const checklists = get().checklists
 
-    // Optimistic reorder
+    // Optimistic reorder - keep checklists but in new order
     const previous = checklists
     const reordered = checklistIds
       .map((id) => checklists.find((c) => c.id === id))
       .filter((c): c is Checklist => !!c)
-      .map((checklist, index) => ({ ...checklist, position: index + 1 }))
 
     set({
       checklists: reordered,
@@ -694,6 +766,31 @@ export const useChecklistsStore = create<ChecklistsState>((set, get) => ({
   },
 
   /**
+   * Handle real-time checklist updated event
+   */
+  handleChecklistUpdated: (checklistId, title) => {
+    const checklists = get().checklists
+    const checklist = checklists.find((c) => c.id === checklistId)
+    if (!checklist) return
+
+    set({
+      checklists: checklists.map((c) =>
+        c.id === checklistId ? { ...c, title } : c
+      ),
+    })
+  },
+
+  /**
+   * Handle real-time checklist deleted event
+   */
+  handleChecklistDeleted: (checklistId) => {
+    const checklists = get().checklists
+    set({
+      checklists: checklists.filter((c) => c.id !== checklistId),
+    })
+  },
+
+  /**
    * Handle real-time item toggled event
    */
   handleItemToggled: (checklistId, itemId, isDone) => {
@@ -712,10 +809,116 @@ export const useChecklistsStore = create<ChecklistsState>((set, get) => ({
               items: c.items.map((i) =>
                 i.id === itemId ? { ...i, is_done: isDone } : i
               ),
-              done_items: isDone
-                ? c.done_items + 1
-                : Math.max(0, c.done_items - 1),
+              completed_items: isDone
+                ? c.completed_items + 1
+                : Math.max(0, c.completed_items - 1),
             }
+          : c
+      ),
+    })
+  },
+
+  /**
+   * Handle real-time item added event
+   */
+  handleItemAdded: (checklistId, item) => {
+    const checklists = get().checklists
+    const checklist = checklists.find((c) => c.id === checklistId)
+    if (!checklist) return
+
+    // Avoid duplicates
+    if (checklist.items.some((i) => i.id === item.id)) return
+
+    set({
+      checklists: checklists.map((c) =>
+        c.id === checklistId
+          ? {
+              ...c,
+              items: [...c.items, item],
+              total_items: c.total_items + 1,
+              completed_items: item.is_done ? c.completed_items + 1 : c.completed_items,
+            }
+          : c
+      ),
+    })
+  },
+
+  /**
+   * Handle real-time item updated event
+   */
+  handleItemUpdated: (itemId, content) => {
+    const checklists = get().checklists
+
+    set({
+      checklists: checklists.map((c) => ({
+        ...c,
+        items: c.items.map((i) =>
+          i.id === itemId ? { ...i, content } : i
+        ),
+      })),
+    })
+  },
+
+  /**
+   * Handle real-time item deleted event
+   */
+  handleItemDeleted: (checklistId, itemId) => {
+    const checklists = get().checklists
+    const checklist = checklists.find((c) => c.id === checklistId)
+    if (!checklist) return
+
+    const item = checklist.items.find((i) => i.id === itemId)
+    if (!item) return
+
+    set({
+      checklists: checklists.map((c) =>
+        c.id === checklistId
+          ? {
+              ...c,
+              items: c.items.filter((i) => i.id !== itemId),
+              total_items: Math.max(0, c.total_items - 1),
+              completed_items: item.is_done ? Math.max(0, c.completed_items - 1) : c.completed_items,
+            }
+          : c
+      ),
+    })
+  },
+
+  /**
+   * Handle real-time checklists reordered event
+   */
+  handleChecklistsReordered: (checklistIds) => {
+    const checklists = get().checklists
+    // Reorder checklists based on the new order
+    const reordered = checklistIds
+      .map((id) => checklists.find((c) => c.id === id))
+      .filter((c): c is Checklist => !!c)
+
+    // Include any checklists not in the reorder list (shouldn't happen, but be safe)
+    const missing = checklists.filter((c) => !checklistIds.includes(c.id))
+    set({ checklists: [...reordered, ...missing] })
+  },
+
+  /**
+   * Handle real-time items reordered event
+   */
+  handleItemsReordered: (checklistId, itemIds) => {
+    const checklists = get().checklists
+    const checklist = checklists.find((c) => c.id === checklistId)
+    if (!checklist) return
+
+    // Reorder items based on the new order
+    const reorderedItems = itemIds
+      .map((id) => checklist.items.find((i) => i.id === id))
+      .filter((i): i is ChecklistItem => !!i)
+
+    // Include any items not in the reorder list (shouldn't happen, but be safe)
+    const missingItems = checklist.items.filter((i) => !itemIds.includes(i.id))
+
+    set({
+      checklists: checklists.map((c) =>
+        c.id === checklistId
+          ? { ...c, items: [...reorderedItems, ...missingItems] }
           : c
       ),
     })
@@ -736,7 +939,7 @@ export const useChecklistsStore = create<ChecklistsState>((set, get) => ({
   getProgress: () => {
     const checklists = get().checklists
     const total = checklists.reduce((sum, c) => sum + c.total_items, 0)
-    const done = checklists.reduce((sum, c) => sum + c.done_items, 0)
+    const done = checklists.reduce((sum, c) => sum + c.completed_items, 0)
     const percent = total > 0 ? Math.round((done / total) * 100) : 0
     return { total, done, percent }
   },

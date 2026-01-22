@@ -10,10 +10,13 @@
  * - Soft-deleted comment display
  */
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { cn } from '@/lib/utils'
-import { User, Edit2, Trash2, MoreHorizontal, Check, X } from 'lucide-react'
-import type { Comment } from '@/stores/comments-store'
+import { User, Edit2, Trash2, Check, X, FileText, FileImage, File, Download, Maximize2 } from 'lucide-react'
+import type { Comment, CommentAttachment } from '@/stores/comments-store'
+import { useFilesStore, formatFileSize, isImageFile } from '@/stores/files-store'
+import { ImageViewer } from '@/components/ui/image-viewer'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 
 // ============================================================================
 // Types
@@ -33,24 +36,115 @@ export interface CommentItemProps {
 // Helper Functions
 // ============================================================================
 
+/**
+ * Parse date string from backend, handling UTC correctly.
+ * Backend sends ISO strings without timezone (e.g., "2024-01-15T10:30:00.123456")
+ * which should be interpreted as UTC.
+ */
+function parseDate(dateString: string): Date {
+  // If the date string doesn't have timezone info, treat it as UTC
+  if (!dateString.endsWith('Z') && !dateString.includes('+') && !/[+-]\d{2}:\d{2}$/.test(dateString)) {
+    return new Date(dateString + 'Z')
+  }
+  return new Date(dateString)
+}
+
+/**
+ * Format timestamp with relative time for recent dates, absolute for older ones.
+ * - < 1 minute: "Just now"
+ * - < 60 minutes: "Xm ago"
+ * - < 24 hours: "Xh ago"
+ * - >= 24 hours: absolute date/time
+ */
 function formatTimestamp(dateString: string): string {
-  const date = new Date(dateString)
+  const date = parseDate(dateString)
   const now = new Date()
   const diffMs = now.getTime() - date.getTime()
   const diffMins = Math.floor(diffMs / 60000)
   const diffHours = Math.floor(diffMs / 3600000)
-  const diffDays = Math.floor(diffMs / 86400000)
 
+  // Handle invalid dates or future dates
+  if (isNaN(date.getTime()) || diffMs < 0) {
+    return 'Just now'
+  }
+
+  // Show relative time for last 24 hours
   if (diffMins < 1) return 'Just now'
   if (diffMins < 60) return `${diffMins}m ago`
   if (diffHours < 24) return `${diffHours}h ago`
-  if (diffDays < 7) return `${diffDays}d ago`
 
+  // Show absolute time for older comments
+  const isToday = date.toDateString() === now.toDateString()
+  const yesterday = new Date(now)
+  yesterday.setDate(yesterday.getDate() - 1)
+  const isYesterday = date.toDateString() === yesterday.toDateString()
+
+  if (isToday) {
+    return `Today at ${date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
+  }
+
+  if (isYesterday) {
+    return `Yesterday at ${date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
+  }
+
+  // Older than yesterday - show full date
+  const sameYear = date.getFullYear() === now.getFullYear()
   return date.toLocaleDateString(undefined, {
     month: 'short',
     day: 'numeric',
-    year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
+    year: sameYear ? undefined : 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
   })
+}
+
+/**
+ * Hook to update timestamps periodically
+ * Returns null if dateString is null/undefined
+ */
+function useRelativeTime(dateString: string | null | undefined): string | null {
+  const [formattedTime, setFormattedTime] = useState<string | null>(() =>
+    dateString ? formatTimestamp(dateString) : null
+  )
+
+  useEffect(() => {
+    if (!dateString) {
+      setFormattedTime(null)
+      return
+    }
+
+    // Update immediately
+    setFormattedTime(formatTimestamp(dateString))
+
+    // Calculate when we need to update next
+    const date = parseDate(dateString)
+    const now = new Date()
+    const diffMs = now.getTime() - date.getTime()
+    const diffMins = Math.floor(diffMs / 60000)
+
+    // Don't set up interval for invalid/future dates or old dates
+    if (isNaN(date.getTime()) || diffMs < 0 || diffMins >= 24 * 60) {
+      return
+    }
+
+    // Update more frequently for recent comments
+    let intervalMs: number
+    if (diffMins < 1) {
+      intervalMs = 10000 // Every 10 seconds for "Just now"
+    } else if (diffMins < 60) {
+      intervalMs = 60000 // Every minute for "Xm ago"
+    } else {
+      intervalMs = 60000 * 5 // Every 5 minutes for "Xh ago"
+    }
+
+    const interval = setInterval(() => {
+      setFormattedTime(formatTimestamp(dateString))
+    }, intervalMs)
+
+    return () => clearInterval(interval)
+  }, [dateString])
+
+  return formattedTime
 }
 
 function getInitials(name: string | null): string {
@@ -58,6 +152,129 @@ function getInitials(name: string | null): string {
   const parts = name.trim().split(/\s+/)
   if (parts.length === 1) return parts[0].charAt(0).toUpperCase()
   return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase()
+}
+
+// ============================================================================
+// Attachment Display Component
+// ============================================================================
+
+interface CommentAttachmentItemProps {
+  attachment: CommentAttachment
+}
+
+function CommentAttachmentItem({ attachment }: CommentAttachmentItemProps): JSX.Element {
+  const [imageUrl, setImageUrl] = useState<string | null>(null)
+  const [isLoadingUrl, setIsLoadingUrl] = useState(false)
+  const [isViewerOpen, setIsViewerOpen] = useState(false)
+  const { getDownloadUrl } = useFilesStore()
+
+  const isImage = isImageFile(attachment.file_type)
+
+  // Load image preview for image attachments
+  useEffect(() => {
+    if (isImage && !imageUrl && !isLoadingUrl) {
+      setIsLoadingUrl(true)
+      getDownloadUrl(attachment.id).then((url) => {
+        setImageUrl(url)
+        setIsLoadingUrl(false)
+      })
+    }
+  }, [isImage, imageUrl, isLoadingUrl, attachment.id, getDownloadUrl])
+
+  const handleDownload = useCallback(async () => {
+    const url = await getDownloadUrl(attachment.id)
+    if (url) {
+      window.open(url, '_blank')
+    }
+  }, [attachment.id, getDownloadUrl])
+
+  const handleOpenViewer = useCallback(() => {
+    if (imageUrl) {
+      setIsViewerOpen(true)
+    }
+  }, [imageUrl])
+
+  // Image attachment - show preview
+  if (isImage) {
+    return (
+      <>
+        <div className="group relative mt-2 max-w-xs overflow-hidden rounded-lg border border-border/50 bg-muted/20">
+          {imageUrl ? (
+            <img
+              src={imageUrl}
+              alt={attachment.file_name}
+              className="max-h-48 w-full object-contain cursor-pointer hover:opacity-90 transition-opacity"
+              onClick={handleOpenViewer}
+            />
+          ) : (
+            <div className="flex h-32 w-full items-center justify-center bg-muted/50">
+              <FileImage className="h-8 w-8 text-muted-foreground animate-pulse" />
+            </div>
+          )}
+          <div className="absolute inset-0 flex items-center justify-center gap-2 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              onClick={handleOpenViewer}
+              className="flex items-center gap-1.5 rounded-md bg-white/90 px-3 py-1.5 text-xs font-medium text-black hover:bg-white transition-colors"
+            >
+              <Maximize2 className="h-3.5 w-3.5" />
+              View
+            </button>
+            <button
+              onClick={handleDownload}
+              className="flex items-center gap-1.5 rounded-md bg-white/90 px-3 py-1.5 text-xs font-medium text-black hover:bg-white transition-colors"
+            >
+              <Download className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="px-2 py-1.5 border-t border-border/30 bg-card/50">
+            <p className="truncate text-xs text-muted-foreground" title={attachment.file_name}>
+              {attachment.file_name}
+            </p>
+          </div>
+        </div>
+
+        {/* Image Viewer Modal */}
+        {imageUrl && (
+          <ImageViewer
+            src={imageUrl}
+            alt={attachment.file_name}
+            fileName={attachment.file_name}
+            isOpen={isViewerOpen}
+            onClose={() => setIsViewerOpen(false)}
+          />
+        )}
+      </>
+    )
+  }
+
+  // Non-image attachment - show file card
+  return (
+    <button
+      onClick={handleDownload}
+      className={cn(
+        'group mt-2 flex items-center gap-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2',
+        'hover:border-border hover:bg-muted/40 transition-all cursor-pointer',
+        'text-left w-full max-w-xs'
+      )}
+    >
+      <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md bg-primary/10">
+        {attachment.file_type?.includes('pdf') ? (
+          <FileText className="h-5 w-5 text-red-500" />
+        ) : (
+          <File className="h-5 w-5 text-muted-foreground" />
+        )}
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium text-foreground" title={attachment.file_name}>
+          {attachment.file_name}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          {formatFileSize(attachment.file_size)}
+        </p>
+      </div>
+      <Download className="h-4 w-4 flex-shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+    </button>
+  )
 }
 
 // ============================================================================
@@ -76,6 +293,14 @@ export function CommentItem({
   const [showActions, setShowActions] = useState(false)
   const [editMode, setEditMode] = useState(false)
   const [editText, setEditText] = useState(comment.body_text || '')
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+
+  // Use hook for auto-updating relative timestamps
+  const timestamp = useRelativeTime(comment.created_at)
+
+  // Check if comment was edited (updated_at differs from created_at)
+  const wasEdited = comment.updated_at && comment.updated_at !== comment.created_at
+  const editedTimestamp = useRelativeTime(wasEdited ? comment.updated_at : null)
 
   const isOwnComment = currentUserId && comment.author_id === currentUserId
   const canModify = isOwnComment && !comment.is_deleted
@@ -92,10 +317,17 @@ export function CommentItem({
     setEditMode(false)
   }, [comment.body_text])
 
-  const handleDelete = useCallback(() => {
+  const handleDeleteClick = useCallback(() => {
+    if (onDelete) {
+      setShowDeleteConfirm(true)
+    }
+  }, [onDelete])
+
+  const handleConfirmDelete = useCallback(() => {
     if (onDelete) {
       onDelete(comment.id)
     }
+    setShowDeleteConfirm(false)
   }, [comment.id, onDelete])
 
   // Deleted comment display
@@ -150,10 +382,12 @@ export function CommentItem({
             {comment.author_name || 'Unknown user'}
           </span>
           <span className="text-xs text-muted-foreground">
-            {formatTimestamp(comment.created_at)}
+            {timestamp}
           </span>
-          {comment.updated_at && comment.updated_at !== comment.created_at && (
-            <span className="text-xs text-muted-foreground">(edited)</span>
+          {wasEdited && editedTimestamp && (
+            <span className="text-xs text-muted-foreground" title={`Edited ${editedTimestamp}`}>
+              (edited {editedTimestamp})
+            </span>
           )}
         </div>
 
@@ -207,9 +441,20 @@ export function CommentItem({
             </div>
           </div>
         ) : (
-          <div className="text-sm text-foreground whitespace-pre-wrap break-words">
-            {renderCommentContent(comment)}
-          </div>
+          <>
+            <div className="text-sm text-foreground whitespace-pre-wrap break-words">
+              {renderCommentContent(comment)}
+            </div>
+
+            {/* Attachments */}
+            {comment.attachments && comment.attachments.length > 0 && (
+              <div className="mt-2 space-y-1">
+                {comment.attachments.map((attachment) => (
+                  <CommentAttachmentItem key={attachment.id} attachment={attachment} />
+                ))}
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -234,7 +479,7 @@ export function CommentItem({
           )}
           {onDelete && (
             <button
-              onClick={handleDelete}
+              onClick={handleDeleteClick}
               disabled={disabled}
               className={cn(
                 'flex h-6 w-6 items-center justify-center rounded-md',
@@ -250,6 +495,17 @@ export function CommentItem({
           )}
         </div>
       )}
+
+      {/* Delete Confirmation Dialog */}
+      <ConfirmDialog
+        open={showDeleteConfirm}
+        onOpenChange={setShowDeleteConfirm}
+        title="Delete comment?"
+        description="Are you sure you want to delete this comment? This action cannot be undone."
+        confirmLabel="Delete"
+        variant="destructive"
+        onConfirm={handleConfirmDelete}
+      />
     </div>
   )
 }

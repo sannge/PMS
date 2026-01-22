@@ -234,7 +234,7 @@ function sanitizeText(text: string): string {
  */
 function isValidNotificationType(
   type: string
-): type is ShowNotificationOptions['type'] {
+): type is 'info' | 'success' | 'warning' | 'error' | 'task' | 'mention' | 'comment' {
   const validTypes = ['info', 'success', 'warning', 'error', 'task', 'mention', 'comment']
   return validTypes.includes(type)
 }

@@ -11,10 +11,12 @@
 
 import { useEffect, useCallback, useState, useRef } from 'react'
 import { cn } from '@/lib/utils'
-import { CheckSquare, Plus, Loader2, AlertCircle, X } from 'lucide-react'
+import { CheckSquare, Plus, AlertCircle, X } from 'lucide-react'
 import { useChecklistsStore } from '@/stores/checklists-store'
 import { useAuthStore } from '@/stores/auth-store'
 import { ChecklistCard } from './ChecklistCard'
+import { SkeletonChecklists } from '@/components/ui/skeleton'
+import { wsClient, MessageType } from '@/lib/websocket'
 
 // ============================================================================
 // Types
@@ -23,6 +25,10 @@ import { ChecklistCard } from './ChecklistCard'
 export interface ChecklistPanelProps {
   taskId: string
   className?: string
+  /**
+   * Whether the user can edit checklists (add/edit/delete)
+   */
+  canEdit?: boolean
 }
 
 // ============================================================================
@@ -32,6 +38,7 @@ export interface ChecklistPanelProps {
 export function ChecklistPanel({
   taskId,
   className,
+  canEdit = true,
 }: ChecklistPanelProps): JSX.Element {
   const token = useAuthStore((state) => state.token)
   const [isAdding, setIsAdding] = useState(false)
@@ -41,7 +48,6 @@ export function ChecklistPanel({
   const {
     checklists,
     isLoading,
-    isCreating,
     error,
     fetchChecklists,
     createChecklist,
@@ -54,6 +60,14 @@ export function ChecklistPanel({
     reorderItems,
     getProgress,
     clearError,
+    handleChecklistUpdated,
+    handleChecklistDeleted,
+    handleChecklistsReordered,
+    handleItemToggled,
+    handleItemAdded,
+    handleItemUpdated,
+    handleItemDeleted,
+    handleItemsReordered,
   } = useChecklistsStore()
 
   // Fetch checklists on mount
@@ -68,6 +82,106 @@ export function ChecklistPanel({
     }
   }, [isAdding])
 
+  // Subscribe to WebSocket events for real-time updates
+  useEffect(() => {
+    if (!taskId) return
+
+    const roomId = `task:${taskId}`
+
+    // Join the room for this task
+    wsClient.joinRoom(roomId)
+
+    // Handle checklist created event
+    const onChecklistCreated = (data: { d?: { id: string; tid: string; title: string } }) => {
+      if (data.d?.tid === taskId) {
+        // Fetch fresh data since the WebSocket only sends minimal data
+        fetchChecklists(token, taskId)
+      }
+    }
+
+    // Handle checklist updated event
+    const onChecklistUpdated = (data: { d?: { id: string; title: string } }) => {
+      if (data.d?.id) {
+        handleChecklistUpdated(data.d.id, data.d.title)
+      }
+    }
+
+    // Handle checklist deleted event
+    const onChecklistDeleted = (data: { d?: { id: string } }) => {
+      if (data.d?.id) {
+        handleChecklistDeleted(data.d.id)
+      }
+    }
+
+    // Handle item toggled event
+    const onItemToggled = (data: { d?: { id: string; clid: string; done: boolean } }) => {
+      if (data.d?.clid && data.d?.id) {
+        handleItemToggled(data.d.clid, data.d.id, data.d.done)
+      }
+    }
+
+    // Handle item added event - refetch to get full item data
+    const onItemAdded = (data: { d?: { clid: string } }) => {
+      if (data.d?.clid) {
+        // Refetch to get full item data
+        fetchChecklists(token, taskId)
+      }
+    }
+
+    // Handle item updated event
+    const onItemUpdated = (data: { d?: { id: string; content: string } }) => {
+      if (data.d?.id) {
+        handleItemUpdated(data.d.id, data.d.content)
+      }
+    }
+
+    // Handle item deleted event
+    const onItemDeleted = (data: { d?: { id: string; clid: string } }) => {
+      if (data.d?.clid && data.d?.id) {
+        handleItemDeleted(data.d.clid, data.d.id)
+      }
+    }
+
+    // Handle checklists reordered event
+    const onChecklistsReordered = (data: { d?: { ids: string[] } }) => {
+      if (data.d?.ids) {
+        handleChecklistsReordered(data.d.ids)
+      }
+    }
+
+    // Handle items reordered event
+    const onItemsReordered = (data: { d?: { clid: string; ids: string[] } }) => {
+      if (data.d?.clid && data.d?.ids) {
+        handleItemsReordered(data.d.clid, data.d.ids)
+      }
+    }
+
+    // Subscribe to events
+    wsClient.on(MessageType.CHECKLIST_CREATED, onChecklistCreated)
+    wsClient.on(MessageType.CHECKLIST_UPDATED, onChecklistUpdated)
+    wsClient.on(MessageType.CHECKLIST_DELETED, onChecklistDeleted)
+    wsClient.on(MessageType.CHECKLISTS_REORDERED, onChecklistsReordered)
+    wsClient.on(MessageType.CHECKLIST_ITEM_TOGGLED, onItemToggled)
+    wsClient.on(MessageType.CHECKLIST_ITEM_ADDED, onItemAdded)
+    wsClient.on(MessageType.CHECKLIST_ITEM_UPDATED, onItemUpdated)
+    wsClient.on(MessageType.CHECKLIST_ITEM_DELETED, onItemDeleted)
+    wsClient.on(MessageType.CHECKLIST_ITEMS_REORDERED, onItemsReordered)
+
+    // Cleanup: leave room and unsubscribe
+    return () => {
+      wsClient.leaveRoom(roomId)
+      wsClient.off(MessageType.CHECKLIST_CREATED, onChecklistCreated)
+      wsClient.off(MessageType.CHECKLIST_UPDATED, onChecklistUpdated)
+      wsClient.off(MessageType.CHECKLIST_DELETED, onChecklistDeleted)
+      wsClient.off(MessageType.CHECKLISTS_REORDERED, onChecklistsReordered)
+      wsClient.off(MessageType.CHECKLIST_ITEM_TOGGLED, onItemToggled)
+      wsClient.off(MessageType.CHECKLIST_ITEM_ADDED, onItemAdded)
+      wsClient.off(MessageType.CHECKLIST_ITEM_UPDATED, onItemUpdated)
+      wsClient.off(MessageType.CHECKLIST_ITEM_DELETED, onItemDeleted)
+      wsClient.off(MessageType.CHECKLIST_ITEMS_REORDERED, onItemsReordered)
+    }
+  }, [taskId, token, fetchChecklists, handleChecklistUpdated, handleChecklistDeleted, handleChecklistsReordered, handleItemToggled, handleItemAdded, handleItemUpdated, handleItemDeleted, handleItemsReordered])
+
   // Get progress
   const progress = getProgress()
 
@@ -76,9 +190,12 @@ export function ChecklistPanel({
     const trimmed = newTitle.trim()
     if (!trimmed) return
 
-    await createChecklist(token, taskId, { title: trimmed })
+    // Clear form immediately since we use optimistic updates
     setNewTitle('')
     setIsAdding(false)
+
+    // Create checklist (appears instantly via optimistic update)
+    await createChecklist(token, taskId, { title: trimmed })
   }, [token, taskId, newTitle, createChecklist])
 
   const handleTitleUpdate = useCallback(
@@ -103,8 +220,8 @@ export function ChecklistPanel({
   )
 
   const handleItemUpdate = useCallback(
-    async (itemId: string, text: string) => {
-      await updateItem(token, itemId, text)
+    async (itemId: string, content: string) => {
+      await updateItem(token, itemId, content)
     },
     [token, updateItem]
   )
@@ -117,8 +234,8 @@ export function ChecklistPanel({
   )
 
   const handleItemCreate = useCallback(
-    async (checklistId: string, text: string) => {
-      await createItem(token, checklistId, { text })
+    async (checklistId: string, content: string) => {
+      await createItem(token, checklistId, { content })
     },
     [token, createItem]
   )
@@ -130,15 +247,23 @@ export function ChecklistPanel({
     [token, reorderItems]
   )
 
-  // Sort checklists by position
-  const sortedChecklists = [...checklists].sort((a, b) => a.position - b.position)
+  // Checklists are already sorted by rank from the store
+  const sortedChecklists = checklists
 
-  // Loading state
+  // Loading state - show skeleton
   if (isLoading && checklists.length === 0) {
     return (
-      <div className={cn('flex flex-col', className)}>
-        <div className="flex items-center justify-center py-8">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      <div className={cn('flex flex-col h-full', className)}>
+        {/* Header */}
+        <div className="flex items-center justify-between px-2 py-2 border-b border-border">
+          <div className="flex items-center gap-2">
+            <CheckSquare className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm font-medium text-foreground">Checklists</span>
+          </div>
+        </div>
+        {/* Skeleton content */}
+        <div className="flex-1 overflow-y-auto p-3">
+          <SkeletonChecklists count={2} />
         </div>
       </div>
     )
@@ -177,8 +302,8 @@ export function ChecklistPanel({
         )}
       </div>
 
-      {/* Error banner */}
-      {error && (
+      {/* Error banner - hide permission errors since UI already disables actions */}
+      {error && !error.message.toLowerCase().includes('access denied') && !error.message.toLowerCase().includes('permission') && (
         <div className="flex items-center gap-2 px-3 py-2 bg-destructive/10 border-b border-destructive/20">
           <AlertCircle className="h-4 w-4 text-destructive flex-shrink-0" />
           <p className="text-xs text-destructive flex-1">{error.message}</p>
@@ -195,20 +320,22 @@ export function ChecklistPanel({
           <div className="flex flex-col items-center justify-center py-8 px-4">
             <CheckSquare className="h-10 w-10 text-muted-foreground/50 mb-2" />
             <p className="text-sm text-muted-foreground text-center mb-3">
-              No checklists yet. Add one to track sub-tasks.
+              {canEdit ? 'No checklists yet. Add one to track sub-tasks.' : 'No checklists yet.'}
             </p>
-            <button
-              onClick={() => setIsAdding(true)}
-              className={cn(
-                'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md',
-                'bg-primary text-primary-foreground text-sm font-medium',
-                'hover:bg-primary/90',
-                'transition-colors'
-              )}
-            >
-              <Plus className="h-4 w-4" />
-              Add checklist
-            </button>
+            {canEdit && (
+              <button
+                onClick={() => setIsAdding(true)}
+                className={cn(
+                  'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md',
+                  'bg-primary text-primary-foreground text-sm font-medium',
+                  'hover:bg-primary/90',
+                  'transition-colors'
+                )}
+              >
+                <Plus className="h-4 w-4" />
+                Add checklist
+              </button>
+            )}
           </div>
         )}
 
@@ -217,19 +344,19 @@ export function ChecklistPanel({
           <ChecklistCard
             key={checklist.id}
             checklist={checklist}
-            onTitleUpdate={handleTitleUpdate}
-            onDelete={handleDelete}
-            onItemToggle={handleItemToggle}
-            onItemUpdate={handleItemUpdate}
-            onItemDelete={handleItemDelete}
-            onItemCreate={handleItemCreate}
-            onItemReorder={handleItemReorder}
-            disabled={isCreating}
+            onTitleUpdate={canEdit ? handleTitleUpdate : undefined}
+            onDelete={canEdit ? handleDelete : undefined}
+            onItemToggle={canEdit ? handleItemToggle : undefined}
+            onItemUpdate={canEdit ? handleItemUpdate : undefined}
+            onItemDelete={canEdit ? handleItemDelete : undefined}
+            onItemCreate={canEdit ? handleItemCreate : undefined}
+            onItemReorder={canEdit ? handleItemReorder : undefined}
+            disabled={checklist.id.startsWith('temp-')}
           />
         ))}
 
         {/* Add checklist */}
-        {isAdding ? (
+        {canEdit && isAdding ? (
           <div className="flex items-center gap-2 p-2 rounded-lg border border-dashed border-border">
             <CheckSquare className="h-4 w-4 flex-shrink-0 text-primary" />
             <input
@@ -252,11 +379,10 @@ export function ChecklistPanel({
                 'placeholder:text-muted-foreground',
                 'focus:outline-none focus:ring-1 focus:ring-ring'
               )}
-              disabled={isCreating}
             />
             <button
               onClick={handleCreateChecklist}
-              disabled={!newTitle.trim() || isCreating}
+              disabled={!newTitle.trim()}
               className={cn(
                 'px-3 py-1.5 rounded-md',
                 'bg-primary text-primary-foreground text-xs font-medium',
@@ -265,7 +391,7 @@ export function ChecklistPanel({
                 'transition-colors'
               )}
             >
-              {isCreating ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Add'}
+              Add
             </button>
             <button
               onClick={() => {
@@ -281,7 +407,7 @@ export function ChecklistPanel({
             </button>
           </div>
         ) : (
-          sortedChecklists.length > 0 && (
+          canEdit && sortedChecklists.length > 0 && (
             <button
               onClick={() => setIsAdding(true)}
               className={cn(

@@ -34,7 +34,9 @@ export type ApplicationRole = 'owner' | 'editor' | 'viewer'
 export interface UserSummary {
   id: string
   email: string
+  display_name: string | null
   full_name: string | null
+  avatar_url: string | null
 }
 
 /**

@@ -33,7 +33,8 @@ import {
   X,
   ArrowLeft,
 } from 'lucide-react'
-import { SkeletonRowCardList, ProgressBar, PulseIndicator } from '@/components/ui/skeleton'
+import { SkeletonRowCardList, PulseIndicator } from '@/components/ui/skeleton'
+import { Loader2 } from 'lucide-react'
 
 // ============================================================================
 // Types

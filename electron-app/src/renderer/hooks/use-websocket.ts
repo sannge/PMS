@@ -902,6 +902,7 @@ export interface ProjectMemberAddedEventData {
     id: string
     email: string
     display_name: string | null
+    full_name: string | null
     avatar_url: string | null
   }
   added_by: string

@@ -17,7 +17,6 @@
  */
 
 import { useCallback, useEffect } from 'react'
-import { shallow } from 'zustand/shallow'
 import {
   useAuthStore,
   selectUser,

@@ -20,8 +20,6 @@ import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 import { getAuthHeaders } from '@/stores/auth-store'
 import {
-  LayoutGrid,
-  List,
   Plus,
   AlertCircle,
   ChevronRight,
@@ -241,61 +239,6 @@ function getTaskTypeIcon(taskType: TaskType): JSX.Element {
   }
 }
 
-/**
- * Get derived status display info (icon, color, label)
- */
-function getDerivedStatusInfo(status: ProjectDerivedStatus | null | undefined): {
-  icon: JSX.Element
-  label: string
-  color: string
-  bgColor: string
-  textColor: string
-} {
-  switch (status) {
-    case 'Done':
-      return {
-        icon: <CheckCircle2 className="h-4 w-4" />,
-        label: 'Done',
-        color: 'bg-green-500',
-        bgColor: 'bg-green-500/10',
-        textColor: 'text-green-600 dark:text-green-400',
-      }
-    case 'Issue':
-      return {
-        icon: <AlertTriangle className="h-4 w-4" />,
-        label: 'Issue',
-        color: 'bg-red-500',
-        bgColor: 'bg-red-500/10',
-        textColor: 'text-red-600 dark:text-red-400',
-      }
-    case 'In Review':
-      return {
-        icon: <Eye className="h-4 w-4" />,
-        label: 'In Review',
-        color: 'bg-purple-500',
-        bgColor: 'bg-purple-500/10',
-        textColor: 'text-purple-600 dark:text-purple-400',
-      }
-    case 'In Progress':
-      return {
-        icon: <Timer className="h-4 w-4" />,
-        label: 'In Progress',
-        color: 'bg-blue-500',
-        bgColor: 'bg-blue-500/10',
-        textColor: 'text-blue-600 dark:text-blue-400',
-      }
-    case 'Todo':
-    default:
-      return {
-        icon: <Circle className="h-4 w-4" />,
-        label: 'Todo',
-        color: 'bg-slate-500',
-        bgColor: 'bg-slate-500/10',
-        textColor: 'text-slate-500 dark:text-slate-400',
-      }
-  }
-}
-
 // ============================================================================
 // Task Card Component
 // ============================================================================
@@ -448,7 +391,7 @@ function BoardColumnComponent({
           /* Virtualized rendering for large lists */
           <Virtuoso
             data={tasks}
-            itemContent={(index, task) => (
+            itemContent={(_index, task) => (
               <div className="pb-2">
                 <TaskCard
                   key={task.id}
@@ -612,7 +555,7 @@ function ListView({ tasks, onTaskClick, getTaskViewers, isLoading }: ListViewPro
                   /* Virtualized rendering for large lists */
                   <Virtuoso
                     data={columnTasks}
-                    itemContent={(index, task) => (
+                    itemContent={(_index, task) => (
                       <ListTaskRow
                         key={task.id}
                         task={task}
@@ -655,8 +598,8 @@ function ListView({ tasks, onTaskClick, getTaskViewers, isLoading }: ListViewPro
 
 export function ProjectBoard({
   projectId,
-  projectKey,
-  derivedStatus,
+  projectKey: _projectKey,
+  derivedStatus: _derivedStatus,
   onTaskClick,
   onAddTask,
   getTaskViewers,
@@ -665,7 +608,7 @@ export function ProjectBoard({
   onRefresh,
 }: ProjectBoardProps): JSX.Element {
   // State
-  const [viewMode, setViewMode] = useState<'board' | 'list'>('board')
+  const [viewMode, _setViewMode] = useState<'board' | 'list'>('board')
   const [tasks, setTasks] = useState<Task[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -688,7 +631,7 @@ export function ProjectBoard({
         if (!exists) {
           setRealtimeNotice('New task added')
           setTimeout(() => setRealtimeNotice(null), 3000)
-          return [...currentTasks, data.task as Task]
+          return [...currentTasks, data.task as unknown as Task]
         }
         return currentTasks
       } else if (data.action === 'updated' && data.task) {
@@ -698,7 +641,7 @@ export function ProjectBoard({
           setRealtimeNotice('Task updated')
           setTimeout(() => setRealtimeNotice(null), 3000)
           const newTasks = [...currentTasks]
-          newTasks[index] = data.task as Task
+          newTasks[index] = data.task as unknown as Task
           return newTasks
         }
         return currentTasks
@@ -718,7 +661,7 @@ export function ProjectBoard({
           setRealtimeNotice('Task status changed')
           setTimeout(() => setRealtimeNotice(null), 3000)
           const newTasks = [...currentTasks]
-          newTasks[index] = data.task as Task
+          newTasks[index] = data.task as unknown as Task
           return newTasks
         }
         return currentTasks
@@ -729,9 +672,6 @@ export function ProjectBoard({
 
   // Subscribe to task updates via WebSocket
   useTaskUpdates(enableRealtime ? projectId : null, handleTaskUpdate)
-
-  // Ref to track refresh requests
-  const refreshCountRef = useRef(0)
 
   // Fetch tasks function
   const fetchTasks = useCallback(async () => {

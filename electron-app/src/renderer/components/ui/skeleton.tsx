@@ -641,6 +641,190 @@ export function SkeletonListView({ className }: { className?: string }): JSX.Ele
 }
 
 // ============================================================================
+// Attachment, Checklist & Comment Skeletons
+// ============================================================================
+
+/**
+ * Attachment grid item skeleton
+ */
+export function SkeletonAttachmentGrid({ className }: { className?: string }): JSX.Element {
+  return (
+    <div className={cn(
+      'rounded-lg border border-border/40 bg-card overflow-hidden',
+      className
+    )}>
+      {/* Thumbnail */}
+      <Skeleton className="h-32 w-full rounded-none" />
+      {/* Info */}
+      <div className="p-3 space-y-1.5">
+        <Skeleton className="h-3.5 w-3/4" />
+        <Skeleton className="h-2.5 w-12" />
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Attachment list item skeleton
+ */
+export function SkeletonAttachmentList({ className }: { className?: string }): JSX.Element {
+  return (
+    <div className={cn(
+      'flex items-center gap-3 rounded-md border border-border/40 bg-card p-3',
+      className
+    )}>
+      <Skeleton className="h-5 w-5 rounded" />
+      <div className="flex-1 space-y-1">
+        <Skeleton className="h-3.5 w-48" />
+        <Skeleton className="h-2.5 w-24" />
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Attachments section skeleton
+ */
+export function SkeletonAttachments({
+  viewMode = 'list',
+  count = 3,
+  className,
+}: {
+  viewMode?: 'grid' | 'list'
+  count?: number
+  className?: string
+}): JSX.Element {
+  if (viewMode === 'grid') {
+    return (
+      <div className={cn('grid grid-cols-2 gap-3 sm:grid-cols-3', className)}>
+        {Array.from({ length: count }).map((_, i) => (
+          <SkeletonAttachmentGrid key={i} />
+        ))}
+      </div>
+    )
+  }
+
+  return (
+    <div className={cn('space-y-2', className)}>
+      {Array.from({ length: count }).map((_, i) => (
+        <SkeletonAttachmentList key={i} />
+      ))}
+    </div>
+  )
+}
+
+/**
+ * Checklist item skeleton
+ */
+export function SkeletonChecklistItem({ className }: { className?: string }): JSX.Element {
+  return (
+    <div className={cn('flex items-center gap-3 py-1.5', className)}>
+      <Skeleton className="h-4 w-4 rounded" />
+      <Skeleton className="h-3.5 flex-1 max-w-[200px]" />
+    </div>
+  )
+}
+
+/**
+ * Checklist card skeleton
+ */
+export function SkeletonChecklistCard({
+  itemCount = 3,
+  className,
+}: {
+  itemCount?: number
+  className?: string
+}): JSX.Element {
+  return (
+    <div className={cn(
+      'rounded-lg border border-border/40 bg-card p-3',
+      className
+    )}>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-4 w-4 rounded" />
+          <Skeleton className="h-4 w-24" />
+        </div>
+        <Skeleton className="h-3 w-12" />
+      </div>
+      {/* Progress bar */}
+      <Skeleton className="h-1.5 w-full rounded-full mb-3" />
+      {/* Items */}
+      <div className="space-y-1">
+        {Array.from({ length: itemCount }).map((_, i) => (
+          <SkeletonChecklistItem key={i} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Checklists section skeleton
+ */
+export function SkeletonChecklists({
+  count = 2,
+  className,
+}: {
+  count?: number
+  className?: string
+}): JSX.Element {
+  return (
+    <div className={cn('space-y-3', className)}>
+      {Array.from({ length: count }).map((_, i) => (
+        <SkeletonChecklistCard key={i} itemCount={i === 0 ? 3 : 2} />
+      ))}
+    </div>
+  )
+}
+
+/**
+ * Comment skeleton
+ */
+export function SkeletonComment({ className }: { className?: string }): JSX.Element {
+  return (
+    <div className={cn('flex gap-3', className)}>
+      {/* Avatar */}
+      <Skeleton className="h-8 w-8 rounded-full flex-shrink-0" />
+      {/* Content */}
+      <div className="flex-1 space-y-2">
+        {/* Header */}
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-3.5 w-24" />
+          <Skeleton className="h-2.5 w-16" />
+        </div>
+        {/* Body */}
+        <div className="space-y-1.5">
+          <Skeleton className="h-3 w-full" />
+          <Skeleton className="h-3 w-4/5" />
+          <Skeleton className="h-3 w-2/3" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Comments section skeleton
+ */
+export function SkeletonComments({
+  count = 3,
+  className,
+}: {
+  count?: number
+  className?: string
+}): JSX.Element {
+  return (
+    <div className={cn('space-y-4', className)}>
+      {Array.from({ length: count }).map((_, i) => (
+        <SkeletonComment key={i} />
+      ))}
+    </div>
+  )
+}
+
+// ============================================================================
 // Overlay States
 // ============================================================================
 

@@ -803,7 +803,8 @@ export function ApplicationDetailPage({
     )
   }
 
-  const application = selectedApplication
+  // At this point, selectedApplication is guaranteed to be non-null due to early returns above
+  const application = selectedApplication!
 
   return (
     <div className="space-y-4">
@@ -1137,8 +1138,8 @@ export function ApplicationDetailPage({
         isLoading={isLoadingMembers}
         totalCount={members.length}
         currentUserId={currentUserId}
-        currentUserRole={userRole}
-        originalOwnerId={selectedApplication?.owner_id}
+        currentUserRole={userRole ?? undefined}
+        originalOwnerId={selectedApplication?.owner_id ?? undefined}
         isUpdatingRole={isUpdatingMemberRole}
         isRemovingMember={isRemovingMember}
         onEditRole={handleEditMemberRole}

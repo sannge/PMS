@@ -295,7 +295,7 @@ function DragOverlayCard({ task }: DragOverlayCardProps): JSX.Element {
 
 export function TaskKanbanBoard({
   projectId,
-  projectKey,
+  projectKey: _projectKey,
   onTaskClick,
   onAddTask,
   onTaskStatusChange,
@@ -345,7 +345,7 @@ export function TaskKanbanBoard({
           if (!exists) {
             setRealtimeNotice('New task added')
             setTimeout(() => setRealtimeNotice(null), 3000)
-            return [...currentTasks, data.task as Task]
+            return [...currentTasks, data.task as unknown as Task]
           }
           return currentTasks
         } else if (data.action === 'updated' && data.task) {
@@ -354,7 +354,7 @@ export function TaskKanbanBoard({
             setRealtimeNotice('Task updated')
             setTimeout(() => setRealtimeNotice(null), 3000)
             const newTasks = [...currentTasks]
-            newTasks[index] = data.task as Task
+            newTasks[index] = data.task as unknown as Task
             return newTasks
           }
           return currentTasks
@@ -372,7 +372,7 @@ export function TaskKanbanBoard({
             setRealtimeNotice('Task status changed')
             setTimeout(() => setRealtimeNotice(null), 3000)
             const newTasks = [...currentTasks]
-            newTasks[index] = data.task as Task
+            newTasks[index] = data.task as unknown as Task
             return newTasks
           }
           return currentTasks

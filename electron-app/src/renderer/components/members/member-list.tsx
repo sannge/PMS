@@ -18,7 +18,6 @@ import { useCallback } from 'react'
 import { cn } from '@/lib/utils'
 import {
   Users,
-  UserCircle2,
   Shield,
   Crown,
   Eye,
@@ -295,7 +294,6 @@ function MemberItem({
   const isUserOwner = currentUserRole === 'owner'
   const isUserEditor = currentUserRole === 'editor'
   const memberIsOwner = member.role === 'owner'
-  const memberIsEditor = member.role === 'editor'
   const memberIsViewer = member.role === 'viewer'
 
   // Original owner cannot be edited/removed by anyone

@@ -25,7 +25,6 @@ import {
   LogOut,
   User,
   ChevronDown,
-  Command,
 } from 'lucide-react'
 
 // ============================================================================

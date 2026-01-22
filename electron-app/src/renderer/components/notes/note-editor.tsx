@@ -58,9 +58,7 @@ import {
   ChevronUp,
   Wifi,
   WifiOff,
-  Users,
 } from 'lucide-react'
-import { useFilesStore, type Attachment } from '@/stores/files-store'
 import { FileUpload } from '@/components/files/file-upload'
 import { AttachmentList } from '@/components/files/attachment-list'
 import {
@@ -470,11 +468,10 @@ export function NoteEditor({
   const [isAttachmentsExpanded, setIsAttachmentsExpanded] = useState(false)
   const [showUploadPanel, setShowUploadPanel] = useState(false)
   const [externalUpdateNotice, setExternalUpdateNotice] = useState<string | null>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
   const isLocalChange = useRef(false)
 
   // WebSocket connection for real-time updates
-  const { status, subscribe, joinRoom, leaveRoom, sendTyping } = useWebSocket()
+  const { status, subscribe, joinRoom, leaveRoom } = useWebSocket()
   const callbackRefs = useRef({ onExternalContentChange, onExternalDelete })
 
   // Keep callback refs up to date
@@ -498,8 +495,9 @@ export function NoteEditor({
         if (data.note_id === noteId && !isLocalChange.current) {
           setExternalUpdateNotice('Note updated by another user')
           setTimeout(() => setExternalUpdateNotice(null), 3000)
-          if (callbackRefs.current.onExternalContentChange && data.content) {
-            callbackRefs.current.onExternalContentChange(data.content)
+          const noteContent = (data.note as { content?: string })?.content
+          if (callbackRefs.current.onExternalContentChange && noteContent) {
+            callbackRefs.current.onExternalContentChange(noteContent)
           }
         }
       }
@@ -512,8 +510,9 @@ export function NoteEditor({
         if (data.note_id === noteId && !isLocalChange.current) {
           setExternalUpdateNotice('Note updated by another user')
           setTimeout(() => setExternalUpdateNotice(null), 3000)
-          if (callbackRefs.current.onExternalContentChange && data.content) {
-            callbackRefs.current.onExternalContentChange(data.content)
+          const noteContent = (data.note as { content?: string })?.content
+          if (callbackRefs.current.onExternalContentChange && noteContent) {
+            callbackRefs.current.onExternalContentChange(noteContent)
           }
         }
       }

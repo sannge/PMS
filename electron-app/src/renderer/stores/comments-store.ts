@@ -31,6 +31,17 @@ export interface Mention {
 }
 
 /**
+ * Attachment data embedded in a comment
+ */
+export interface CommentAttachment {
+  id: string
+  file_name: string
+  file_type: string | null
+  file_size: number | null
+  created_at: string
+}
+
+/**
  * Comment data from the API
  */
 export interface Comment {
@@ -45,6 +56,7 @@ export interface Comment {
   created_at: string
   updated_at: string | null
   mentions: Mention[]
+  attachments: CommentAttachment[]
 }
 
 /**
@@ -53,6 +65,7 @@ export interface Comment {
 export interface CommentCreate {
   body_json?: Record<string, unknown>
   body_text?: string
+  attachment_ids?: string[]
 }
 
 /**
@@ -267,34 +280,11 @@ export const useCommentsStore = create<CommentsState>((set, get) => ({
   },
 
   /**
-   * Create a new comment with optimistic update
+   * Create a new comment
+   * Note: No optimistic update - WebSocket handles adding the comment to avoid race conditions
    */
   createComment: async (token, taskId, data) => {
-    const tempId = `temp-${Date.now()}`
-    const now = new Date().toISOString()
-
-    // Create optimistic comment
-    const optimisticComment: Comment = {
-      id: tempId,
-      task_id: taskId,
-      author_id: '',
-      author_name: 'You',
-      author_avatar_url: null,
-      body_json: data.body_json || null,
-      body_text: data.body_text || '',
-      is_deleted: false,
-      created_at: now,
-      updated_at: null,
-      mentions: [],
-    }
-
-    // Optimistically add to the beginning (newest first)
-    const previousComments = get().comments
-    set({
-      comments: [optimisticComment, ...previousComments],
-      isCreating: true,
-      error: null,
-    })
+    set({ isCreating: true, error: null })
 
     try {
       if (!window.electronAPI) {
@@ -308,35 +298,28 @@ export const useCommentsStore = create<CommentsState>((set, get) => ({
       )
 
       if (response.status !== 201) {
-        // Rollback
         const error = parseApiError(response.status, response.data)
-        set({
-          comments: previousComments,
-          isCreating: false,
-          error,
-        })
+        set({ isCreating: false, error })
         return null
       }
 
       const comment = response.data
 
-      // Replace temp comment with real one
-      set({
-        comments: get().comments.map((c) => (c.id === tempId ? comment : c)),
-        isCreating: false,
-      })
+      // Add comment directly (WebSocket will also try to add it, but duplicate check will prevent it)
+      if (comment) {
+        const { comments } = get()
+        if (!comments.some((c) => c.id === comment.id)) {
+          set({ comments: [comment, ...comments] })
+        }
+      }
 
+      set({ isCreating: false })
       return comment
     } catch (err) {
-      // Rollback
       const error: CommentError = {
         message: err instanceof Error ? err.message : 'Failed to create comment',
       }
-      set({
-        comments: previousComments,
-        isCreating: false,
-        error,
-      })
+      set({ isCreating: false, error })
       return null
     }
   },
@@ -418,11 +401,9 @@ export const useCommentsStore = create<CommentsState>((set, get) => ({
   deleteComment: async (token, commentId) => {
     const previousComments = get().comments
 
-    // Optimistic delete (mark as deleted)
+    // Optimistic delete (remove from list)
     set({
-      comments: previousComments.map((c) =>
-        c.id === commentId ? { ...c, is_deleted: true, body_text: '[deleted]' } : c
-      ),
+      comments: previousComments.filter((c) => c.id !== commentId),
       isDeleting: true,
       error: null,
     })
@@ -470,8 +451,10 @@ export const useCommentsStore = create<CommentsState>((set, get) => ({
   handleCommentAdded: (comment) => {
     const { currentTaskId, comments } = get()
 
-    // Only add if it's for the current task and doesn't already exist
+    // Only add if it's for the current task
     if (comment.task_id !== currentTaskId) return
+
+    // Skip if already exists (handles both own comments and duplicates)
     if (comments.some((c) => c.id === comment.id)) return
 
     // Add to the beginning (newest first)
@@ -495,10 +478,9 @@ export const useCommentsStore = create<CommentsState>((set, get) => ({
   handleCommentDeleted: (commentId) => {
     const { comments } = get()
 
+    // Remove the comment entirely (hard delete)
     set({
-      comments: comments.map((c) =>
-        c.id === commentId ? { ...c, is_deleted: true, body_text: '[deleted]' } : c
-      ),
+      comments: comments.filter((c) => c.id !== commentId),
     })
   },
 

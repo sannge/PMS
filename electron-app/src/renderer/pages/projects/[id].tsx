@@ -32,7 +32,6 @@ import {
   Trash2,
   Loader2,
   AlertCircle,
-  ListTodo,
   Columns,
   RefreshCw,
   Info,
@@ -41,7 +40,7 @@ import {
   X,
   Shield,
 } from 'lucide-react'
-import { SkeletonProjectDetail, PulseIndicator } from '@/components/ui/skeleton'
+import { SkeletonProjectDetail } from '@/components/ui/skeleton'
 import { ProjectMemberPanel } from '@/components/projects/ProjectMemberPanel'
 import { ProjectStatusOverride } from '@/components/projects/ProjectStatusOverride'
 import { PresenceAvatars } from '@/components/presence'
@@ -487,14 +486,14 @@ export function ProjectDetailPage({
   const refreshBoardRef = useRef<(() => void) | null>(null)
 
   // Presence hook for real-time collaboration
-  const { viewers: presenceUsers, isConnected } = usePresence({
+  const { viewers: presenceUsers, isConnected: _isConnected } = usePresence({
     roomId: projectId,
     roomType: 'project',
     enabled: true,
   })
 
   // Task viewers hook for tracking who's viewing which task
-  const { getViewers, setViewing } = useTaskViewers({
+  const { getViewers: _getViewers, setViewing } = useTaskViewers({
     projectId,
     enabled: true,
   })
@@ -697,7 +696,8 @@ export function ProjectDetailPage({
     )
   }
 
-  const project = selectedProject
+  // At this point, selectedProject is guaranteed to be non-null due to early returns above
+  const project = selectedProject!
   const typeInfo = getProjectTypeInfo(project.project_type)
 
   return (
@@ -924,7 +924,7 @@ export function ProjectDetailPage({
             assignees={assigneeOptions}
             isSubmitting={isCreatingTask}
             error={taskError?.message}
-            onSubmit={handleCreateTask}
+            onSubmit={handleCreateTask as (data: TaskCreate | TaskUpdate) => void}
             onCancel={handleCloseTaskForm}
           />
         </Modal>
@@ -941,6 +941,8 @@ export function ProjectDetailPage({
           onClose={handleCloseTaskDetail}
           onUpdate={canEditTasks ? handleTaskUpdate : undefined}
           onDelete={canEditTasks ? handleTaskDelete : undefined}
+          canEdit={canEditTasks}
+          applicationId={project.application_id}
           onExternalUpdate={(updatedTask) => {
             setSelectedTask(updatedTask)
             fetchProject(token, projectId)

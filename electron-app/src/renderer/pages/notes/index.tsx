@@ -41,7 +41,7 @@ import {
   ChevronRight,
   Loader2,
 } from 'lucide-react'
-import { Skeleton, SkeletonNoteContent, PulseIndicator } from '@/components/ui/skeleton'
+import { Skeleton, PulseIndicator } from '@/components/ui/skeleton'
 
 // ============================================================================
 // Types
@@ -654,7 +654,7 @@ export function NotesPage({
     isUpdating,
     isDeleting,
     error,
-    currentApplicationId,
+    currentApplicationId: _currentApplicationId,
     fetchNoteTree,
     createNote,
     updateNote,

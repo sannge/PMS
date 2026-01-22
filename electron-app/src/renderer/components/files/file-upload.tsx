@@ -19,12 +19,6 @@ import {
   Upload,
   X,
   File,
-  FileImage,
-  FileVideo,
-  FileAudio,
-  FileText,
-  FileCode,
-  FileArchive,
   Loader2,
   CheckCircle2,
   AlertCircle,
@@ -34,7 +28,6 @@ import {
   type EntityType,
   type UploadProgress,
   formatFileSize,
-  getFileIconType,
 } from '@/stores/files-store'
 
 // ============================================================================
@@ -92,39 +85,6 @@ const MAX_FILE_SIZE = 100 * 1024 * 1024 // 100MB default
 
 // ============================================================================
 // Helper Functions
-// ============================================================================
-
-/**
- * Get icon component for file type
- */
-function getFileIcon(fileType: string | null, fileName: string): JSX.Element {
-  const iconType = getFileIconType(fileType, fileName)
-
-  switch (iconType) {
-    case 'image':
-      return <FileImage className="h-5 w-5 text-blue-500" />
-    case 'video':
-      return <FileVideo className="h-5 w-5 text-purple-500" />
-    case 'audio':
-      return <FileAudio className="h-5 w-5 text-green-500" />
-    case 'pdf':
-      return <FileText className="h-5 w-5 text-red-500" />
-    case 'word':
-    case 'text':
-      return <FileText className="h-5 w-5 text-blue-600" />
-    case 'excel':
-      return <FileText className="h-5 w-5 text-green-600" />
-    case 'powerpoint':
-      return <FileText className="h-5 w-5 text-orange-500" />
-    case 'archive':
-      return <FileArchive className="h-5 w-5 text-yellow-600" />
-    case 'code':
-      return <FileCode className="h-5 w-5 text-slate-600" />
-    default:
-      return <File className="h-5 w-5 text-muted-foreground" />
-  }
-}
-
 // ============================================================================
 // Sub-Components
 // ============================================================================
@@ -298,7 +258,7 @@ export function FileUpload({
 
   // Remove a completed/error upload from list
   const handleRemoveUpload = useCallback(
-    (uploadId: string) => {
+    (_uploadId: string) => {
       // For simplicity, we clear all non-pending uploads
       clearUploads()
     },

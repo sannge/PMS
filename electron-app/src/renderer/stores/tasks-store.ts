@@ -77,6 +77,10 @@ export interface Task {
 
   // Optimistic concurrency control
   row_version: number
+
+  // Checklist aggregates (populated by API)
+  checklist_total?: number
+  checklist_done?: number
 }
 
 /**

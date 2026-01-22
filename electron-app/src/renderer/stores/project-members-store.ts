@@ -37,6 +37,7 @@ export interface UserSummary {
   id: string
   email: string
   display_name: string | null
+  full_name: string | null
   avatar_url: string | null
 }
 
@@ -222,7 +223,7 @@ export const useProjectMembersStore = create<ProjectMembersState>((set, get) => 
   /**
    * Fetch application members who are not yet project members
    */
-  fetchAvailableMembers: async (token, projectId, applicationId) => {
+  fetchAvailableMembers: async (token, _projectId, applicationId) => {
     set({ isLoadingAvailable: true, error: null })
 
     try {

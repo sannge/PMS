@@ -262,7 +262,7 @@ export function NotesTabBar({
   onCloseOtherTabs,
   onSaveTab,
   className,
-}: NotesTabBarProps): JSX.Element {
+}: NotesTabBarProps): JSX.Element | null {
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const [canScrollLeft, setCanScrollLeft] = useState(false)
   const [canScrollRight, setCanScrollRight] = useState(false)

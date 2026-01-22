@@ -313,9 +313,10 @@ export function TaskCard({
   onClick,
   onEdit,
   onDelete,
-  onStatusChange,
+  onStatusChange: _onStatusChange,
   viewers = [],
   disabled = false,
+  showDragHandle: _showDragHandle,
   variant = 'default',
   className,
 }: TaskCardProps): JSX.Element {
@@ -329,15 +330,6 @@ export function TaskCard({
       }
     },
     [task, disabled, onClick]
-  )
-
-  const handleStatusChange = useCallback(
-    (status: TaskStatus) => {
-      if (!disabled && onStatusChange) {
-        onStatusChange(task, status)
-      }
-    },
-    [task, disabled, onStatusChange]
   )
 
   const priorityConfig = PRIORITY_CONFIG[task.priority]

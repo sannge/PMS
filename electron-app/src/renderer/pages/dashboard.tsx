@@ -31,9 +31,7 @@ import {
   StickyNote,
   LayoutDashboard,
   ArrowRight,
-  Clock,
   CheckCircle2,
-  AlertCircle,
   TrendingUp,
   TrendingDown,
   Sparkles,
@@ -72,14 +70,6 @@ interface QuickActionProps {
   color: 'amber' | 'violet' | 'emerald'
   onClick?: () => void
   index?: number
-}
-
-interface RecentActivityProps {
-  type: 'task' | 'project' | 'note'
-  title: string
-  description: string
-  time: string
-  status?: 'completed' | 'in-progress' | 'pending'
 }
 
 // ============================================================================
@@ -226,55 +216,6 @@ function QuickAction({ icon, label, description, color, onClick, index = 0 }: Qu
         <ArrowRight className="h-5 w-5 text-accent" />
       </div>
     </button>
-  )
-}
-
-function RecentActivityItem({ type, title, description, time, status }: RecentActivityProps): JSX.Element {
-  const getIcon = () => {
-    switch (type) {
-      case 'task':
-        return <ListTodo className="h-4 w-4" />
-      case 'project':
-        return <FolderKanban className="h-4 w-4" />
-      case 'note':
-        return <StickyNote className="h-4 w-4" />
-    }
-  }
-
-  const getStatusIcon = () => {
-    switch (status) {
-      case 'completed':
-        return <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-      case 'in-progress':
-        return <Activity className="h-4 w-4 text-amber-500" />
-      case 'pending':
-        return <Clock className="h-4 w-4 text-muted-foreground" />
-      default:
-        return null
-    }
-  }
-
-  return (
-    <div className="group flex items-start gap-4 py-4 transition-colors duration-200 hover:bg-muted/30 px-2 -mx-2 rounded-lg">
-      <div className={cn(
-        'flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl',
-        'bg-muted/50 text-muted-foreground',
-        'transition-all duration-200',
-        'group-hover:bg-accent/10 group-hover:text-accent'
-      )}>
-        {getIcon()}
-      </div>
-
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <p className="font-medium text-foreground truncate">{title}</p>
-          {getStatusIcon()}
-        </div>
-        <p className="mt-0.5 text-sm text-muted-foreground truncate">{description}</p>
-      </div>
-
-      <span className="flex-shrink-0 text-xs text-muted-foreground">{time}</span>
-    </div>
   )
 }
 
@@ -443,7 +384,6 @@ export function DashboardPage({
   const token = useAuthStore((state) => state.token)
 
   // Notification store
-  const addNotification = useNotificationsStore((state) => state.addNotification)
   const fetchNotifications = useNotificationsStore((state) => state.fetchNotifications)
 
   // WebSocket status for reconnect handling
@@ -498,14 +438,14 @@ export function DashboardPage({
 
   // Listen for invitation-related WebSocket events
   useInvitationNotifications({
-    onInvitationReceived: (data) => {
+    onInvitationReceived: (_data) => {
       // Refresh notifications from backend to get the persisted notification with correct ID
       // This ensures read state is properly synced
       if (token) {
         fetchNotifications(token)
       }
     },
-    onInvitationResponse: (data) => {
+    onInvitationResponse: (_data) => {
       // Refresh notifications from backend to get the persisted notification with correct ID
       if (token) {
         fetchNotifications(token)
@@ -586,7 +526,7 @@ export function DashboardPage({
         if (member) {
           membersStore.updateMemberInList({
             ...member,
-            role: data.new_role,
+            role: data.new_role as 'owner' | 'editor' | 'viewer',
           })
         }
       }
@@ -594,7 +534,7 @@ export function DashboardPage({
   })
 
   // Listen for generic notification messages (project role changes, task assignments, etc.)
-  useNotifications((data) => {
+  useNotifications((_data) => {
     // Refresh notifications from backend when any notification is received
     // This ensures project-level notifications (role changes, etc.) are captured
     if (token) {

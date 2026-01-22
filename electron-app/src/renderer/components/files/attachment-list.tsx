@@ -25,7 +25,6 @@ import {
   FileArchive,
   Download,
   Trash2,
-  ExternalLink,
   Loader2,
   MoreVertical,
   Eye,
@@ -42,6 +41,9 @@ import {
   getFileIconType,
 } from '@/stores/files-store'
 import { FilePreview } from './file-preview'
+import { wsClient, MessageType } from '@/lib/websocket'
+import { SkeletonAttachments } from '@/components/ui/skeleton'
+import { DeleteFileDialog } from '@/components/ui/confirm-dialog'
 
 // ============================================================================
 // Types
@@ -349,6 +351,8 @@ export function AttachmentList({
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [previewUrls, setPreviewUrls] = useState<Record<string, string>>({})
+  const [deleteTarget, setDeleteTarget] = useState<Attachment | null>(null)
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
 
   const {
     attachments: allAttachments,
@@ -357,6 +361,8 @@ export function AttachmentList({
     fetchAttachments,
     deleteAttachment,
     getDownloadUrl,
+    handleAttachmentUploaded,
+    handleAttachmentDeleted,
   } = useFilesStore()
 
   // Get attachments for this entity
@@ -369,6 +375,40 @@ export function AttachmentList({
       fetchAttachments(entityType, entityId)
     }
   }, [entityType, entityId, fetchAttachments])
+
+  // Subscribe to WebSocket room for real-time updates
+  useEffect(() => {
+    if (!entityId) return
+
+    const roomId = `${entityType}:${entityId}`
+
+    // Join the room for this entity
+    wsClient.joinRoom(roomId)
+
+    // Handle attachment uploaded event
+    // Note: wsClient.on() receives only the data portion, not the full message
+    const handleUploaded = (data: { attachment: Attachment; entity_type: string; entity_id: string }) => {
+      const { attachment, entity_type, entity_id } = data
+      handleAttachmentUploaded(entity_type, entity_id, attachment)
+    }
+
+    // Handle attachment deleted event
+    const handleDeleted = (data: { attachment_id: string; entity_type: string; entity_id: string }) => {
+      const { attachment_id, entity_type, entity_id } = data
+      handleAttachmentDeleted(entity_type, entity_id, attachment_id)
+    }
+
+    // Subscribe to events
+    wsClient.on(MessageType.ATTACHMENT_UPLOADED, handleUploaded)
+    wsClient.on(MessageType.ATTACHMENT_DELETED, handleDeleted)
+
+    // Cleanup: leave room and unsubscribe
+    return () => {
+      wsClient.leaveRoom(roomId)
+      wsClient.off(MessageType.ATTACHMENT_UPLOADED, handleUploaded)
+      wsClient.off(MessageType.ATTACHMENT_DELETED, handleDeleted)
+    }
+  }, [entityType, entityId, handleAttachmentUploaded, handleAttachmentDeleted])
 
   // Load preview URLs for images (grid view)
   useEffect(() => {
@@ -402,19 +442,28 @@ export function AttachmentList({
     [getDownloadUrl]
   )
 
-  // Handle delete
-  const handleDelete = useCallback(
-    async (attachment: Attachment) => {
-      if (!window.confirm(`Delete "${attachment.file_name}"? This cannot be undone.`)) {
-        return
-      }
+  // Handle delete - open confirmation dialog
+  const handleDelete = useCallback((attachment: Attachment) => {
+    setDeleteTarget(attachment)
+    setIsDeleteDialogOpen(true)
+  }, [])
 
-      setDeletingId(attachment.id)
-      await deleteAttachment(attachment.id)
-      setDeletingId(null)
-    },
-    [deleteAttachment]
-  )
+  // Confirm delete
+  const handleConfirmDelete = useCallback(async () => {
+    if (!deleteTarget) return
+
+    setDeletingId(deleteTarget.id)
+    await deleteAttachment(deleteTarget.id)
+    setDeletingId(null)
+    setIsDeleteDialogOpen(false)
+    setDeleteTarget(null)
+  }, [deleteTarget, deleteAttachment])
+
+  // Cancel delete
+  const handleCancelDelete = useCallback(() => {
+    setDeleteTarget(null)
+    setIsDeleteDialogOpen(false)
+  }, [])
 
   // Handle preview navigation
   const handlePreviewNavigate = useCallback((attachment: Attachment) => {
@@ -427,11 +476,16 @@ export function AttachmentList({
     setPreviewAttachment(null)
   }, [])
 
-  // Loading state
+  // Loading state - show skeleton
   if (isLoading && attachments.length === 0) {
     return (
-      <div className={cn('flex items-center justify-center py-8', className)}>
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      <div className={className}>
+        {!compact && showViewToggle && (
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-sm font-medium text-muted-foreground">Loading...</span>
+          </div>
+        )}
+        <SkeletonAttachments viewMode={viewMode} count={compact ? 2 : 3} />
       </div>
     )
   }
@@ -538,6 +592,17 @@ export function AttachmentList({
         attachments={attachments}
         onClose={handleClosePreview}
         onNavigate={handlePreviewNavigate}
+      />
+
+      {/* Delete Confirmation Dialog */}
+      <DeleteFileDialog
+        open={isDeleteDialogOpen}
+        onOpenChange={setIsDeleteDialogOpen}
+        fileName={deleteTarget?.file_name || ''}
+        fileIcon={deleteTarget ? getFileIcon(deleteTarget.file_type, deleteTarget.file_name, 'lg') : undefined}
+        onConfirm={handleConfirmDelete}
+        onCancel={handleCancelDelete}
+        isDeleting={deletingId === deleteTarget?.id}
       />
     </div>
   )

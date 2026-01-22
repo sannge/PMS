@@ -14,7 +14,7 @@
 
 import { useState, useCallback, useMemo } from 'react'
 import { cn } from '@/lib/utils'
-import type { NoteTree, Note } from '@/stores/notes-store'
+import type { NoteTree } from '@/stores/notes-store'
 import {
   ChevronRight,
   ChevronDown,
@@ -105,7 +105,7 @@ interface ContextMenuProps {
 // ============================================================================
 
 function ContextMenu({
-  note,
+  note: _note,
   position,
   onClose,
   onCreateChild,
@@ -532,7 +532,7 @@ export function NotesSidebar({
       </div>
 
       {/* Subtle loading progress bar */}
-      <ProgressBar isActive={isLoading && filteredNoteTree.length > 0} />
+      <ProgressBar isActive={Boolean(isLoading && filteredNoteTree.length > 0)} />
 
       {/* Note Tree */}
       <div className="flex-1 overflow-auto p-1.5" role="tree" aria-label="Notes">

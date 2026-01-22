@@ -16,10 +16,8 @@ import { useCallback } from 'react'
 import { cn } from '@/lib/utils'
 import {
   Bell,
-  BellOff,
   CheckCheck,
   Inbox,
-  Loader2,
 } from 'lucide-react'
 import { NotificationItem, type Notification } from './notification-item'
 

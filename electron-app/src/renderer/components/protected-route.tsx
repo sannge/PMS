@@ -28,8 +28,8 @@
  * ```
  */
 
-import { ReactNode, useCallback, useEffect } from 'react'
-import { useAuthInit, useAuth, useIsAuthenticated } from '@/hooks/use-auth'
+import { ReactNode, useEffect } from 'react'
+import { useAuthInit } from '@/hooks/use-auth'
 import { cn } from '@/lib/utils'
 
 // ============================================================================

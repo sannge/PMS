@@ -88,6 +88,26 @@ export enum MessageType {
   PROJECT_MEMBER_REMOVED = 'project_member_removed',
   PROJECT_ROLE_CHANGED = 'project_role_changed',
 
+  // Attachment events
+  ATTACHMENT_UPLOADED = 'attachment_uploaded',
+  ATTACHMENT_DELETED = 'attachment_deleted',
+
+  // Checklist events
+  CHECKLIST_CREATED = 'checklist_created',
+  CHECKLIST_UPDATED = 'checklist_updated',
+  CHECKLIST_DELETED = 'checklist_deleted',
+  CHECKLISTS_REORDERED = 'checklists_reordered',
+  CHECKLIST_ITEM_TOGGLED = 'checklist_item_toggled',
+  CHECKLIST_ITEM_ADDED = 'checklist_item_added',
+  CHECKLIST_ITEM_UPDATED = 'checklist_item_updated',
+  CHECKLIST_ITEM_DELETED = 'checklist_item_deleted',
+  CHECKLIST_ITEMS_REORDERED = 'checklist_items_reordered',
+
+  // Comment events
+  COMMENT_ADDED = 'comment_added',
+  COMMENT_UPDATED = 'comment_updated',
+  COMMENT_DELETED = 'comment_deleted',
+
   // Keepalive
   PING = 'ping',
   PONG = 'pong',
@@ -271,7 +291,7 @@ export interface NotificationReadEventData {
  * WebSocket client configuration
  */
 export interface WebSocketConfig {
-  /** WebSocket server URL (default: ws://localhost:8000/ws) */
+  /** WebSocket server URL (default: derived from VITE_API_URL) */
   url?: string
   /** JWT token for authentication */
   token?: string
@@ -305,8 +325,18 @@ export type Unsubscribe = () => void
 // Constants
 // ============================================================================
 
+/**
+ * Get WebSocket URL from API URL environment variable
+ */
+function getWebSocketUrl(): string {
+  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8001'
+  // Convert http(s):// to ws(s)://
+  const wsUrl = apiUrl.replace(/^http/, 'ws')
+  return `${wsUrl}/ws`
+}
+
 const DEFAULT_CONFIG: Required<WebSocketConfig> = {
-  url: 'ws://localhost:8001/ws',
+  url: getWebSocketUrl(),
   token: '',
   autoReconnect: true,
   maxReconnectAttempts: 10,

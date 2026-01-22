@@ -92,7 +92,6 @@ export interface AuthState {
 // Constants
 // ============================================================================
 
-const TOKEN_STORAGE_KEY = 'pm-desktop-auth-token'
 const AUTH_STORAGE_KEY = 'pm-desktop-auth'
 
 // ============================================================================

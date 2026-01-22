@@ -9,7 +9,7 @@
  * - Smooth micro-interactions
  */
 
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import {
   LayoutDashboard,
@@ -33,6 +33,8 @@ import type { Project, ProjectDerivedStatus } from '@/stores/projects-store'
 export interface ProjectCardProps {
   project: Project
   onClick?: (project: Project) => void
+  onEdit?: (project: Project) => void
+  onDelete?: (project: Project) => void
   disabled?: boolean
   className?: string
   index?: number
@@ -161,6 +163,8 @@ function getDerivedStatusInfo(status: ProjectDerivedStatus | null): {
 export function ProjectCard({
   project,
   onClick,
+  onEdit: _onEdit,
+  onDelete: _onDelete,
   disabled = false,
   className,
   index = 0,

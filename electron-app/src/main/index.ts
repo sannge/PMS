@@ -12,7 +12,7 @@ import { app, BrowserWindow, shell, session, Menu, MenuItemConstructorOptions } 
 import { join, resolve } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
-import { registerNotificationHandlers, isNotificationSupported } from './notifications'
+import { registerNotificationHandlers } from './notifications'
 
 // Support custom user data directory via environment variable (must be set before app ready)
 if (process.env.ELECTRON_USER_DATA_DIR) {
@@ -123,29 +123,39 @@ function createWindow(): void {
  * Configure Content Security Policy for enhanced security
  */
 function setupContentSecurityPolicy(): void {
+  // Get API URL from environment for CSP
+  const apiUrl = process.env.VITE_API_URL || 'http://localhost:8001'
+  const wsUrl = apiUrl.replace(/^http/, 'ws')
+  // Get MinIO URL for file storage (presigned URLs)
+  // Note: In electron-vite, VITE_ vars may not be in process.env for main process
+  const minioUrl = process.env.VITE_MINIO_URL || 'http://10.18.136.10:9000'
+
+  console.log('[CSP] API URL:', apiUrl)
+  console.log('[CSP] MinIO URL:', minioUrl)
+
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({
       responseHeaders: {
         ...details.responseHeaders,
         'Content-Security-Policy': [
           is.dev
-            ? // Development CSP - more permissive
+            ? // Development CSP - more permissive for internal IPs
               "default-src 'self'; " +
               "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
               "style-src 'self' 'unsafe-inline'; " +
-              "img-src 'self' data: blob: http://localhost:* https://*; " +
+              `img-src 'self' data: blob: http://localhost:* http://10.18.136.10:* ${minioUrl} https://*; ` +
               "font-src 'self' data:; " +
-              "connect-src 'self' http://localhost:* ws://localhost:*; " +
-              "media-src 'self' blob:; " +
+              `connect-src 'self' http://localhost:* ws://localhost:* http://10.18.136.10:* ${minioUrl}; ` +
+              `media-src 'self' blob: http://10.18.136.10:* ${minioUrl}; ` +
               "worker-src 'self' blob:;"
             : // Production CSP - more restrictive
               "default-src 'self'; " +
               "script-src 'self'; " +
               "style-src 'self' 'unsafe-inline'; " +
-              "img-src 'self' data: blob:; " +
+              `img-src 'self' data: blob: ${minioUrl}; ` +
               "font-src 'self' data:; " +
-              "connect-src 'self' http://localhost:8001 ws://localhost:8001; " +
-              "media-src 'self' blob:;"
+              `connect-src 'self' ${apiUrl} ${wsUrl} ${minioUrl}; ` +
+              `media-src 'self' blob: ${minioUrl};`
         ]
       }
     })
@@ -160,7 +170,7 @@ function setupSessionSecurity(): void {
   // session.defaultSession.clearStorageData({ storages: ['cookies', 'localstorage'] })
 
   // Set permission request handler
-  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     const allowedPermissions = ['clipboard-read', 'clipboard-write', 'notifications']
 
     if (allowedPermissions.includes(permission)) {
@@ -171,7 +181,7 @@ function setupSessionSecurity(): void {
   })
 
   // Set permission check handler
-  session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
     const allowedPermissions = ['clipboard-read', 'clipboard-write', 'notifications', 'media']
     return allowedPermissions.includes(permission)
   })
@@ -340,29 +350,8 @@ app.on('window-all-closed', () => {
   }
 })
 
-// Security: Disable remote module globally
-app.on('remote-require', (event) => {
-  event.preventDefault()
-})
-
-app.on('remote-get-builtin', (event) => {
-  event.preventDefault()
-})
-
-app.on('remote-get-global', (event) => {
-  event.preventDefault()
-})
-
-app.on('remote-get-current-window', (event) => {
-  event.preventDefault()
-})
-
-app.on('remote-get-current-web-contents', (event) => {
-  event.preventDefault()
-})
-
 // Security: Handle certificate errors
-app.on('certificate-error', (event, webContents, url, error, certificate, callback) => {
+app.on('certificate-error', (event, _webContents, url, _error, _certificate, callback) => {
   // In development, ignore certificate errors for localhost
   if (is.dev && url.includes('localhost')) {
     event.preventDefault()

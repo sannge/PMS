@@ -42,6 +42,7 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import type { Checklist, ChecklistItem as ChecklistItemType } from '@/stores/checklists-store'
 import { ChecklistItem } from './ChecklistItem'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 
 // ============================================================================
 // Types
@@ -52,9 +53,9 @@ export interface ChecklistCardProps {
   onTitleUpdate?: (checklistId: string, title: string) => void
   onDelete?: (checklistId: string) => void
   onItemToggle?: (itemId: string) => void
-  onItemUpdate?: (itemId: string, text: string) => void
+  onItemUpdate?: (itemId: string, content: string) => void
   onItemDelete?: (itemId: string) => void
-  onItemCreate?: (checklistId: string, text: string) => void
+  onItemCreate?: (checklistId: string, content: string) => void
   onItemReorder?: (checklistId: string, itemIds: string[]) => void
   disabled?: boolean
   defaultExpanded?: boolean
@@ -68,7 +69,7 @@ export interface ChecklistCardProps {
 interface SortableItemProps {
   item: ChecklistItemType
   onToggle?: (itemId: string) => void
-  onUpdate?: (itemId: string, text: string) => void
+  onUpdate?: (itemId: string, content: string) => void
   onDelete?: (itemId: string) => void
   disabled?: boolean
 }
@@ -79,7 +80,8 @@ function SortableChecklistItem({
   onUpdate,
   onDelete,
   disabled,
-}: SortableItemProps): JSX.Element {
+  canReorder = true,
+}: SortableItemProps & { canReorder?: boolean }): JSX.Element {
   const {
     attributes,
     listeners,
@@ -87,7 +89,7 @@ function SortableChecklistItem({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: item.id })
+  } = useSortable({ id: item.id, disabled: !canReorder })
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -103,8 +105,8 @@ function SortableChecklistItem({
         onUpdate={onUpdate}
         onDelete={onDelete}
         disabled={disabled}
-        showDragHandle
-        dragListeners={listeners}
+        showDragHandle={canReorder}
+        dragListeners={canReorder ? listeners : undefined}
       />
     </div>
   )
@@ -132,6 +134,7 @@ export function ChecklistCard({
   const [editTitle, setEditTitle] = useState(checklist.title)
   const [newItemText, setNewItemText] = useState('')
   const [isAddingItem, setIsAddingItem] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
   const titleInputRef = useRef<HTMLInputElement>(null)
   const addItemInputRef = useRef<HTMLInputElement>(null)
@@ -146,10 +149,12 @@ export function ChecklistCard({
     })
   )
 
-  // Calculate progress
-  const progress = checklist.total_items > 0
-    ? Math.round((checklist.done_items / checklist.total_items) * 100)
-    : 0
+  // Use progress from server (or calculate if needed)
+  const progress = checklist.progress_percent ?? (
+    checklist.total_items > 0
+      ? Math.round((checklist.completed_items / checklist.total_items) * 100)
+      : 0
+  )
 
   // Focus title input when editing
   useEffect(() => {
@@ -196,15 +201,23 @@ export function ChecklistCard({
     }
   }, [checklist.id, newItemText, onItemCreate])
 
-  const handleDelete = useCallback(() => {
+  const handleDeleteClick = useCallback(() => {
+    if (onDelete) {
+      setShowDeleteConfirm(true)
+    }
+  }, [onDelete])
+
+  const handleConfirmDelete = useCallback(() => {
     if (onDelete) {
       onDelete(checklist.id)
     }
+    setShowDeleteConfirm(false)
   }, [checklist.id, onDelete])
 
-  // Sort items by position (memoized for DnD)
+  // Items are already in correct order from the store (after reordering)
+  // We only sort by rank on initial load, the store maintains order after that
   const sortedItems = useMemo(
-    () => [...checklist.items].sort((a, b) => a.position - b.position),
+    () => [...checklist.items],
     [checklist.items]
   )
 
@@ -301,7 +314,7 @@ export function ChecklistCard({
 
         {/* Progress */}
         <span className="flex-shrink-0 text-xs text-muted-foreground tabular-nums">
-          {checklist.done_items}/{checklist.total_items}
+          {checklist.completed_items}/{checklist.total_items}
         </span>
 
         {/* Actions */}
@@ -323,7 +336,7 @@ export function ChecklistCard({
             )}
             {onDelete && (
               <button
-                onClick={handleDelete}
+                onClick={handleDeleteClick}
                 disabled={disabled}
                 className={cn(
                   'p-1 rounded text-muted-foreground',
@@ -370,6 +383,7 @@ export function ChecklistCard({
                       onUpdate={onItemUpdate}
                       onDelete={onItemDelete}
                       disabled={disabled}
+                      canReorder={!!onItemReorder}
                     />
                   ))}
                 </div>
@@ -452,6 +466,17 @@ export function ChecklistCard({
           )}
         </div>
       )}
+
+      {/* Delete Confirmation Dialog */}
+      <ConfirmDialog
+        open={showDeleteConfirm}
+        onOpenChange={setShowDeleteConfirm}
+        title="Delete checklist?"
+        description={`Are you sure you want to delete "${checklist.title}"? This will also delete all ${checklist.total_items} item${checklist.total_items !== 1 ? 's' : ''} in this checklist.`}
+        confirmLabel="Delete"
+        variant="destructive"
+        onConfirm={handleConfirmDelete}
+      />
     </div>
   )
 }

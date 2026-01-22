@@ -104,7 +104,7 @@ export function useTaskViewers({
           project_id: projectId,
           task_id: null,
           user_id: user.id,
-          user_name: user.name || user.email,
+          user_name: user.display_name || user.email,
           avatar_url: null,
         })
       }
@@ -118,7 +118,7 @@ export function useTaskViewers({
             project_id: projectId,
             task_id: taskId,
             user_id: user.id,
-            user_name: user.name || user.email,
+            user_name: user.display_name || user.email,
             avatar_url: null,
           })
         }
@@ -228,7 +228,7 @@ export function useTaskViewers({
           project_id: projectId,
           task_id: null,
           user_id: user.id,
-          user_name: user.name || user.email,
+          user_name: user.display_name || user.email,
           avatar_url: null,
         })
       }

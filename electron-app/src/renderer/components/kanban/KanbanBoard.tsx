@@ -46,7 +46,7 @@ import {
   type TaskUpdateEventData,
   type TaskMovedEventData,
 } from '@/hooks/use-websocket'
-import { useDragAndDrop, findTaskBySortableId } from '@/hooks/use-drag-and-drop'
+import { useDragAndDrop } from '@/hooks/use-drag-and-drop'
 import { DroppableColumn, DEFAULT_COLUMNS } from './DroppableColumn'
 import { TaskCard } from '../tasks/task-card'
 
@@ -132,7 +132,7 @@ const customCollisionDetection: CollisionDetection = (args) => {
 
 export function KanbanBoard({
   projectId,
-  projectKey,
+  projectKey: _projectKey,
   onTaskClick,
   onAddTask,
   onTaskStatusChange,
@@ -240,13 +240,13 @@ export function KanbanBoard({
   const {
     sensors,
     activeTask,
-    activeId,
+    activeId: _activeId,
     overColumnId,
     handleDragStart,
     handleDragEnd,
     handleDragOver,
     handleDragCancel,
-    isDragging,
+    isDragging: _isDragging,
   } = useDragAndDrop({
     tasks,
     onTaskMove: handleTaskMove,
@@ -267,7 +267,7 @@ export function KanbanBoard({
           if (!exists) {
             setRealtimeNotice('New task added')
             setTimeout(() => setRealtimeNotice(null), 3000)
-            return [...currentTasks, data.task as Task]
+            return [...currentTasks, data.task as unknown as Task]
           }
           return currentTasks
         } else if (data.action === 'updated' && data.task) {
@@ -276,7 +276,7 @@ export function KanbanBoard({
             setRealtimeNotice('Task updated')
             setTimeout(() => setRealtimeNotice(null), 3000)
             const newTasks = [...currentTasks]
-            newTasks[index] = data.task as Task
+            newTasks[index] = data.task as unknown as Task
             return newTasks
           }
           return currentTasks
@@ -294,7 +294,7 @@ export function KanbanBoard({
             setRealtimeNotice('Task status changed')
             setTimeout(() => setRealtimeNotice(null), 3000)
             const newTasks = [...currentTasks]
-            newTasks[index] = data.task as Task
+            newTasks[index] = data.task as unknown as Task
             return newTasks
           }
           return currentTasks
@@ -327,7 +327,7 @@ export function KanbanBoard({
           if (data.task) {
             setRealtimeNotice('Task moved')
             setTimeout(() => setRealtimeNotice(null), 3000)
-            return [...currentTasks, data.task as Task]
+            return [...currentTasks, data.task as unknown as Task]
           }
           return currentTasks
         }
@@ -341,8 +341,8 @@ export function KanbanBoard({
 
         // Determine the new status from the task data or status_id
         let newStatus = existingTask.status
-        if (data.task && (data.task as Task).status) {
-          newStatus = (data.task as Task).status
+        if (data.task && (data.task as unknown as Task).status) {
+          newStatus = (data.task as unknown as Task).status
         }
 
         newTasks[taskIndex] = {

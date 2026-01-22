@@ -13,6 +13,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { cn } from '@/lib/utils'
 import { Check, X, Trash2, GripVertical } from 'lucide-react'
 import type { ChecklistItem as ChecklistItemType } from '@/stores/checklists-store'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 
 // ============================================================================
 // Types
@@ -21,7 +22,7 @@ import type { ChecklistItem as ChecklistItemType } from '@/stores/checklists-sto
 export interface ChecklistItemProps {
   item: ChecklistItemType
   onToggle?: (itemId: string) => void
-  onUpdate?: (itemId: string, text: string) => void
+  onUpdate?: (itemId: string, content: string) => void
   onDelete?: (itemId: string) => void
   disabled?: boolean
   showDragHandle?: boolean
@@ -44,8 +45,9 @@ export function ChecklistItem({
   className,
 }: ChecklistItemProps): JSX.Element {
   const [isEditing, setIsEditing] = useState(false)
-  const [editText, setEditText] = useState(item.text)
+  const [editText, setEditText] = useState(item.content)
   const [isHovered, setIsHovered] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   // Focus input when entering edit mode
@@ -64,23 +66,23 @@ export function ChecklistItem({
 
   const handleStartEdit = useCallback(() => {
     if (!disabled && onUpdate) {
-      setEditText(item.text)
+      setEditText(item.content)
       setIsEditing(true)
     }
-  }, [disabled, onUpdate, item.text])
+  }, [disabled, onUpdate, item.content])
 
   const handleSaveEdit = useCallback(() => {
     const trimmed = editText.trim()
-    if (trimmed && trimmed !== item.text && onUpdate) {
+    if (trimmed && trimmed !== item.content && onUpdate) {
       onUpdate(item.id, trimmed)
     }
     setIsEditing(false)
-  }, [item.id, item.text, editText, onUpdate])
+  }, [item.id, item.content, editText, onUpdate])
 
   const handleCancelEdit = useCallback(() => {
-    setEditText(item.text)
+    setEditText(item.content)
     setIsEditing(false)
-  }, [item.text])
+  }, [item.content])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -94,11 +96,18 @@ export function ChecklistItem({
     [handleSaveEdit, handleCancelEdit]
   )
 
-  const handleDelete = useCallback(() => {
+  const handleDeleteClick = useCallback(() => {
     if (!disabled && onDelete) {
+      setShowDeleteConfirm(true)
+    }
+  }, [disabled, onDelete])
+
+  const handleConfirmDelete = useCallback(() => {
+    if (onDelete) {
       onDelete(item.id)
     }
-  }, [item.id, disabled, onDelete])
+    setShowDeleteConfirm(false)
+  }, [item.id, onDelete])
 
   return (
     <div
@@ -116,9 +125,8 @@ export function ChecklistItem({
         <div
           className={cn(
             'flex-shrink-0 cursor-grab active:cursor-grabbing',
-            'text-muted-foreground/50 hover:text-muted-foreground',
-            'transition-opacity touch-none',
-            isHovered ? 'opacity-100' : 'opacity-0'
+            'text-muted-foreground/40 hover:text-muted-foreground',
+            'transition-colors touch-none'
           )}
           {...dragListeners}
         >
@@ -190,14 +198,14 @@ export function ChecklistItem({
               : 'text-foreground'
           )}
         >
-          {item.text}
+          {item.content}
         </span>
       )}
 
       {/* Delete button */}
       {!isEditing && onDelete && (
         <button
-          onClick={handleDelete}
+          onClick={handleDeleteClick}
           disabled={disabled}
           className={cn(
             'flex-shrink-0 p-1 rounded',
@@ -210,6 +218,17 @@ export function ChecklistItem({
           <Trash2 className="h-3 w-3" />
         </button>
       )}
+
+      {/* Delete Confirmation Dialog */}
+      <ConfirmDialog
+        open={showDeleteConfirm}
+        onOpenChange={setShowDeleteConfirm}
+        title="Delete item?"
+        description={`Are you sure you want to delete "${item.content.substring(0, 50)}${item.content.length > 50 ? '...' : ''}"?`}
+        confirmLabel="Delete"
+        variant="destructive"
+        onConfirm={handleConfirmDelete}
+      />
     </div>
   )
 }
