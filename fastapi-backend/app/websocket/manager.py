@@ -45,10 +45,16 @@ class MessageType(str, Enum):
     CHECKLIST_CREATED = "checklist_created"
     CHECKLIST_UPDATED = "checklist_updated"
     CHECKLIST_DELETED = "checklist_deleted"
+    CHECKLISTS_REORDERED = "checklists_reordered"
     CHECKLIST_ITEM_TOGGLED = "checklist_item_toggled"
     CHECKLIST_ITEM_ADDED = "checklist_item_added"
     CHECKLIST_ITEM_UPDATED = "checklist_item_updated"
     CHECKLIST_ITEM_DELETED = "checklist_item_deleted"
+    CHECKLIST_ITEMS_REORDERED = "checklist_items_reordered"
+
+    # Attachment events
+    ATTACHMENT_UPLOADED = "attachment_uploaded"
+    ATTACHMENT_DELETED = "attachment_deleted"
 
     # Presence events (ephemeral)
     PRESENCE_UPDATE = "presence_update"

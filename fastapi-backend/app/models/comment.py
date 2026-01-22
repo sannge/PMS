@@ -11,6 +11,7 @@ from sqlalchemy.orm import relationship
 from ..database import Base
 
 if TYPE_CHECKING:
+    from .attachment import Attachment
     from .mention import Mention
     from .task import Task
     from .user import User
@@ -99,6 +100,12 @@ class Comment(Base):
     )
     mentions = relationship(
         "Mention",
+        back_populates="comment",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    attachments = relationship(
+        "Attachment",
         back_populates="comment",
         cascade="all, delete-orphan",
         lazy="selectin",

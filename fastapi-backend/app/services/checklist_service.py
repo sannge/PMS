@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
 from sqlalchemy import func
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from ..models.checklist import Checklist
 from ..models.checklist_item import ChecklistItem
@@ -24,6 +24,28 @@ from ..schemas.checklist import (
     ChecklistUpdate,
     ReorderRequest,
 )
+
+
+def _generate_lexorank(before_rank: Optional[str] = None, after_rank: Optional[str] = None) -> str:
+    """Generate a lexorank between two existing ranks."""
+    if before_rank is None and after_rank is None:
+        return "a"
+    if before_rank is None:
+        # Insert at beginning
+        return chr(ord(after_rank[0]) - 1) if after_rank else "a"
+    if after_rank is None:
+        # Insert at end
+        return before_rank + "a"
+    # Insert between
+    if before_rank < after_rank:
+        # Find midpoint
+        for i in range(max(len(before_rank), len(after_rank))):
+            b_char = before_rank[i] if i < len(before_rank) else 'a'
+            a_char = after_rank[i] if i < len(after_rank) else 'z'
+            if ord(a_char) - ord(b_char) > 1:
+                return before_rank[:i] + chr((ord(b_char) + ord(a_char)) // 2)
+        return before_rank + "m"
+    return before_rank + "m"
 
 
 # ============================================================================
@@ -47,17 +69,19 @@ def create_checklist(
     Returns:
         Created checklist
     """
-    # Get current max position for this task's checklists
-    max_position = db.query(func.max(Checklist.position)).filter(
+    # Get current max rank for this task's checklists
+    last_checklist = db.query(Checklist).filter(
         Checklist.task_id == task_id
-    ).scalar() or 0
+    ).order_by(Checklist.rank.desc()).first()
+
+    new_rank = _generate_lexorank(last_checklist.rank if last_checklist else None, None)
 
     checklist = Checklist(
         task_id=task_id,
         title=checklist_data.title,
-        position=max_position + 1,
+        rank=new_rank,
         total_items=0,
-        done_items=0,
+        completed_items=0,
         created_at=datetime.utcnow(),
     )
     db.add(checklist)
@@ -137,6 +161,9 @@ def get_checklist(
     """
     Get a checklist by ID with items loaded.
 
+    Uses selectinload for items to avoid cartesian product,
+    and nested joinedload for completer to prevent N+1 queries.
+
     Args:
         db: Database session
         checklist_id: Checklist ID
@@ -145,7 +172,7 @@ def get_checklist(
         Checklist or None if not found
     """
     return db.query(Checklist).options(
-        joinedload(Checklist.items)
+        selectinload(Checklist.items).joinedload(ChecklistItem.completer)
     ).filter(
         Checklist.id == checklist_id
     ).first()
@@ -158,19 +185,22 @@ def get_checklists_for_task(
     """
     Get all checklists for a task with items.
 
+    Uses selectinload for items to avoid cartesian product,
+    and nested joinedload for completer to prevent N+1 queries.
+
     Args:
         db: Database session
         task_id: Task ID
 
     Returns:
-        List of checklists ordered by position
+        List of checklists ordered by rank
     """
     return db.query(Checklist).options(
-        joinedload(Checklist.items)
+        selectinload(Checklist.items).joinedload(ChecklistItem.completer)
     ).filter(
         Checklist.task_id == task_id
     ).order_by(
-        Checklist.position
+        Checklist.rank
     ).all()
 
 
@@ -183,6 +213,7 @@ def create_checklist_item(
     db: Session,
     checklist_id: UUID,
     item_data: ChecklistItemCreate,
+    user_id: Optional[UUID] = None,
 ) -> Optional[ChecklistItem]:
     """
     Create a new item in a checklist.
@@ -191,6 +222,7 @@ def create_checklist_item(
         db: Database session
         checklist_id: Checklist ID to add item to
         item_data: Item creation data
+        user_id: ID of user creating the item
 
     Returns:
         Created item or None if checklist not found
@@ -199,25 +231,25 @@ def create_checklist_item(
     if not checklist:
         return None
 
-    # Get max position
-    max_position = db.query(func.max(ChecklistItem.position)).filter(
+    # Get last item rank
+    last_item = db.query(ChecklistItem).filter(
         ChecklistItem.checklist_id == checklist_id
-    ).scalar() or 0
+    ).order_by(ChecklistItem.rank.desc()).first()
+
+    new_rank = _generate_lexorank(last_item.rank if last_item else None, None)
 
     item = ChecklistItem(
         checklist_id=checklist_id,
-        text=item_data.text,
-        is_done=item_data.is_done if item_data.is_done is not None else False,
-        position=max_position + 1,
+        content=item_data.content,
+        is_done=False,
+        rank=new_rank,
         created_at=datetime.utcnow(),
     )
     db.add(item)
 
     # Update checklist counts
     checklist.total_items += 1
-    if item.is_done:
-        checklist.done_items += 1
-    checklist.updated_at = datetime.utcnow()
+    # No need to update completed_items since new items are not done
 
     db.commit()
     db.refresh(item)
@@ -232,6 +264,7 @@ def update_checklist_item(
     db: Session,
     item_id: UUID,
     item_data: ChecklistItemUpdate,
+    user_id: Optional[UUID] = None,
 ) -> Optional[ChecklistItem]:
     """
     Update a checklist item.
@@ -240,6 +273,7 @@ def update_checklist_item(
         db: Database session
         item_id: Item ID to update
         item_data: Update data
+        user_id: ID of user updating the item
 
     Returns:
         Updated item or None if not found
@@ -255,21 +289,26 @@ def update_checklist_item(
     # Track if done status changed
     was_done = item.is_done
 
-    if item_data.text is not None:
-        item.text = item_data.text
+    if item_data.content is not None:
+        item.content = item_data.content
 
     if item_data.is_done is not None:
         item.is_done = item_data.is_done
+        if item.is_done and not was_done:
+            item.completed_by = user_id
+            item.completed_at = datetime.utcnow()
+        elif not item.is_done and was_done:
+            item.completed_by = None
+            item.completed_at = None
 
     item.updated_at = datetime.utcnow()
 
-    # Update checklist done count if status changed
+    # Update checklist completed count if status changed
     if item_data.is_done is not None and was_done != item.is_done:
         if item.is_done:
-            checklist.done_items += 1
+            checklist.completed_items += 1
         else:
-            checklist.done_items = max(0, checklist.done_items - 1)
-        checklist.updated_at = datetime.utcnow()
+            checklist.completed_items = max(0, checklist.completed_items - 1)
 
     db.commit()
     db.refresh(item)
@@ -283,6 +322,7 @@ def update_checklist_item(
 def toggle_checklist_item(
     db: Session,
     item_id: UUID,
+    user_id: Optional[UUID] = None,
 ) -> Optional[Tuple[ChecklistItem, UUID, UUID]]:
     """
     Toggle a checklist item's done status.
@@ -290,6 +330,7 @@ def toggle_checklist_item(
     Args:
         db: Database session
         item_id: Item ID to toggle
+        user_id: ID of user toggling the item
 
     Returns:
         Tuple of (updated item, checklist_id, task_id) or None if not found
@@ -306,12 +347,18 @@ def toggle_checklist_item(
     item.is_done = not item.is_done
     item.updated_at = datetime.utcnow()
 
+    if item.is_done:
+        item.completed_by = user_id
+        item.completed_at = datetime.utcnow()
+    else:
+        item.completed_by = None
+        item.completed_at = None
+
     # Update checklist count
     if item.is_done:
-        checklist.done_items += 1
+        checklist.completed_items += 1
     else:
-        checklist.done_items = max(0, checklist.done_items - 1)
-    checklist.updated_at = datetime.utcnow()
+        checklist.completed_items = max(0, checklist.completed_items - 1)
 
     db.commit()
     db.refresh(item)
@@ -350,8 +397,7 @@ def delete_checklist_item(
     # Update counts
     checklist.total_items = max(0, checklist.total_items - 1)
     if item.is_done:
-        checklist.done_items = max(0, checklist.done_items - 1)
-    checklist.updated_at = datetime.utcnow()
+        checklist.completed_items = max(0, checklist.completed_items - 1)
 
     db.delete(item)
     db.commit()
@@ -392,11 +438,13 @@ def reorder_checklist_items(
     if len(items) != len(item_ids):
         return False
 
-    # Update positions
-    for position, item_id in enumerate(item_ids, start=1):
+    # Generate new ranks based on order
+    current_rank = "a"
+    for item_id in item_ids:
         db.query(ChecklistItem).filter(
             ChecklistItem.id == item_id
-        ).update({"position": position})
+        ).update({"rank": current_rank})
+        current_rank = _generate_lexorank(current_rank, None)
 
     db.commit()
     return True
@@ -427,11 +475,13 @@ def reorder_checklists(
     if len(checklists) != len(checklist_ids):
         return False
 
-    # Update positions
-    for position, checklist_id in enumerate(checklist_ids, start=1):
+    # Generate new ranks based on order
+    current_rank = "a"
+    for checklist_id in checklist_ids:
         db.query(Checklist).filter(
             Checklist.id == checklist_id
-        ).update({"position": position})
+        ).update({"rank": current_rank})
+        current_rank = _generate_lexorank(current_rank, None)
 
     db.commit()
     return True
@@ -453,7 +503,7 @@ def _update_task_checklist_counts(db: Session, task_id: UUID) -> None:
     # Calculate totals across all checklists
     result = db.query(
         func.sum(Checklist.total_items).label("total"),
-        func.sum(Checklist.done_items).label("done"),
+        func.sum(Checklist.completed_items).label("done"),
     ).filter(
         Checklist.task_id == task_id
     ).first()
@@ -485,26 +535,22 @@ def build_checklist_response(checklist: Checklist) -> Dict[str, Any]:
         Dictionary matching ChecklistResponse schema
     """
     items = []
-    for item in sorted(checklist.items, key=lambda x: x.position):
-        items.append({
-            "id": str(item.id),
-            "checklist_id": str(item.checklist_id),
-            "text": item.text,
-            "is_done": item.is_done,
-            "position": item.position,
-            "created_at": item.created_at.isoformat(),
-            "updated_at": item.updated_at.isoformat() if item.updated_at else None,
-        })
+    for item in sorted(checklist.items, key=lambda x: x.rank):
+        items.append(build_checklist_item_response(item))
+
+    progress_percent = 0
+    if checklist.total_items > 0:
+        progress_percent = int((checklist.completed_items / checklist.total_items) * 100)
 
     return {
         "id": str(checklist.id),
         "task_id": str(checklist.task_id),
         "title": checklist.title,
-        "position": checklist.position,
+        "rank": checklist.rank,
         "total_items": checklist.total_items,
-        "done_items": checklist.done_items,
+        "completed_items": checklist.completed_items,
+        "progress_percent": progress_percent,
         "created_at": checklist.created_at.isoformat(),
-        "updated_at": checklist.updated_at.isoformat() if checklist.updated_at else None,
         "items": items,
     }
 
@@ -519,12 +565,19 @@ def build_checklist_item_response(item: ChecklistItem) -> Dict[str, Any]:
     Returns:
         Dictionary matching ChecklistItemResponse schema
     """
+    completer_name = None
+    if item.completer:
+        completer_name = item.completer.display_name or item.completer.email
+
     return {
         "id": str(item.id),
         "checklist_id": str(item.checklist_id),
-        "text": item.text,
+        "content": item.content,
         "is_done": item.is_done,
-        "position": item.position,
+        "completed_by": str(item.completed_by) if item.completed_by else None,
+        "completed_by_name": completer_name,
+        "completed_at": item.completed_at.isoformat() if item.completed_at else None,
+        "rank": item.rank,
         "created_at": item.created_at.isoformat(),
         "updated_at": item.updated_at.isoformat() if item.updated_at else None,
     }

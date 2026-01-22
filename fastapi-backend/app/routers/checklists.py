@@ -11,9 +11,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload
 
 from ..database import get_db
-from ..models.application_member import ApplicationMember
 from ..models.checklist import Checklist
 from ..models.project import Project
+from ..models.project_member import ProjectMember
 from ..models.task import Task
 from ..models.user import User
 from ..schemas.checklist import (
@@ -43,7 +43,14 @@ from ..services.checklist_service import (
 )
 from ..websocket.handlers import (
     handle_checklist_created,
+    handle_checklist_updated,
+    handle_checklist_deleted,
+    handle_checklists_reordered,
     handle_checklist_item_toggled,
+    handle_checklist_item_added,
+    handle_checklist_item_updated,
+    handle_checklist_item_deleted,
+    handle_checklist_items_reordered,
 )
 
 router = APIRouter(tags=["Checklists"])
@@ -61,13 +68,24 @@ def verify_task_access(
     require_edit: bool = False,
 ) -> Task:
     """
-    Verify that the user has access to the task via application membership.
+    Verify that the user has access to the task.
+
+    Permission rules for VIEW (require_edit=False):
+    - Application Owner: Allowed
+    - Application Member (editor, viewer): Allowed
+    - Project Admin/Member: Allowed
+
+    Permission rules for EDIT (require_edit=True):
+    - Application Owner: Allowed
+    - Project Admin/Member: Allowed
+    - Application Editor (non-project member): NOT allowed
+    - Viewer: NOT allowed
 
     Args:
         task_id: The UUID of the task
         current_user: The authenticated user
         db: Database session
-        require_edit: If True, require owner or editor role
+        require_edit: If True, require edit permission (owner or project member)
 
     Returns:
         Task: The verified task
@@ -75,6 +93,8 @@ def verify_task_access(
     Raises:
         HTTPException: If task not found or user doesn't have access
     """
+    from ..models.application_member import ApplicationMember
+
     task = db.query(Task).options(
         joinedload(Task.project).joinedload(Project.application)
     ).filter(
@@ -87,31 +107,40 @@ def verify_task_access(
             detail=f"Task with ID {task_id} not found",
         )
 
-    application_id = task.project.application_id
-
-    # Check if user is the owner
+    # Check if user is the application owner - always has full access
     if task.project.application.owner_id == current_user.id:
         return task
 
-    # Check ApplicationMembers
-    member = db.query(ApplicationMember).filter(
-        ApplicationMember.application_id == application_id,
+    # Check if user is a project member (admin or member) - always has full access
+    project_member = db.query(ProjectMember).filter(
+        ProjectMember.project_id == task.project_id,
+        ProjectMember.user_id == current_user.id,
+    ).first()
+
+    if project_member:
+        return task
+
+    # For edit operations, only owner and project members are allowed
+    if require_edit:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. You must be the application owner or a project member to edit checklists.",
+        )
+
+    # For view operations, check if user is an application member (viewer/editor)
+    application_member = db.query(ApplicationMember).filter(
+        ApplicationMember.application_id == task.project.application_id,
         ApplicationMember.user_id == current_user.id,
     ).first()
 
-    if not member:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. You are not a member of this application.",
-        )
+    if application_member:
+        return task
 
-    if require_edit and member.role == "viewer":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. Viewers cannot modify checklists.",
-        )
-
-    return task
+    # User doesn't have access
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Access denied. You must be a member of this application to view checklists.",
+    )
 
 
 # ============================================================================
@@ -221,7 +250,16 @@ async def update_checklist_endpoint(
 
     # Reload with items
     updated = get_checklist(db, checklist_id)
-    return ChecklistResponse(**build_checklist_response(updated))
+    response = build_checklist_response(updated)
+
+    # Broadcast WebSocket event
+    await handle_checklist_updated(
+        task_id=checklist.task_id,
+        checklist_id=checklist_id,
+        checklist_data=response,
+    )
+
+    return ChecklistResponse(**response)
 
 
 @router.delete(
@@ -250,7 +288,7 @@ async def delete_checklist_endpoint(
             detail="Checklist not found",
         )
 
-    verify_task_access(checklist.task_id, current_user, db, require_edit=True)
+    task = verify_task_access(checklist.task_id, current_user, db, require_edit=True)
 
     deleted = delete_checklist(db, checklist_id)
     if not deleted:
@@ -258,6 +296,13 @@ async def delete_checklist_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Checklist not found",
         )
+
+    # Broadcast WebSocket event
+    await handle_checklist_deleted(
+        task_id=checklist.task_id,
+        checklist_id=checklist_id,
+        project_id=task.project_id,
+    )
 
 
 @router.put(
@@ -288,6 +333,12 @@ async def reorder_checklists_endpoint(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid checklist IDs provided",
         )
+
+    # Broadcast WebSocket event
+    await handle_checklists_reordered(
+        task_id=task_id,
+        checklist_ids=reorder_data.item_ids,
+    )
 
 
 # ============================================================================
@@ -333,7 +384,16 @@ async def create_item_endpoint(
             detail="Checklist not found",
         )
 
-    return ChecklistItemResponse(**build_checklist_item_response(item))
+    response = build_checklist_item_response(item)
+
+    # Broadcast WebSocket event
+    await handle_checklist_item_added(
+        task_id=checklist.task_id,
+        checklist_id=checklist_id,
+        item_data=response,
+    )
+
+    return ChecklistItemResponse(**response)
 
 
 @router.put(
@@ -381,7 +441,16 @@ async def update_item_endpoint(
             detail="Item not found",
         )
 
-    return ChecklistItemResponse(**build_checklist_item_response(updated))
+    response = build_checklist_item_response(updated)
+
+    # Broadcast WebSocket event
+    await handle_checklist_item_updated(
+        task_id=checklist.task_id,
+        item_id=item_id,
+        item_data=response,
+    )
+
+    return ChecklistItemResponse(**response)
 
 
 @router.post(
@@ -420,7 +489,7 @@ async def toggle_item_endpoint(
 
     task = verify_task_access(checklist.task_id, current_user, db, require_edit=True)
 
-    result = toggle_checklist_item(db, item_id)
+    result = toggle_checklist_item(db, item_id, user_id=current_user.id)
     if not result:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -485,6 +554,13 @@ async def delete_item_endpoint(
             detail="Item not found",
         )
 
+    # Broadcast WebSocket event
+    await handle_checklist_item_deleted(
+        task_id=checklist.task_id,
+        checklist_id=item.checklist_id,
+        item_id=item_id,
+    )
+
 
 @router.put(
     "/api/checklists/{checklist_id}/items/reorder",
@@ -522,3 +598,10 @@ async def reorder_items_endpoint(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid item IDs provided",
         )
+
+    # Broadcast WebSocket event
+    await handle_checklist_items_reordered(
+        task_id=checklist.task_id,
+        checklist_id=checklist_id,
+        item_ids=reorder_data.item_ids,
+    )

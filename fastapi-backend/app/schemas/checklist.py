@@ -148,17 +148,9 @@ class ChecklistResponse(BaseModel):
 
 
 class ReorderRequest(BaseModel):
-    """Schema for reordering a checklist or item."""
+    """Schema for reordering checklists or items."""
 
-    before_id: Optional[UUID] = Field(
-        None,
-        description="ID of the item/checklist to place after (null = first position)",
-    )
-    after_id: Optional[UUID] = Field(
-        None,
-        description="ID of the item/checklist to place before (null = last position)",
-    )
-    target_rank: Optional[str] = Field(
-        None,
-        description="Direct Lexorank value (alternative to before/after)",
+    item_ids: List[UUID] = Field(
+        ...,
+        description="Ordered list of item/checklist IDs in desired order",
     )

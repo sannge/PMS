@@ -7,6 +7,18 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+class CommentAttachmentResponse(BaseModel):
+    """Schema for attachment info in comment response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID = Field(..., description="Unique attachment identifier")
+    file_name: str = Field(..., description="Original file name")
+    file_type: Optional[str] = Field(None, description="MIME type of the file")
+    file_size: Optional[int] = Field(None, description="File size in bytes")
+    created_at: datetime = Field(..., description="When the attachment was created")
+
+
 class MentionResponse(BaseModel):
     """Schema for mention response."""
 
@@ -41,6 +53,10 @@ class CommentCreate(BaseModel):
         None,
         max_length=50000,
         description="Plain text content (extracted from body_json or provided directly)",
+    )
+    attachment_ids: Optional[List[UUID]] = Field(
+        None,
+        description="List of attachment IDs to link to this comment",
     )
 
     @model_validator(mode="after")
@@ -113,6 +129,10 @@ class CommentResponse(BaseModel):
     mentions: List[MentionResponse] = Field(
         default_factory=list,
         description="List of @mentions in this comment",
+    )
+    attachments: List[CommentAttachmentResponse] = Field(
+        default_factory=list,
+        description="List of file attachments on this comment",
     )
 
 

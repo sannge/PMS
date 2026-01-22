@@ -1226,7 +1226,7 @@ async def handle_comment_added(
 
     Args:
         task_id: The task's UUID
-        comment_data: The comment payload
+        comment_data: The full comment payload from build_comment_response
         mentioned_user_ids: List of mentioned users to notify directly
         connection_manager: Optional custom manager (defaults to global)
 
@@ -1236,17 +1236,12 @@ async def handle_comment_added(
     mgr = connection_manager or manager
     room_id = get_task_room(task_id)
 
+    # Send full comment data for seamless real-time updates
     payload: dict[str, Any] = {
-        "t": "ca",  # Minified type for efficiency
-        "d": {
-            "id": str(comment_data.get("id", "")),
-            "tid": str(task_id),
-            "a": str(comment_data.get("author_id", "")),
-            "an": comment_data.get("author_name", ""),
-            "b": (comment_data.get("body_text", "") or "")[:100],  # Preview
-            "m": [str(uid) for uid in (mentioned_user_ids or [])],
-            "ts": int(datetime.utcnow().timestamp()),
-        },
+        "task_id": str(task_id),
+        "comment": comment_data,  # Full comment data
+        "mentioned_user_ids": [str(uid) for uid in (mentioned_user_ids or [])],
+        "timestamp": datetime.utcnow().isoformat(),
     }
 
     message = {
@@ -1283,7 +1278,7 @@ async def handle_comment_updated(
     Args:
         task_id: The task's UUID
         comment_id: The comment's UUID
-        comment_data: The updated comment payload
+        comment_data: The full updated comment payload from build_comment_response
         connection_manager: Optional custom manager (defaults to global)
 
     Returns:
@@ -1292,13 +1287,12 @@ async def handle_comment_updated(
     mgr = connection_manager or manager
     room_id = get_task_room(task_id)
 
+    # Send full comment data for seamless real-time updates
     payload = {
-        "t": "cu",
-        "d": {
-            "id": str(comment_id),
-            "b": (comment_data.get("body_text", "") or "")[:100],
-            "ts": int(datetime.utcnow().timestamp()),
-        },
+        "task_id": str(task_id),
+        "comment_id": str(comment_id),
+        "comment": comment_data,  # Full comment data
+        "timestamp": datetime.utcnow().isoformat(),
     }
 
     message = {
@@ -1338,11 +1332,9 @@ async def handle_comment_deleted(
     room_id = get_task_room(task_id)
 
     payload = {
-        "t": "cd",
-        "d": {
-            "id": str(comment_id),
-            "ts": int(datetime.utcnow().timestamp()),
-        },
+        "task_id": str(task_id),
+        "comment_id": str(comment_id),
+        "timestamp": datetime.utcnow().isoformat(),
     }
 
     message = {
@@ -1578,6 +1570,240 @@ async def handle_checklist_item_toggled(
         room_id=room_id,
         recipients=recipients,
         message_type=MessageType.CHECKLIST_ITEM_TOGGLED.value,
+        success=True,
+    )
+
+
+async def handle_checklist_item_added(
+    task_id: UUID | str,
+    checklist_id: UUID | str,
+    item_data: dict[str, Any],
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Handle checklist_item_added event and broadcast to task room.
+
+    Args:
+        task_id: The task's UUID
+        checklist_id: The checklist's UUID
+        item_data: The item payload
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_task_room(task_id)
+
+    payload = {
+        "t": "cia",
+        "d": {
+            "id": str(item_data.get("id", "")),
+            "clid": str(checklist_id),
+            "content": item_data.get("content", ""),
+            "done": item_data.get("is_done", False),
+            "ts": int(datetime.utcnow().timestamp()),
+        },
+    }
+
+    message = {
+        "type": MessageType.CHECKLIST_ITEM_ADDED.value,
+        "data": payload,
+    }
+
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    logger.debug(f"Checklist item added: task_id={task_id}, item_id={item_data.get('id')}")
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.CHECKLIST_ITEM_ADDED.value,
+        success=True,
+    )
+
+
+async def handle_checklist_item_updated(
+    task_id: UUID | str,
+    item_id: UUID | str,
+    item_data: dict[str, Any],
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Handle checklist_item_updated event and broadcast to task room.
+
+    Args:
+        task_id: The task's UUID
+        item_id: The item's UUID
+        item_data: The updated item payload
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_task_room(task_id)
+
+    payload = {
+        "t": "ciu",
+        "d": {
+            "id": str(item_id),
+            "content": item_data.get("content", ""),
+            "ts": int(datetime.utcnow().timestamp()),
+        },
+    }
+
+    message = {
+        "type": MessageType.CHECKLIST_ITEM_UPDATED.value,
+        "data": payload,
+    }
+
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    logger.debug(f"Checklist item updated: task_id={task_id}, item_id={item_id}")
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.CHECKLIST_ITEM_UPDATED.value,
+        success=True,
+    )
+
+
+async def handle_checklist_item_deleted(
+    task_id: UUID | str,
+    checklist_id: UUID | str,
+    item_id: UUID | str,
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Handle checklist_item_deleted event and broadcast to task room.
+
+    Args:
+        task_id: The task's UUID
+        checklist_id: The checklist's UUID
+        item_id: The item's UUID
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_task_room(task_id)
+
+    payload = {
+        "t": "cid",
+        "d": {
+            "id": str(item_id),
+            "clid": str(checklist_id),
+            "ts": int(datetime.utcnow().timestamp()),
+        },
+    }
+
+    message = {
+        "type": MessageType.CHECKLIST_ITEM_DELETED.value,
+        "data": payload,
+    }
+
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    logger.debug(f"Checklist item deleted: task_id={task_id}, item_id={item_id}")
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.CHECKLIST_ITEM_DELETED.value,
+        success=True,
+    )
+
+
+async def handle_checklist_items_reordered(
+    task_id: UUID | str,
+    checklist_id: UUID | str,
+    item_ids: list[UUID | str],
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Handle checklist_items_reordered event and broadcast to task room.
+
+    Args:
+        task_id: The task's UUID
+        checklist_id: The checklist's UUID
+        item_ids: Ordered list of item UUIDs
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_task_room(task_id)
+
+    payload = {
+        "t": "cir",
+        "d": {
+            "clid": str(checklist_id),
+            "ids": [str(item_id) for item_id in item_ids],
+            "ts": int(datetime.utcnow().timestamp()),
+        },
+    }
+
+    message = {
+        "type": MessageType.CHECKLIST_ITEMS_REORDERED.value,
+        "data": payload,
+    }
+
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    logger.debug(f"Checklist items reordered: task_id={task_id}, checklist_id={checklist_id}")
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.CHECKLIST_ITEMS_REORDERED.value,
+        success=True,
+    )
+
+
+async def handle_checklists_reordered(
+    task_id: UUID | str,
+    checklist_ids: list[UUID | str],
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Handle checklists_reordered event and broadcast to task room.
+
+    Args:
+        task_id: The task's UUID
+        checklist_ids: Ordered list of checklist UUIDs
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_task_room(task_id)
+
+    payload = {
+        "t": "clr",
+        "d": {
+            "ids": [str(checklist_id) for checklist_id in checklist_ids],
+            "ts": int(datetime.utcnow().timestamp()),
+        },
+    }
+
+    message = {
+        "type": MessageType.CHECKLISTS_REORDERED.value,
+        "data": payload,
+    }
+
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    logger.debug(f"Checklists reordered: task_id={task_id}")
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.CHECKLISTS_REORDERED.value,
         success=True,
     )
 
@@ -1822,7 +2048,12 @@ __all__ = [
     "handle_checklist_created",
     "handle_checklist_updated",
     "handle_checklist_deleted",
+    "handle_checklists_reordered",
     "handle_checklist_item_toggled",
+    "handle_checklist_item_added",
+    "handle_checklist_item_updated",
+    "handle_checklist_item_deleted",
+    "handle_checklist_items_reordered",
     # Presence handlers
     "handle_presence_update",
     "handle_typing_indicator",

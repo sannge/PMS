@@ -72,6 +72,10 @@ class AttachmentCreate(AttachmentBase):
         None,
         description="ID of the note (when attaching to a note)",
     )
+    comment_id: Optional[UUID] = Field(
+        None,
+        description="ID of the comment (when attaching to a comment)",
+    )
 
 
 class AttachmentUpdate(BaseModel):
@@ -117,6 +121,10 @@ class AttachmentResponse(AttachmentBase):
     note_id: Optional[UUID] = Field(
         None,
         description="ID of the associated note",
+    )
+    comment_id: Optional[UUID] = Field(
+        None,
+        description="ID of the associated comment",
     )
     uploaded_by: Optional[UUID] = Field(
         None,

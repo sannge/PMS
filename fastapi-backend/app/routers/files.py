@@ -9,11 +9,15 @@ from typing import Annotated, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from ..database import get_db
+from ..models.application_member import ApplicationMember
 from ..models.attachment import Attachment
+from ..models.comment import Comment
 from ..models.note import Note
+from ..models.project import Project
+from ..models.project_member import ProjectMember
 from ..models.task import Task
 from ..models.user import User
 from ..schemas.file import (
@@ -26,11 +30,102 @@ from ..schemas.file import (
 )
 from ..services.auth_service import get_current_user
 from ..services.minio_service import MinIOService, MinIOServiceError, get_minio_service
+from ..websocket.manager import manager as ws_manager, MessageType
 
 router = APIRouter(prefix="/api/files", tags=["Files"])
 
 # Maximum file size (100 MB)
 MAX_FILE_SIZE = 100 * 1024 * 1024
+
+
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+
+def check_task_attachment_permission(
+    task_id: UUID,
+    current_user: User,
+    db: Session,
+) -> bool:
+    """
+    Check if user has permission to manage attachments on a task.
+
+    Permission rules:
+    - Application Owner: Always allowed
+    - Application Member (including Viewers): Allowed (can upload for comments)
+    - Project Admin: Always allowed
+    - Project Member: Always allowed
+    - Others: Not allowed
+
+    Args:
+        task_id: The task ID to check access for
+        current_user: The authenticated user
+        db: Database session
+
+    Returns:
+        bool: True if user has permission
+    """
+    # Get task with project and application
+    task = db.query(Task).options(
+        joinedload(Task.project).joinedload(Project.application)
+    ).filter(Task.id == task_id).first()
+
+    if not task:
+        return False
+
+    application_id = task.project.application_id
+
+    # Check if user is the application owner
+    if task.project.application.owner_id == current_user.id:
+        return True
+
+    # Check if user is an application member (owner, editor, or viewer)
+    # All application members can upload attachments (e.g., for comments)
+    app_member = db.query(ApplicationMember).filter(
+        ApplicationMember.application_id == application_id,
+        ApplicationMember.user_id == current_user.id,
+    ).first()
+
+    if app_member:
+        return True
+
+    # Check if user is a project member (admin or member)
+    project_member = db.query(ProjectMember).filter(
+        ProjectMember.project_id == task.project_id,
+        ProjectMember.user_id == current_user.id,
+    ).first()
+
+    if project_member:
+        return True
+
+    return False
+
+
+def verify_task_attachment_access(
+    task_id: UUID,
+    current_user: User,
+    db: Session,
+    action: str = "manage",
+) -> None:
+    """
+    Verify that the user has permission to manage attachments on a task.
+    Raises HTTPException if not allowed.
+
+    Args:
+        task_id: The task ID to check access for
+        current_user: The authenticated user
+        db: Database session
+        action: Description of the action for error message
+
+    Raises:
+        HTTPException: If user doesn't have permission
+    """
+    if not check_task_attachment_permission(task_id, current_user, db):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access denied. You must be the application owner or a project member to {action} attachments.",
+        )
 
 
 @router.post(
@@ -66,6 +161,10 @@ async def upload_file(
     note_id: Optional[UUID] = Query(
         None,
         description="ID of the note to attach the file to (shortcut for entity_type=note)",
+    ),
+    comment_id: Optional[UUID] = Query(
+        None,
+        description="ID of the comment to attach the file to (shortcut for entity_type=comment)",
     ),
 ) -> AttachmentResponse:
     """
@@ -112,13 +211,15 @@ async def upload_file(
     if task_id and not resolved_entity_type:
         resolved_entity_type = EntityType.TASK.value
         resolved_entity_id = task_id
-        # Verify task exists and user has access
+        # Verify task exists
         task = db.query(Task).filter(Task.id == task_id).first()
         if not task:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Task with ID {task_id} not found",
             )
+        # Check upload permission (app owner or project member)
+        verify_task_attachment_access(task_id, current_user, db, action="upload")
 
     # Handle note_id shortcut
     if note_id and not resolved_entity_type:
@@ -131,6 +232,29 @@ async def upload_file(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Note with ID {note_id} not found",
             )
+
+    # Handle comment_id shortcut
+    if comment_id and not resolved_entity_type:
+        resolved_entity_type = EntityType.COMMENT.value
+        resolved_entity_id = comment_id
+        # Verify comment exists
+        comment = db.query(Comment).filter(Comment.id == comment_id).first()
+        if not comment:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Comment with ID {comment_id} not found",
+            )
+
+    # Handle explicit entity_type=task with entity_id
+    if entity_type == EntityType.TASK and entity_id:
+        task = db.query(Task).filter(Task.id == entity_id).first()
+        if not task:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Task with ID {entity_id} not found",
+            )
+        # Check upload permission (app owner or project member)
+        verify_task_attachment_access(entity_id, current_user, db, action="upload")
 
     # Determine bucket based on content type
     bucket = minio.get_bucket_for_content_type(content_type)
@@ -170,11 +294,38 @@ async def upload_file(
         entity_id=resolved_entity_id,
         task_id=task_id,
         note_id=note_id,
+        comment_id=comment_id,
     )
 
     db.add(attachment)
     db.commit()
     db.refresh(attachment)
+
+    # Broadcast attachment upload via WebSocket
+    if resolved_entity_type and resolved_entity_id:
+        room_id = f"{resolved_entity_type}:{resolved_entity_id}"
+        await ws_manager.broadcast_to_room(
+            room_id,
+            {
+                "type": MessageType.ATTACHMENT_UPLOADED,
+                "data": {
+                    "attachment": {
+                        "id": str(attachment.id),
+                        "file_name": attachment.file_name,
+                        "file_type": attachment.file_type,
+                        "file_size": attachment.file_size,
+                        "entity_type": attachment.entity_type,
+                        "entity_id": str(attachment.entity_id) if attachment.entity_id else None,
+                        "task_id": str(attachment.task_id) if attachment.task_id else None,
+                        "note_id": str(attachment.note_id) if attachment.note_id else None,
+                        "uploaded_by": str(attachment.uploaded_by),
+                        "created_at": attachment.created_at.isoformat() if attachment.created_at else None,
+                    },
+                    "entity_type": resolved_entity_type,
+                    "entity_id": str(resolved_entity_id),
+                },
+            },
+        )
 
     return attachment
 
@@ -285,8 +436,6 @@ async def get_file(
 
     Returns the attachment metadata and a temporary URL for downloading the file.
     The download URL is valid for 1 hour.
-
-    Only the uploader can access the file.
     """
     # Get the attachment
     attachment = db.query(Attachment).filter(
@@ -299,12 +448,8 @@ async def get_file(
             detail=f"Attachment with ID {attachment_id} not found",
         )
 
-    # Check access - user must be the uploader
-    if attachment.uploaded_by != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. You do not have permission to access this file.",
-        )
+    # Access is allowed for any authenticated user
+    # Entity-level access control happens when listing attachments
 
     # Generate presigned download URL
     if attachment.minio_bucket and attachment.minio_key:
@@ -363,12 +508,8 @@ async def get_attachment_info(
             detail=f"Attachment with ID {attachment_id} not found",
         )
 
-    # Check access - user must be the uploader
-    if attachment.uploaded_by != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. You do not have permission to access this file.",
-        )
+    # Access is allowed for any authenticated user
+    # Entity-level access control happens when listing attachments
 
     return attachment
 
@@ -461,7 +602,10 @@ async def delete_file(
     - The file from MinIO storage
     - The attachment database record
 
-    Only the uploader can delete their files.
+    The following users can delete files:
+    - The application owner
+    - Project admins or members (for task attachments)
+
     This action is irreversible.
     """
     # Get the attachment
@@ -475,12 +619,32 @@ async def delete_file(
             detail=f"Attachment with ID {attachment_id} not found",
         )
 
-    # Check access - user must be the uploader
-    if attachment.uploaded_by != current_user.id:
+    # Check access - must be application owner or project member
+    can_delete = False
+
+    # For task attachments, use the task permission helper
+    if attachment.task_id:
+        can_delete = check_task_attachment_permission(attachment.task_id, current_user, db)
+
+    # For note attachments, check if user is the application owner
+    if not can_delete and attachment.note_id:
+        note = db.query(Note).options(
+            joinedload(Note.application)
+        ).filter(Note.id == attachment.note_id).first()
+
+        if note and note.application.owner_id == current_user.id:
+            can_delete = True
+
+    if not can_delete:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. You do not have permission to delete this file.",
+            detail="Access denied. You must be the application owner or a project member to delete attachments.",
         )
+
+    # Capture entity info for WebSocket broadcast before deletion
+    entity_type = attachment.entity_type
+    entity_id = attachment.entity_id
+    deleted_attachment_id = str(attachment.id)
 
     # Delete from MinIO storage
     if attachment.minio_bucket and attachment.minio_key:
@@ -497,6 +661,21 @@ async def delete_file(
     # Delete the database record
     db.delete(attachment)
     db.commit()
+
+    # Broadcast attachment deletion via WebSocket
+    if entity_type and entity_id:
+        room_id = f"{entity_type}:{entity_id}"
+        await ws_manager.broadcast_to_room(
+            room_id,
+            {
+                "type": MessageType.ATTACHMENT_DELETED,
+                "data": {
+                    "attachment_id": deleted_attachment_id,
+                    "entity_type": entity_type,
+                    "entity_id": str(entity_id),
+                },
+            },
+        )
 
     return None
 
@@ -535,12 +714,8 @@ async def get_download_url(
             detail=f"Attachment with ID {attachment_id} not found",
         )
 
-    # Check access - user must be the uploader
-    if attachment.uploaded_by != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. You do not have permission to access this file.",
-        )
+    # Access is allowed for any authenticated user
+    # Entity-level access control happens when listing attachments
 
     # Generate presigned download URL
     if not attachment.minio_bucket or not attachment.minio_key:

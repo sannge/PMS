@@ -14,6 +14,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session, joinedload
 
+from ..models.attachment import Attachment
 from ..models.comment import Comment
 from ..models.mention import Mention
 from ..models.task import Task
@@ -180,8 +181,23 @@ def create_comment(
         )
         db.add(mention)
 
+    # Link attachments to this comment
+    if comment_data.attachment_ids:
+        db.query(Attachment).filter(
+            Attachment.id.in_(comment_data.attachment_ids)
+        ).update(
+            {
+                Attachment.comment_id: comment.id,
+                Attachment.entity_type: "comment",
+                Attachment.entity_id: comment.id,
+            },
+            synchronize_session=False,
+        )
+
     db.commit()
-    db.refresh(comment)
+
+    # Expire the comment to force reload of relationships including attachments
+    db.expire(comment)
 
     return comment, list(set(mentioned_user_ids))
 
@@ -309,7 +325,7 @@ def get_comment(
     comment_id: UUID,
 ) -> Optional[Comment]:
     """
-    Get a comment by ID with author and mentions loaded.
+    Get a comment by ID with author, mentions, and attachments loaded.
 
     Args:
         db: Database session
@@ -321,6 +337,7 @@ def get_comment(
     return db.query(Comment).options(
         joinedload(Comment.author),
         joinedload(Comment.mentions).joinedload(Mention.user),
+        joinedload(Comment.attachments),
     ).filter(
         Comment.id == comment_id,
         Comment.is_deleted == False,
@@ -348,6 +365,7 @@ def get_comments_for_task(
     query = db.query(Comment).options(
         joinedload(Comment.author),
         joinedload(Comment.mentions).joinedload(Mention.user),
+        joinedload(Comment.attachments),
     ).filter(
         Comment.task_id == task_id,
         Comment.is_deleted == False,
@@ -421,6 +439,18 @@ def build_comment_response(comment: Comment) -> Dict[str, Any]:
         }
         mentions.append(mention_data)
 
+    # Build attachments list
+    attachments = []
+    if hasattr(comment, 'attachments') and comment.attachments:
+        for attachment in comment.attachments:
+            attachments.append({
+                "id": str(attachment.id),
+                "file_name": attachment.file_name,
+                "file_type": attachment.file_type,
+                "file_size": attachment.file_size,
+                "created_at": attachment.created_at.isoformat() if attachment.created_at else None,
+            })
+
     return {
         "id": str(comment.id),
         "task_id": str(comment.task_id),
@@ -433,4 +463,5 @@ def build_comment_response(comment: Comment) -> Dict[str, Any]:
         "created_at": comment.created_at.isoformat(),
         "updated_at": comment.updated_at.isoformat() if comment.updated_at else None,
         "mentions": mentions,
+        "attachments": attachments,
     }

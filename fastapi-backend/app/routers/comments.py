@@ -24,11 +24,10 @@ from ..schemas.comment import (
     CommentUpdate,
 )
 from ..services.auth_service import get_current_user
+from ..services.minio_service import MinIOService, get_minio_service
 from ..services.comment_service import (
     build_comment_response,
-    count_comments_for_task,
     create_comment,
-    delete_comment,
     get_comment,
     get_comments_for_task,
     update_comment,
@@ -52,16 +51,16 @@ def verify_task_access(
     task_id: UUID,
     current_user: User,
     db: Session,
-    require_edit: bool = False,
 ) -> Task:
     """
     Verify that the user has access to the task via application membership.
+
+    Any application member (owner, editor, viewer) can access and comment on tasks.
 
     Args:
         task_id: The UUID of the task
         current_user: The authenticated user
         db: Database session
-        require_edit: If True, require owner or editor role
 
     Returns:
         Task: The verified task
@@ -101,11 +100,8 @@ def verify_task_access(
             detail="Access denied. You are not a member of this application.",
         )
 
-    if require_edit and member.role == "viewer":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. Viewers cannot comment on tasks.",
-        )
+    # Any application member (owner, editor, viewer) can comment
+    # No additional permission checks needed for comments
 
     return task
 
@@ -206,8 +202,8 @@ async def create_comment_endpoint(
     Supports TipTap JSON format for rich text with @mentions.
     Mentioned users will receive notifications.
     """
-    # Verify access (require edit permission to comment)
-    task = verify_task_access(task_id, current_user, db, require_edit=True)
+    # Verify access - any application member can comment
+    task = verify_task_access(task_id, current_user, db)
 
     # Create comment
     comment, mentioned_user_ids = create_comment(
@@ -315,7 +311,7 @@ async def update_comment_endpoint(
     "/api/comments/{comment_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a comment",
-    description="Soft-delete a comment. Only the author can delete.",
+    description="Delete a comment and its attachments. Only the author can delete.",
     responses={
         204: {"description": "Comment deleted successfully"},
         401: {"description": "Not authenticated"},
@@ -327,15 +323,18 @@ async def delete_comment_endpoint(
     comment_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
+    minio: MinIOService = Depends(get_minio_service),
 ) -> None:
     """
-    Soft-delete a comment.
+    Delete a comment and its attachments.
 
     Only the comment author can delete their own comments.
-    The comment content will be replaced with "[deleted]".
+    This will also delete any file attachments from MinIO storage.
     """
-    # Get comment first to get task_id for WebSocket
-    comment = db.query(Comment).filter(
+    # Get comment with attachments
+    comment = db.query(Comment).options(
+        joinedload(Comment.attachments)
+    ).filter(
         Comment.id == comment_id,
         Comment.author_id == current_user.id,
         Comment.is_deleted == False,
@@ -349,19 +348,24 @@ async def delete_comment_endpoint(
 
     task_id = comment.task_id
 
-    # Delete comment
-    deleted = delete_comment(
-        db=db,
-        comment_id=comment_id,
-        author_id=current_user.id,
-        soft_delete=True,
-    )
+    # Collect MinIO file info before deleting from database
+    minio_files = [
+        (att.minio_bucket, att.minio_key)
+        for att in comment.attachments
+        if att.minio_bucket and att.minio_key
+    ]
 
-    if deleted is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Comment not found or you are not the author",
-        )
+    # Delete comment from database (cascade will delete attachment records)
+    db.delete(comment)
+    db.commit()
+
+    # Delete files from MinIO storage (after successful DB commit)
+    for bucket, key in minio_files:
+        try:
+            minio.delete_file(bucket=bucket, object_name=key)
+        except Exception:
+            # Log error but continue - file might already be deleted
+            pass
 
     # Broadcast WebSocket event
     await handle_comment_deleted(

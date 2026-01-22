@@ -99,6 +99,12 @@ class Attachment(Base):
         nullable=True,
         index=True,
     )
+    comment_id = Column(
+        UNIQUEIDENTIFIER,
+        ForeignKey("Comments.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     uploaded_by = Column(
         UNIQUEIDENTIFIER,
         ForeignKey("Users.id", ondelete="SET NULL"),
@@ -124,6 +130,12 @@ class Attachment(Base):
         back_populates="attachments",
         lazy="joined",
         foreign_keys=[note_id],
+    )
+    comment = relationship(
+        "Comment",
+        back_populates="attachments",
+        lazy="joined",
+        foreign_keys=[comment_id],
     )
     uploader = relationship(
         "User",
