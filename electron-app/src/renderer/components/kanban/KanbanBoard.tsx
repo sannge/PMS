@@ -157,7 +157,7 @@ export function KanbanBoard({
   const token = useAuthStore((state) => state.token)
 
   // Store actions
-  const { moveTask, isMoving } = useTasksStore()
+  const { moveTask, isMoving, error: moveError } = useTasksStore()
 
   // WebSocket status
   const { status } = useWebSocket()
@@ -218,8 +218,10 @@ export function KanbanBoard({
       if (!result) {
         // Revert on failure and show error notice
         setTasks(originalTasks)
-        setRealtimeNotice('Failed to move task')
-        setTimeout(() => setRealtimeNotice(null), 3000)
+        // Get the actual error message from the store, fallback to generic message
+        const errorMessage = useTasksStore.getState().error?.message || 'Failed to move task'
+        setRealtimeNotice(errorMessage)
+        setTimeout(() => setRealtimeNotice(null), 5000)  // Show longer for important errors
         return false
       }
 

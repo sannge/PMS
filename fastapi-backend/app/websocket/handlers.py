@@ -1315,6 +1315,7 @@ async def handle_comment_updated(
 async def handle_comment_deleted(
     task_id: UUID | str,
     comment_id: UUID | str,
+    attachment_ids: list[str] | None = None,
     connection_manager: Optional[ConnectionManager] = None,
 ) -> BroadcastResult:
     """
@@ -1323,6 +1324,7 @@ async def handle_comment_deleted(
     Args:
         task_id: The task's UUID
         comment_id: The comment's UUID
+        attachment_ids: List of deleted attachment IDs (for frontend cleanup)
         connection_manager: Optional custom manager (defaults to global)
 
     Returns:
@@ -1334,6 +1336,7 @@ async def handle_comment_deleted(
     payload = {
         "task_id": str(task_id),
         "comment_id": str(comment_id),
+        "attachment_ids": attachment_ids or [],
         "timestamp": datetime.utcnow().isoformat(),
     }
 
@@ -1344,7 +1347,7 @@ async def handle_comment_deleted(
 
     recipients = await mgr.broadcast_to_room(room_id, message)
 
-    logger.debug(f"Comment deleted: task_id={task_id}, comment_id={comment_id}")
+    logger.debug(f"Comment deleted: task_id={task_id}, comment_id={comment_id}, attachments={len(attachment_ids or [])}")
 
     return BroadcastResult(
         room_id=room_id,

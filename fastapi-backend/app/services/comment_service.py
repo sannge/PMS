@@ -182,17 +182,16 @@ def create_comment(
         db.add(mention)
 
     # Link attachments to this comment
+    # Only set comment_id - keep entity_type/entity_id unchanged so attachments
+    # still appear in the task's attachment section
     if comment_data.attachment_ids:
         db.query(Attachment).filter(
             Attachment.id.in_(comment_data.attachment_ids)
         ).update(
-            {
-                Attachment.comment_id: comment.id,
-                Attachment.entity_type: "comment",
-                Attachment.entity_id: comment.id,
-            },
+            {"comment_id": comment.id},
             synchronize_session=False,
         )
+        db.flush()
 
     db.commit()
 

@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils'
 import { MessageSquare, Loader2, AlertCircle } from 'lucide-react'
 import { useCommentsStore, type Comment } from '@/stores/comments-store'
 import { useAuthStore } from '@/stores/auth-store'
+import { useFilesStore } from '@/stores/files-store'
 import { CommentItem } from './CommentItem'
 import { CommentInput, type MentionSuggestion } from './CommentInput'
 import { TypingIndicator } from '@/components/presence'
@@ -48,6 +49,7 @@ export function CommentThread({
 }: CommentThreadProps): JSX.Element {
   const token = useAuthStore((state) => state.token)
   const userId = useAuthStore((state) => state.user?.id)
+  const removeAttachmentsByIds = useFilesStore((state) => state.removeAttachmentsByIds)
 
   const {
     comments,
@@ -99,9 +101,13 @@ export function CommentThread({
     }
 
     // Handle comment deleted event
-    const onCommentDeleted = (data: { task_id?: string; comment_id?: string }) => {
+    const onCommentDeleted = (data: { task_id?: string; comment_id?: string; attachment_ids?: string[] }) => {
       if (data.task_id === taskId && data.comment_id) {
         handleCommentDeleted(data.comment_id)
+        // Remove associated attachments from the task's attachment list
+        if (data.attachment_ids && data.attachment_ids.length > 0) {
+          removeAttachmentsByIds(data.attachment_ids)
+        }
       }
     }
 
@@ -117,7 +123,7 @@ export function CommentThread({
       wsClient.off(MessageType.COMMENT_UPDATED, onCommentUpdated)
       wsClient.off(MessageType.COMMENT_DELETED, onCommentDeleted)
     }
-  }, [taskId, handleCommentAdded, handleCommentUpdated, handleCommentDeleted])
+  }, [taskId, handleCommentAdded, handleCommentUpdated, handleCommentDeleted, removeAttachmentsByIds])
 
   // Setup infinite scroll observer
   useEffect(() => {

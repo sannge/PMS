@@ -24,6 +24,7 @@ from ..schemas.file import (
     AttachmentCreate,
     AttachmentResponse,
     AttachmentUpdate,
+    BatchDownloadUrlsRequest,
     EntityType,
     FileDownloadResponse,
     FileUploadResponse,
@@ -740,6 +741,54 @@ async def get_download_url(
         "file_name": attachment.file_name,
         "download_url": download_url,
     }
+
+
+@router.post(
+    "/download-urls",
+    summary="Get download URLs for multiple attachments",
+    description="Batch generate presigned download URLs for multiple attachments (max 50).",
+    responses={
+        200: {"description": "Download URLs generated successfully"},
+        401: {"description": "Not authenticated"},
+        422: {"description": "Validation error (too many IDs or invalid format)"},
+    },
+)
+async def get_download_urls_batch(
+    request: BatchDownloadUrlsRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+    minio: MinIOService = Depends(get_minio_service),
+) -> dict[str, str]:
+    """
+    Batch generate presigned download URLs for multiple attachments.
+
+    - Maximum 50 attachment IDs per request
+    - Returns a dictionary mapping attachment IDs to their download URLs
+    - URLs are valid for 1 hour
+    - Invalid or inaccessible attachment IDs are silently skipped
+    """
+    if not request.ids:
+        return {}
+
+    # Get all attachments in one query
+    attachments = db.query(Attachment).filter(
+        Attachment.id.in_(request.ids),
+    ).all()
+
+    result: dict[str, str] = {}
+    for attachment in attachments:
+        if attachment.minio_bucket and attachment.minio_key:
+            try:
+                download_url = minio.get_presigned_download_url(
+                    bucket=attachment.minio_bucket,
+                    object_name=attachment.minio_key,
+                )
+                result[str(attachment.id)] = download_url
+            except MinIOServiceError:
+                # Skip attachments that fail to generate URLs
+                pass
+
+    return result
 
 
 @router.get(

@@ -197,9 +197,11 @@ def verify_task_access(
     Raises:
         HTTPException: If task not found or user doesn't have access
     """
-    # Fetch task with project and application in single query using joins
+    # Fetch task with project, application, assignee, and reporter in single query using joins
     task = db.query(Task).options(
-        joinedload(Task.project).joinedload(Project.application)
+        joinedload(Task.project).joinedload(Project.application),
+        joinedload(Task.assignee),
+        joinedload(Task.reporter),
     ).filter(
         Task.id == task_id,
     ).first()
@@ -1231,8 +1233,8 @@ async def update_task(
         old_status_name = get_status_name_from_legacy(old_status)
         new_status_name = get_status_name_from_legacy(new_status)
 
-        # Need to fetch the project to update derived_status_id
-        project = db.query(Project).filter(Project.id == task.project_id).first()
+        # Use the already-loaded project from verify_task_access (via joinedload)
+        project = task.project
 
         # Capture old derived status before update
         if project:
@@ -1261,9 +1263,7 @@ async def update_task(
             user_id=current_user.id,
         )
 
-    # Load assignee/reporter relationships for WebSocket broadcast and response
-    _ = task.assignee  # Trigger lazy load
-    _ = task.reporter  # Trigger lazy load
+    # Assignee/reporter are already loaded via eager loading in verify_task_access
 
     # Broadcast task update to project room for real-time updates
     task_data = {
@@ -1347,8 +1347,8 @@ async def delete_task(
     project_id = task.project_id
     task_status = task.status
 
-    # Get the project and capture old derived status before deletion
-    project = db.query(Project).filter(Project.id == project_id).first()
+    # Use the already-loaded project from verify_task_access (via joinedload)
+    project = task.project
     old_derived_status: Optional[str] = None
     if project:
         old_derived_status = get_current_derived_status_name(db, project)
@@ -1507,6 +1507,13 @@ async def move_task(
         new_status = legacy_status
         task.status = new_status
 
+    # Validate: Cannot move from TODO to another status if task is unassigned
+    if old_status == "todo" and new_status != "todo" and task.assignee_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Task must be assigned to someone before moving from Todo",
+        )
+
     # Validate before_task_id and after_task_id belong to the same project
     if move_data.before_task_id:
         before_task = db.query(Task).filter(
@@ -1569,8 +1576,8 @@ async def move_task(
         old_status_name = get_status_name_from_legacy(old_status)
         new_status_name = get_status_name_from_legacy(new_status)
 
-        # Fetch the project to update derived_status_id
-        project = db.query(Project).filter(Project.id == task.project_id).first()
+        # Use the already-loaded project from verify_task_access (via joinedload)
+        project = task.project
 
         # Capture old derived status before update
         if project:
@@ -1590,9 +1597,7 @@ async def move_task(
     db.commit()
     db.refresh(task)
 
-    # Load assignee/reporter relationships for WebSocket broadcast and response
-    _ = task.assignee  # Trigger lazy load
-    _ = task.reporter  # Trigger lazy load
+    # Assignee/reporter are already loaded via eager loading in verify_task_access
 
     # Emit WebSocket task_moved event for real-time Kanban updates
     # Serialize task data for WebSocket broadcast

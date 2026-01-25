@@ -348,7 +348,8 @@ async def delete_comment_endpoint(
 
     task_id = comment.task_id
 
-    # Collect MinIO file info before deleting from database
+    # Collect attachment info before deleting from database
+    attachment_ids = [str(att.id) for att in comment.attachments]
     minio_files = [
         (att.minio_bucket, att.minio_key)
         for att in comment.attachments
@@ -367,8 +368,9 @@ async def delete_comment_endpoint(
             # Log error but continue - file might already be deleted
             pass
 
-    # Broadcast WebSocket event
+    # Broadcast WebSocket event with deleted attachment IDs
     await handle_comment_deleted(
         task_id=task_id,
         comment_id=comment_id,
+        attachment_ids=attachment_ids,
     )

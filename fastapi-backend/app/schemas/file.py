@@ -160,3 +160,14 @@ class FileDownloadResponse(BaseModel):
         ...,
         description="Presigned URL for downloading the file",
     )
+
+
+class BatchDownloadUrlsRequest(BaseModel):
+    """Schema for batch download URLs request."""
+
+    ids: list[UUID] = Field(
+        ...,
+        min_length=1,
+        max_length=50,  # Limit batch size to prevent abuse
+        description="List of attachment IDs to get download URLs for",
+    )

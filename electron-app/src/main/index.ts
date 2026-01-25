@@ -8,8 +8,13 @@
  * - webSecurity: true - Enforces same-origin policy
  */
 
+// Load environment variables from .env file FIRST (before other imports that use env vars)
+import { config } from 'dotenv'
+import { resolve } from 'path'
+config({ path: resolve(__dirname, '../../.env') })
+
 import { app, BrowserWindow, shell, session, Menu, MenuItemConstructorOptions } from 'electron'
-import { join, resolve } from 'path'
+import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
 import { registerNotificationHandlers } from './notifications'
@@ -128,7 +133,7 @@ function setupContentSecurityPolicy(): void {
   const wsUrl = apiUrl.replace(/^http/, 'ws')
   // Get MinIO URL for file storage (presigned URLs)
   // Note: In electron-vite, VITE_ vars may not be in process.env for main process
-  const minioUrl = process.env.VITE_MINIO_URL || 'http://10.18.136.10:9000'
+  const minioUrl = process.env.VITE_MINIO_URL || 'http://10.18.137.108:9000'
 
   console.log('[CSP] API URL:', apiUrl)
   console.log('[CSP] MinIO URL:', minioUrl)
@@ -143,10 +148,10 @@ function setupContentSecurityPolicy(): void {
               "default-src 'self'; " +
               "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
               "style-src 'self' 'unsafe-inline'; " +
-              `img-src 'self' data: blob: http://localhost:* http://10.18.136.10:* ${minioUrl} https://*; ` +
+              `img-src 'self' data: blob: http://localhost:* http://10.18.137.108:* ${minioUrl} https://*; ` +
               "font-src 'self' data:; " +
-              `connect-src 'self' http://localhost:* ws://localhost:* http://10.18.136.10:* ${minioUrl}; ` +
-              `media-src 'self' blob: http://10.18.136.10:* ${minioUrl}; ` +
+              `connect-src 'self' http://localhost:* ws://localhost:* http://10.18.137.108:* ${minioUrl}; ` +
+              `media-src 'self' blob: http://10.18.137.108:* ${minioUrl}; ` +
               "worker-src 'self' blob:;"
             : // Production CSP - more restrictive
               "default-src 'self'; " +

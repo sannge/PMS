@@ -1,6 +1,6 @@
 # PM Desktop - Claude Code Context
 
-**Last updated**: 2026-01-19
+**Last updated**: 2026-01-24
 
 ## Project Overview
 
@@ -8,11 +8,14 @@ PM Desktop is a project management application with Jira-like features and OneNo
 
 ## Active Technologies
 
-- Python 3.11 + FastAPI, SQLAlchemy, Pydantic, Alembic (017-project-task-management-and-permissions)
-- TypeScript 5.5 + React 18, Electron 30, Zustand, Radix UI, TailwindCSS, TipTap (017-project-task-management-and-permissions)
+- Python 3.12 + FastAPI, SQLAlchemy, Pydantic, Alembic
+- TypeScript 5.5 + React 18, Electron 30, Zustand, Radix UI, TailwindCSS, TipTap
 - Microsoft SQL Server (via pyodbc)
 - Redis 7+ (WebSocket pub/sub and caching)
 - @dnd-kit (drag-and-drop)
+- pycrdt (Python CRDT for Yjs compatibility)
+- Meilisearch (full-text search engine)
+- @tiptap/extension-collaboration + y-websocket (real-time collaborative editing)
 
 ## Project Structure
 
@@ -42,7 +45,7 @@ electron-app/
 ```bash
 # Backend
 cd fastapi-backend
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8001
 pytest tests/ -v
 ruff check .
 
@@ -56,6 +59,7 @@ npm run lint
 ## Coding Conventions
 
 ### Python (Backend)
+
 - Type hints required for all functions
 - Pydantic models for request/response schemas
 - SQLAlchemy async patterns with selectinload
@@ -63,41 +67,55 @@ npm run lint
 - Ruff for linting
 
 ### TypeScript (Frontend)
+
 - Strict mode enabled
-- Radix UI + TailwindCSS for components
+- Radix UI + TailwindCSS for components (shadcn/ui pattern)
 - Zustand for state management
 - TipTap for rich text editing
+- State-based routing (NOT react-router) - navigation via callbacks and state in DashboardPage
 - ESLint with zero warnings policy
 
-## Current Feature: 017-project-task-management-and-permissions
+## Current Feature: 019-knowledge-base
 
 ### Scope
-Complete project task management with:
-- Drag-and-drop Kanban board
-- Comments with @mentions
-- Checklists
-- Project member management
-- Status override
-- Real-time presence indicators
+
+Real-time collaborative knowledge system with:
+
+- Google Docs-like collaborative rich-text editing
+- Hierarchical folder/document structure for Applications, Projects, Tasks
+- Real-time cursor sharing and co-editing using Yjs CRDT
+- Full-text search via Meilisearch
+- Unified "Notes" screen showing all knowledge organized by Application → Projects
+- Role-based permissions (Owner/Editor can edit, Viewers read-only)
 
 ### Scale Target
+
 5,000 concurrent users per server instance
 
 ### Key Files
-- Spec: `specs/auto-claude/017-project-task-management-and-permissions/spec.md`
-- Plan: `specs/auto-claude/017-project-task-management-and-permissions/plan.md`
-- Research: `specs/auto-claude/017-project-task-management-and-permissions/research.md`
-- Data Model: `specs/auto-claude/017-project-task-management-and-permissions/data-model.md`
+
+- Spec: `specs/019-knowledge-base/spec.md`
+- Plan: `specs/019-knowledge-base/plan.md`
+- Research: `specs/019-knowledge-base/research.md`
+- Data Model: `specs/019-knowledge-base/data-model.md`
+- API Contracts: `specs/019-knowledge-base/contracts/`
 
 ### Skills to Use
+
 - **frontend-design**: For UI component implementation
 - **agent-browser**: For E2E testing after each feature
 
 ## Recent Changes
 
-- 017-project-task-management-and-permissions: Added Comments, Checklists, DnD, Presence features
+- 019-knowledge-base (in progress):
+  - Backend: Document, DocumentFolder, DocumentSnapshot models with Alembic migration
+  - Backend: Document/folder CRUD routers, Yjs WebSocket handler, search service (Meilisearch)
+  - Frontend: Knowledge tree components (FolderNode, DocumentNode, KnowledgeTree)
+  - Frontend: Collaborative editor with TipTap + Yjs integration
+  - Frontend: Full-text search UI (KnowledgeSearch component)
+  - Frontend: shadcn/ui components (dialog, input, label, popover, dropdown-menu, scroll-area)
+- 017-project-task-management-and-permissions: Comments, Checklists, DnD, Presence features
 - Backend: TaskStatus, ProjectMember, ProjectTaskStatusAgg models
-- Frontend: Basic Kanban structure, WebSocket connection
 
 ## Constitution Principles
 

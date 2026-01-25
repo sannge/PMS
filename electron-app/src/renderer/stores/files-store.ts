@@ -49,10 +49,17 @@ export interface UploadProgress {
   error?: string
 }
 
+// URL cache entry with expiration
+interface CachedUrl {
+  url: string
+  expiresAt: number
+}
+
 interface FilesState {
   // Data
   attachments: Record<string, Attachment[]>  // Keyed by "entityType:entityId"
   uploads: UploadProgress[]
+  urlCache: Record<string, CachedUrl>  // Cache for presigned URLs
 
   // UI state
   isLoading: boolean
@@ -63,12 +70,17 @@ interface FilesState {
   uploadFile: (data: FileUploadData) => Promise<Attachment | null>
   deleteAttachment: (id: string) => Promise<boolean>
   getDownloadUrl: (id: string) => Promise<string | null>
+  getDownloadUrls: (ids: string[]) => Promise<Record<string, string>>  // Batch fetch
+  clearExpiredUrls: () => void  // Clean up expired cache entries
   clearError: () => void
   clearUploads: () => void
 
   // WebSocket handlers for real-time updates
   handleAttachmentUploaded: (entityType: string, entityId: string, attachment: Attachment) => void
   handleAttachmentDeleted: (entityType: string, entityId: string, attachmentId: string) => void
+
+  // Remove multiple attachments by IDs (for comment deletion cleanup)
+  removeAttachmentsByIds: (attachmentIds: string[]) => void
 }
 
 // ============================================================================
@@ -161,10 +173,16 @@ export function getFileIconType(fileType: string | null, fileName: string): stri
 // Store
 // ============================================================================
 
-export const useFilesStore = create<FilesState>()((set, _get) => ({
+// URL cache TTL (50 minutes - presigned URLs are typically valid for 1 hour)
+const URL_CACHE_TTL_MS = 50 * 60 * 1000
+// Maximum cache entries before forced cleanup
+const MAX_CACHE_SIZE = 200
+
+export const useFilesStore = create<FilesState>()((set, get) => ({
   // Initial state
   attachments: {},
   uploads: [],
+  urlCache: {},
   isLoading: false,
   error: null,
 
@@ -345,13 +363,15 @@ export const useFilesStore = create<FilesState>()((set, _get) => ({
       )
 
       if (response.status >= 200 && response.status < 300) {
-        // Remove from all attachment lists
+        // Remove from all attachment lists and clear cached URL
         set((state) => {
           const newAttachments: Record<string, Attachment[]> = {}
           for (const key of Object.keys(state.attachments)) {
             newAttachments[key] = state.attachments[key].filter((a) => a.id !== id)
           }
-          return { attachments: newAttachments }
+          // Remove from URL cache
+          const { [id]: _, ...remainingCache } = state.urlCache
+          return { attachments: newAttachments, urlCache: remainingCache }
         })
         return true
       } else {
@@ -364,8 +384,14 @@ export const useFilesStore = create<FilesState>()((set, _get) => ({
     }
   },
 
-  // Get download URL for an attachment (presigned URL from MinIO)
+  // Get download URL for an attachment (presigned URL from MinIO) with caching
   getDownloadUrl: async (id: string) => {
+    // Check cache first
+    const cached = get().urlCache[id]
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.url
+    }
+
     try {
       const token = localStorage.getItem('pm-desktop-auth')
       const parsedToken = token ? JSON.parse(token)?.state?.token : null
@@ -381,8 +407,26 @@ export const useFilesStore = create<FilesState>()((set, _get) => ({
       )
 
       if (response.status >= 200 && response.status < 300 && response.data?.download_url) {
-        console.log('[Files] getDownloadUrl: Success', response.data.download_url)
-        return response.data.download_url
+        const url = response.data.download_url
+        // Cache the URL with size limit enforcement
+        set((state) => {
+          let updatedCache = {
+            ...state.urlCache,
+            [id]: { url, expiresAt: Date.now() + URL_CACHE_TTL_MS },
+          }
+
+          // If cache exceeds max size, remove oldest entries
+          const cacheSize = Object.keys(updatedCache).length
+          if (cacheSize > MAX_CACHE_SIZE) {
+            const entries = Object.entries(updatedCache)
+            entries.sort((a, b) => a[1].expiresAt - b[1].expiresAt)
+            const keepEntries = entries.slice(-MAX_CACHE_SIZE)
+            updatedCache = Object.fromEntries(keepEntries)
+          }
+
+          return { urlCache: updatedCache }
+        })
+        return url
       }
 
       console.error('[Files] getDownloadUrl: Failed', response.status, response.data)
@@ -391,6 +435,111 @@ export const useFilesStore = create<FilesState>()((set, _get) => ({
       console.error('[Files] getDownloadUrl: Error', error)
       return null
     }
+  },
+
+  // Batch get download URLs for multiple attachments
+  getDownloadUrls: async (ids: string[]) => {
+    if (ids.length === 0) return {}
+
+    const now = Date.now()
+    const result: Record<string, string> = {}
+    const uncachedIds: string[] = []
+    const expiredIds: string[] = []
+
+    // Check cache first and track expired entries for cleanup
+    const cache = get().urlCache
+    for (const id of ids) {
+      const cached = cache[id]
+      if (cached) {
+        if (cached.expiresAt > now) {
+          result[id] = cached.url
+        } else {
+          expiredIds.push(id)
+          uncachedIds.push(id)
+        }
+      } else {
+        uncachedIds.push(id)
+      }
+    }
+
+    // Clean up expired entries we found (lazy cleanup)
+    if (expiredIds.length > 0) {
+      set((state) => {
+        const newCache = { ...state.urlCache }
+        for (const id of expiredIds) {
+          delete newCache[id]
+        }
+        return { urlCache: newCache }
+      })
+    }
+
+    // If all URLs are cached, return immediately
+    if (uncachedIds.length === 0) {
+      return result
+    }
+
+    try {
+      const token = localStorage.getItem('pm-desktop-auth')
+      const parsedToken = token ? JSON.parse(token)?.state?.token : null
+
+      if (!parsedToken) {
+        console.error('[Files] getDownloadUrls: Not authenticated')
+        return result
+      }
+
+      // Batch fetch uncached URLs
+      const response = await window.electronAPI.post<Record<string, string>>(
+        '/api/files/download-urls',
+        { ids: uncachedIds },
+        getAuthHeaders(parsedToken)
+      )
+
+      if (response.status >= 200 && response.status < 300 && response.data) {
+        const newUrls = response.data
+        const newCache: Record<string, CachedUrl> = {}
+
+        for (const [id, url] of Object.entries(newUrls)) {
+          result[id] = url
+          newCache[id] = { url, expiresAt: now + URL_CACHE_TTL_MS }
+        }
+
+        // Update cache with size limit enforcement
+        set((state) => {
+          let updatedCache = { ...state.urlCache, ...newCache }
+
+          // If cache exceeds max size, remove oldest expired entries first, then oldest entries
+          const cacheSize = Object.keys(updatedCache).length
+          if (cacheSize > MAX_CACHE_SIZE) {
+            const entries = Object.entries(updatedCache)
+            // Sort by expiration time (oldest first)
+            entries.sort((a, b) => a[1].expiresAt - b[1].expiresAt)
+            // Keep only the newest MAX_CACHE_SIZE entries
+            const keepEntries = entries.slice(-MAX_CACHE_SIZE)
+            updatedCache = Object.fromEntries(keepEntries)
+          }
+
+          return { urlCache: updatedCache }
+        })
+      }
+    } catch (error) {
+      console.error('[Files] getDownloadUrls: Error', error)
+    }
+
+    return result
+  },
+
+  // Clean up expired URL cache entries (call periodically or on navigation)
+  clearExpiredUrls: () => {
+    const now = Date.now()
+    set((state) => {
+      const newCache: Record<string, CachedUrl> = {}
+      for (const [id, entry] of Object.entries(state.urlCache)) {
+        if (entry.expiresAt > now) {
+          newCache[id] = entry
+        }
+      }
+      return { urlCache: newCache }
+    })
   },
 
   // Clear error
@@ -428,6 +577,25 @@ export const useFilesStore = create<FilesState>()((set, _get) => ({
         [key]: (state.attachments[key] || []).filter((a) => a.id !== attachmentId),
       },
     }))
+  },
+
+  // Remove multiple attachments by IDs (for comment deletion cleanup)
+  removeAttachmentsByIds: (attachmentIds: string[]) => {
+    if (attachmentIds.length === 0) return
+
+    const idsSet = new Set(attachmentIds)
+    set((state) => {
+      const newAttachments: Record<string, Attachment[]> = {}
+      for (const key of Object.keys(state.attachments)) {
+        newAttachments[key] = state.attachments[key].filter((a) => !idsSet.has(a.id))
+      }
+      // Also remove from URL cache
+      const newCache = { ...state.urlCache }
+      for (const id of attachmentIds) {
+        delete newCache[id]
+      }
+      return { attachments: newAttachments, urlCache: newCache }
+    })
   },
 }))
 

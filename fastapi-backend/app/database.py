@@ -19,10 +19,16 @@ DATABASE_URL = (
 )
 
 # Create SQLAlchemy engine
+# - pool_size: Base number of connections to keep open (increased for concurrent users)
+# - max_overflow: Additional connections allowed when pool is full
+# - pool_timeout: Seconds to wait for a connection before timeout
 # - pool_pre_ping: Verify connections before use (handles stale connections)
 # - pool_recycle: Recycle connections after 3600 seconds (1 hour)
 engine = create_engine(
     DATABASE_URL,
+    pool_size=20,  # Increased from default 5 to handle concurrent requests
+    max_overflow=30,  # Increased from default 10 for burst traffic
+    pool_timeout=60,  # Increased from default 30 for slow queries
     pool_pre_ping=True,
     pool_recycle=3600,
 )

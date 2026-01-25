@@ -126,11 +126,23 @@ function getTaskTypeLabel(taskType: TaskType): string {
 }
 
 function formatDueDate(dateString: string): { text: string; isOverdue: boolean; isSoon: boolean } {
-  const date = new Date(dateString)
+  // Parse the date string as a local date to avoid timezone issues
+  // ISO date strings like "2026-01-26" or "2026-01-26T00:00:00" are parsed as UTC,
+  // which can shift to the previous day in negative UTC offset timezones
+  const datePart = dateString.split('T')[0]
+  const [year, month, day] = datePart.split('-').map(Number)
+
+  // Validate parsed values
+  if (isNaN(year) || isNaN(month) || isNaN(day)) {
+    return { text: 'Invalid', isOverdue: false, isSoon: false }
+  }
+
+  const dueDate = new Date(year, month - 1, day) // month is 0-indexed
+
   const now = new Date()
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  const dueDate = new Date(date.getFullYear(), date.getMonth(), date.getDate())
-  const diffDays = Math.ceil((dueDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+  // Use Math.round for robustness against floating point edge cases
+  const diffDays = Math.round((dueDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
 
   if (diffDays < 0) {
     return { text: 'Overdue', isOverdue: true, isSoon: false }
@@ -146,7 +158,7 @@ function formatDueDate(dateString: string): { text: string; isOverdue: boolean; 
   }
 
   return {
-    text: date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+    text: dueDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
     isOverdue: false,
     isSoon: false,
   }

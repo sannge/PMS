@@ -361,6 +361,7 @@ export function AttachmentList({
     fetchAttachments,
     deleteAttachment,
     getDownloadUrl,
+    getDownloadUrls,
     handleAttachmentUploaded,
     handleAttachmentDeleted,
   } = useFilesStore()
@@ -410,20 +411,25 @@ export function AttachmentList({
     }
   }, [entityType, entityId, handleAttachmentUploaded, handleAttachmentDeleted])
 
-  // Load preview URLs for images (grid view)
+  // Load preview URLs for images (grid view) - use batch fetching to reduce API calls
   useEffect(() => {
     if (viewMode === 'grid') {
-      attachments
-        .filter((a) => isImageFile(a.file_type) && !previewUrls[a.id])
-        .forEach((attachment) => {
-          getDownloadUrl(attachment.id).then((url) => {
-            if (url) {
-              setPreviewUrls((prev) => ({ ...prev, [attachment.id]: url }))
-            }
-          })
-        })
+      const imageAttachments = attachments.filter(
+        (a) => isImageFile(a.file_type) && !previewUrls[a.id]
+      )
+
+      if (imageAttachments.length === 0) return
+
+      const ids = imageAttachments.map((a) => a.id)
+
+      // Batch fetch all URLs in one request
+      getDownloadUrls(ids).then((urls) => {
+        if (Object.keys(urls).length > 0) {
+          setPreviewUrls((prev) => ({ ...prev, ...urls }))
+        }
+      })
     }
-  }, [attachments, viewMode, previewUrls, getDownloadUrl])
+  }, [attachments, viewMode, previewUrls, getDownloadUrls])
 
   // Handle preview
   const handlePreview = useCallback((attachment: Attachment) => {

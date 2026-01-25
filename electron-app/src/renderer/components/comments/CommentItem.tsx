@@ -160,26 +160,40 @@ function getInitials(name: string | null): string {
 
 interface CommentAttachmentItemProps {
   attachment: CommentAttachment
+  preloadedUrl?: string | null  // Pre-fetched URL from batch load
 }
 
-function CommentAttachmentItem({ attachment }: CommentAttachmentItemProps): JSX.Element {
-  const [imageUrl, setImageUrl] = useState<string | null>(null)
+function CommentAttachmentItem({ attachment, preloadedUrl }: CommentAttachmentItemProps): JSX.Element {
+  const [imageUrl, setImageUrl] = useState<string | null>(preloadedUrl || null)
   const [isLoadingUrl, setIsLoadingUrl] = useState(false)
   const [isViewerOpen, setIsViewerOpen] = useState(false)
   const { getDownloadUrl } = useFilesStore()
 
   const isImage = isImageFile(attachment.file_type)
 
-  // Load image preview for image attachments
+  // Update imageUrl when preloadedUrl changes
   useEffect(() => {
-    if (isImage && !imageUrl && !isLoadingUrl) {
+    if (preloadedUrl) {
+      setImageUrl(preloadedUrl)
+    }
+  }, [preloadedUrl])
+
+  // Load image preview for image attachments (fallback if not preloaded)
+  useEffect(() => {
+    if (isImage && !imageUrl && !isLoadingUrl && !preloadedUrl) {
+      let isCancelled = false
       setIsLoadingUrl(true)
       getDownloadUrl(attachment.id).then((url) => {
-        setImageUrl(url)
-        setIsLoadingUrl(false)
+        if (!isCancelled) {
+          setImageUrl(url)
+          setIsLoadingUrl(false)
+        }
       })
+      return () => {
+        isCancelled = true
+      }
     }
-  }, [isImage, imageUrl, isLoadingUrl, attachment.id, getDownloadUrl])
+  }, [isImage, imageUrl, isLoadingUrl, attachment.id, getDownloadUrl, preloadedUrl])
 
   const handleDownload = useCallback(async () => {
     const url = await getDownloadUrl(attachment.id)
@@ -294,6 +308,29 @@ export function CommentItem({
   const [editMode, setEditMode] = useState(false)
   const [editText, setEditText] = useState(comment.body_text || '')
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [attachmentUrls, setAttachmentUrls] = useState<Record<string, string>>({})
+  const { getDownloadUrls } = useFilesStore()
+
+  // Batch load image URLs for attachments
+  useEffect(() => {
+    if (!comment.attachments || comment.attachments.length === 0) return
+
+    const imageAttachments = comment.attachments.filter((a) => isImageFile(a.file_type))
+    if (imageAttachments.length === 0) return
+
+    let isCancelled = false
+    const ids = imageAttachments.map((a) => a.id)
+
+    getDownloadUrls(ids).then((urls) => {
+      if (!isCancelled) {
+        setAttachmentUrls(urls)
+      }
+    })
+
+    return () => {
+      isCancelled = true
+    }
+  }, [comment.id, comment.attachments, getDownloadUrls])
 
   // Use hook for auto-updating relative timestamps
   const timestamp = useRelativeTime(comment.created_at)
@@ -450,7 +487,11 @@ export function CommentItem({
             {comment.attachments && comment.attachments.length > 0 && (
               <div className="mt-2 space-y-1">
                 {comment.attachments.map((attachment) => (
-                  <CommentAttachmentItem key={attachment.id} attachment={attachment} />
+                  <CommentAttachmentItem
+                    key={attachment.id}
+                    attachment={attachment}
+                    preloadedUrl={attachmentUrls[attachment.id]}
+                  />
                 ))}
               </div>
             )}
