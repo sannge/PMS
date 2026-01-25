@@ -2,26 +2,30 @@
  * Applications List Page
  *
  * Displays a list of all applications with search, create, edit, and delete functionality.
+ * Uses TanStack Query for data fetching with stale-while-revalidate pattern.
  *
  * Features:
  * - Application list with cards
- * - Search filtering
+ * - Search filtering (client-side)
  * - Create new application modal
  * - Edit application modal
  * - Delete confirmation dialog
  * - Empty state
- * - Loading state
+ * - Loading state with skeleton
+ * - Instant page loads from cache
  */
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { cn } from '@/lib/utils'
-import { useAuthStore } from '@/stores/auth-store'
 import {
-  useApplicationsStore,
+  useApplications,
+  useCreateApplication,
+  useUpdateApplication,
+  useDeleteApplication,
   type Application,
   type ApplicationCreate,
   type ApplicationUpdate,
-} from '@/stores/applications-store'
+} from '@/hooks/use-queries'
 import { ApplicationCard } from '@/components/applications/application-card'
 import { ApplicationForm } from '@/components/applications/application-form'
 import {
@@ -156,111 +160,121 @@ function Modal({ children, onClose }: ModalProps): JSX.Element {
 export function ApplicationsPage({
   onSelectApplication,
 }: ApplicationsPageProps): JSX.Element {
-  // Auth state
-  const token = useAuthStore((state) => state.token)
-
-  // Applications state
+  // TanStack Query hooks
   const {
-    applications,
+    data: applications = [],
     isLoading,
-    isCreating,
-    isUpdating,
-    isDeleting,
-    error,
-    fetchApplications,
-    createApplication,
-    updateApplication,
-    deleteApplication,
-    clearError,
-  } = useApplicationsStore()
+    isFetching,
+    error: queryError,
+  } = useApplications()
+
+  const createMutation = useCreateApplication()
+  const [editingAppId, setEditingAppId] = useState<string | null>(null)
+  const updateMutation = useUpdateApplication(editingAppId || '')
+  const [deletingAppId, setDeletingAppId] = useState<string | null>(null)
+  const deleteMutation = useDeleteApplication(deletingAppId || '')
 
   // Local state
   const [searchQuery, setSearchQuery] = useState('')
   const [modalMode, setModalMode] = useState<ModalMode>(null)
   const [editingApplication, setEditingApplication] = useState<Application | null>(null)
   const [deletingApplication, setDeletingApplication] = useState<Application | null>(null)
-  const [hasFetched, setHasFetched] = useState(false)
+  const [mutationError, setMutationError] = useState<string | null>(null)
 
-  // Show loading if actively loading OR if we haven't fetched yet
-  const showLoading = isLoading || !hasFetched
+  // Derive loading states
+  const isCreating = createMutation.isPending
+  const isUpdating = updateMutation.isPending
+  const isDeleting = deleteMutation.isPending
 
-  // Fetch applications on mount
+  // Show loading skeleton only on first load (no cached data)
+  const showLoading = isLoading && applications.length === 0
+
+  // Filter applications based on search (client-side)
+  const filteredApplications = useMemo(() => {
+    if (!searchQuery.trim()) return applications
+    const query = searchQuery.toLowerCase()
+    return applications.filter(
+      (app) =>
+        app.name.toLowerCase().includes(query) ||
+        app.description?.toLowerCase().includes(query)
+    )
+  }, [applications, searchQuery])
+
+  // Clear mutation error when modal closes
   useEffect(() => {
-    fetchApplications(token).finally(() => {
-      setHasFetched(true)
-    })
-  }, [token, fetchApplications])
+    if (!modalMode) {
+      setMutationError(null)
+    }
+  }, [modalMode])
 
   // Handle search
-  const handleSearch = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const query = e.target.value
-      setSearchQuery(query)
-      // Debounce search would be better, but for simplicity we'll search on every change
-      fetchApplications(token, { search: query || undefined })
-    },
-    [token, fetchApplications]
-  )
+  const handleSearch = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchQuery(e.target.value)
+  }, [])
 
   // Handle create application
   const handleCreate = useCallback(() => {
-    clearError()
+    setMutationError(null)
     setEditingApplication(null)
     setModalMode('create')
-  }, [clearError])
+  }, [])
 
   // Handle edit application
-  const handleEdit = useCallback(
-    (application: Application) => {
-      clearError()
-      setEditingApplication(application)
-      setModalMode('edit')
-    },
-    [clearError]
-  )
+  const handleEdit = useCallback((application: Application) => {
+    setMutationError(null)
+    setEditingApplication(application)
+    setEditingAppId(application.id)
+    setModalMode('edit')
+  }, [])
 
   // Handle delete application
   const handleDeleteClick = useCallback((application: Application) => {
     setDeletingApplication(application)
+    setDeletingAppId(application.id)
   }, [])
 
   // Handle confirm delete
   const handleConfirmDelete = useCallback(async () => {
     if (!deletingApplication) return
 
-    const success = await deleteApplication(token, deletingApplication.id)
-    if (success) {
+    try {
+      await deleteMutation.mutateAsync()
       setDeletingApplication(null)
+      setDeletingAppId(null)
+    } catch (err) {
+      // Error is handled by mutation state
     }
-  }, [deletingApplication, deleteApplication, token])
+  }, [deletingApplication, deleteMutation])
 
   // Handle cancel delete
   const handleCancelDelete = useCallback(() => {
     setDeletingApplication(null)
+    setDeletingAppId(null)
   }, [])
 
   // Handle close modal
   const handleCloseModal = useCallback(() => {
     setModalMode(null)
     setEditingApplication(null)
+    setEditingAppId(null)
   }, [])
 
   // Handle form submit
   const handleFormSubmit = useCallback(
     async (data: ApplicationCreate | ApplicationUpdate) => {
-      if (modalMode === 'create') {
-        const application = await createApplication(token, data as ApplicationCreate)
-        if (application) {
+      try {
+        if (modalMode === 'create') {
+          await createMutation.mutateAsync(data as ApplicationCreate)
+          handleCloseModal()
+        } else if (modalMode === 'edit' && editingApplication) {
+          await updateMutation.mutateAsync(data as ApplicationUpdate)
           handleCloseModal()
         }
-      } else if (modalMode === 'edit' && editingApplication) {
-        const application = await updateApplication(token, editingApplication.id, data as ApplicationUpdate)
-        if (application) {
-          handleCloseModal()
-        }
+      } catch (err) {
+        setMutationError(err instanceof Error ? err.message : 'An error occurred')
       }
     },
-    [modalMode, editingApplication, createApplication, updateApplication, token, handleCloseModal]
+    [modalMode, editingApplication, createMutation, updateMutation, handleCloseModal]
   )
 
   // Handle application click
@@ -271,8 +285,13 @@ export function ApplicationsPage({
     [onSelectApplication]
   )
 
-  // Filter applications based on search
-  const filteredApplications = applications
+  // Clear error handler
+  const clearError = useCallback(() => {
+    setMutationError(null)
+  }, [])
+
+  // Combine errors
+  const error = mutationError || (queryError ? queryError.message : null)
 
   return (
     <div className="space-y-4">
@@ -295,10 +314,7 @@ export function ApplicationsPage({
             />
             {searchQuery && (
               <button
-                onClick={() => {
-                  setSearchQuery('')
-                  fetchApplications(token)
-                }}
+                onClick={() => setSearchQuery('')}
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
               >
                 <X className="h-3 w-3" />
@@ -329,7 +345,7 @@ export function ApplicationsPage({
       {error && !modalMode && (
         <div className="flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
           <AlertCircle className="h-4 w-4 flex-shrink-0" />
-          <span>{error.message}</span>
+          <span>{error}</span>
           <button
             onClick={clearError}
             className="ml-auto text-destructive hover:text-destructive/80"
@@ -340,7 +356,7 @@ export function ApplicationsPage({
       )}
 
       {/* Loading State - Skeleton */}
-      {showLoading && applications.length === 0 && (
+      {showLoading && (
         <SkeletonRowCardList count={6} />
       )}
 
@@ -373,11 +389,11 @@ export function ApplicationsPage({
         </div>
       )}
 
-      {/* Subtle loading progress bar when refreshing */}
-      <ProgressBar isActive={showLoading && applications.length > 0} />
+      {/* Subtle loading progress bar when refreshing in background */}
+      <ProgressBar isActive={isFetching && applications.length > 0} />
 
       {/* Applications List */}
-      {applications.length > 0 && (
+      {filteredApplications.length > 0 && (
         <div className="space-y-2">
           {filteredApplications.map((application, index) => (
             <ApplicationCard
@@ -393,13 +409,32 @@ export function ApplicationsPage({
         </div>
       )}
 
+      {/* Empty search results */}
+      {!showLoading && applications.length > 0 && filteredApplications.length === 0 && searchQuery && (
+        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-8">
+          <Search className="h-8 w-8 text-muted-foreground/50" />
+          <h3 className="mt-3 text-sm font-medium text-foreground">
+            No matches found
+          </h3>
+          <p className="mt-1 text-xs text-center text-muted-foreground max-w-[200px]">
+            No applications match "{searchQuery}"
+          </p>
+          <button
+            onClick={() => setSearchQuery('')}
+            className="mt-3 text-xs text-primary hover:underline"
+          >
+            Clear search
+          </button>
+        </div>
+      )}
+
       {/* Create/Edit Modal */}
       {modalMode && (
         <Modal onClose={handleCloseModal}>
           <ApplicationForm
             application={editingApplication}
             isSubmitting={modalMode === 'create' ? isCreating : isUpdating}
-            error={error?.message}
+            error={mutationError || undefined}
             onSubmit={handleFormSubmit}
             onCancel={handleCloseModal}
           />

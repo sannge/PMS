@@ -19,7 +19,7 @@ import {
   FolderKanban,
   AlertCircle,
 } from 'lucide-react'
-import type { Application, ApplicationCreate, ApplicationUpdate } from '@/stores/applications-store'
+import type { Application, ApplicationCreate, ApplicationUpdate } from '@/hooks/use-queries'
 
 // ============================================================================
 // Types

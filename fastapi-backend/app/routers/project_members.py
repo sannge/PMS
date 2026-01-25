@@ -42,6 +42,7 @@ from ..schemas.notification import NotificationType, EntityType, NotificationCre
 from ..services.auth_service import get_current_user
 from ..services.permission_service import get_permission_service
 from ..services.notification_service import NotificationService
+from ..services.user_cache_service import invalidate_project_role
 from ..websocket.manager import MessageType, manager
 
 router = APIRouter(tags=["Project Members"])
@@ -566,6 +567,9 @@ async def remove_project_member(
     db.delete(member)
     db.commit()
 
+    # Invalidate project role cache for removed user
+    invalidate_project_role(user_id, project_id)
+
     # Create notifications
     # Notify the removed user
     removed_notification = NotificationCreate(
@@ -713,6 +717,9 @@ async def change_project_member_role(
     member.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(member)
+
+    # Invalidate project role cache for affected user
+    invalidate_project_role(user_id, project_id)
 
     # Create notification for the affected user
     role_notification = NotificationCreate(

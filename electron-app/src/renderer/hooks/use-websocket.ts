@@ -14,9 +14,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAuthStore } from '@/stores/auth-store'
-import { useNotificationsStore } from '@/stores/notifications-store'
-import { useProjectsStore, type ProjectStatusChangedEventData } from '@/stores/projects-store'
-import { useProjectMembersStore } from '@/stores/project-members-store'
 import {
   wsClient,
   WebSocketClient,
@@ -833,48 +830,22 @@ export function useInvitationNotifications(
 /**
  * Hook for syncing notification read status across tabs/devices
  *
- * When a notification is marked as read on one device/tab, this hook
- * receives the event via WebSocket and updates the local store.
+ * @deprecated Use useWebSocketCacheInvalidation from use-websocket-cache.ts instead.
+ * This hook is now a no-op as TanStack Query handles cache invalidation.
  *
  * @example
  * ```tsx
- * function App() {
- *   useNotificationReadSync()
- *   // Now notification read status syncs across all open tabs
- * }
+ * // Old (deprecated):
+ * useNotificationReadSync()
+ *
+ * // New (use in App or Dashboard):
+ * import { useWebSocketCacheInvalidation } from '@/hooks/use-websocket-cache'
+ * useWebSocketCacheInvalidation()
  * ```
  */
 export function useNotificationReadSync(): void {
-  const { subscribe, status } = useWebSocket()
-
-  useEffect(() => {
-    if (!status.isConnected) {
-      return
-    }
-
-    const unsubscribe = subscribe<NotificationReadEventData>(
-      MessageType.NOTIFICATION_READ,
-      (data) => {
-        // Update the notification in local store (optimistic, no backend call)
-        const store = useNotificationsStore.getState()
-        const notification = store.notifications.find(
-          (n: { id: string }) => n.id === data.notification_id
-        )
-        if (notification && !notification.read) {
-          // Directly update state without calling markAsRead (which would trigger another backend call)
-          useNotificationsStore.setState((state) => ({
-            ...state,
-            notifications: state.notifications.map((n) =>
-              n.id === data.notification_id ? { ...n, read: true } : n
-            ),
-            unreadCount: Math.max(0, state.unreadCount - 1),
-          }))
-        }
-      }
-    )
-
-    return unsubscribe
-  }, [status.isConnected, subscribe])
+  // No-op: Now handled by useWebSocketCacheInvalidation
+  // which invalidates queryKeys.notifications and queryKeys.unreadCount
 }
 
 /**
@@ -932,146 +903,48 @@ export interface ProjectRoleChangedEventData {
 /**
  * Hook to sync project updates (name, description, type, derived status) across tabs/windows.
  *
- * When a project is updated or its derived status changes (due to task changes),
- * this hook receives the event via WebSocket and updates the local projects store.
+ * @deprecated Use useWebSocketCacheInvalidation from use-websocket-cache.ts instead.
+ * This hook is now a no-op as TanStack Query handles cache invalidation.
  *
- * @param projectId - The project ID to sync updates for
+ * @param _projectId - The project ID (unused, kept for API compatibility)
  */
-export function useProjectUpdatedSync(projectId: string | undefined): void {
-  const { subscribe, status, joinRoom, leaveRoom } = useWebSocket()
-
-  useEffect(() => {
-    if (!status.isConnected || !projectId) {
-      return
-    }
-
-    const roomId = WebSocketClient.getProjectRoom(projectId)
-    joinRoom(roomId)
-
-    // Subscribe to project property updates (name, description, type)
-    const unsubscribeUpdated = subscribe<ProjectUpdatedEventData>(
-      MessageType.PROJECT_UPDATED,
-      (data) => {
-        if (data.project_id === projectId) {
-          useProjectsStore.getState().handleProjectUpdated(data)
-        }
-      }
-    )
-
-    // Subscribe to project status changes (derived status from task distribution)
-    const unsubscribeStatusChanged = subscribe<ProjectStatusChangedEventData>(
-      MessageType.PROJECT_STATUS_CHANGED,
-      (data) => {
-        if (data.project_id === projectId) {
-          useProjectsStore.getState().handleProjectStatusChanged(data)
-        }
-      }
-    )
-
-    return () => {
-      unsubscribeUpdated()
-      unsubscribeStatusChanged()
-      leaveRoom(roomId)
-    }
-  }, [status.isConnected, projectId, subscribe, joinRoom, leaveRoom])
+export function useProjectUpdatedSync(_projectId: string | undefined): void {
+  // No-op: Now handled by useWebSocketCacheInvalidation
+  // which invalidates queryKeys.project() and queryKeys.projects()
 }
 
 /**
  * Hook to sync project member changes across tabs/windows.
  *
- * When project members are added, removed, or their roles change,
- * this hook receives the events via WebSocket and updates the local store.
+ * @deprecated Use useWebSocketCacheInvalidation from use-websocket-cache.ts instead.
+ * This hook is now a no-op as TanStack Query handles cache invalidation.
  *
- * @param projectId - The project ID to sync member changes for
+ * @param _projectId - The project ID (unused, kept for API compatibility)
  */
-export function useProjectMemberSync(projectId: string | undefined): void {
-  const { subscribe, status, joinRoom, leaveRoom } = useWebSocket()
-
-  useEffect(() => {
-    if (!status.isConnected || !projectId) {
-      return
-    }
-
-    const roomId = WebSocketClient.getProjectRoom(projectId)
-    joinRoom(roomId)
-
-    // Subscribe to member added
-    const unsubscribeMemberAdded = subscribe<ProjectMemberAddedEventData>(
-      MessageType.PROJECT_MEMBER_ADDED,
-      (data) => {
-        if (data.project_id === projectId) {
-          useProjectMembersStore.getState().handleMemberAdded(data)
-        }
-      }
-    )
-
-    // Subscribe to member removed
-    const unsubscribeMemberRemoved = subscribe<ProjectMemberRemovedEventData>(
-      MessageType.PROJECT_MEMBER_REMOVED,
-      (data) => {
-        if (data.project_id === projectId) {
-          useProjectMembersStore.getState().handleMemberRemoved(data)
-        }
-      }
-    )
-
-    // Subscribe to role changed
-    const unsubscribeRoleChanged = subscribe<ProjectRoleChangedEventData>(
-      MessageType.PROJECT_ROLE_CHANGED,
-      (data) => {
-        if (data.project_id === projectId) {
-          useProjectMembersStore.getState().handleRoleChanged(data)
-        }
-      }
-    )
-
-    return () => {
-      unsubscribeMemberAdded()
-      unsubscribeMemberRemoved()
-      unsubscribeRoleChanged()
-      leaveRoom(roomId)
-    }
-  }, [status.isConnected, projectId, subscribe, joinRoom, leaveRoom])
+export function useProjectMemberSync(_projectId: string | undefined): void {
+  // No-op: Now handled by useWebSocketCacheInvalidation
+  // which invalidates queryKeys.projectMembers() and queryKeys.tasks()
 }
 
 /**
  * Hook for syncing project deletion across tabs/devices
  *
- * When a project is deleted, this hook receives the event via WebSocket
- * and updates the local projects store. The event is sent directly to
- * affected users (project members and application owners).
+ * @deprecated Use useWebSocketCacheInvalidation from use-websocket-cache.ts instead.
+ * This hook is now a no-op as TanStack Query handles cache invalidation.
  *
  * @example
  * ```tsx
- * function App() {
- *   useProjectDeletedSync()
- *   // Now project deletions sync across all open tabs
- * }
+ * // Old (deprecated):
+ * useProjectDeletedSync()
+ *
+ * // New (use in App or Dashboard):
+ * import { useWebSocketCacheInvalidation } from '@/hooks/use-websocket-cache'
+ * useWebSocketCacheInvalidation()
  * ```
  */
 export function useProjectDeletedSync(): void {
-  const { subscribe, status } = useWebSocket()
-
-  useEffect(() => {
-    if (!status.isConnected) {
-      return
-    }
-
-    const unsubscribe = subscribe<{
-      project_id: string
-      application_id: string
-      project_name: string
-      project_key: string
-      deleted_by: string
-    }>(
-      MessageType.PROJECT_DELETED,
-      (data) => {
-        useProjectsStore.getState().handleProjectDeleted(data)
-      }
-    )
-
-    return unsubscribe
-  }, [status.isConnected, subscribe])
+  // No-op: Now handled by useWebSocketCacheInvalidation
+  // which removes queryKeys.project() and queryKeys.tasks(), and invalidates queryKeys.projects()
 }
 
 // ============================================================================

@@ -8,20 +8,28 @@
  * - Inline actions via dropdown
  */
 
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
-import { useApplicationsStore } from '@/stores/applications-store'
 import {
-  useProjectsStore,
+  useProject,
+  useUpdateProject,
+  useDeleteProject,
+  useApplication,
+  useCreateTask,
+  useUpdateTask,
+  useDeleteTask,
   type Project,
   type ProjectUpdate,
-} from '@/stores/projects-store'
-import { useTasksStore, type TaskCreate, type TaskUpdate } from '@/stores/tasks-store'
-import { useProjectMembersStore } from '@/stores/project-members-store'
+  type Task,
+  type TaskCreate,
+  type TaskUpdate,
+  type TaskStatus as TaskStatusObject,
+} from '@/hooks/use-queries'
+import type { TaskStatus } from '@/stores/tasks-store'
+import { useProjectMembers, type ProjectMember } from '@/hooks/use-members'
 import { ProjectForm } from '@/components/projects/project-form'
 import { KanbanBoard } from '@/components/kanban/KanbanBoard'
-import type { Task, TaskStatus } from '@/stores/tasks-store'
 import { TaskForm, type AssigneeOption } from '@/components/tasks/task-form'
 import { TaskDetail } from '@/components/tasks/task-detail'
 import {
@@ -56,6 +64,10 @@ export interface ProjectDetailPageProps {
    * Project ID to display
    */
   projectId: string
+  /**
+   * Application ID for permission checks
+   */
+  applicationId: string
   /**
    * Callback to navigate back to projects list
    */
@@ -391,29 +403,54 @@ function Modal({ children, onClose }: ModalProps): JSX.Element {
 
 export function ProjectDetailPage({
   projectId,
+  applicationId,
   onBack,
   onDeleted,
   onSelectTask,
 }: ProjectDetailPageProps): JSX.Element {
   // Auth state
-  const token = useAuthStore((state) => state.token)
   const currentUserId = useAuthStore((state) => state.user?.id)
 
+  // TanStack Query hooks
+  const {
+    data: project,
+    isLoading,
+    error: queryError,
+  } = useProject(projectId)
+
+  const { data: application } = useApplication(applicationId)
+  const { data: projectMembers = [] } = useProjectMembers(projectId)
+
+  // Mutation hooks
+  const updateMutation = useUpdateProject(projectId, applicationId)
+  const deleteMutation = useDeleteProject(projectId, applicationId)
+
+  // Task mutations - need state for selected task
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+  const createTaskMutation = useCreateTask(projectId)
+  const updateTaskMutation = useUpdateTask(selectedTaskId || '', projectId)
+  const deleteTaskMutation = useDeleteTask(selectedTaskId || '', projectId)
+
+  // Derive loading states from mutations
+  const isUpdating = updateMutation.isPending
+  const isDeleting = deleteMutation.isPending
+  const isCreatingTask = createTaskMutation.isPending
+  const isUpdatingTask = updateTaskMutation.isPending
+  const isDeletingTask = deleteTaskMutation.isPending
+
+  // Local error state for mutations
+  const [mutationError, setMutationError] = useState<string | null>(null)
+
   // Application state - get user's role for permission checks
-  const selectedApplication = useApplicationsStore((state) => state.selectedApplication)
-  const userRole = selectedApplication?.user_role || 'viewer'
+  const userRole = application?.user_role || 'viewer'
   const isAppOwner = userRole === 'owner'
   const isAppEditor = userRole === 'editor'
 
-  // Project members state - to check if user can view/manage team
-  const {
-    members: projectMembers,
-    fetchMembers: fetchProjectMembers,
-    canManageMembers,
-  } = useProjectMembersStore()
-
   // Check if current user is a project member
-  const currentUserMembership = projectMembers.find((m) => m.user_id === currentUserId)
+  const currentUserMembership = useMemo(
+    () => projectMembers.find((m) => m.user_id === currentUserId),
+    [projectMembers, currentUserId]
+  )
   const isProjectMember = !!currentUserMembership
   const isProjectAdmin = currentUserMembership?.role === 'admin'
 
@@ -427,7 +464,7 @@ export function ProjectDetailPage({
   const canViewTeam = isAppOwner || isProjectMember
 
   // User can manage team if: app owner, or project admin
-  const canManageTeam = canManageMembers(currentUserId || '', isAppOwner)
+  const canManageTeam = isAppOwner || isProjectAdmin
 
   // User can edit tasks if: app owner, OR (app editor AND project member)
   // Editors need to be project members to edit tasks within a project
@@ -438,48 +475,32 @@ export function ProjectDetailPage({
   useProjectMemberSync(projectId)
 
   // Convert project members to assignee options for task form
-  const assigneeOptions: AssigneeOption[] = projectMembers
-    .filter((m) => m.user)
-    .map((m) => ({
-      id: m.user_id,
-      display_name: m.user?.display_name,
-      email: m.user?.email,
-      avatar_url: m.user?.avatar_url,
-    }))
+  const assigneeOptions: AssigneeOption[] = useMemo(
+    () =>
+      projectMembers.map((m) => ({
+        id: m.user_id,
+        display_name: m.user_display_name,
+        email: m.user_email,
+        avatar_url: m.user_avatar_url,
+      })),
+    [projectMembers]
+  )
 
-  // Projects state
-  const {
-    selectedProject,
-    isLoading,
-    isUpdating,
-    isDeleting,
-    error,
-    fetchProject,
-    updateProject,
-    deleteProject,
-    clearError,
-  } = useProjectsStore()
+  // Combine errors
+  const error = queryError?.message || mutationError
 
-  // Tasks state
-  const {
-    createTask,
-    updateTask,
-    deleteTask: deleteTaskFromStore,
-    isCreating: isCreatingTask,
-    isUpdating: isUpdatingTask,
-    isDeleting: isDeletingTask,
-    error: taskError,
-    clearError: clearTaskError,
-  } = useTasksStore()
+  // Clear mutation error helper
+  const clearError = useCallback(() => {
+    setMutationError(null)
+  }, [])
 
   // Local state
   const [isEditing, setIsEditing] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [showTeamPanel, setShowTeamPanel] = useState(false)
   const [showStatusPanel, setShowStatusPanel] = useState(false)
-  const [hasFetched, setHasFetched] = useState(false)
   const [showTaskForm, setShowTaskForm] = useState(false)
-  const [initialTaskStatus, setInitialTaskStatus] = useState<TaskStatus>('todo')
+  const [initialTaskStatus, setInitialTaskStatus] = useState<TaskStatus | null>(null)
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
 
   // Ref to hold the board refresh function
@@ -498,21 +519,6 @@ export function ProjectDetailPage({
     enabled: true,
   })
 
-  // Fetch project on mount
-  useEffect(() => {
-    setHasFetched(false)
-    fetchProject(token, projectId).finally(() => {
-      setHasFetched(true)
-    })
-  }, [token, projectId, fetchProject])
-
-  // Fetch project members to check permissions
-  useEffect(() => {
-    if (projectId) {
-      fetchProjectMembers(token, projectId)
-    }
-  }, [token, projectId, fetchProjectMembers])
-
   // Handle edit
   const handleEdit = useCallback(() => {
     clearError()
@@ -527,12 +533,14 @@ export function ProjectDetailPage({
   // Handle update
   const handleUpdate = useCallback(
     async (data: ProjectUpdate) => {
-      const result = await updateProject(token, projectId, data)
-      if (result) {
+      try {
+        await updateMutation.mutateAsync(data)
         setIsEditing(false)
+      } catch (err) {
+        setMutationError(err instanceof Error ? err.message : 'Failed to update project')
       }
     },
-    [token, projectId, updateProject]
+    [updateMutation]
   )
 
   // Handle delete click
@@ -542,13 +550,15 @@ export function ProjectDetailPage({
 
   // Handle confirm delete
   const handleConfirmDelete = useCallback(async () => {
-    const success = await deleteProject(token, projectId)
-    if (success) {
+    try {
+      await deleteMutation.mutateAsync()
       setShowDeleteDialog(false)
       onDeleted?.()
       onBack?.()
+    } catch (err) {
+      setMutationError(err instanceof Error ? err.message : 'Failed to delete project')
     }
-  }, [token, projectId, deleteProject, onDeleted, onBack])
+  }, [deleteMutation, onDeleted, onBack])
 
   // Handle cancel delete
   const handleCancelDelete = useCallback(() => {
@@ -557,33 +567,33 @@ export function ProjectDetailPage({
 
   // Handle add task
   const handleAddTask = useCallback((status?: TaskStatus) => {
-    clearTaskError()
-    setInitialTaskStatus(status || 'todo')
+    setMutationError(null)
+    setInitialTaskStatus(status || null)
     setShowTaskForm(true)
-  }, [clearTaskError])
+  }, [])
 
   // Handle create task submission
   const handleCreateTask = useCallback(
     async (data: TaskCreate) => {
-      const task = await createTask(token, projectId, data)
-      if (task) {
+      try {
+        await createTaskMutation.mutateAsync(data)
         setShowTaskForm(false)
-        // Refresh the project to update task count
-        fetchProject(token, projectId)
-        // Refresh the board to show the new task immediately
+        // Board will refresh via cache invalidation
         if (refreshBoardRef.current) {
           refreshBoardRef.current()
         }
+      } catch (err) {
+        setMutationError(err instanceof Error ? err.message : 'Failed to create task')
       }
     },
-    [token, projectId, createTask, fetchProject]
+    [createTaskMutation]
   )
 
   // Handle close task form
   const handleCloseTaskForm = useCallback(() => {
     setShowTaskForm(false)
-    clearTaskError()
-  }, [clearTaskError])
+    setMutationError(null)
+  }, [])
 
   // Handle task click
   const handleTaskClick = useCallback(
@@ -591,6 +601,7 @@ export function ProjectDetailPage({
       // Notify other users that we're viewing this task
       setViewing(task.id)
       setSelectedTask(task)
+      setSelectedTaskId(task.id)
       onSelectTask?.(task)
     },
     [onSelectTask, setViewing]
@@ -599,49 +610,53 @@ export function ProjectDetailPage({
   // Handle close task detail
   const handleCloseTaskDetail = useCallback(() => {
     setSelectedTask(null)
+    setSelectedTaskId(null)
   }, [])
 
   // Handle task update
   const handleTaskUpdate = useCallback(
     async (data: TaskUpdate) => {
       if (!selectedTask) return
-      const updatedTask = await updateTask(token, selectedTask.id, data)
-      if (updatedTask) {
+      try {
+        const updatedTask = await updateTaskMutation.mutateAsync(data)
         setSelectedTask(updatedTask)
-        // Refresh board to reflect changes
+        // Board will refresh via cache invalidation
         if (refreshBoardRef.current) {
           refreshBoardRef.current()
         }
+      } catch (err) {
+        setMutationError(err instanceof Error ? err.message : 'Failed to update task')
       }
     },
-    [token, selectedTask, updateTask]
+    [selectedTask, updateTaskMutation]
   )
 
   // Handle task delete
   const handleTaskDelete = useCallback(async () => {
     if (!selectedTask) return
-    const success = await deleteTaskFromStore(token, selectedTask.id)
-    if (success) {
+    try {
+      await deleteTaskMutation.mutateAsync()
       setSelectedTask(null)
-      // Refresh project to update task count
-      fetchProject(token, projectId)
-      // Refresh board to remove the deleted task
+      setSelectedTaskId(null)
+      // Board will refresh via cache invalidation
       if (refreshBoardRef.current) {
         refreshBoardRef.current()
       }
+    } catch (err) {
+      setMutationError(err instanceof Error ? err.message : 'Failed to delete task')
     }
-  }, [token, selectedTask, deleteTaskFromStore, fetchProject, projectId])
+  }, [selectedTask, deleteTaskMutation])
 
-  // Show loading if actively loading OR if we haven't fetched yet
-  const showLoading = isLoading || !hasFetched
+  // Show loading only on first load (no cached data)
+  const showLoading = isLoading && !project
 
   // Loading state - modern skeleton
-  if (showLoading && !selectedProject) {
+  if (showLoading) {
     return <SkeletonProjectDetail />
   }
 
   // Error state
-  if (error && !selectedProject) {
+  if (queryError && !project) {
     return (
       <div className="flex flex-col items-center justify-center py-12">
         <div className="flex h-16 w-16 items-center justify-center rounded-full bg-destructive/10">
@@ -650,7 +665,7 @@ export function ProjectDetailPage({
         <h3 className="mt-4 text-lg font-semibold text-foreground">
           Failed to load project
         </h3>
-        <p className="mt-2 text-muted-foreground">{error.message}</p>
+        <p className="mt-2 text-muted-foreground">{queryError.message}</p>
         {onBack && (
           <button
             onClick={onBack}
@@ -667,8 +682,8 @@ export function ProjectDetailPage({
     )
   }
 
-  // Not found state (only show after fetch completed)
-  if (!selectedProject && hasFetched) {
+  // Not found state (only show after loading completes without data)
+  if (!project && !isLoading) {
     return (
       <div className="flex flex-col items-center justify-center py-12">
         <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted">
@@ -696,8 +711,10 @@ export function ProjectDetailPage({
     )
   }
 
-  // At this point, selectedProject is guaranteed to be non-null due to early returns above
-  const project = selectedProject!
+  // Safety check - should not happen but TypeScript needs this
+  if (!project) {
+    return <SkeletonProjectDetail />
+  }
   const typeInfo = getProjectTypeInfo(project.project_type)
 
   return (
@@ -814,7 +831,7 @@ export function ProjectDetailPage({
           <ProjectForm
             project={project}
             isSubmitting={isUpdating}
-            error={error?.message}
+            error={error || undefined}
             onSubmit={handleUpdate}
             onCancel={handleCloseEdit}
           />
@@ -857,7 +874,7 @@ export function ProjectDetailPage({
             <div className="h-[calc(100%-52px)] overflow-y-auto">
               <ProjectMemberPanel
                 projectId={project.id}
-                applicationId={selectedApplication?.id || ''}
+                applicationId={applicationId}
                 isOwner={isAppOwner}
                 creatorId={project.created_by}
               />
@@ -903,11 +920,11 @@ export function ProjectDetailPage({
                 statuses={[]}
                 isOwner={userRole === 'owner'}
                 onOverrideSet={() => {
-                  fetchProject(token, projectId)
+                  // Query will auto-refetch via cache invalidation
                   setShowStatusPanel(false)
                 }}
                 onOverrideCleared={() => {
-                  fetchProject(token, projectId)
+                  // Query will auto-refetch via cache invalidation
                   setShowStatusPanel(false)
                 }}
               />
@@ -923,7 +940,7 @@ export function ProjectDetailPage({
             initialStatus={initialTaskStatus}
             assignees={assigneeOptions}
             isSubmitting={isCreatingTask}
-            error={taskError?.message}
+            error={error || undefined}
             onSubmit={handleCreateTask as (data: TaskCreate | TaskUpdate) => void}
             onCancel={handleCloseTaskForm}
           />
@@ -937,7 +954,7 @@ export function ProjectDetailPage({
           isOpen={true}
           isUpdating={isUpdatingTask}
           isDeleting={isDeletingTask}
-          error={taskError?.message}
+          error={error || undefined}
           onClose={handleCloseTaskDetail}
           onUpdate={canEditTasks ? handleTaskUpdate : undefined}
           onDelete={canEditTasks ? handleTaskDelete : undefined}
@@ -945,11 +962,12 @@ export function ProjectDetailPage({
           applicationId={project.application_id}
           onExternalUpdate={(updatedTask) => {
             setSelectedTask(updatedTask)
-            fetchProject(token, projectId)
+            // Project query will auto-refetch via cache invalidation
           }}
           onExternalDelete={() => {
             setSelectedTask(null)
-            fetchProject(token, projectId)
+            setSelectedTaskId(null)
+            // Project query will auto-refetch via cache invalidation
           }}
           enableRealtime
         />

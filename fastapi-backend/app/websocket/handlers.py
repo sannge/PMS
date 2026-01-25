@@ -2016,6 +2016,114 @@ async def handle_task_moved(
     )
 
 
+# =============================================================================
+# Attachment Event Handlers
+# =============================================================================
+
+
+async def handle_attachment_uploaded(
+    task_id: UUID | str,
+    attachment_data: dict[str, Any],
+    user_id: UUID | str,
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Broadcast when an attachment is uploaded to a task.
+
+    Args:
+        task_id: The task's UUID
+        attachment_data: The attachment payload containing:
+            - id: UUID of the attachment
+            - file_name: Original file name
+            - file_size: Size in bytes
+            - mime_type: MIME type of the file
+            - uploader_id: UUID of who uploaded
+        user_id: The user who uploaded the attachment
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_task_room(task_id)
+
+    payload: dict[str, Any] = {
+        "message_id": str(uuid4()),
+        "task_id": str(task_id),
+        "attachment": attachment_data,
+        "uploaded_by": str(user_id),
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    message = {
+        "type": MessageType.ATTACHMENT_UPLOADED.value,
+        "data": payload,
+    }
+
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    logger.debug(
+        f"Attachment uploaded: task_id={task_id}, "
+        f"attachment_id={attachment_data.get('id')}, recipients={recipients}"
+    )
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.ATTACHMENT_UPLOADED.value,
+        success=True,
+    )
+
+
+async def handle_attachment_deleted(
+    task_id: UUID | str,
+    attachment_id: UUID | str,
+    user_id: UUID | str,
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Broadcast when an attachment is deleted from a task.
+
+    Args:
+        task_id: The task's UUID
+        attachment_id: The attachment's UUID
+        user_id: The user who deleted the attachment
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_task_room(task_id)
+
+    payload: dict[str, Any] = {
+        "message_id": str(uuid4()),
+        "task_id": str(task_id),
+        "attachment_id": str(attachment_id),
+        "deleted_by": str(user_id),
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    message = {
+        "type": MessageType.ATTACHMENT_DELETED.value,
+        "data": payload,
+    }
+
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    logger.debug(
+        f"Attachment deleted: task_id={task_id}, "
+        f"attachment_id={attachment_id}, recipients={recipients}"
+    )
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.ATTACHMENT_DELETED.value,
+        success=True,
+    )
+
+
 # Export all handlers and utilities
 __all__ = [
     "UpdateAction",
@@ -2061,4 +2169,7 @@ __all__ = [
     "handle_presence_update",
     "handle_typing_indicator",
     "handle_task_viewers",
+    # Attachment handlers
+    "handle_attachment_uploaded",
+    "handle_attachment_deleted",
 ]

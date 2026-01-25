@@ -24,7 +24,7 @@ import {
   CheckCircle2,
   AlertCircle,
 } from 'lucide-react'
-import type { Project, ProjectDerivedStatus } from '@/stores/projects-store'
+import type { Project, ProjectDerivedStatus } from '@/hooks/use-queries'
 
 // ============================================================================
 // Types

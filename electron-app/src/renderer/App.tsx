@@ -7,12 +7,19 @@
  * - Theme context for dark/light mode
  * - Authentication state management
  * - Simple state-based routing (login, register, main app)
+ * - TanStack Query client provider with IndexedDB persistence
+ * - WebSocket cache invalidation
  */
-import { Component, createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react'
+import { Component, createContext, useContext, useEffect, useState, useCallback, useRef, ReactNode } from 'react'
+import { QueryClientProvider } from '@tanstack/react-query'
+import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
 import { LoginPage } from '@/pages/login'
 import { RegisterPage } from '@/pages/register'
 import { DashboardPage } from '@/pages/dashboard'
 import { AuthGate } from '@/components/protected-route'
+import { queryClient, initializeQueryPersistence, clearQueryCache } from '@/lib/query-client'
+import { useWebSocketCacheInvalidation } from '@/hooks/use-websocket-cache'
+import { useAuthStore } from '@/stores/auth-store'
 
 // ============================================================================
 // Types
@@ -211,6 +218,27 @@ function AuthPages(): JSX.Element {
 }
 
 // ============================================================================
+// Cache Clear on Logout Hook
+// ============================================================================
+
+/**
+ * Hook that clears query cache when user logs out.
+ * This ensures sensitive data is not persisted after logout.
+ */
+function useCacheClearOnLogout(): void {
+  const token = useAuthStore((s) => s.token)
+  const prevTokenRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    // Check if user just logged out (had token, now doesn't)
+    if (prevTokenRef.current !== null && token === null) {
+      clearQueryCache()
+    }
+    prevTokenRef.current = token
+  }, [token])
+}
+
+// ============================================================================
 // Authenticated App Component
 // ============================================================================
 
@@ -220,6 +248,10 @@ function AuthPages(): JSX.Element {
  */
 function AuthenticatedApp(): JSX.Element {
   const { theme, setTheme } = useTheme()
+
+  // Enable WebSocket cache invalidation for real-time updates
+  useWebSocketCacheInvalidation()
+
   return <DashboardPage theme={theme} onThemeChange={setTheme} />
 }
 
@@ -246,6 +278,43 @@ function AuthRouter(): JSX.Element {
 }
 
 // ============================================================================
+// Query Client Initializer Component
+// ============================================================================
+
+/**
+ * Initializes query persistence on mount.
+ * Also clears cache on logout.
+ */
+function QueryClientInitializer({ children }: { children: ReactNode }): JSX.Element {
+  const [isReady, setIsReady] = useState(false)
+
+  // Clear cache on logout
+  useCacheClearOnLogout()
+
+  useEffect(() => {
+    // Initialize IndexedDB persistence
+    initializeQueryPersistence()
+      .then(() => setIsReady(true))
+      .catch((error) => {
+        console.warn('[QueryClient] Persistence init failed:', error)
+        setIsReady(true) // Continue without persistence
+      })
+  }, [])
+
+  // Show loading until persistence is ready
+  // This prevents flash of stale UI on refresh
+  if (!isReady) {
+    return (
+      <div className="flex h-full items-center justify-center bg-background">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+      </div>
+    )
+  }
+
+  return <>{children}</>
+}
+
+// ============================================================================
 // Main App Component
 // ============================================================================
 
@@ -253,17 +322,24 @@ function AuthRouter(): JSX.Element {
  * Root Application Component
  *
  * This component wraps the entire application with necessary providers:
+ * - QueryClientProvider: TanStack Query client with IndexedDB persistence
  * - ThemeProvider: Manages dark/light mode
  * - ErrorBoundary: Catches and displays rendering errors
  * - AuthRouter: Handles authentication-based routing
  */
 function App(): JSX.Element {
   return (
-    <ThemeProvider>
-      <ErrorBoundary>
-        <AuthRouter />
-      </ErrorBoundary>
-    </ThemeProvider>
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider>
+        <ErrorBoundary>
+          <QueryClientInitializer>
+            <AuthRouter />
+          </QueryClientInitializer>
+        </ErrorBoundary>
+      </ThemeProvider>
+      {/* React Query Devtools - only shown in development */}
+      {import.meta.env.DEV && <ReactQueryDevtools initialIsOpen={false} />}
+    </QueryClientProvider>
   )
 }
 

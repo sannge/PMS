@@ -22,7 +22,7 @@ import {
   ChevronRight,
   UserPlus,
 } from 'lucide-react'
-import type { Application, OwnershipType } from '@/stores/applications-store'
+import type { Application, OwnershipType } from '@/hooks/use-queries'
 
 // ============================================================================
 // Types

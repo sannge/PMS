@@ -15,6 +15,7 @@ from ..database import get_db
 from ..models.user import User
 from ..schemas.user import UserCreate
 from ..utils.security import get_password_hash, verify_password
+from .user_cache_service import CachedUser, get_cached_user, set_cached_user
 
 # OAuth2 scheme for token-based authentication
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
@@ -191,6 +192,27 @@ def create_user(db: Session, user_data: UserCreate) -> User:
     return db_user
 
 
+def _user_from_cache(cached: CachedUser) -> User:
+    """
+    Create a User-like object from cache without ORM session.
+
+    This creates a detached User instance that can be used for
+    authentication checks without requiring database queries.
+
+    Args:
+        cached: The cached user data
+
+    Returns:
+        A User instance with essential fields populated
+    """
+    user = User.__new__(User)
+    object.__setattr__(user, "id", cached.id)
+    object.__setattr__(user, "email", cached.email)
+    object.__setattr__(user, "display_name", cached.display_name)
+    object.__setattr__(user, "avatar_url", cached.avatar_url)
+    return user
+
+
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
@@ -199,7 +221,8 @@ async def get_current_user(
     Get the current authenticated user from the JWT token.
 
     This is a FastAPI dependency that extracts and validates
-    the JWT token from the Authorization header.
+    the JWT token from the Authorization header. Uses in-memory
+    cache to reduce database queries for high concurrency.
 
     Args:
         token: JWT token from Authorization header
@@ -228,9 +251,18 @@ async def get_current_user(
     except ValueError:
         raise credentials_exception
 
+    # Check cache first
+    cached = get_cached_user(user_id)
+    if cached:
+        return _user_from_cache(cached)
+
+    # Cache miss - query database
     user = get_user_by_id(db, user_id)
     if user is None:
         raise credentials_exception
+
+    # Populate cache for future requests
+    set_cached_user(user)
 
     return user
 

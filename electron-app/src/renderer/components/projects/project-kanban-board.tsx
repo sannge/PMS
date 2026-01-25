@@ -22,7 +22,7 @@ import {
   LayoutDashboard,
   Plus,
 } from 'lucide-react'
-import type { Project, ProjectDerivedStatus } from '@/stores/projects-store'
+import type { Project, ProjectDerivedStatus } from '@/hooks/use-queries'
 import { ProjectCard } from './project-card'
 import { SkeletonProjectCard } from '@/components/ui/skeleton'
 

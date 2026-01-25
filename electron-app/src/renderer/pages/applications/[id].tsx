@@ -9,24 +9,51 @@
  * - Minimal footprint design
  */
 
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 import { useWebSocket, MessageType, type MemberAddedEventData, type MemberRemovedEventData, type RoleUpdatedEventData } from '@/hooks/use-websocket'
 import { WebSocketClient } from '@/lib/websocket'
 import {
-  useApplicationsStore,
+  useApplication,
+  useUpdateApplication,
+  useDeleteApplication,
+  useProjects,
+  useCreateProject,
+  useUpdateProject,
+  useDeleteProject,
+  useAppMembers,
+  useUpdateAppMemberRole,
+  useRemoveAppMember,
   type Application,
   type ApplicationUpdate,
-} from '@/stores/applications-store'
-import {
-  useProjectsStore,
   type Project,
   type ProjectCreate,
   type ProjectUpdate,
-  type ProjectStatusChangedEventData,
-} from '@/stores/projects-store'
-import { useMembersStore } from '@/stores/members-store'
+} from '@/hooks/use-queries'
+import type { ApplicationMember, ApplicationRole } from '@/hooks/use-members'
+import type { ProjectStatusChangedEventData } from '@/stores/projects-store'
+import type { MemberWithUser } from '@/stores/members-store'
+
+// Convert ApplicationMember to MemberWithUser for compatibility with member components
+function toMemberWithUser(member: ApplicationMember): MemberWithUser {
+  return {
+    id: member.user_id, // Use user_id as member id
+    application_id: member.application_id,
+    user_id: member.user_id,
+    role: member.role,
+    invitation_id: null,
+    created_at: member.created_at,
+    updated_at: member.updated_at || member.created_at,
+    user: {
+      id: member.user_id,
+      email: member.user_email,
+      full_name: member.user_display_name,
+      display_name: member.user_display_name,
+      avatar_url: member.user_avatar_url,
+    },
+  }
+}
 import { ApplicationForm } from '@/components/applications/application-form'
 import { ProjectCard } from '@/components/projects/project-card'
 import { ProjectForm } from '@/components/projects/project-form'
@@ -367,55 +394,58 @@ export function ApplicationDetailPage({
   onDeleted,
   onSelectProject,
 }: ApplicationDetailPageProps): JSX.Element {
-  // Auth state
-  const token = useAuthStore((state) => state.token)
-
-  // Applications state
-  const {
-    selectedApplication,
-    isLoading,
-    isUpdating,
-    isDeleting,
-    error,
-    fetchApplication,
-    updateApplication,
-    deleteApplication,
-    clearError,
-  } = useApplicationsStore()
-
-  // Projects state
-  const {
-    projects,
-    isLoading: isLoadingProjects,
-    isCreating: isCreatingProject,
-    isUpdating: isUpdatingProject,
-    isDeleting: isDeletingProject,
-    error: projectsError,
-    fetchProjects,
-    createProject,
-    updateProject,
-    deleteProject,
-    clearError: clearProjectsError,
-  } = useProjectsStore()
-
-  // Members state
-  const {
-    members,
-    isLoading: isLoadingMembers,
-    isUpdating: isUpdatingMemberRole,
-    isRemoving: isRemovingMember,
-    fetchMembers,
-    updateMemberRole,
-    removeMember,
-    removeMemberFromList,
-    updateMemberRoleInList,
-  } = useMembersStore()
-
   // Get current user ID
   const currentUserId = useAuthStore((state) => state.user?.id)
 
+  // TanStack Query hooks for application
+  const {
+    data: application,
+    isLoading,
+    error: queryError,
+  } = useApplication(applicationId)
+
+  // Track editing application ID for update mutation
+  const [editingAppId, setEditingAppId] = useState<string | null>(null)
+  const updateMutation = useUpdateApplication(editingAppId || applicationId)
+  const deleteMutation = useDeleteApplication(applicationId)
+
+  // TanStack Query hooks for projects
+  const {
+    data: projects = [],
+    isLoading: isLoadingProjects,
+    error: projectsQueryError,
+  } = useProjects(applicationId)
+
+  const createProjectMutation = useCreateProject(applicationId)
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
+  const updateProjectMutation = useUpdateProject(editingProjectId || '', applicationId)
+  const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null)
+  const deleteProjectMutation = useDeleteProject(deletingProjectId || '', applicationId)
+
+  // TanStack Query hooks for members
+  const {
+    data: members = [],
+    isLoading: isLoadingMembers,
+  } = useAppMembers(applicationId)
+
+  const updateMemberRoleMutation = useUpdateAppMemberRole(applicationId)
+  const removeMemberMutation = useRemoveAppMember(applicationId)
+
+  // Derive loading states from mutations
+  const isUpdating = updateMutation.isPending
+  const isDeleting = deleteMutation.isPending
+  const isCreatingProject = createProjectMutation.isPending
+  const isUpdatingProject = updateProjectMutation.isPending
+  const isDeletingProject = deleteProjectMutation.isPending
+  const isUpdatingMemberRole = updateMemberRoleMutation.isPending
+  const isRemovingMember = removeMemberMutation.isPending
+
+  // Error states
+  const error = queryError?.message || updateMutation.error?.message || deleteMutation.error?.message
+  const projectsError = projectsQueryError?.message || createProjectMutation.error?.message || updateProjectMutation.error?.message || deleteProjectMutation.error?.message
+
   // Permission checks based on user role
-  const userRole = selectedApplication?.user_role || 'viewer'
+  const userRole = application?.user_role || 'viewer'
   const isOwner = userRole === 'owner'
   const isEditor = userRole === 'editor'
   // Owners and editors can edit projects
@@ -435,55 +465,41 @@ export function ApplicationDetailPage({
   const [projectSearchQuery, setProjectSearchQuery] = useState('')
   const [projectViewMode, setProjectViewMode] = useState<'kanban' | 'grid'>('kanban')
   // Member management state
-  const [editingMember, setEditingMember] = useState<import('@/stores/members-store').MemberWithUser | null>(null)
-  const [removingMember, setRemovingMember] = useState<import('@/stores/members-store').MemberWithUser | null>(null)
-  const [hasFetched, setHasFetched] = useState(false)
+  const [editingMember, setEditingMember] = useState<ApplicationMember | null>(null)
+  const [removingMember, setRemovingMember] = useState<ApplicationMember | null>(null)
+  const [mutationError, setMutationError] = useState<string | null>(null)
 
-  // Fetch application on mount
-  useEffect(() => {
-    setHasFetched(false)
-    fetchApplication(token, applicationId).finally(() => {
-      setHasFetched(true)
-    })
-  }, [token, applicationId, fetchApplication])
+  // Filter projects by search query (client-side)
+  const filteredProjects = useMemo(() => {
+    if (!projectSearchQuery.trim()) return projects
+    const query = projectSearchQuery.toLowerCase()
+    return projects.filter(
+      (p) =>
+        p.name.toLowerCase().includes(query) ||
+        p.key.toLowerCase().includes(query) ||
+        p.description?.toLowerCase().includes(query)
+    )
+  }, [projects, projectSearchQuery])
 
-  // Fetch projects when application is loaded
-  useEffect(() => {
-    if (selectedApplication?.id === applicationId) {
-      fetchProjects(token, applicationId)
-    }
-  }, [token, applicationId, selectedApplication?.id, fetchProjects])
+  // Convert ApplicationMember[] to MemberWithUser[] for compatibility with member components
+  const membersWithUser = useMemo(() => members.map(toMemberWithUser), [members])
 
-  // Fetch members when application is loaded
-  useEffect(() => {
-    if (selectedApplication?.id === applicationId) {
-      fetchMembers(token, applicationId)
-    }
-  }, [token, applicationId, selectedApplication?.id, fetchMembers])
+  // Show loading skeleton only on first load (no cached data)
+  const showLoading = isLoading && !application
 
   // Join application room for real-time member updates
-  // Use refs to store callback functions to avoid dependency array issues
   const { joinRoom, leaveRoom, subscribe, status: wsStatus } = useWebSocket()
 
-  // Store callbacks in refs to avoid effect re-runs
-  const fetchMembersRef = useRef(fetchMembers)
-  const fetchApplicationRef = useRef(fetchApplication)
-  const removeMemberFromListRef = useRef(removeMemberFromList)
-  const updateMemberRoleInListRef = useRef(updateMemberRoleInList)
-  const tokenRef = useRef(token)
+  // Store current user ID in ref for WebSocket handlers
   const currentUserIdRef = useRef(currentUserId)
 
-  // Keep refs up to date
+  // Keep ref up to date
   useEffect(() => {
-    fetchMembersRef.current = fetchMembers
-    fetchApplicationRef.current = fetchApplication
-    removeMemberFromListRef.current = removeMemberFromList
-    updateMemberRoleInListRef.current = updateMemberRoleInList
-    tokenRef.current = token
     currentUserIdRef.current = currentUserId
   })
 
-  // Combined room join and subscription effect - only depends on connection state and applicationId
+  // Join application room for real-time updates
+  // Cache invalidation is handled globally by useWebSocketCacheInvalidation in App.tsx
   useEffect(() => {
     if (!applicationId || !wsStatus.isConnected) {
       return
@@ -492,57 +508,10 @@ export function ApplicationDetailPage({
     const roomId = WebSocketClient.getApplicationRoom(applicationId)
     joinRoom(roomId)
 
-    // Handle member added - refresh members list
-    const unsubMemberAdded = subscribe<MemberAddedEventData>(
-      MessageType.MEMBER_ADDED,
-      (data) => {
-        if (data.application_id === applicationId && tokenRef.current) {
-          fetchMembersRef.current(tokenRef.current, applicationId)
-        }
-      }
-    )
-
-    // Handle member removed - update local state directly (no refetch needed)
-    const unsubMemberRemoved = subscribe<MemberRemovedEventData>(
-      MessageType.MEMBER_REMOVED,
-      (data) => {
-        if (data.application_id === applicationId) {
-          removeMemberFromListRef.current(data.user_id)
-        }
-      }
-    )
-
-    // Handle role updated - update local state and refresh application if current user's role changed
-    const unsubRoleUpdated = subscribe<RoleUpdatedEventData>(
-      MessageType.ROLE_UPDATED,
-      (data) => {
-        if (data.application_id === applicationId) {
-          updateMemberRoleInListRef.current(data.user_id, data.new_role as import('@/stores/members-store').ApplicationRole)
-          if (data.user_id === currentUserIdRef.current && tokenRef.current) {
-            fetchApplicationRef.current(tokenRef.current, applicationId)
-          }
-        }
-      }
-    )
-
-    // Handle project status changed - update project's derived status in the list
-    const unsubProjectStatusChanged = subscribe<ProjectStatusChangedEventData>(
-      MessageType.PROJECT_STATUS_CHANGED,
-      (data) => {
-        if (data.application_id === applicationId) {
-          useProjectsStore.getState().handleProjectStatusChanged(data)
-        }
-      }
-    )
-
     return () => {
-      unsubMemberAdded()
-      unsubMemberRemoved()
-      unsubRoleUpdated()
-      unsubProjectStatusChanged()
       leaveRoom(roomId)
     }
-  }, [applicationId, wsStatus.isConnected, joinRoom, leaveRoom, subscribe])
+  }, [applicationId, wsStatus.isConnected, joinRoom, leaveRoom])
 
   // Handle invite modal
   const handleOpenInviteModal = useCallback(() => {
@@ -554,17 +523,16 @@ export function ApplicationDetailPage({
   }, [])
 
   const handleInvitationSent = useCallback(() => {
-    // Refresh members list after invitation sent
-    fetchMembers(token, applicationId)
-  }, [token, applicationId, fetchMembers])
+    // Members list will be invalidated by WebSocket cache hook when member is added
+  }, [])
 
   // ============================================================================
   // Member Handlers
   // ============================================================================
 
-  // Handle edit member role
+  // Handle edit member role - convert ApplicationMember to expected format
   const handleEditMemberRole = useCallback(
-    (member: import('@/stores/members-store').MemberWithUser) => {
+    (member: ApplicationMember) => {
       setEditingMember(member)
     },
     []
@@ -572,7 +540,7 @@ export function ApplicationDetailPage({
 
   // Handle remove member click
   const handleRemoveMemberClick = useCallback(
-    (member: import('@/stores/members-store').MemberWithUser) => {
+    (member: ApplicationMember) => {
       setRemovingMember(member)
     },
     []
@@ -580,13 +548,17 @@ export function ApplicationDetailPage({
 
   // Handle confirm role change
   const handleConfirmRoleChange = useCallback(
-    async (newRole: import('@/stores/members-store').ApplicationRole) => {
+    async (newRole: ApplicationRole) => {
       if (!editingMember) return
 
-      await updateMemberRole(token, applicationId, editingMember.user_id, { role: newRole })
-      setEditingMember(null)
+      try {
+        await updateMemberRoleMutation.mutateAsync({ userId: editingMember.user_id, newRole })
+        setEditingMember(null)
+      } catch (err) {
+        setMutationError(err instanceof Error ? err.message : 'Failed to update role')
+      }
     },
-    [token, applicationId, editingMember, updateMemberRole]
+    [editingMember, updateMemberRoleMutation]
   )
 
   // Handle cancel role change
@@ -598,11 +570,13 @@ export function ApplicationDetailPage({
   const handleConfirmRemoveMember = useCallback(async () => {
     if (!removingMember) return
 
-    const success = await removeMember(token, applicationId, removingMember.user_id)
-    if (success) {
+    try {
+      await removeMemberMutation.mutateAsync(removingMember.user_id)
       setRemovingMember(null)
+    } catch (err) {
+      setMutationError(err instanceof Error ? err.message : 'Failed to remove member')
     }
-  }, [token, applicationId, removingMember, removeMember])
+  }, [removingMember, removeMemberMutation])
 
   // Handle cancel remove member
   const handleCancelRemoveMember = useCallback(() => {
@@ -611,24 +585,29 @@ export function ApplicationDetailPage({
 
   // Handle edit
   const handleEdit = useCallback(() => {
-    clearError()
+    setMutationError(null)
+    setEditingAppId(applicationId)
     setIsEditing(true)
-  }, [clearError])
+  }, [applicationId])
 
   // Handle close edit
   const handleCloseEdit = useCallback(() => {
     setIsEditing(false)
+    setEditingAppId(null)
   }, [])
 
   // Handle update
   const handleUpdate = useCallback(
     async (data: ApplicationUpdate) => {
-      const result = await updateApplication(token, applicationId, data)
-      if (result) {
+      try {
+        await updateMutation.mutateAsync(data)
         setIsEditing(false)
+        setEditingAppId(null)
+      } catch (err) {
+        setMutationError(err instanceof Error ? err.message : 'Failed to update application')
       }
     },
-    [token, applicationId, updateApplication]
+    [updateMutation]
   )
 
   // Handle delete click
@@ -638,13 +617,15 @@ export function ApplicationDetailPage({
 
   // Handle confirm delete
   const handleConfirmDelete = useCallback(async () => {
-    const success = await deleteApplication(token, applicationId)
-    if (success) {
+    try {
+      await deleteMutation.mutateAsync()
       setShowDeleteDialog(false)
       onDeleted?.()
       onBack?.()
+    } catch (err) {
+      setMutationError(err instanceof Error ? err.message : 'Failed to delete application')
     }
-  }, [token, applicationId, deleteApplication, onDeleted, onBack])
+  }, [deleteMutation, onDeleted, onBack])
 
   // Handle cancel delete
   const handleCancelDelete = useCallback(() => {
@@ -657,63 +638,70 @@ export function ApplicationDetailPage({
 
   // Handle create project
   const handleCreateProject = useCallback(() => {
-    clearProjectsError()
+    setMutationError(null)
     setEditingProject(null)
     setProjectModalMode('create')
-  }, [clearProjectsError])
+  }, [])
 
   // Handle edit project
   const handleEditProject = useCallback(
     (project: Project) => {
-      clearProjectsError()
+      setMutationError(null)
       setEditingProject(project)
+      setEditingProjectId(project.id)
       setProjectModalMode('edit')
     },
-    [clearProjectsError]
+    []
   )
 
   // Handle delete project click
   const handleDeleteProjectClick = useCallback((project: Project) => {
     setDeletingProject(project)
+    setDeletingProjectId(project.id)
   }, [])
 
   // Handle confirm delete project
   const handleConfirmDeleteProject = useCallback(async () => {
     if (!deletingProject) return
 
-    const success = await deleteProject(token, deletingProject.id)
-    if (success) {
+    try {
+      await deleteProjectMutation.mutateAsync()
       setDeletingProject(null)
+      setDeletingProjectId(null)
+    } catch (err) {
+      setMutationError(err instanceof Error ? err.message : 'Failed to delete project')
     }
-  }, [deletingProject, deleteProject, token])
+  }, [deletingProject, deleteProjectMutation])
 
   // Handle cancel delete project
   const handleCancelDeleteProject = useCallback(() => {
     setDeletingProject(null)
+    setDeletingProjectId(null)
   }, [])
 
   // Handle close project modal
   const handleCloseProjectModal = useCallback(() => {
     setProjectModalMode(null)
     setEditingProject(null)
+    setEditingProjectId(null)
   }, [])
 
   // Handle project form submit
   const handleProjectFormSubmit = useCallback(
     async (data: ProjectCreate | ProjectUpdate) => {
-      if (projectModalMode === 'create') {
-        const project = await createProject(token, applicationId, data as ProjectCreate)
-        if (project) {
+      try {
+        if (projectModalMode === 'create') {
+          await createProjectMutation.mutateAsync(data as ProjectCreate)
+          handleCloseProjectModal()
+        } else if (projectModalMode === 'edit' && editingProject) {
+          await updateProjectMutation.mutateAsync(data as ProjectUpdate)
           handleCloseProjectModal()
         }
-      } else if (projectModalMode === 'edit' && editingProject) {
-        const project = await updateProject(token, editingProject.id, data as ProjectUpdate)
-        if (project) {
-          handleCloseProjectModal()
-        }
+      } catch (err) {
+        setMutationError(err instanceof Error ? err.message : 'An error occurred')
       }
     },
-    [projectModalMode, editingProject, createProject, updateProject, token, applicationId, handleCloseProjectModal]
+    [projectModalMode, editingProject, createProjectMutation, updateProjectMutation, handleCloseProjectModal]
   )
 
   // Handle project click
@@ -724,21 +712,21 @@ export function ApplicationDetailPage({
     [onSelectProject]
   )
 
-  // Handle project search
+  // Handle project search (client-side filtering)
   const handleProjectSearch = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      const query = e.target.value
-      setProjectSearchQuery(query)
-      fetchProjects(token, applicationId, { search: query || undefined })
+      setProjectSearchQuery(e.target.value)
     },
-    [token, applicationId, fetchProjects]
+    []
   )
 
-  // Show loading if actively loading OR if we haven't fetched yet
-  const showLoading = isLoading || !hasFetched
+  // Clear error handler
+  const clearError = useCallback(() => {
+    setMutationError(null)
+  }, [])
 
-  // Loading state
-  if (showLoading && !selectedApplication) {
+  // Loading state - show skeleton only on first load
+  if (showLoading) {
     return (
       <div className="flex flex-col items-center justify-center py-12">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -748,7 +736,7 @@ export function ApplicationDetailPage({
   }
 
   // Error state
-  if (error && !selectedApplication) {
+  if (queryError && !application) {
     return (
       <div className="flex flex-col items-center justify-center py-12">
         <div className="flex h-16 w-16 items-center justify-center rounded-full bg-destructive/10">
@@ -757,7 +745,7 @@ export function ApplicationDetailPage({
         <h3 className="mt-4 text-lg font-semibold text-foreground">
           Failed to load application
         </h3>
-        <p className="mt-2 text-muted-foreground">{error.message}</p>
+        <p className="mt-2 text-muted-foreground">{queryError.message}</p>
         {onBack && (
           <button
             onClick={onBack}
@@ -774,8 +762,8 @@ export function ApplicationDetailPage({
     )
   }
 
-  // Not found state (only show after fetch completed)
-  if (!selectedApplication && hasFetched) {
+  // Not found state
+  if (!application && !isLoading) {
     return (
       <div className="flex flex-col items-center justify-center py-12">
         <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted">
@@ -803,8 +791,8 @@ export function ApplicationDetailPage({
     )
   }
 
-  // At this point, selectedApplication is guaranteed to be non-null due to early returns above
-  const application = selectedApplication!
+  // At this point, application is guaranteed to be non-null due to early returns above
+  if (!application) return null
 
   return (
     <div className="space-y-4">
@@ -853,8 +841,8 @@ export function ApplicationDetailPage({
         <div className="flex items-center gap-3">
           <span className="text-sm font-medium text-muted-foreground">Team</span>
           <MemberAvatarGroup
-            members={members}
-            totalCount={members.length}
+            members={membersWithUser}
+            totalCount={membersWithUser.length}
             maxDisplay={5}
             size="sm"
             onClick={() => setIsMemberModalOpen(true)}
@@ -897,10 +885,7 @@ export function ApplicationDetailPage({
                 />
                 {projectSearchQuery && (
                   <button
-                    onClick={() => {
-                      setProjectSearchQuery('')
-                      fetchProjects(token, applicationId)
-                    }}
+                    onClick={() => setProjectSearchQuery('')}
                     className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                   >
                     <X className="h-3 w-3" />
@@ -955,12 +940,12 @@ export function ApplicationDetailPage({
         </div>
 
         {/* Projects Error Display */}
-        {projectsError && !projectModalMode && (
+        {(projectsError || mutationError) && !projectModalMode && (
           <div className="flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
             <AlertCircle className="h-4 w-4 flex-shrink-0" />
-            <span>{projectsError.message}</span>
+            <span>{projectsError || mutationError}</span>
             <button
-              onClick={clearProjectsError}
+              onClick={clearError}
               className="ml-auto text-destructive hover:text-destructive/80"
             >
               <X className="h-4 w-4" />
@@ -969,7 +954,7 @@ export function ApplicationDetailPage({
         )}
 
         {/* Loading Projects State - Skeleton */}
-        {isLoadingProjects && projects.length === 0 && (
+        {isLoadingProjects && filteredProjects.length === 0 && (
           projectViewMode === 'kanban' ? (
             <div className="flex-1 overflow-x-auto">
               <SkeletonProjectKanbanBoard />
@@ -980,7 +965,7 @@ export function ApplicationDetailPage({
         )}
 
         {/* Empty Projects State */}
-        {!isLoadingProjects && projects.length === 0 && (
+        {!isLoadingProjects && filteredProjects.length === 0 && (
           <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-8">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted">
               <LayoutDashboard className="h-5 w-5 text-muted-foreground" />
@@ -1009,11 +994,11 @@ export function ApplicationDetailPage({
         )}
 
         {/* Projects View */}
-        {!isLoadingProjects && projects.length > 0 && (
+        {!isLoadingProjects && filteredProjects.length > 0 && (
           projectViewMode === 'kanban' ? (
             <div className="flex-1 overflow-x-auto">
               <ProjectKanbanBoard
-                projects={projects}
+                projects={filteredProjects}
                 isLoading={isLoadingProjects}
                 onProjectClick={onSelectProject ? handleProjectClick : undefined}
                 onEdit={canEditProjects ? handleEditProject : undefined}
@@ -1026,7 +1011,7 @@ export function ApplicationDetailPage({
             </div>
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {projects.map((project) => (
+              {filteredProjects.map((project) => (
                 <ProjectCard
                   key={project.id}
                   project={project}
@@ -1134,21 +1119,21 @@ export function ApplicationDetailPage({
       <MemberManagementModal
         isOpen={isMemberModalOpen}
         onClose={() => setIsMemberModalOpen(false)}
-        members={members}
+        members={membersWithUser}
         isLoading={isLoadingMembers}
-        totalCount={members.length}
+        totalCount={membersWithUser.length}
         currentUserId={currentUserId}
         currentUserRole={userRole ?? undefined}
-        originalOwnerId={selectedApplication?.owner_id ?? undefined}
+        originalOwnerId={application?.owner_id ?? undefined}
         isUpdatingRole={isUpdatingMemberRole}
         isRemovingMember={isRemovingMember}
-        onEditRole={handleEditMemberRole}
-        onRemoveMember={handleRemoveMemberClick}
+        onEditRole={(m) => handleEditMemberRole(members.find((am) => am.user_id === m.user_id)!)}
+        onRemoveMember={(m) => handleRemoveMemberClick(members.find((am) => am.user_id === m.user_id)!)}
         onInvite={() => {
           setIsMemberModalOpen(false)
           handleOpenInviteModal()
         }}
-        applicationName={selectedApplication?.name}
+        applicationName={application?.name}
       />
 
       {/* Edit Member Role Dialog */}
@@ -1173,7 +1158,7 @@ export function ApplicationDetailPage({
           <div className="w-full max-w-sm rounded-lg border border-border bg-card p-6 shadow-lg">
             <h3 className="text-lg font-semibold text-foreground">Change Role</h3>
             <p className="mt-2 text-sm text-muted-foreground">
-              Select a new role for <strong>{editingMember.user?.full_name || editingMember.user?.email}</strong>
+              Select a new role for <strong>{editingMember.user_display_name || editingMember.user_email}</strong>
             </p>
             <div className="mt-4 space-y-2">
               {availableRoles.map((role) => (
@@ -1233,7 +1218,7 @@ export function ApplicationDetailPage({
               <div className="flex-1">
                 <h3 className="text-lg font-semibold text-foreground">Remove Member</h3>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  Are you sure you want to remove <strong>{removingMember.user?.full_name || removingMember.user?.email}</strong> from this application?
+                  Are you sure you want to remove <strong>{removingMember.user_display_name || removingMember.user_email}</strong> from this application?
                   They will lose access to all projects and tasks.
                 </p>
               </div>

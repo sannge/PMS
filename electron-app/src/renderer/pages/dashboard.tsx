@@ -20,11 +20,11 @@ import { ProjectsPage } from '@/pages/projects/index'
 import { ProjectDetailPage } from '@/pages/projects/[id]'
 import { NotesPage } from '@/pages/notes/index'
 import { useInvitationNotifications, useWebSocket, useNotificationReadSync, useProjectDeletedSync, useNotifications } from '@/hooks/use-websocket'
-import { useNotificationsStore, requestNotificationPermission } from '@/stores/notifications-store'
+import { requestNotificationPermission } from '@/stores/notifications-store'
 import { useAuthStore } from '@/stores/auth-store'
-import { useMembersStore } from '@/stores/members-store'
-import { useApplicationsStore, type Application } from '@/stores/applications-store'
-import type { Project } from '@/stores/projects-store'
+import { useQueryClient } from '@tanstack/react-query'
+import { queryKeys } from '@/lib/query-client'
+import type { Project, Application } from '@/hooks/use-queries'
 import {
   FolderKanban,
   ListTodo,
@@ -383,8 +383,8 @@ export function DashboardPage({
   // Auth store
   const token = useAuthStore((state) => state.token)
 
-  // Notification store
-  const fetchNotifications = useNotificationsStore((state) => state.fetchNotifications)
+  // TanStack Query client for cache invalidation
+  const queryClient = useQueryClient()
 
   // WebSocket status for reconnect handling
   const { status: wsStatus } = useWebSocket()
@@ -408,23 +408,23 @@ export function DashboardPage({
     requestNotificationPermission()
   }, [])
 
-  // Fetch notifications on initial load and WebSocket reconnect (with debouncing)
+  // Invalidate notifications on initial load and WebSocket reconnect (with debouncing)
   useEffect(() => {
     const wasConnected = prevConnectedRef.current
     prevConnectedRef.current = wsStatus.isConnected
 
-    // Only fetch if:
+    // Only invalidate if:
     // 1. We have a token
     // 2. We're now connected
     // 3. Either this is the first connection (wasConnected === null) OR we reconnected (wasConnected === false)
     if (token && wsStatus.isConnected && (wasConnected === null || wasConnected === false)) {
-      // Debounce fetch to prevent multiple rapid calls during reconnection flapping
+      // Debounce to prevent multiple rapid calls during reconnection flapping
       if (fetchTimeoutRef.current) {
         clearTimeout(fetchTimeoutRef.current)
       }
 
       fetchTimeoutRef.current = setTimeout(() => {
-        fetchNotifications(token)
+        queryClient.invalidateQueries({ queryKey: queryKeys.notifications })
         fetchTimeoutRef.current = null
       }, 500) // 500ms debounce
     }
@@ -434,22 +434,17 @@ export function DashboardPage({
         clearTimeout(fetchTimeoutRef.current)
       }
     }
-  }, [token, wsStatus.isConnected, fetchNotifications])
+  }, [token, wsStatus.isConnected, queryClient])
 
   // Listen for invitation-related WebSocket events
   useInvitationNotifications({
     onInvitationReceived: (_data) => {
-      // Refresh notifications from backend to get the persisted notification with correct ID
-      // This ensures read state is properly synced
-      if (token) {
-        fetchNotifications(token)
-      }
+      // Invalidate notifications to refetch from backend
+      queryClient.invalidateQueries({ queryKey: queryKeys.notifications })
     },
     onInvitationResponse: (_data) => {
-      // Refresh notifications from backend to get the persisted notification with correct ID
-      if (token) {
-        fetchNotifications(token)
-      }
+      // Invalidate notifications to refetch from backend
+      queryClient.invalidateQueries({ queryKey: queryKeys.notifications })
     },
     onMemberAdded: (data) => {
       console.log('[Dashboard] onMemberAdded triggered:', data)
@@ -458,38 +453,25 @@ export function DashboardPage({
       const currentUserId = useAuthStore.getState().user?.id
       const isCurrentUserAdded = currentUserId === data.user_id
 
-      // Refresh notifications from backend to get persisted notification with correct ID
-      if (token) {
-        fetchNotifications(token)
+      // Invalidate notifications
+      queryClient.invalidateQueries({ queryKey: queryKeys.notifications })
+
+      // If current user just joined, invalidate applications list to show the new application
+      if (isCurrentUserAdded) {
+        console.log('[Dashboard] Current user was added, invalidating applications')
+        queryClient.invalidateQueries({ queryKey: queryKeys.applications })
       }
 
-      // If current user just joined, refresh applications list to show the new application
-      if (isCurrentUserAdded && token) {
-        console.log('[Dashboard] Current user was added, refreshing applications')
-        useApplicationsStore.getState().fetchApplications(token)
-      }
-
-      // Re-fetch members if viewing this application to get full member data
-      const membersStore = useMembersStore.getState()
-      console.log('[Dashboard] Checking currentApplicationId:', {
-        currentAppId: membersStore.currentApplicationId,
-        dataAppId: data.application_id,
-        match: membersStore.currentApplicationId === data.application_id
-      })
-      if (membersStore.currentApplicationId === data.application_id && token) {
-        console.log('[Dashboard] Fetching members for application:', data.application_id)
-        membersStore.fetchMembers(token, data.application_id)
-      }
+      // Invalidate members for this application (TanStack Query will refetch if needed)
+      queryClient.invalidateQueries({ queryKey: queryKeys.appMembers(data.application_id) })
     },
     onMemberRemoved: (data) => {
       // Check if current user is the one being removed
       const currentUserId = useAuthStore.getState().user?.id
       const isCurrentUserRemoved = currentUserId === data.user_id
 
-      // Refresh notifications from backend to get persisted notification with correct ID
-      if (token) {
-        fetchNotifications(token)
-      }
+      // Invalidate notifications
+      queryClient.invalidateQueries({ queryKey: queryKeys.notifications })
 
       // If current user was removed, kick them out if viewing that application
       if (isCurrentUserRemoved) {
@@ -500,46 +482,27 @@ export function DashboardPage({
           setSelectedApplicationName(null)
           setSelectedProjectId(null)
         }
-        // Refresh applications list to remove the application they no longer have access to
-        if (token) {
-          useApplicationsStore.getState().fetchApplications(token)
-        }
-      } else {
-        // Update members store if viewing this application (for other team members)
-        const membersStore = useMembersStore.getState()
-        if (membersStore.currentApplicationId === data.application_id) {
-          membersStore.removeMemberFromList(data.user_id)
-        }
-      }
-    },
-    onRoleUpdated: (data) => {
-      // Refresh notifications from backend to get persisted notification with correct ID
-      if (token) {
-        fetchNotifications(token)
+        // Invalidate applications list to remove the application they no longer have access to
+        queryClient.invalidateQueries({ queryKey: queryKeys.applications })
       }
 
-      // Update members store if viewing this application
-      const membersStore = useMembersStore.getState()
-      if (membersStore.currentApplicationId === data.application_id) {
-        // Find and update the member in the list
-        const member = membersStore.members.find(m => m.user_id === data.user_id)
-        if (member) {
-          membersStore.updateMemberInList({
-            ...member,
-            role: data.new_role as 'owner' | 'editor' | 'viewer',
-          })
-        }
-      }
+      // Invalidate members for this application
+      queryClient.invalidateQueries({ queryKey: queryKeys.appMembers(data.application_id) })
+    },
+    onRoleUpdated: (data) => {
+      // Invalidate notifications
+      queryClient.invalidateQueries({ queryKey: queryKeys.notifications })
+
+      // Invalidate members for this application (will show updated role)
+      queryClient.invalidateQueries({ queryKey: queryKeys.appMembers(data.application_id) })
     },
   })
 
   // Listen for generic notification messages (project role changes, task assignments, etc.)
   useNotifications((_data) => {
-    // Refresh notifications from backend when any notification is received
+    // Invalidate notifications when any notification is received
     // This ensures project-level notifications (role changes, etc.) are captured
-    if (token) {
-      fetchNotifications(token)
-    }
+    queryClient.invalidateQueries({ queryKey: queryKeys.notifications })
   })
 
   useEffect(() => {
@@ -599,6 +562,7 @@ export function DashboardPage({
           return (
             <ProjectDetailPage
               projectId={selectedProjectId}
+              applicationId={selectedApplicationId}
               onBack={handleBackToProjects}
               onDeleted={handleBackToProjects}
             />
@@ -620,10 +584,11 @@ export function DashboardPage({
           />
         )
       case 'projects':
-        if (selectedProjectId) {
+        if (selectedProjectId && selectedApplicationId) {
           return (
             <ProjectDetailPage
               projectId={selectedProjectId}
+              applicationId={selectedApplicationId}
               onBack={handleBackToProjects}
               onDeleted={handleBackToProjects}
             />

@@ -37,7 +37,7 @@ import {
   Wifi,
   WifiOff,
 } from 'lucide-react'
-import type { ProjectDerivedStatus } from '@/stores/projects-store'
+import type { ProjectDerivedStatus } from '@/hooks/use-queries'
 import {
   SkeletonTaskCard,
   SkeletonListView,

@@ -21,7 +21,7 @@ import {
   Columns,
   RefreshCw,
 } from 'lucide-react'
-import type { Project, ProjectCreate, ProjectUpdate, ProjectType } from '@/stores/projects-store'
+import type { Project, ProjectCreate, ProjectUpdate, ProjectType } from '@/hooks/use-queries'
 
 // ============================================================================
 // Types

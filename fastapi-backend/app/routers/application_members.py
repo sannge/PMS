@@ -31,6 +31,7 @@ from ..schemas.application_member import (
 from ..schemas.invitation import ApplicationRole
 from ..schemas.notification import EntityType, NotificationType
 from ..services.auth_service import get_current_user
+from ..services.user_cache_service import invalidate_app_role
 from ..websocket.handlers import (
     handle_member_removed,
     handle_role_updated,
@@ -516,6 +517,9 @@ async def update_member_role(
     db.commit()
     db.refresh(member)
 
+    # Invalidate role cache for affected user
+    invalidate_app_role(user_id, application_id)
+
     # Create notification for affected user
     if old_role != member.role:
         notification = Notification(
@@ -636,6 +640,9 @@ async def remove_member(
 
     db.delete(member)
     db.commit()
+
+    # Invalidate role cache for removed user
+    invalidate_app_role(user_id, application_id)
 
     # Create notification for removed user (unless self-removal)
     if not is_self_removal:

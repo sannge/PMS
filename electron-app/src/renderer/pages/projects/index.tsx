@@ -14,15 +14,17 @@
  * - Loading state
  */
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import { cn } from '@/lib/utils'
-import { useAuthStore } from '@/stores/auth-store'
 import {
-  useProjectsStore,
+  useProjects,
+  useCreateProject,
+  useUpdateProject,
+  useDeleteProject,
   type Project,
   type ProjectCreate,
   type ProjectUpdate,
-} from '@/stores/projects-store'
+} from '@/hooks/use-queries'
 import { ProjectCard } from '@/components/projects/project-card'
 import { ProjectForm } from '@/components/projects/project-form'
 import {
@@ -171,112 +173,123 @@ export function ProjectsPage({
   onSelectProject,
   onBack,
 }: ProjectsPageProps): JSX.Element {
-  // Auth state
-  const token = useAuthStore((state) => state.token)
-
-  // Projects state
+  // TanStack Query hooks
   const {
-    projects,
+    data: projects = [],
     isLoading,
-    isCreating,
-    isUpdating,
-    isDeleting,
-    error,
-    fetchProjects,
-    createProject,
-    updateProject,
-    deleteProject,
-    clearError,
-  } = useProjectsStore()
+    error: queryError,
+  } = useProjects(applicationId)
+
+  const createMutation = useCreateProject(applicationId)
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
+  const updateMutation = useUpdateProject(editingProjectId || '', applicationId)
+  const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null)
+  const deleteMutation = useDeleteProject(deletingProjectId || '', applicationId)
+
+  // Derive loading states from mutations
+  const isCreating = createMutation.isPending
+  const isUpdating = updateMutation.isPending
+  const isDeleting = deleteMutation.isPending
 
   // Local state
   const [searchQuery, setSearchQuery] = useState('')
   const [modalMode, setModalMode] = useState<ModalMode>(null)
   const [editingProject, setEditingProject] = useState<Project | null>(null)
   const [deletingProject, setDeletingProject] = useState<Project | null>(null)
-  const [fetchedAppId, setFetchedAppId] = useState<string | null>(null)
+  const [mutationError, setMutationError] = useState<string | null>(null)
 
-  // Show skeleton: either loading OR we haven't fetched for this app yet
-  const showSkeleton = isLoading || fetchedAppId !== applicationId
+  // Filter projects by search query (client-side)
+  const filteredProjects = useMemo(() => {
+    if (!searchQuery.trim()) return projects
+    const query = searchQuery.toLowerCase()
+    return projects.filter(
+      (p) =>
+        p.name.toLowerCase().includes(query) ||
+        p.key.toLowerCase().includes(query) ||
+        p.description?.toLowerCase().includes(query)
+    )
+  }, [projects, searchQuery])
 
-  // Fetch projects on mount or when applicationId changes
-  useEffect(() => {
-    setFetchedAppId(null) // Reset to show skeleton immediately
-    fetchProjects(token, applicationId).then(() => {
-      setFetchedAppId(applicationId)
-    })
-  }, [token, applicationId, fetchProjects])
+  // Show skeleton only on first load (no cached data)
+  const showSkeleton = isLoading && projects.length === 0
 
-  // Handle search
-  const handleSearch = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const query = e.target.value
-      setSearchQuery(query)
-      fetchProjects(token, applicationId, { search: query || undefined })
-    },
-    [token, applicationId, fetchProjects]
-  )
+  // Error state
+  const error = queryError?.message || mutationError
+
+  // Handle search (client-side filtering)
+  const handleSearch = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchQuery(e.target.value)
+  }, [])
 
   // Handle create project
   const handleCreate = useCallback(() => {
-    clearError()
+    setMutationError(null)
     setEditingProject(null)
     setModalMode('create')
-  }, [clearError])
+  }, [])
 
   // Handle edit project
-  const handleEdit = useCallback(
-    (project: Project) => {
-      clearError()
-      setEditingProject(project)
-      setModalMode('edit')
-    },
-    [clearError]
-  )
+  const handleEdit = useCallback((project: Project) => {
+    setMutationError(null)
+    setEditingProject(project)
+    setEditingProjectId(project.id)
+    setModalMode('edit')
+  }, [])
 
   // Handle delete project
   const handleDeleteClick = useCallback((project: Project) => {
     setDeletingProject(project)
+    setDeletingProjectId(project.id)
   }, [])
 
   // Handle confirm delete
   const handleConfirmDelete = useCallback(async () => {
     if (!deletingProject) return
 
-    const success = await deleteProject(token, deletingProject.id)
-    if (success) {
+    try {
+      await deleteMutation.mutateAsync()
       setDeletingProject(null)
+      setDeletingProjectId(null)
+    } catch (err) {
+      setMutationError(err instanceof Error ? err.message : 'Failed to delete project')
     }
-  }, [deletingProject, deleteProject, token])
+  }, [deletingProject, deleteMutation])
 
   // Handle cancel delete
   const handleCancelDelete = useCallback(() => {
     setDeletingProject(null)
+    setDeletingProjectId(null)
   }, [])
 
   // Handle close modal
   const handleCloseModal = useCallback(() => {
     setModalMode(null)
     setEditingProject(null)
+    setEditingProjectId(null)
   }, [])
 
   // Handle form submit
   const handleFormSubmit = useCallback(
     async (data: ProjectCreate | ProjectUpdate) => {
-      if (modalMode === 'create') {
-        const project = await createProject(token, applicationId, data as ProjectCreate)
-        if (project) {
+      try {
+        if (modalMode === 'create') {
+          await createMutation.mutateAsync(data as ProjectCreate)
+          handleCloseModal()
+        } else if (modalMode === 'edit' && editingProject) {
+          await updateMutation.mutateAsync(data as ProjectUpdate)
           handleCloseModal()
         }
-      } else if (modalMode === 'edit' && editingProject) {
-        const project = await updateProject(token, editingProject.id, data as ProjectUpdate)
-        if (project) {
-          handleCloseModal()
-        }
+      } catch (err) {
+        setMutationError(err instanceof Error ? err.message : 'An error occurred')
       }
     },
-    [modalMode, editingProject, createProject, updateProject, token, applicationId, handleCloseModal]
+    [modalMode, editingProject, createMutation, updateMutation, handleCloseModal]
   )
+
+  // Clear error
+  const clearError = useCallback(() => {
+    setMutationError(null)
+  }, [])
 
   // Handle project click
   const handleProjectClick = useCallback(
@@ -285,9 +298,6 @@ export function ProjectsPage({
     },
     [onSelectProject]
   )
-
-  // Filter projects based on search (API handles filtering, but keep for local filtering if needed)
-  const filteredProjects = projects
 
   return (
     <div className="space-y-4">
@@ -327,10 +337,7 @@ export function ProjectsPage({
             />
             {searchQuery && (
               <button
-                onClick={() => {
-                  setSearchQuery('')
-                  fetchProjects(token, applicationId)
-                }}
+                onClick={() => setSearchQuery('')}
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
               >
                 <X className="h-3 w-3" />
@@ -361,7 +368,7 @@ export function ProjectsPage({
       {error && !modalMode && (
         <div className="flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
           <AlertCircle className="h-4 w-4 flex-shrink-0" />
-          <span>{error.message}</span>
+          <span>{error}</span>
           <button
             onClick={clearError}
             className="ml-auto text-destructive hover:text-destructive/80"
@@ -377,7 +384,7 @@ export function ProjectsPage({
       )}
 
       {/* Empty State: only show when done loading and truly empty */}
-      {!showSkeleton && projects.length === 0 && (
+      {!showSkeleton && filteredProjects.length === 0 && (
         <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-8">
           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
             <LayoutDashboard className="h-5 w-5 text-primary" />
@@ -428,7 +435,7 @@ export function ProjectsPage({
           <ProjectForm
             project={editingProject}
             isSubmitting={modalMode === 'create' ? isCreating : isUpdating}
-            error={error?.message}
+            error={error || undefined}
             onSubmit={handleFormSubmit}
             onCancel={handleCloseModal}
           />
