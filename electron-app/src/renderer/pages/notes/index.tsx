@@ -22,10 +22,7 @@ import {
   type NoteCreate,
   type NoteUpdate,
 } from '@/stores/notes-store'
-import {
-  useApplicationsStore,
-  type Application,
-} from '@/stores/applications-store'
+import { useApplications, type Application } from '@/hooks/use-queries'
 import { NotesSidebar } from '@/components/notes/notes-sidebar'
 import { NotesTabBar } from '@/components/notes/notes-tab-bar'
 import {
@@ -636,12 +633,8 @@ export function NotesPage({
   // Auth state
   const token = useAuthStore((state) => state.token)
 
-  // Applications state
-  const {
-    applications,
-    isLoading: isLoadingApps,
-    fetchApplications,
-  } = useApplicationsStore()
+  // Applications state - using TanStack Query
+  const { data: applications = [], isLoading: isLoadingApps } = useApplications()
 
   // Notes state
   const {
@@ -699,10 +692,7 @@ export function NotesPage({
     setIsSidebarCollapsed(collapsed)
   }, [])
 
-  // Fetch applications on mount
-  useEffect(() => {
-    fetchApplications(token)
-  }, [token, fetchApplications])
+  // Note: Applications are auto-fetched by TanStack Query
 
   // Restore session or set initial application when applications are loaded
   useEffect(() => {

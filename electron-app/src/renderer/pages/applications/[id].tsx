@@ -32,27 +32,13 @@ import {
   type ProjectUpdate,
 } from '@/hooks/use-queries'
 import type { ApplicationMember, ApplicationRole } from '@/hooks/use-members'
-import type { ProjectStatusChangedEventData } from '@/stores/projects-store'
-import type { MemberWithUser } from '@/stores/members-store'
+import { MessageType, type WebSocketEventData } from '@/hooks/use-websocket'
 
-// Convert ApplicationMember to MemberWithUser for compatibility with member components
-function toMemberWithUser(member: ApplicationMember): MemberWithUser {
-  return {
-    id: member.user_id, // Use user_id as member id
-    application_id: member.application_id,
-    user_id: member.user_id,
-    role: member.role,
-    invitation_id: null,
-    created_at: member.created_at,
-    updated_at: member.updated_at || member.created_at,
-    user: {
-      id: member.user_id,
-      email: member.user_email,
-      full_name: member.user_display_name,
-      display_name: member.user_display_name,
-      avatar_url: member.user_avatar_url,
-    },
-  }
+// Define the event data type for project status changed
+interface ProjectStatusChangedEventData extends WebSocketEventData {
+  project_id?: string
+  application_id?: string
+  project?: Project
 }
 import { ApplicationForm } from '@/components/applications/application-form'
 import { ProjectCard } from '@/components/projects/project-card'
@@ -481,9 +467,6 @@ export function ApplicationDetailPage({
     )
   }, [projects, projectSearchQuery])
 
-  // Convert ApplicationMember[] to MemberWithUser[] for compatibility with member components
-  const membersWithUser = useMemo(() => members.map(toMemberWithUser), [members])
-
   // Show loading skeleton only on first load (no cached data)
   const showLoading = isLoading && !application
 
@@ -841,8 +824,8 @@ export function ApplicationDetailPage({
         <div className="flex items-center gap-3">
           <span className="text-sm font-medium text-muted-foreground">Team</span>
           <MemberAvatarGroup
-            members={membersWithUser}
-            totalCount={membersWithUser.length}
+            members={members}
+            totalCount={members.length}
             maxDisplay={5}
             size="sm"
             onClick={() => setIsMemberModalOpen(true)}
@@ -1119,9 +1102,9 @@ export function ApplicationDetailPage({
       <MemberManagementModal
         isOpen={isMemberModalOpen}
         onClose={() => setIsMemberModalOpen(false)}
-        members={membersWithUser}
+        members={members}
         isLoading={isLoadingMembers}
-        totalCount={membersWithUser.length}
+        totalCount={members.length}
         currentUserId={currentUserId}
         currentUserRole={userRole ?? undefined}
         originalOwnerId={application?.owner_id ?? undefined}
