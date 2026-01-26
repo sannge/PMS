@@ -15,7 +15,7 @@ import { memo } from 'react'
 import * as Tooltip from '@radix-ui/react-tooltip'
 import { cn } from '@/lib/utils'
 import { Crown, User, ShieldCheck, Users } from 'lucide-react'
-import type { ProjectMemberRole } from '@/stores/project-members-store'
+import type { ProjectRole as ProjectMemberRole } from '@/hooks/use-members'
 
 // ============================================================================
 // Types

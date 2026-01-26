@@ -14,7 +14,7 @@
 import { useCallback } from 'react'
 import { cn } from '@/lib/utils'
 import { Users } from 'lucide-react'
-import type { MemberWithUser } from '@/stores/members-store'
+import type { ApplicationMember } from '@/hooks/use-members'
 
 // ============================================================================
 // Types
@@ -24,7 +24,7 @@ export interface MemberAvatarGroupProps {
   /**
    * Array of members to display
    */
-  members: MemberWithUser[]
+  members: ApplicationMember[]
   /**
    * Total count of members (may be more than members array if paginated)
    */
@@ -58,16 +58,16 @@ export interface MemberAvatarGroupProps {
 /**
  * Get initials from member data
  */
-function getMemberInitials(member: MemberWithUser): string {
-  if (member.user?.full_name) {
-    const names = member.user.full_name.split(' ')
+function getMemberInitials(member: ApplicationMember): string {
+  if (member.user_display_name) {
+    const names = member.user_display_name.split(' ')
     if (names.length >= 2) {
       return `${names[0][0]}${names[names.length - 1][0]}`.toUpperCase()
     }
     return names[0].substring(0, 2).toUpperCase()
   }
-  if (member.user?.email) {
-    return member.user.email.substring(0, 2).toUpperCase()
+  if (member.user_email) {
+    return member.user_email.substring(0, 2).toUpperCase()
   }
   return '??'
 }
@@ -75,8 +75,8 @@ function getMemberInitials(member: MemberWithUser): string {
 /**
  * Get display name for tooltip
  */
-function getMemberDisplayName(member: MemberWithUser): string {
-  return member.user?.full_name || member.user?.email || 'Unknown'
+function getMemberDisplayName(member: ApplicationMember): string {
+  return member.user_display_name || member.user_email || 'Unknown'
 }
 
 // ============================================================================

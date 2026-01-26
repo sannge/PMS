@@ -24,7 +24,7 @@ import {
   Eye,
   Loader2,
 } from 'lucide-react'
-import type { ApplicationRole } from '@/stores/members-store'
+import type { ApplicationRole } from '@/hooks/use-members'
 
 // ============================================================================
 // Types

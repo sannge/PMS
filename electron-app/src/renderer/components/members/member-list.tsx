@@ -24,7 +24,7 @@ import {
   Edit2,
   Trash2,
 } from 'lucide-react'
-import type { MemberWithUser, ApplicationRole } from '@/stores/members-store'
+import type { ApplicationMember, ApplicationRole } from '@/hooks/use-members'
 
 // ============================================================================
 // Types
@@ -34,7 +34,7 @@ export interface MemberListProps {
   /**
    * Array of members to display
    */
-  members: MemberWithUser[]
+  members: ApplicationMember[]
   /**
    * Whether members are loading
    */
@@ -166,12 +166,12 @@ function formatRelativeTime(dateString: string): string {
 /**
  * Get member display name
  */
-function getMemberDisplayName(member: MemberWithUser): string {
-  if (member.user?.full_name) {
-    return member.user.full_name
+function getMemberDisplayName(member: ApplicationMember): string {
+  if (member.user_display_name) {
+    return member.user_display_name
   }
-  if (member.user?.email) {
-    return member.user.email
+  if (member.user_email) {
+    return member.user_email
   }
   return 'Unknown user'
 }
@@ -179,16 +179,16 @@ function getMemberDisplayName(member: MemberWithUser): string {
 /**
  * Get member initials for avatar
  */
-function getMemberInitials(member: MemberWithUser): string {
-  if (member.user?.full_name) {
-    const parts = member.user.full_name.split(' ')
+function getMemberInitials(member: ApplicationMember): string {
+  if (member.user_display_name) {
+    const parts = member.user_display_name.split(' ')
     if (parts.length >= 2) {
       return `${parts[0][0]}${parts[1][0]}`.toUpperCase()
     }
     return parts[0].slice(0, 2).toUpperCase()
   }
-  if (member.user?.email) {
-    return member.user.email.slice(0, 2).toUpperCase()
+  if (member.user_email) {
+    return member.user_email.slice(0, 2).toUpperCase()
   }
   return 'UN'
 }
@@ -358,8 +358,8 @@ function MemberItem({
 
         {/* Email and joined date */}
         <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
-          {member.user?.email && (
-            <span className="line-clamp-1">{member.user.email}</span>
+          {member.user_email && (
+            <span className="line-clamp-1">{member.user_email}</span>
           )}
           <span className="hidden sm:inline">•</span>
           <span className="hidden sm:inline">Joined {formatRelativeTime(member.created_at)}</span>

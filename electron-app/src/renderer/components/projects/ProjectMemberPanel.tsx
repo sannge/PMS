@@ -29,11 +29,15 @@ import {
   Check,
 } from 'lucide-react'
 import {
-  useProjectMembersStore,
+  useProjectMembers,
+  useApplicationMembers,
+  useAddProjectMember,
+  useRemoveProjectMember,
+  useUpdateProjectMemberRole,
   type ProjectMember,
-  type AppMember,
-  type ProjectMemberRole,
-} from '@/stores/project-members-store'
+  type ApplicationMember,
+  type ProjectRole as ProjectMemberRole,
+} from '@/hooks/use-members'
 import { useAuthStore } from '@/stores/auth-store'
 
 // ============================================================================
@@ -79,82 +83,85 @@ export function ProjectMemberPanel({
   creatorId = null,
   className,
 }: ProjectMemberPanelProps): JSX.Element {
-  const token = useAuthStore((state) => state.token)
   const currentUserId = useAuthStore((state) => state.user?.id)
   const [showAddDialog, setShowAddDialog] = useState(false)
-  const [addingUserId, setAddingUserId] = useState<string | null>(null)
-  const [removingUserId, setRemovingUserId] = useState<string | null>(null)
-  const [changingRoleUserId, setChangingRoleUserId] = useState<string | null>(null)
+  const [localError, setLocalError] = useState<Error | null>(null)
 
-  const {
-    members,
-    availableMembers,
-    isLoading,
-    isLoadingAvailable,
-    error,
-    fetchMembers,
-    fetchAvailableMembers,
-    addMember,
-    removeMember,
-    updateMemberRole,
-    canManageMembers,
-    clearError,
-  } = useProjectMembersStore()
+  // TanStack Query hooks
+  const { data: members = [], isLoading, error: membersError } = useProjectMembers(projectId)
+  const { data: appMembers = [], isLoading: isLoadingApplicationMembers } = useApplicationMembers(showAddDialog ? applicationId : undefined)
+
+  // Mutations
+  const addMemberMutation = useAddProjectMember(projectId)
+  const removeMemberMutation = useRemoveProjectMember(projectId)
+  const updateRoleMutation = useUpdateProjectMemberRole(projectId)
+
+  // Calculate available members (app members not already in project)
+  const memberUserIds = useMemo(() => new Set(members.map(m => m.user_id)), [members])
+  const availableMembers = useMemo(
+    () => appMembers.filter(m => !memberUserIds.has(m.user_id)),
+    [appMembers, memberUserIds]
+  )
+  const isLoadingAvailable = isLoadingApplicationMembers
+
+  // Combined error state
+  const error = localError || membersError
 
   // Check if current user can manage members (app owner or project admin)
-  const canManage = canManageMembers(currentUserId || '', isOwner)
+  const canManage = useMemo(() => {
+    if (isOwner) return true
+    const currentMember = members.find(m => m.user_id === currentUserId)
+    return currentMember?.role === 'admin'
+  }, [members, currentUserId, isOwner])
 
-  // Fetch members on mount
-  useEffect(() => {
-    fetchMembers(token, projectId)
-  }, [token, projectId, fetchMembers])
-
-  // Fetch available when opening add dialog
-  useEffect(() => {
-    if (showAddDialog) {
-      fetchAvailableMembers(token, projectId, applicationId)
-    }
-  }, [showAddDialog, token, projectId, applicationId, fetchAvailableMembers])
+  // Clear error function
+  const clearError = useCallback(() => {
+    setLocalError(null)
+  }, [])
 
   // Handlers
   const handleAddMember = useCallback(
     async (userId: string) => {
-      setAddingUserId(userId)
       try {
-        const success = await addMember(token, projectId, userId)
-        if (success && availableMembers.length <= 1) {
+        const appMember = appMembers.find(m => m.user_id === userId)
+        if (!appMember) return
+        await addMemberMutation.mutateAsync({ email: appMember.user_email, role: 'member' })
+        if (availableMembers.length <= 1) {
           setShowAddDialog(false)
         }
-      } finally {
-        setAddingUserId(null)
+      } catch (err) {
+        setLocalError(err instanceof Error ? err : new Error('Failed to add member'))
       }
     },
-    [token, projectId, addMember, availableMembers.length]
+    [addMemberMutation, appMembers, availableMembers.length]
   )
 
   const handleRemoveMember = useCallback(
     async (userId: string) => {
-      setRemovingUserId(userId)
       try {
-        await removeMember(token, projectId, userId)
-      } finally {
-        setRemovingUserId(null)
+        await removeMemberMutation.mutateAsync(userId)
+      } catch (err) {
+        setLocalError(err instanceof Error ? err : new Error('Failed to remove member'))
       }
     },
-    [token, projectId, removeMember]
+    [removeMemberMutation]
   )
 
   const handleRoleChange = useCallback(
     async (userId: string, newRole: ProjectMemberRole) => {
-      setChangingRoleUserId(userId)
       try {
-        await updateMemberRole(token, projectId, userId, newRole)
-      } finally {
-        setChangingRoleUserId(null)
+        await updateRoleMutation.mutateAsync({ userId, newRole })
+      } catch (err) {
+        setLocalError(err instanceof Error ? err : new Error('Failed to update role'))
       }
     },
-    [token, projectId, updateMemberRole]
+    [updateRoleMutation]
   )
+
+  // Track which operations are pending
+  const addingUserId = addMemberMutation.isPending ? addMemberMutation.variables?.email : null
+  const removingUserId = removeMemberMutation.isPending ? removeMemberMutation.variables : null
+  const changingRoleUserId = updateRoleMutation.isPending ? updateRoleMutation.variables?.userId : null
 
   // Loading state with skeleton
   if (isLoading && members.length === 0) {
@@ -303,9 +310,9 @@ function MemberItem({
 }: MemberItemProps): JSX.Element {
   const [showRoleMenu, setShowRoleMenu] = useState(false)
   const roleMenuRef = useRef<HTMLDivElement>(null)
-  const displayName = getDisplayName(member.user)
-  const hasName = member.user?.display_name
-  const showEmail = hasName && member.user?.email
+  const displayName = member.user_display_name || member.user_email || 'Unknown user'
+  const hasName = member.user_display_name
+  const showEmail = hasName && member.user_email
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -335,15 +342,15 @@ function MemberItem({
       )}
     >
       {/* Avatar */}
-      {member.user?.avatar_url ? (
+      {member.user_avatar_url ? (
         <img
-          src={member.user.avatar_url}
+          src={member.user_avatar_url}
           alt={displayName}
           className="h-8 w-8 rounded-full object-cover"
         />
       ) : (
         <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-medium">
-          {getInitials(member.user?.display_name || null, member.user?.email)}
+          {getInitials(member.user_display_name || null, member.user_email)}
         </div>
       )}
 
@@ -362,9 +369,9 @@ function MemberItem({
             <span className="text-[10px] text-muted-foreground">(you)</span>
           )}
         </div>
-        {showEmail && member.user && (
+        {showEmail && (
           <div className="text-xs text-muted-foreground truncate">
-            {member.user.email}
+            {member.user_email}
           </div>
         )}
       </div>
@@ -494,7 +501,7 @@ function ProjectRoleBadge({ role }: ProjectRoleBadgeProps): JSX.Element {
 }
 
 interface AddMemberDialogProps {
-  availableMembers: AppMember[]
+  availableMembers: ApplicationMember[]
   isLoading: boolean
   addingUserId: string | null
   onAdd: (userId: string) => void
@@ -576,15 +583,15 @@ function AddMemberDialog({
 }
 
 interface AvailableMemberItemProps {
-  member: AppMember
+  member: ApplicationMember
   isAdding: boolean
   onAdd: () => void
 }
 
 function AvailableMemberItem({ member, isAdding, onAdd }: AvailableMemberItemProps): JSX.Element {
-  const displayName = getDisplayName(member.user)
-  const hasName = member.user?.display_name
-  const showEmail = hasName && member.user?.email
+  const displayName = member.user_display_name || member.user_email || 'Unknown user'
+  const hasName = member.user_display_name
+  const showEmail = hasName && member.user_email
 
   return (
     <div
@@ -595,15 +602,15 @@ function AvailableMemberItem({ member, isAdding, onAdd }: AvailableMemberItemPro
       )}
     >
       {/* Avatar */}
-      {member.user?.avatar_url ? (
+      {member.user_avatar_url ? (
         <img
-          src={member.user.avatar_url}
+          src={member.user_avatar_url}
           alt={displayName}
           className="h-8 w-8 rounded-full object-cover"
         />
       ) : (
         <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-medium">
-          {getInitials(member.user?.display_name || null, member.user?.email)}
+          {getInitials(member.user_display_name || null, member.user_email)}
         </div>
       )}
 
@@ -615,9 +622,9 @@ function AvailableMemberItem({ member, isAdding, onAdd }: AvailableMemberItemPro
           </span>
           <RoleBadge role={member.role} />
         </div>
-        {showEmail && member.user && (
+        {showEmail && (
           <div className="text-xs text-muted-foreground truncate">
-            {member.user.email}
+            {member.user_email}
           </div>
         )}
       </div>

@@ -12,6 +12,7 @@
 import { useCallback, ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { useNotificationsStore } from '@/stores/notifications-store'
+import { useUnreadCount } from '@/hooks/use-notifications'
 import {
   LayoutDashboard,
   FolderKanban,
@@ -115,7 +116,9 @@ export function Sidebar({
   onNotificationClick,
   className,
 }: SidebarProps): JSX.Element {
-  const unreadCount = useNotificationsStore((state) => state.unreadCount)
+  // Use TanStack Query for unread count (auto-refreshes)
+  const { data: unreadCount = 0 } = useUnreadCount()
+  // Keep UI state (panel open/close) in notifications store
   const toggleNotifications = useNotificationsStore((state) => state.toggleOpen)
 
   const handleNavigate = useCallback(

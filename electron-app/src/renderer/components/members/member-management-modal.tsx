@@ -26,7 +26,7 @@ import {
   Loader2,
   Users,
 } from 'lucide-react'
-import type { MemberWithUser, ApplicationRole } from '@/stores/members-store'
+import type { ApplicationMember, ApplicationRole } from '@/hooks/use-members'
 
 // ============================================================================
 // Types
@@ -44,7 +44,7 @@ export interface MemberManagementModalProps {
   /**
    * Array of members to display
    */
-  members: MemberWithUser[]
+  members: ApplicationMember[]
   /**
    * Whether members are loading
    */
@@ -88,11 +88,11 @@ export interface MemberManagementModalProps {
   /**
    * Callback when role edit is requested
    */
-  onEditRole?: (member: MemberWithUser) => void
+  onEditRole?: (member: ApplicationMember) => void
   /**
    * Callback when member removal is requested
    */
-  onRemoveMember?: (member: MemberWithUser) => void
+  onRemoveMember?: (member: ApplicationMember) => void
   /**
    * Callback to open invite modal
    */
@@ -129,22 +129,22 @@ const ROLE_CONFIG: Record<ApplicationRole, { icon: JSX.Element; label: string; c
 // Helper Functions
 // ============================================================================
 
-function getMemberInitials(member: MemberWithUser): string {
-  if (member.user?.full_name) {
-    const names = member.user.full_name.split(' ')
+function getMemberInitials(member: ApplicationMember): string {
+  if (member.user_display_name) {
+    const names = member.user_display_name.split(' ')
     if (names.length >= 2) {
       return `${names[0][0]}${names[names.length - 1][0]}`.toUpperCase()
     }
     return names[0].substring(0, 2).toUpperCase()
   }
-  if (member.user?.email) {
-    return member.user.email.substring(0, 2).toUpperCase()
+  if (member.user_email) {
+    return member.user_email.substring(0, 2).toUpperCase()
   }
   return '??'
 }
 
-function getMemberDisplayName(member: MemberWithUser): string {
-  return member.user?.full_name || member.user?.email || 'Unknown'
+function getMemberDisplayName(member: ApplicationMember): string {
+  return member.user_display_name || member.user_email || 'Unknown'
 }
 
 // ============================================================================
@@ -152,7 +152,7 @@ function getMemberDisplayName(member: MemberWithUser): string {
 // ============================================================================
 
 interface MemberItemProps {
-  member: MemberWithUser
+  member: ApplicationMember
   isCurrentUser: boolean
   canEdit: boolean
   canRemove: boolean
@@ -215,8 +215,8 @@ function MemberItem({
             </span>
           )}
         </div>
-        {member.user?.email && (
-          <p className="text-xs text-muted-foreground truncate">{member.user.email}</p>
+        {member.user_email && (
+          <p className="text-xs text-muted-foreground truncate">{member.user_email}</p>
         )}
       </div>
 
@@ -354,7 +354,7 @@ export function MemberManagementModal({
 
   // Check permissions for a member
   const canEditMember = useCallback(
-    (member: MemberWithUser): boolean => {
+    (member: ApplicationMember): boolean => {
       if (!currentUserRole) return false
       const isCurrentUser = member.user_id === currentUserId
       const isOriginalOwner = member.user_id === originalOwnerId
@@ -370,7 +370,7 @@ export function MemberManagementModal({
   )
 
   const canRemoveMember = useCallback(
-    (member: MemberWithUser): boolean => {
+    (member: ApplicationMember): boolean => {
       if (!currentUserRole) return false
       const isCurrentUser = member.user_id === currentUserId
       const isOriginalOwner = member.user_id === originalOwnerId
