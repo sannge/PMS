@@ -11,10 +11,13 @@
  */
 
 import { useState, useCallback, useEffect } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { User, Edit2, Trash2, Check, X, FileText, FileImage, File, Download, Maximize2 } from 'lucide-react'
-import type { Comment, CommentAttachment } from '@/stores/comments-store'
+import type { Comment, CommentAttachment } from '@/hooks/use-comments'
+import { useAuthStore } from '@/stores/auth-store'
 import { useFilesStore, formatFileSize, isImageFile } from '@/stores/files-store'
+import { queryKeys } from '@/lib/query-client'
 import { ImageViewer } from '@/components/ui/image-viewer'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 
@@ -25,11 +28,19 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 export interface CommentItemProps {
   comment: Comment
   currentUserId?: string
+  /** @deprecated No longer used - edit is handled internally */
   onEdit?: (commentId: string, bodyText: string) => void
+  /** @deprecated No longer used - delete is handled internally */
   onDelete?: (commentId: string) => void
   isEditing?: boolean
   disabled?: boolean
   className?: string
+}
+
+// Helper to get auth headers
+function getAuthHeaders(token: string | null): Record<string, string> {
+  if (!token) return {}
+  return { Authorization: `Bearer ${token}` }
 }
 
 // ============================================================================
@@ -298,18 +309,63 @@ function CommentAttachmentItem({ attachment, preloadedUrl }: CommentAttachmentIt
 export function CommentItem({
   comment,
   currentUserId,
-  onEdit,
-  onDelete,
+  onEdit: _onEdit,
+  onDelete: _onDelete,
   isEditing = false,
   disabled = false,
   className,
 }: CommentItemProps): JSX.Element {
+  const queryClient = useQueryClient()
+  const token = useAuthStore((s) => s.token)
   const [showActions, setShowActions] = useState(false)
   const [editMode, setEditMode] = useState(false)
   const [editText, setEditText] = useState(comment.body_text || '')
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [attachmentUrls, setAttachmentUrls] = useState<Record<string, string>>({})
   const { getDownloadUrls } = useFilesStore()
+
+  // Update comment mutation
+  const updateMutation = useMutation({
+    mutationFn: async (bodyText: string) => {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+      const response = await window.electronAPI.put<Comment>(
+        `/api/comments/${comment.id}`,
+        { body_text: bodyText },
+        getAuthHeaders(token)
+      )
+      if (response.status !== 200) {
+        throw new Error('Failed to update comment')
+      }
+      return response.data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.comments(comment.task_id) })
+      setEditMode(false)
+    },
+  })
+
+  // Delete comment mutation
+  const deleteMutation = useMutation({
+    mutationFn: async () => {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+      const response = await window.electronAPI.delete<void>(
+        `/api/comments/${comment.id}`,
+        getAuthHeaders(token)
+      )
+      if (response.status !== 204 && response.status !== 200) {
+        throw new Error('Failed to delete comment')
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.comments(comment.task_id) })
+    },
+  })
+
+  const isMutating = updateMutation.isPending || deleteMutation.isPending
 
   // Batch load image URLs for attachments
   useEffect(() => {
@@ -343,11 +399,10 @@ export function CommentItem({
   const canModify = isOwnComment && !comment.is_deleted
 
   const handleEditSubmit = useCallback(() => {
-    if (editText.trim() && onEdit) {
-      onEdit(comment.id, editText.trim())
-      setEditMode(false)
+    if (editText.trim()) {
+      updateMutation.mutate(editText.trim())
     }
-  }, [comment.id, editText, onEdit])
+  }, [editText, updateMutation])
 
   const handleEditCancel = useCallback(() => {
     setEditText(comment.body_text || '')
@@ -355,17 +410,13 @@ export function CommentItem({
   }, [comment.body_text])
 
   const handleDeleteClick = useCallback(() => {
-    if (onDelete) {
-      setShowDeleteConfirm(true)
-    }
-  }, [onDelete])
+    setShowDeleteConfirm(true)
+  }, [])
 
   const handleConfirmDelete = useCallback(() => {
-    if (onDelete) {
-      onDelete(comment.id)
-    }
+    deleteMutation.mutate()
     setShowDeleteConfirm(false)
-  }, [comment.id, onDelete])
+  }, [deleteMutation])
 
   // Deleted comment display
   if (comment.is_deleted) {
@@ -442,12 +493,12 @@ export function CommentItem({
                 'resize-none'
               )}
               placeholder="Edit your comment..."
-              disabled={disabled}
+              disabled={disabled || isMutating}
             />
             <div className="flex items-center gap-2">
               <button
                 onClick={handleEditSubmit}
-                disabled={!editText.trim() || disabled}
+                disabled={!editText.trim() || disabled || isMutating}
                 className={cn(
                   'inline-flex items-center gap-1 px-2 py-1 rounded-md',
                   'text-xs font-medium',
@@ -458,11 +509,11 @@ export function CommentItem({
                 )}
               >
                 <Check className="h-3 w-3" />
-                Save
+                {updateMutation.isPending ? 'Saving...' : 'Save'}
               </button>
               <button
                 onClick={handleEditCancel}
-                disabled={disabled}
+                disabled={disabled || isMutating}
                 className={cn(
                   'inline-flex items-center gap-1 px-2 py-1 rounded-md',
                   'text-xs font-medium',
@@ -502,38 +553,34 @@ export function CommentItem({
       {/* Actions */}
       {canModify && !editMode && (showActions || isEditing) && (
         <div className="flex items-center gap-1 flex-shrink-0">
-          {onEdit && (
-            <button
-              onClick={() => setEditMode(true)}
-              disabled={disabled}
-              className={cn(
-                'flex h-6 w-6 items-center justify-center rounded-md',
-                'text-muted-foreground',
-                'hover:bg-muted hover:text-foreground',
-                'disabled:opacity-50 disabled:cursor-not-allowed',
-                'transition-colors'
-              )}
-              title="Edit"
-            >
-              <Edit2 className="h-3 w-3" />
-            </button>
-          )}
-          {onDelete && (
-            <button
-              onClick={handleDeleteClick}
-              disabled={disabled}
-              className={cn(
-                'flex h-6 w-6 items-center justify-center rounded-md',
-                'text-muted-foreground',
-                'hover:bg-destructive/10 hover:text-destructive',
-                'disabled:opacity-50 disabled:cursor-not-allowed',
-                'transition-colors'
-              )}
-              title="Delete"
-            >
-              <Trash2 className="h-3 w-3" />
-            </button>
-          )}
+          <button
+            onClick={() => setEditMode(true)}
+            disabled={disabled || isMutating}
+            className={cn(
+              'flex h-6 w-6 items-center justify-center rounded-md',
+              'text-muted-foreground',
+              'hover:bg-muted hover:text-foreground',
+              'disabled:opacity-50 disabled:cursor-not-allowed',
+              'transition-colors'
+            )}
+            title="Edit"
+          >
+            <Edit2 className="h-3 w-3" />
+          </button>
+          <button
+            onClick={handleDeleteClick}
+            disabled={disabled || isMutating}
+            className={cn(
+              'flex h-6 w-6 items-center justify-center rounded-md',
+              'text-muted-foreground',
+              'hover:bg-destructive/10 hover:text-destructive',
+              'disabled:opacity-50 disabled:cursor-not-allowed',
+              'transition-colors'
+            )}
+            title="Delete"
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
         </div>
       )}
 

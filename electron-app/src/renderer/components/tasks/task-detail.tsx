@@ -45,8 +45,7 @@ import {
   WifiOff,
 } from 'lucide-react'
 import type { Task, TaskStatusValue as TaskStatus, TaskUpdate, TaskPriority, TaskType } from '@/hooks/use-queries'
-import { useProjectMembersStore } from '@/stores/project-members-store'
-import { useMembersStore } from '@/stores/members-store'
+import { useProjectMembers, useAppMembers } from '@/hooks/use-members'
 import { useAuthStore } from '@/stores/auth-store'
 import { TaskStatusBadge } from './task-status-badge'
 import { FileUpload } from '@/components/files/file-upload'
@@ -443,38 +442,25 @@ export function TaskDetail({
   const [externalUpdateNotice, setExternalUpdateNotice] = useState<string | null>(null)
   const [mentionSuggestions, setMentionSuggestions] = useState<Array<{ id: string; name: string; email?: string; avatar_url?: string }>>([])
 
-  // Auth and project members for assignee selector
+  // Auth
   const token = useAuthStore((s) => s.token)
-  const { members: projectMembers, fetchMembers: fetchProjectMembers } = useProjectMembersStore()
 
-  // Application members for @mentions (includes viewers)
-  const { members: appMembers, fetchMembers: fetchAppMembers } = useMembersStore()
+  // Project members for assignee selector (auto-fetches when enabled)
+  const { data: projectMembers = [] } = useProjectMembers(isOpen ? task.project_id : undefined)
 
-  // Fetch project members when panel opens (for assignee selector)
-  useEffect(() => {
-    if (isOpen && token && task.project_id) {
-      fetchProjectMembers(token, task.project_id)
-    }
-  }, [isOpen, token, task.project_id, fetchProjectMembers])
-
-  // Fetch application members when panel opens (for @mentions - includes viewers)
-  useEffect(() => {
-    if (isOpen && token && applicationId) {
-      fetchAppMembers(token, applicationId)
-    }
-  }, [isOpen, token, applicationId, fetchAppMembers])
+  // Application members for @mentions (includes viewers) (auto-fetches when enabled)
+  const { data: appMembersData = [] } = useAppMembers(isOpen ? applicationId : undefined)
 
   // Handle @mention search - filter application members by query (includes viewers)
   // Search by display_name first, then email. Display name (or email username if no name)
   const handleMentionSearch = useCallback(
     (query: string) => {
       const lowerQuery = query.toLowerCase()
-      const suggestions = appMembers
+      const suggestions = appMembersData
         .filter((member) => {
-          if (!member.user) return false
           // Search by display_name first, then by email
-          const name = member.user.display_name
-          const email = member.user.email
+          const name = member.user_display_name
+          const email = member.user_email
           if (name && name.toLowerCase().includes(lowerQuery)) return true
           if (email && email.toLowerCase().includes(lowerQuery)) return true
           return false
@@ -482,19 +468,19 @@ export function TaskDetail({
         .slice(0, 10) // Limit to 10 suggestions
         .map((member) => {
           // Use display_name if available, otherwise extract username from email
-          const displayName = member.user?.display_name ||
-            member.user?.email?.split('@')[0] ||
+          const displayName = member.user_display_name ||
+            member.user_email?.split('@')[0] ||
             'Unknown'
           return {
             id: member.user_id,
             name: displayName,
-            email: member.user?.email,
-            avatar_url: member.user?.avatar_url || undefined,
+            email: member.user_email,
+            avatar_url: member.user_avatar_url || undefined,
           }
         })
       setMentionSuggestions(suggestions)
     },
-    [appMembers]
+    [appMembersData]
   )
 
   // WebSocket connection for real-time updates
@@ -887,7 +873,7 @@ export function TaskDetail({
                   <option value="">Unassigned</option>
                   {projectMembers.map((member) => (
                     <option key={member.user_id} value={member.user_id}>
-                      {member.user?.display_name || member.user?.email?.split('@')[0] || 'Unknown'} ({member.user?.email})
+                      {member.user_display_name || member.user_email?.split('@')[0] || 'Unknown'} ({member.user_email})
                     </option>
                   ))}
                 </select>

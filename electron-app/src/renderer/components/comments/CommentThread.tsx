@@ -10,12 +10,14 @@
  * - Loading and empty states
  */
 
-import { useEffect, useCallback, useRef } from 'react'
+import { useEffect, useCallback, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { MessageSquare, Loader2, AlertCircle } from 'lucide-react'
-import { useCommentsStore, type Comment } from '@/stores/comments-store'
+import { useCommentsList, useCreateComment, type Comment } from '@/hooks/use-comments'
 import { useAuthStore } from '@/stores/auth-store'
 import { useFilesStore } from '@/stores/files-store'
+import { queryKeys } from '@/lib/query-client'
 import { CommentItem } from './CommentItem'
 import { CommentInput, type MentionSuggestion } from './CommentInput'
 import { TypingIndicator } from '@/components/presence'
@@ -47,37 +49,31 @@ export function CommentThread({
   onTyping,
   className,
 }: CommentThreadProps): JSX.Element {
-  const token = useAuthStore((state) => state.token)
+  const queryClient = useQueryClient()
   const userId = useAuthStore((state) => state.user?.id)
   const removeAttachmentsByIds = useFilesStore((state) => state.removeAttachmentsByIds)
 
+  // TanStack Query hooks
   const {
     comments,
     isLoading,
-    isLoadingMore,
-    isCreating,
-    hasMore,
+    isFetchingNextPage: isLoadingMore,
+    hasNextPage: hasMore,
+    fetchNextPage,
     error,
-    fetchComments,
-    loadMore,
-    createComment,
-    updateComment,
-    deleteComment,
-    clearError,
-    handleCommentAdded,
-    handleCommentUpdated,
-    handleCommentDeleted,
-  } = useCommentsStore()
+  } = useCommentsList(taskId)
+
+  const createCommentMutation = useCreateComment(taskId)
+  const isCreating = createCommentMutation.isPending
+
+  // Local error state (for dismissible errors)
+  const [localError, setLocalError] = useState<Error | null>(null)
+  const displayError = localError || error
 
   const observerRef = useRef<IntersectionObserver | null>(null)
   const loadMoreRef = useRef<HTMLDivElement>(null)
 
-  // Fetch comments on mount or task change
-  useEffect(() => {
-    fetchComments(token, taskId)
-  }, [token, taskId, fetchComments])
-
-  // Subscribe to WebSocket events for real-time updates
+  // Subscribe to WebSocket events for real-time updates (cache invalidation)
   useEffect(() => {
     if (!taskId) return
 
@@ -86,24 +82,22 @@ export function CommentThread({
     // Join the room for this task
     wsClient.joinRoom(roomId)
 
-    // Handle comment added event - use full comment data directly
-    const onCommentAdded = (data: { task_id?: string; comment?: Comment }) => {
-      if (data.task_id === taskId && data.comment) {
-        handleCommentAdded(data.comment)
+    // Handle comment events - invalidate cache to refetch
+    const onCommentAdded = (data: { task_id?: string }) => {
+      if (data.task_id === taskId) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.comments(taskId) })
       }
     }
 
-    // Handle comment updated event - use full comment data directly
-    const onCommentUpdated = (data: { task_id?: string; comment_id?: string; comment?: Comment }) => {
-      if (data.task_id === taskId && data.comment_id && data.comment) {
-        handleCommentUpdated(data.comment_id, data.comment)
+    const onCommentUpdated = (data: { task_id?: string }) => {
+      if (data.task_id === taskId) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.comments(taskId) })
       }
     }
 
-    // Handle comment deleted event
-    const onCommentDeleted = (data: { task_id?: string; comment_id?: string; attachment_ids?: string[] }) => {
-      if (data.task_id === taskId && data.comment_id) {
-        handleCommentDeleted(data.comment_id)
+    const onCommentDeleted = (data: { task_id?: string; attachment_ids?: string[] }) => {
+      if (data.task_id === taskId) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.comments(taskId) })
         // Remove associated attachments from the task's attachment list
         if (data.attachment_ids && data.attachment_ids.length > 0) {
           removeAttachmentsByIds(data.attachment_ids)
@@ -123,7 +117,7 @@ export function CommentThread({
       wsClient.off(MessageType.COMMENT_UPDATED, onCommentUpdated)
       wsClient.off(MessageType.COMMENT_DELETED, onCommentDeleted)
     }
-  }, [taskId, handleCommentAdded, handleCommentUpdated, handleCommentDeleted, removeAttachmentsByIds])
+  }, [taskId, queryClient, removeAttachmentsByIds])
 
   // Setup infinite scroll observer
   useEffect(() => {
@@ -134,7 +128,7 @@ export function CommentThread({
     observerRef.current = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting && hasMore && !isLoadingMore) {
-          loadMore(token)
+          fetchNextPage()
         }
       },
       { threshold: 0.1 }
@@ -149,32 +143,43 @@ export function CommentThread({
         observerRef.current.disconnect()
       }
     }
-  }, [hasMore, isLoadingMore, loadMore, token])
+  }, [hasMore, isLoadingMore, fetchNextPage])
 
   // Handlers
   const handleSubmit = useCallback(
     async (content: { body_text: string; body_json?: Record<string, unknown> }, attachmentIds?: string[]) => {
-      await createComment(token, taskId, {
-        ...content,
-        attachment_ids: attachmentIds,
-      })
+      try {
+        await createCommentMutation.mutateAsync({
+          ...content,
+          attachment_ids: attachmentIds,
+        })
+      } catch (err) {
+        setLocalError(err instanceof Error ? err : new Error('Failed to create comment'))
+      }
     },
-    [token, taskId, createComment]
+    [createCommentMutation]
   )
 
+  // Note: Edit and delete are handled by CommentItem using its own hooks
   const handleEdit = useCallback(
-    async (commentId: string, bodyText: string) => {
-      await updateComment(token, commentId, { body_text: bodyText })
+    async (_commentId: string, _bodyText: string) => {
+      // This is a no-op - CommentItem handles its own editing via useUpdateComment
+      // Kept for interface compatibility
     },
-    [token, updateComment]
+    []
   )
 
   const handleDelete = useCallback(
-    async (commentId: string) => {
-      await deleteComment(token, commentId)
+    async (_commentId: string) => {
+      // This is a no-op - CommentItem handles its own deletion via useDeleteComment
+      // Kept for interface compatibility
     },
-    [token, deleteComment]
+    []
   )
+
+  const clearError = useCallback(() => {
+    setLocalError(null)
+  }, [])
 
   // Loading state - show skeleton
   if (isLoading && comments.length === 0) {
@@ -194,16 +199,16 @@ export function CommentThread({
   }
 
   // Error state
-  if (error && comments.length === 0) {
+  if (displayError && comments.length === 0) {
     return (
       <div className={cn('flex flex-col', className)}>
         <div className="flex flex-col items-center justify-center py-8 gap-2">
           <AlertCircle className="h-8 w-8 text-destructive" />
-          <p className="text-sm text-destructive">{error.message}</p>
+          <p className="text-sm text-destructive">{displayError.message}</p>
           <button
             onClick={() => {
               clearError()
-              fetchComments(token, taskId)
+              queryClient.invalidateQueries({ queryKey: queryKeys.comments(taskId) })
             }}
             className={cn(
               'text-sm text-primary underline',
@@ -264,7 +269,7 @@ export function CommentThread({
                   <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                 ) : (
                   <button
-                    onClick={() => loadMore(token)}
+                    onClick={() => fetchNextPage()}
                     className={cn(
                       'text-sm text-primary',
                       'hover:underline'
@@ -280,10 +285,10 @@ export function CommentThread({
       </div>
 
       {/* Error banner */}
-      {error && comments.length > 0 && (
+      {displayError && comments.length > 0 && (
         <div className="flex items-center gap-2 px-3 py-2 bg-destructive/10 border-t border-destructive/20">
           <AlertCircle className="h-4 w-4 text-destructive flex-shrink-0" />
-          <p className="text-xs text-destructive flex-1">{error.message}</p>
+          <p className="text-xs text-destructive flex-1">{displayError.message}</p>
           <button
             onClick={clearError}
             className="text-xs text-destructive underline"
