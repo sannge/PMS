@@ -24,7 +24,7 @@ import {
   XCircle,
   GripVertical,
 } from 'lucide-react'
-import type { Task, TaskStatus } from '@/stores/tasks-store'
+import type { Task, TaskStatusValue as TaskStatus } from '@/hooks/use-queries'
 import { TaskCard } from './task-card'
 import { SkeletonTaskCard } from '@/components/ui/skeleton'
 

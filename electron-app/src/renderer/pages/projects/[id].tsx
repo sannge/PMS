@@ -25,8 +25,8 @@ import {
   type TaskCreate,
   type TaskUpdate,
   type TaskStatus as TaskStatusObject,
+  type TaskStatusValue as TaskStatus,
 } from '@/hooks/use-queries'
-import type { TaskStatus } from '@/stores/tasks-store'
 import { useProjectMembers, type ProjectMember } from '@/hooks/use-members'
 import { ProjectForm } from '@/components/projects/project-form'
 import { KanbanBoard } from '@/components/kanban/KanbanBoard'

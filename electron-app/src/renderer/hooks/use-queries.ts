@@ -27,6 +27,19 @@ export type ApplicationRole = 'owner' | 'editor' | 'viewer'
 export type ProjectType = 'kanban' | 'scrum'
 export type ProjectDerivedStatus = 'Todo' | 'In Progress' | 'Issue' | 'Done'
 
+// Task-related types (matching backend API and old stores)
+export type TaskStatusValue = 'todo' | 'in_progress' | 'in_review' | 'issue' | 'done'
+export type TaskPriority = 'lowest' | 'low' | 'medium' | 'high' | 'highest'
+export type TaskType = 'story' | 'bug' | 'epic' | 'subtask' | 'task'
+
+export interface TaskUserInfo {
+  id: string
+  email: string
+  display_name: string | null
+  full_name: string | null
+  avatar_url: string | null
+}
+
 export interface Application {
   id: string
   name: string
@@ -89,43 +102,77 @@ export interface ProjectUpdate {
 export interface Task {
   id: string
   project_id: string
+  task_key: string
   title: string
   description: string | null
-  status_id: string
-  status_name: string
+  task_type: TaskType
+  status: TaskStatusValue
+  priority: TaskPriority
   assignee_id: string | null
   reporter_id: string | null
-  rank: string
+  assignee: TaskUserInfo | null
+  reporter: TaskUserInfo | null
+  parent_id: string | null
+  sprint_id: string | null
+  story_points: number | null
+  due_date: string | null
   created_at: string
   updated_at: string
-  due_date: string | null
-  priority: string | null
+  subtasks_count?: number
+  // Kanban board fields
+  task_status_id: string | null
+  task_rank: string | null
+  // Optimistic concurrency control
+  row_version: number
+  // Checklist aggregates (populated by API)
+  checklist_total?: number
+  checklist_done?: number
 }
 
 export interface TaskCreate {
+  project_id?: string
   title: string
   description?: string | null
-  status_id?: string
+  task_type?: TaskType
+  status?: TaskStatusValue
+  priority?: TaskPriority
   assignee_id?: string | null
-  priority?: string | null
+  reporter_id?: string | null
+  parent_id?: string | null
+  sprint_id?: string | null
+  story_points?: number | null
   due_date?: string | null
+  task_status_id?: string | null
+  task_rank?: string | null
 }
 
 export interface TaskUpdate {
   title?: string
   description?: string | null
-  status_id?: string
+  task_type?: TaskType
+  status?: TaskStatusValue
+  priority?: TaskPriority
   assignee_id?: string | null
-  priority?: string | null
+  reporter_id?: string | null
+  parent_id?: string | null
+  sprint_id?: string | null
+  story_points?: number | null
   due_date?: string | null
+  task_status_id?: string | null
+  task_rank?: string | null
+  row_version?: number
 }
 
 export interface TaskMovePayload {
   taskId: string
-  newStatusId: string
-  newRank?: string
-  targetTaskId?: string
-  position?: 'before' | 'after'
+  /** Target status name: 'todo', 'in_progress', 'in_review', 'issue', 'done' */
+  targetStatus: TaskStatusValue
+  /** Direct rank string (optional, auto-calculated if not provided) */
+  targetRank?: string
+  /** Task ID to position before (optional) */
+  beforeTaskId?: string
+  /** Task ID to position after (optional) */
+  afterTaskId?: string
 }
 
 export interface ApiError {
@@ -758,6 +805,24 @@ export function useDeleteTask(
 /**
  * Move a task (change status/position) with optimistic update.
  * Used for Kanban drag-and-drop.
+ *
+ * @example
+ * ```tsx
+ * const moveTask = useMoveTask(projectId)
+ *
+ * // Move task to new status
+ * moveTask.mutate({
+ *   taskId: 'task-123',
+ *   targetStatus: 'in_progress',
+ * })
+ *
+ * // Move task to new position within column
+ * moveTask.mutate({
+ *   taskId: 'task-123',
+ *   targetStatus: 'todo',
+ *   beforeTaskId: 'task-456', // position before this task
+ * })
+ * ```
  */
 export function useMoveTask(
   projectId: string
@@ -766,19 +831,28 @@ export function useMoveTask(
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ taskId, newStatusId, newRank, targetTaskId, position }: TaskMovePayload) => {
+    mutationFn: async ({ taskId, targetStatus, targetRank, beforeTaskId, afterTaskId }: TaskMovePayload) => {
       if (!window.electronAPI) {
         throw new Error('Electron API not available')
       }
 
-      const response = await window.electronAPI.patch<Task>(
+      // Build request body matching backend API
+      const body: Record<string, unknown> = {
+        target_status: targetStatus,
+      }
+      if (targetRank !== undefined) {
+        body.target_rank = targetRank
+      }
+      if (beforeTaskId !== undefined) {
+        body.before_task_id = beforeTaskId
+      }
+      if (afterTaskId !== undefined) {
+        body.after_task_id = afterTaskId
+      }
+
+      const response = await window.electronAPI.put<Task>(
         `/api/tasks/${taskId}/move`,
-        {
-          status_id: newStatusId,
-          rank: newRank,
-          target_task_id: targetTaskId,
-          position,
-        },
+        body,
         getAuthHeaders(token)
       )
 
@@ -789,14 +863,14 @@ export function useMoveTask(
       return response.data
     },
     // Optimistic update for instant drag-drop feedback
-    onMutate: async ({ taskId, newStatusId }) => {
+    onMutate: async ({ taskId, targetStatus }) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.tasks(projectId) })
 
       const previous = queryClient.getQueryData<Task[]>(queryKeys.tasks(projectId))
 
       // Optimistically update task status
       queryClient.setQueryData<Task[]>(queryKeys.tasks(projectId), (old) =>
-        old?.map((t) => (t.id === taskId ? { ...t, status_id: newStatusId } : t))
+        old?.map((t) => (t.id === taskId ? { ...t, status: targetStatus } : t))
       )
 
       return { previous }

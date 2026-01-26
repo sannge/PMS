@@ -24,12 +24,7 @@ import {
 } from '@dnd-kit/core'
 import { cn } from '@/lib/utils'
 import { useAuthStore, getAuthHeaders } from '@/stores/auth-store'
-import {
-  useTasksStore,
-  type Task,
-  type TaskStatus,
-  type TaskMove,
-} from '@/stores/tasks-store'
+import { useMoveTask, type Task, type TaskStatusValue as TaskStatus } from '@/hooks/use-queries'
 import {
   LayoutGrid,
   Plus,
@@ -156,8 +151,9 @@ export function KanbanBoard({
   // Auth
   const token = useAuthStore((state) => state.token)
 
-  // Store actions
-  const { moveTask, isMoving, error: moveError } = useTasksStore()
+  // Task move mutation
+  const moveTaskMutation = useMoveTask(projectId)
+  const isMoving = moveTaskMutation.isPending
 
   // WebSocket status
   const { status } = useWebSocket()
@@ -198,41 +194,31 @@ export function KanbanBoard({
         onTaskStatusChange(task, targetStatus)
       }
 
-      // Build move data (don't include row_version to avoid 409 conflicts)
-      // For drag-drop operations, last-write-wins is acceptable
-      const moveData: TaskMove = {
-        target_status: targetStatus,
-      }
+      try {
+        // Make API call using TanStack Query mutation
+        const result = await moveTaskMutation.mutateAsync({
+          taskId,
+          targetStatus,
+          beforeTaskId: beforeTaskId || undefined,
+          afterTaskId: afterTaskId || undefined,
+        })
 
-      // Add positioning info if reordering within column
-      if (beforeTaskId) {
-        moveData.before_task_id = beforeTaskId
-      }
-      if (afterTaskId) {
-        moveData.after_task_id = afterTaskId
-      }
+        // Update local state with the returned task (includes new row_version)
+        setTasks((prevTasks) =>
+          prevTasks.map((t) => (t.id === taskId ? result : t))
+        )
 
-      // Make API call
-      const result = await moveTask(token, taskId, moveData)
-
-      if (!result) {
+        return true
+      } catch (err) {
         // Revert on failure and show error notice
         setTasks(originalTasks)
-        // Get the actual error message from the store, fallback to generic message
-        const errorMessage = useTasksStore.getState().error?.message || 'Failed to move task'
+        const errorMessage = err instanceof Error ? err.message : 'Failed to move task'
         setRealtimeNotice(errorMessage)
-        setTimeout(() => setRealtimeNotice(null), 5000)  // Show longer for important errors
+        setTimeout(() => setRealtimeNotice(null), 5000)
         return false
       }
-
-      // Update local state with the returned task (includes new row_version)
-      setTasks((prevTasks) =>
-        prevTasks.map((t) => (t.id === taskId ? result : t))
-      )
-
-      return true
     },
-    [token, moveTask, onTaskStatusChange]
+    [moveTaskMutation, onTaskStatusChange]
   )
 
   // ============================================================================

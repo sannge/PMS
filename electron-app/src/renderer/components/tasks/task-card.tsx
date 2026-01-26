@@ -30,7 +30,7 @@ import {
   CheckSquare,
   History,
 } from 'lucide-react'
-import type { Task, TaskType, TaskPriority, TaskStatus } from '@/stores/tasks-store'
+import type { Task, TaskType, TaskPriority, TaskStatusValue as TaskStatus } from '@/hooks/use-queries'
 import { TaskViewerDots } from './TaskViewerDots'
 import type { TaskViewer } from '@/hooks/use-task-viewers'
 

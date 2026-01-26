@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils'
 import { Plus, Circle, Timer, Eye, CheckCircle2, XCircle } from 'lucide-react'
 import { DraggableTaskCard } from './DraggableTaskCard'
 import { SkeletonTaskCard } from '@/components/ui/skeleton'
-import type { Task, TaskStatus } from '@/stores/tasks-store'
+import type { Task, TaskStatusValue as TaskStatus } from '@/hooks/use-queries'
 import { createSortableId } from '@/hooks/use-drag-and-drop'
 
 // ============================================================================

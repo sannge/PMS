@@ -8,12 +8,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { useAuthStore, getAuthHeaders } from '@/stores/auth-store'
-import {
-  useTasksStore,
-  type Task,
-  type TaskStatus,
-  type TaskMove,
-} from '@/stores/tasks-store'
+import { useMoveTask, type Task, type TaskStatusValue as TaskStatus } from '@/hooks/use-queries'
 import {
   DndContext,
   DragOverlay,
@@ -312,8 +307,9 @@ export function TaskKanbanBoard({
   // Auth
   const token = useAuthStore((state) => state.token)
 
-  // Store actions
-  const { moveTask, isMoving } = useTasksStore()
+  // Task move mutation
+  const moveTaskMutation = useMoveTask(projectId)
+  const isMoving = moveTaskMutation.isPending
 
   // WebSocket status
   const { status } = useWebSocket()
@@ -477,15 +473,13 @@ export function TaskKanbanBoard({
         onTaskStatusChange(task, targetStatus)
       }
 
-      // API call
-      const moveData: TaskMove = {
-        target_status: targetStatus,
-        row_version: task.row_version,
-      }
-
-      const result = await moveTask(token, taskId, moveData)
-
-      if (!result) {
+      try {
+        // API call using TanStack Query mutation
+        await moveTaskMutation.mutateAsync({
+          taskId,
+          targetStatus,
+        })
+      } catch {
         // Revert on failure
         setTasks((currentTasks) =>
           currentTasks.map((t) =>
@@ -494,7 +488,7 @@ export function TaskKanbanBoard({
         )
       }
     },
-    [tasks, token, moveTask, onTaskStatusChange]
+    [tasks, moveTaskMutation, onTaskStatusChange]
   )
 
   // Error state

@@ -32,7 +32,7 @@ import {
   TouchSensor,
 } from '@dnd-kit/core'
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable'
-import type { Task, TaskStatus } from '@/stores/tasks-store'
+import type { Task, TaskStatusValue as TaskStatus } from '@/hooks/use-queries'
 
 // ============================================================================
 // Types

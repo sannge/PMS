@@ -44,7 +44,7 @@ import {
   Wifi,
   WifiOff,
 } from 'lucide-react'
-import type { Task, TaskStatus, TaskUpdate, TaskPriority, TaskType } from '@/stores/tasks-store'
+import type { Task, TaskStatusValue as TaskStatus, TaskUpdate, TaskPriority, TaskType } from '@/hooks/use-queries'
 import { useProjectMembersStore } from '@/stores/project-members-store'
 import { useMembersStore } from '@/stores/members-store'
 import { useAuthStore } from '@/stores/auth-store'

@@ -33,9 +33,9 @@ import type {
   TaskCreate,
   TaskUpdate,
   TaskType,
-  TaskStatus,
+  TaskStatusValue as TaskStatus,
   TaskPriority,
-} from '@/stores/tasks-store'
+} from '@/hooks/use-queries'
 import { getStatusOptions } from './task-status-badge'
 
 // ============================================================================

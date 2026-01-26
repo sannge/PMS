@@ -21,7 +21,7 @@ import {
   XCircle,
   ChevronDown,
 } from 'lucide-react'
-import type { TaskStatus } from '@/stores/tasks-store'
+import type { TaskStatusValue as TaskStatus } from '@/hooks/use-queries'
 
 // ============================================================================
 // Types
