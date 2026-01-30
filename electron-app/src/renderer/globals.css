@@ -60,7 +60,7 @@
     /* Border & Input */
     --border: 40 10% 90%;
     --input: 40 10% 90%;
-    --ring: 35 100% 50%;
+    --ring: 220 70% 50%;
 
     /* Sidebar specific */
     --sidebar: 240 6% 12%;
@@ -127,7 +127,7 @@
     /* Border & Input */
     --border: 240 6% 18%;
     --input: 240 6% 18%;
-    --ring: 35 95% 55%;
+    --ring: 220 70% 55%;
 
     /* Sidebar */
     --sidebar: 240 10% 8%;
@@ -433,4 +433,119 @@
 @keyframes spin-slow {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+/* ============================================================================
+   TipTap Rich Text Editor Styles
+   ============================================================================ */
+
+/* Table resize handle cursor */
+.ProseMirror .tableWrapper {
+  @apply relative overflow-x-auto my-4;
+}
+
+.ProseMirror table {
+  @apply border-collapse w-full;
+}
+
+.ProseMirror th,
+.ProseMirror td {
+  @apply border border-border p-2 relative;
+  min-width: 50px;
+}
+
+.ProseMirror th {
+  @apply bg-muted font-semibold;
+}
+
+/* Table column resize handle */
+.ProseMirror .column-resize-handle {
+  @apply absolute -right-0.5 top-0 bottom-0 w-1 bg-primary/50 cursor-col-resize z-20;
+}
+
+/* Selected table cell */
+.ProseMirror .selectedCell {
+  @apply bg-primary/10;
+}
+
+.ProseMirror .selectedCell::after {
+  content: "";
+  @apply absolute inset-0 pointer-events-none border-2 border-primary/30;
+}
+
+/* Table resize cursor when hovering between columns */
+.ProseMirror.resize-cursor {
+  cursor: col-resize;
+}
+
+/* Image styles */
+.ProseMirror img {
+  @apply max-w-full h-auto rounded-md my-4;
+}
+
+.ProseMirror img.ProseMirror-selectednode {
+  @apply ring-2 ring-primary/50;
+}
+
+/* Placeholder style */
+.ProseMirror p.is-editor-empty:first-child::before {
+  @apply text-muted-foreground pointer-events-none float-left h-0;
+  content: attr(data-placeholder);
+}
+
+/* Link styles in editor */
+.ProseMirror a {
+  @apply text-primary underline cursor-pointer;
+}
+
+/* Code block styles */
+.ProseMirror pre {
+  @apply bg-muted rounded-md p-4 my-4 overflow-x-auto;
+}
+
+.ProseMirror code {
+  @apply bg-muted px-1.5 py-0.5 rounded text-sm font-mono;
+}
+
+.ProseMirror pre code {
+  @apply bg-transparent p-0;
+}
+
+/* List styles */
+.ProseMirror ul {
+  @apply list-disc pl-6 my-2;
+}
+
+.ProseMirror ol {
+  @apply list-decimal pl-6 my-2;
+}
+
+.ProseMirror li {
+  @apply my-1;
+}
+
+/* Blockquote */
+.ProseMirror blockquote {
+  @apply border-l-4 border-border pl-4 my-4 italic text-muted-foreground;
+}
+
+/* Horizontal rule */
+.ProseMirror hr {
+  @apply border-t border-border my-6;
+}
+
+/* Selection: preserve text color and highlight while selected */
+.ProseMirror ::selection {
+  background: rgba(59, 130, 246, 0.18);
+  color: inherit;
+}
+
+.ProseMirror mark ::selection {
+  background: rgba(59, 130, 246, 0.25);
+  color: inherit;
+}
+
+/* Focus state */
+.ProseMirror:focus {
+  @apply outline-none;
 }

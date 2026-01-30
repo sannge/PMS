@@ -5,19 +5,32 @@
  * - Optimistic mark-as-read updates
  * - Unread count polling
  * - Automatic refetch on window focus
+ * - Browser notification alerts
+ * - IndexedDB persistence for offline access
  *
  * @see https://tanstack.com/query/latest
  */
 
+import { useCallback, useMemo } from 'react'
 import {
   useQuery,
+  useInfiniteQuery,
   useMutation,
   useQueryClient,
   UseQueryResult,
+  UseInfiniteQueryResult,
   UseMutationResult,
+  InfiniteData,
 } from '@tanstack/react-query'
 import { useAuthStore } from '@/stores/auth-store'
 import { queryKeys } from '@/lib/query-client'
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+const NOTIFICATION_SOUND_URL = '/notification.mp3'
+const NOTIFICATIONS_PAGE_SIZE = 20
 
 // ============================================================================
 // Types
@@ -37,19 +50,48 @@ export type NotificationType =
   | 'invitation_received'
   | 'invitation_accepted'
   | 'invitation_rejected'
+  | 'application_invite'  // Backend notification type for app invitations
 
+// Raw notification from API (matches backend schema)
+interface NotificationApiResponse {
+  id: string
+  user_id: string
+  type: NotificationType
+  title: string
+  message: string | null
+  is_read: boolean
+  entity_type: string | null
+  entity_id: string | null
+  entity_status: string | null
+  created_at: string
+}
+
+// Notification with aliases for frontend compatibility
 export interface Notification {
   id: string
   user_id: string
-  notification_type: NotificationType
+  type: NotificationType
   title: string
-  body: string | null
+  message: string | null
   is_read: boolean
-  data: Record<string, unknown> | null
+  entity_type: string | null
+  entity_id: string | null
+  entity_status: string | null
   created_at: string
-  read_at: string | null
+  // Aliases for frontend components using old field names
+  notification_type: NotificationType
+  body: string | null
+  data: Record<string, unknown> | null
 }
 
+// Single page of notifications
+export interface NotificationPage {
+  items: Notification[]
+  nextCursor: number | null  // skip value for next page, null if no more
+  hasMore: boolean
+}
+
+// Flattened view for components (data only, no functions)
 export interface NotificationListResponse {
   items: Notification[]
   total: number
@@ -92,25 +134,38 @@ function parseApiError(status: number, data: unknown): ApiError {
 }
 
 // ============================================================================
+// Helper: Transform API response to Notification
+// ============================================================================
+
+function transformNotification(n: NotificationApiResponse): Notification {
+  return {
+    ...n,
+    notification_type: n.type,  // Alias for components using old field name
+    body: n.message,            // Alias for components using old field name
+    data: n.entity_id ? { invitation_id: n.entity_id, status: n.entity_status } : null,
+  }
+}
+
+// ============================================================================
 // Notification Queries
 // ============================================================================
 
 /**
- * Fetch notifications for the current user.
- * Uses 1 min stale time and 30 sec refetch interval for near real-time updates.
+ * Fetch notifications with infinite scroll pagination.
+ * Loads 20 notifications per page, persisted to IndexedDB automatically.
  */
-export function useNotifications(): UseQueryResult<NotificationListResponse, Error> {
+export function useNotificationsInfinite(): UseInfiniteQueryResult<InfiniteData<NotificationPage>, Error> {
   const token = useAuthStore((s) => s.token)
 
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: queryKeys.notifications,
-    queryFn: async () => {
+    queryFn: async ({ pageParam = 0 }) => {
       if (!window.electronAPI) {
         throw new Error('Electron API not available')
       }
 
-      const response = await window.electronAPI.get<NotificationListResponse>(
-        '/api/notifications',
+      const response = await window.electronAPI.get<NotificationApiResponse[]>(
+        `/api/notifications?skip=${pageParam}&limit=${NOTIFICATIONS_PAGE_SIZE}`,
         getAuthHeaders(token)
       )
 
@@ -118,19 +173,71 @@ export function useNotifications(): UseQueryResult<NotificationListResponse, Err
         throw new Error(parseApiError(response.status, response.data).message)
       }
 
-      return (
-        response.data || {
-          items: [],
-          total: 0,
-          unread_count: 0,
-        }
-      )
+      const rawItems = Array.isArray(response.data) ? response.data : []
+      const items = rawItems.map(transformNotification)
+      const hasMore = items.length === NOTIFICATIONS_PAGE_SIZE
+
+      return {
+        items,
+        nextCursor: hasMore ? pageParam + NOTIFICATIONS_PAGE_SIZE : null,
+        hasMore,
+      }
     },
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
     enabled: !!token,
-    staleTime: 60 * 1000, // 1 minute
+    staleTime: 60 * 1000,
     gcTime: 24 * 60 * 60 * 1000,
-    refetchInterval: 60 * 1000, // Poll every minute as backup to WebSocket
   })
+}
+
+/**
+ * Convenience hook that flattens infinite query pages into a single list.
+ * Memoized to prevent unnecessary recomputation on every render.
+ */
+export function useNotifications(): {
+  data: NotificationListResponse | undefined
+  isLoading: boolean
+  isError: boolean
+  error: Error | null
+  refetch: () => void
+  fetchNextPage: () => void
+  hasNextPage: boolean
+  isFetchingNextPage: boolean
+} {
+  const infiniteQuery = useNotificationsInfinite()
+
+  // Memoize the expensive data computation in a single pass (O(n) instead of O(2n))
+  const data = useMemo((): NotificationListResponse | undefined => {
+    if (!infiniteQuery.data) return undefined
+
+    const items: Notification[] = []
+    let unreadCount = 0
+
+    for (const page of infiniteQuery.data.pages) {
+      for (const item of page.items) {
+        items.push(item)
+        if (!item.is_read) unreadCount++
+      }
+    }
+
+    return {
+      items,
+      total: items.length,
+      unread_count: unreadCount,
+    }
+  }, [infiniteQuery.data])
+
+  return {
+    data,
+    isLoading: infiniteQuery.isLoading,
+    isError: infiniteQuery.isError,
+    error: infiniteQuery.error,
+    refetch: infiniteQuery.refetch,
+    fetchNextPage: infiniteQuery.fetchNextPage,
+    hasNextPage: infiniteQuery.hasNextPage ?? false,
+    isFetchingNextPage: infiniteQuery.isFetchingNextPage,
+  }
 }
 
 /**
@@ -147,8 +254,8 @@ export function useUnreadCount(): UseQueryResult<number, Error> {
         throw new Error('Electron API not available')
       }
 
-      const response = await window.electronAPI.get<{ unread_count: number }>(
-        '/api/notifications/unread-count',
+      const response = await window.electronAPI.get<{ total: number; unread: number }>(
+        '/api/notifications/count',
         getAuthHeaders(token)
       )
 
@@ -156,7 +263,7 @@ export function useUnreadCount(): UseQueryResult<number, Error> {
         throw new Error(parseApiError(response.status, response.data).message)
       }
 
-      return response.data?.unread_count || 0
+      return response.data?.unread || 0
     },
     enabled: !!token,
     staleTime: 30 * 1000, // 30 seconds
@@ -166,17 +273,19 @@ export function useUnreadCount(): UseQueryResult<number, Error> {
 }
 
 // ============================================================================
-// Notification Mutations
+// Notification Mutations (with infinite query optimistic updates)
 // ============================================================================
 
+type InfiniteNotificationData = InfiniteData<NotificationPage>
+
 /**
- * Mark a notification as read with optimistic update.
+ * Mark a notification as read with optimistic update across pages.
  */
 export function useMarkAsRead(): UseMutationResult<
   void,
   Error,
   string,
-  { previousNotifications?: NotificationListResponse; previousCount?: number }
+  { previousData?: InfiniteNotificationData; previousCount?: number }
 > {
   const token = useAuthStore((s) => s.token)
   const queryClient = useQueryClient()
@@ -187,9 +296,9 @@ export function useMarkAsRead(): UseMutationResult<
         throw new Error('Electron API not available')
       }
 
-      const response = await window.electronAPI.post<void>(
-        `/api/notifications/${notificationId}/read`,
-        {},
+      const response = await window.electronAPI.put<void>(
+        `/api/notifications/${notificationId}`,
+        { is_read: true },
         getAuthHeaders(token)
       )
 
@@ -197,61 +306,72 @@ export function useMarkAsRead(): UseMutationResult<
         throw new Error(parseApiError(response.status, response.data).message)
       }
     },
-    // Optimistic update
     onMutate: async (notificationId) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.notifications })
       await queryClient.cancelQueries({ queryKey: queryKeys.unreadCount })
 
-      const previousNotifications = queryClient.getQueryData<NotificationListResponse>(
-        queryKeys.notifications
-      )
+      const previousData = queryClient.getQueryData<InfiniteNotificationData>(queryKeys.notifications)
       const previousCount = queryClient.getQueryData<number>(queryKeys.unreadCount)
 
-      // Optimistically update notification
-      queryClient.setQueryData<NotificationListResponse>(queryKeys.notifications, (old) => {
+      // Check if notification was unread before updating (early return on find)
+      let wasUnread = false
+      if (previousData) {
+        outer: for (const page of previousData.pages) {
+          for (const item of page.items) {
+            if (item.id === notificationId) {
+              wasUnread = !item.is_read
+              break outer
+            }
+          }
+        }
+      }
+
+      // Optimistically update across all pages
+      queryClient.setQueryData<InfiniteNotificationData>(queryKeys.notifications, (old) => {
         if (!old) return old
-        const wasUnread = old.items.find((n) => n.id === notificationId && !n.is_read)
         return {
           ...old,
-          items: old.items.map((n) =>
-            n.id === notificationId
-              ? { ...n, is_read: true, read_at: new Date().toISOString() }
-              : n
-          ),
-          unread_count: wasUnread ? Math.max(0, old.unread_count - 1) : old.unread_count,
+          pages: old.pages.map((page) => ({
+            ...page,
+            items: page.items.map((n) =>
+              n.id === notificationId ? { ...n, is_read: true } : n
+            ),
+          })),
         }
       })
 
-      // Optimistically update count
-      queryClient.setQueryData<number>(queryKeys.unreadCount, (old) =>
-        Math.max(0, (old || 0) - 1)
-      )
+      // Optimistically update count if it was unread
+      if (wasUnread) {
+        queryClient.setQueryData<number>(queryKeys.unreadCount, (old) =>
+          Math.max(0, (old || 0) - 1)
+        )
+      }
 
-      return { previousNotifications, previousCount }
+      return { previousData, previousCount }
     },
     onError: (_err, _vars, context) => {
-      if (context?.previousNotifications) {
-        queryClient.setQueryData(queryKeys.notifications, context.previousNotifications)
+      if (context?.previousData) {
+        queryClient.setQueryData(queryKeys.notifications, context.previousData)
       }
       if (context?.previousCount !== undefined) {
         queryClient.setQueryData(queryKeys.unreadCount, context.previousCount)
       }
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.notifications })
+      // Only invalidate unread count, not full list (optimistic update is sufficient)
       queryClient.invalidateQueries({ queryKey: queryKeys.unreadCount })
     },
   })
 }
 
 /**
- * Mark all notifications as read.
+ * Mark all notifications as read across all pages.
  */
 export function useMarkAllAsRead(): UseMutationResult<
   void,
   Error,
   void,
-  { previousNotifications?: NotificationListResponse; previousCount?: number }
+  { previousData?: InfiniteNotificationData; previousCount?: number }
 > {
   const token = useAuthStore((s) => s.token)
   const queryClient = useQueryClient()
@@ -263,7 +383,7 @@ export function useMarkAllAsRead(): UseMutationResult<
       }
 
       const response = await window.electronAPI.post<void>(
-        '/api/notifications/read-all',
+        '/api/notifications/mark-all-read',
         {},
         getAuthHeaders(token)
       )
@@ -272,54 +392,51 @@ export function useMarkAllAsRead(): UseMutationResult<
         throw new Error(parseApiError(response.status, response.data).message)
       }
     },
-    // Optimistic update
     onMutate: async () => {
       await queryClient.cancelQueries({ queryKey: queryKeys.notifications })
       await queryClient.cancelQueries({ queryKey: queryKeys.unreadCount })
 
-      const previousNotifications = queryClient.getQueryData<NotificationListResponse>(
-        queryKeys.notifications
-      )
+      const previousData = queryClient.getQueryData<InfiniteNotificationData>(queryKeys.notifications)
       const previousCount = queryClient.getQueryData<number>(queryKeys.unreadCount)
 
-      // Mark all as read
-      queryClient.setQueryData<NotificationListResponse>(queryKeys.notifications, (old) => {
+      // Mark all as read across all pages
+      queryClient.setQueryData<InfiniteNotificationData>(queryKeys.notifications, (old) => {
         if (!old) return old
-        const now = new Date().toISOString()
         return {
           ...old,
-          items: old.items.map((n) => ({ ...n, is_read: true, read_at: n.read_at || now })),
-          unread_count: 0,
+          pages: old.pages.map((page) => ({
+            ...page,
+            items: page.items.map((n) => ({ ...n, is_read: true })),
+          })),
         }
       })
 
       queryClient.setQueryData<number>(queryKeys.unreadCount, 0)
 
-      return { previousNotifications, previousCount }
+      return { previousData, previousCount }
     },
     onError: (_err, _vars, context) => {
-      if (context?.previousNotifications) {
-        queryClient.setQueryData(queryKeys.notifications, context.previousNotifications)
+      if (context?.previousData) {
+        queryClient.setQueryData(queryKeys.notifications, context.previousData)
       }
       if (context?.previousCount !== undefined) {
         queryClient.setQueryData(queryKeys.unreadCount, context.previousCount)
       }
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.notifications })
       queryClient.invalidateQueries({ queryKey: queryKeys.unreadCount })
     },
   })
 }
 
 /**
- * Delete a notification.
+ * Delete a notification from any page.
  */
 export function useDeleteNotification(): UseMutationResult<
   void,
   Error,
   string,
-  { previousNotifications?: NotificationListResponse }
+  { previousData?: InfiniteNotificationData; previousCount?: number }
 > {
   const token = useAuthStore((s) => s.token)
   const queryClient = useQueryClient()
@@ -339,31 +456,110 @@ export function useDeleteNotification(): UseMutationResult<
         throw new Error(parseApiError(response.status, response.data).message)
       }
     },
-    // Optimistic delete
     onMutate: async (notificationId) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.notifications })
+      await queryClient.cancelQueries({ queryKey: queryKeys.unreadCount })
 
-      const previousNotifications = queryClient.getQueryData<NotificationListResponse>(
-        queryKeys.notifications
-      )
+      const previousData = queryClient.getQueryData<InfiniteNotificationData>(queryKeys.notifications)
+      const previousCount = queryClient.getQueryData<number>(queryKeys.unreadCount)
 
-      queryClient.setQueryData<NotificationListResponse>(queryKeys.notifications, (old) => {
+      // Find if notification was unread before removing (early return on find)
+      let wasUnread = false
+      if (previousData) {
+        outer: for (const page of previousData.pages) {
+          for (const item of page.items) {
+            if (item.id === notificationId) {
+              wasUnread = !item.is_read
+              break outer
+            }
+          }
+        }
+      }
+
+      // Remove from pages
+      queryClient.setQueryData<InfiniteNotificationData>(queryKeys.notifications, (old) => {
         if (!old) return old
-        const removed = old.items.find((n) => n.id === notificationId)
-        const wasUnread = removed && !removed.is_read
         return {
           ...old,
-          items: old.items.filter((n) => n.id !== notificationId),
-          total: old.total - 1,
-          unread_count: wasUnread ? Math.max(0, old.unread_count - 1) : old.unread_count,
+          pages: old.pages.map((page) => ({
+            ...page,
+            items: page.items.filter((n) => n.id !== notificationId),
+          })),
         }
       })
 
-      return { previousNotifications }
+      // Update count if was unread
+      if (wasUnread) {
+        queryClient.setQueryData<number>(queryKeys.unreadCount, (old) =>
+          Math.max(0, (old || 0) - 1)
+        )
+      }
+
+      return { previousData, previousCount }
     },
     onError: (_err, _vars, context) => {
-      if (context?.previousNotifications) {
-        queryClient.setQueryData(queryKeys.notifications, context.previousNotifications)
+      if (context?.previousData) {
+        queryClient.setQueryData(queryKeys.notifications, context.previousData)
+      }
+      if (context?.previousCount !== undefined) {
+        queryClient.setQueryData(queryKeys.unreadCount, context.previousCount)
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.unreadCount })
+    },
+  })
+}
+
+/**
+ * Clear all notifications (resets infinite query).
+ */
+export function useClearAllNotifications(): UseMutationResult<
+  void,
+  Error,
+  void,
+  { previousData?: InfiniteNotificationData; previousCount?: number }
+> {
+  const token = useAuthStore((s) => s.token)
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async () => {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      const response = await window.electronAPI.delete<void>(
+        '/api/notifications',
+        getAuthHeaders(token)
+      )
+
+      if (response.status !== 204 && response.status !== 200) {
+        throw new Error(parseApiError(response.status, response.data).message)
+      }
+    },
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.notifications })
+      await queryClient.cancelQueries({ queryKey: queryKeys.unreadCount })
+
+      const previousData = queryClient.getQueryData<InfiniteNotificationData>(queryKeys.notifications)
+      const previousCount = queryClient.getQueryData<number>(queryKeys.unreadCount)
+
+      // Clear all pages
+      queryClient.setQueryData<InfiniteNotificationData>(queryKeys.notifications, {
+        pages: [{ items: [], nextCursor: null, hasMore: false }],
+        pageParams: [0],
+      })
+      queryClient.setQueryData<number>(queryKeys.unreadCount, 0)
+
+      return { previousData, previousCount }
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previousData) {
+        queryClient.setQueryData(queryKeys.notifications, context.previousData)
+      }
+      if (context?.previousCount !== undefined) {
+        queryClient.setQueryData(queryKeys.unreadCount, context.previousCount)
       }
     },
     onSettled: () => {
@@ -371,4 +567,104 @@ export function useDeleteNotification(): UseMutationResult<
       queryClient.invalidateQueries({ queryKey: queryKeys.unreadCount })
     },
   })
+}
+
+// ============================================================================
+// Desktop Notification Helpers
+// ============================================================================
+
+/**
+ * Play notification sound
+ */
+function playNotificationSound(): void {
+  try {
+    const audio = new Audio(NOTIFICATION_SOUND_URL)
+    audio.volume = 0.5
+    audio.play().catch(() => {
+      // Ignore errors (user hasn't interacted with page yet)
+    })
+  } catch {
+    // Ignore audio errors
+  }
+}
+
+/**
+ * Show desktop notification using Electron's native notification system
+ */
+function showDesktopNotification(title: string, message: string): void {
+  if (!title || !message) return
+
+  // Use Electron's notification API via preload
+  if (window.electronAPI?.showNotification) {
+    window.electronAPI.showNotification({
+      title,
+      body: message,
+      type: 'info',
+    }).catch(() => {
+      // Ignore notification errors
+    })
+  }
+}
+
+/**
+ * Request notification permission (no-op in Electron)
+ */
+export function requestNotificationPermission(): void {
+  // Electron notifications don't require permission prompts
+}
+
+/**
+ * Hook to add a real-time notification (from WebSocket).
+ * Handles both raw API format and transformed format.
+ * Prepends to first page and shows browser notification.
+ */
+export function useAddNotification(): (rawNotification: NotificationApiResponse | Notification) => void {
+  const queryClient = useQueryClient()
+
+  return useCallback(
+    (rawNotification: NotificationApiResponse | Notification) => {
+      // Transform if needed (WebSocket might send raw API format)
+      const notification: Notification = 'notification_type' in rawNotification
+        ? rawNotification as Notification
+        : transformNotification(rawNotification as NotificationApiResponse)
+
+      // Play sound and show browser notification
+      playNotificationSound()
+      showDesktopNotification(notification.title, notification.body || notification.message || '')
+
+      // Prepend to first page of infinite query
+      queryClient.setQueryData<InfiniteNotificationData>(queryKeys.notifications, (old) => {
+        if (!old || old.pages.length === 0) {
+          return {
+            pages: [{ items: [notification], nextCursor: null, hasMore: false }],
+            pageParams: [0],
+          }
+        }
+
+        // Check for duplicates across all pages (early return on find)
+        for (const page of old.pages) {
+          for (const item of page.items) {
+            if (item.id === notification.id) {
+              return old // Duplicate found, no change
+            }
+          }
+        }
+
+        // Prepend to first page
+        return {
+          ...old,
+          pages: [
+            { ...old.pages[0], items: [notification, ...old.pages[0].items] },
+            ...old.pages.slice(1),
+          ],
+        }
+      })
+
+      // Increment unread count
+      if (!notification.is_read) {
+        queryClient.setQueryData<number>(queryKeys.unreadCount, (old) => (old || 0) + 1)
+      }
+    },
+    [queryClient]
+  )
 }

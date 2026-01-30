@@ -14,7 +14,8 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { cn } from '@/lib/utils'
 import { Send, Loader2, AtSign, Paperclip, X, FileText, FileImage, File } from 'lucide-react'
-import { useFilesStore, formatFileSize } from '@/stores/files-store'
+import { useUploadFile } from '@/hooks/use-attachments'
+import { formatFileSize } from '@/lib/file-utils'
 
 // ============================================================================
 // Types
@@ -34,8 +35,16 @@ interface PendingAttachment {
   previewUrl?: string
 }
 
+/** Uploaded attachment info for optimistic updates */
+export interface UploadedAttachment {
+  id: string
+  file_name: string
+  file_type: string | null
+  file_size: number | null
+}
+
 export interface CommentInputProps {
-  onSubmit: (content: { body_text: string; body_json?: Record<string, unknown> }, attachmentIds?: string[]) => void | Promise<void>
+  onSubmit: (content: { body_text: string; body_json?: Record<string, unknown> }, attachments?: UploadedAttachment[]) => void | Promise<void>
   placeholder?: string
   disabled?: boolean
   isSubmitting?: boolean
@@ -165,8 +174,10 @@ export function CommentInput({
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mentionStartRef = useRef<number | null>(null)
   const lastTypingRef = useRef<number>(0)
+  const pendingAttachmentsRef = useRef<PendingAttachment[]>(pendingAttachments)
+  const handleSubmitRef = useRef<() => Promise<void>>(() => Promise.resolve())
 
-  const { uploadFile } = useFilesStore()
+  const uploadMutation = useUploadFile()
 
   // Auto-resize textarea
   useEffect(() => {
@@ -176,6 +187,11 @@ export function CommentInput({
       textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`
     }
   }, [text])
+
+  // Keep ref in sync for cleanup access
+  useEffect(() => {
+    pendingAttachmentsRef.current = pendingAttachments
+  }, [pendingAttachments])
 
   // Handle text change and mention detection
   const handleTextChange = useCallback(
@@ -303,7 +319,7 @@ export function CommentInput({
       // Submit on Ctrl+Enter or Cmd+Enter
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault()
-        handleSubmit()
+        handleSubmitRef.current()
       }
     },
     [showMentions, mentionSuggestions, selectedMentionIndex, insertMention]
@@ -358,13 +374,13 @@ export function CommentInput({
   // Cleanup preview URLs on unmount
   useEffect(() => {
     return () => {
-      pendingAttachments.forEach((a) => {
+      pendingAttachmentsRef.current.forEach((a) => {
         if (a.previewUrl) {
           URL.revokeObjectURL(a.previewUrl)
         }
       })
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])
 
   // Build TipTap JSON from text and mentions
   const buildTipTapJson = useCallback(
@@ -457,7 +473,7 @@ export function CommentInput({
     // after the comment is created. Since comment_id isn't known yet, we first create
     // the comment, then the parent will update attachments with the comment_id.
     // For now, we upload files with just task_id and let the backend handle association later.
-    let uploadedAttachmentIds: string[] = []
+    let uploadedAttachments: UploadedAttachment[] = []
 
     if (pendingAttachments.length > 0) {
       setIsUploading(true)
@@ -465,16 +481,24 @@ export function CommentInput({
         const uploadPromises = pendingAttachments.map(async (pa) => {
           // Upload with entity_type='comment' - the backend will create unlinked attachments
           // that will be linked when comment is created
-          const result = await uploadFile({
+          const result = await uploadMutation.mutateAsync({
             file: pa.file,
             entityType: 'task', // Attach to task for now, will be linked to comment
             entityId: taskId,
           })
-          return result?.id
+          if (result?.id) {
+            return {
+              id: result.id,
+              file_name: result.file_name || pa.file.name,
+              file_type: result.file_type || pa.file.type || null,
+              file_size: result.file_size ?? pa.file.size ?? null,
+            }
+          }
+          return null
         })
 
         const results = await Promise.all(uploadPromises)
-        uploadedAttachmentIds = results.filter((id): id is string => !!id)
+        uploadedAttachments = results.filter((a): a is UploadedAttachment => a !== null)
       } catch (error) {
         console.error('Failed to upload attachments:', error)
       } finally {
@@ -492,7 +516,7 @@ export function CommentInput({
     // Submit comment and wait for it to complete before clearing state
     // This prevents the visual glitch where the input clears before the comment appears
     try {
-      await onSubmit(submitData, uploadedAttachmentIds.length > 0 ? uploadedAttachmentIds : undefined)
+      await onSubmit(submitData, uploadedAttachments.length > 0 ? uploadedAttachments : undefined)
     } finally {
       // Always clear state after submit completes (success or error)
       setText('')
@@ -500,7 +524,10 @@ export function CommentInput({
       setInsertedMentions([])
       setPendingAttachments([])
     }
-  }, [text, disabled, isSubmitting, isUploading, onSubmit, insertedMentions, buildTipTapJson, pendingAttachments, uploadFile, taskId])
+  }, [text, disabled, isSubmitting, isUploading, onSubmit, insertedMentions, buildTipTapJson, pendingAttachments, uploadMutation, taskId])
+
+  // Keep ref in sync for keyboard shortcut access
+  handleSubmitRef.current = handleSubmit
 
   const isOverLimit = text.length > MAX_COMMENT_LENGTH
   const hasContent = text.trim().length > 0 || pendingAttachments.length > 0

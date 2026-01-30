@@ -2,31 +2,53 @@
  * TanStack Query Client Configuration
  *
  * Configures the query client with:
- * - IndexedDB persistence for offline support
- * - Selective query persistence (excludes download URLs, search results)
+ * - Per-query IndexedDB persistence with LZ-string compression
+ * - LRU eviction (max 1000 entries, 50MB)
+ * - Progressive hydration (critical queries first)
  * - Stale-while-revalidate pattern for instant page loads
  * - Request deduplication built-in
  *
  * @see https://tanstack.com/query/latest
  */
 
-import { QueryClient } from '@tanstack/react-query'
-import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister'
-import { persistQueryClient, PersistQueryClientOptions } from '@tanstack/react-query-persist-client'
-import { get, set, del, clear } from 'idb-keyval'
+import { QueryClient, focusManager } from '@tanstack/react-query'
+import { migrateFromLegacyCache } from './cache-migration'
+import {
+  initializeHydration,
+  subscribeToQueryCache,
+  clearPersistedCache,
+  forceFlush,
+  getPersistedCacheStats,
+  isHydrationComplete,
+} from './per-query-persister'
+import { clearAll as clearQueryCacheDB } from './query-cache-db'
+
+// ============================================================================
+// Electron Focus Manager
+// ============================================================================
+// Electron's document.visibilitychange doesn't fire on window focus/blur
+// (only on minimize). Override with window focus/blur events so that
+// refetchOnWindowFocus works correctly in the Electron renderer.
+
+focusManager.setEventListener((handleFocus) => {
+  const onFocus = () => handleFocus(true)
+  const onBlur = () => handleFocus(false)
+
+  window.addEventListener('focus', onFocus)
+  window.addEventListener('blur', onBlur)
+
+  return () => {
+    window.removeEventListener('focus', onFocus)
+    window.removeEventListener('blur', onBlur)
+  }
+})
 
 // ============================================================================
 // Constants
 // ============================================================================
 
-/** Cache storage key in IndexedDB */
-const CACHE_KEY = 'pm-query-cache'
-
-/** Maximum age for persisted cache (24 hours) */
-const MAX_AGE = 24 * 60 * 60 * 1000
-
-/** Default stale time (5 minutes) */
-const DEFAULT_STALE_TIME = 5 * 60 * 1000
+/** Default stale time (30 seconds) */
+const DEFAULT_STALE_TIME = 30 * 1000
 
 /** Default garbage collection time (24 hours) */
 const DEFAULT_GC_TIME = 24 * 60 * 60 * 1000
@@ -47,11 +69,25 @@ export const queryKeys = {
   // Projects
   projects: (appId: string) => ['projects', appId] as const,
   project: (id: string) => ['project', id] as const,
+  archivedProjects: (appId: string) => ['projects', appId, 'archived'] as const,
 
   // Tasks
   tasks: (projectId: string) => ['tasks', projectId] as const,
   task: (id: string) => ['task', id] as const,
   tasksByStatus: (projectId: string, status: string) => ['tasks', projectId, 'status', status] as const,
+  archivedTasks: (projectId: string) => ['tasks', projectId, 'archived'] as const,
+
+  // My Tasks (application-level)
+  myPendingTasks: (appId: string) => ['myTasks', appId, 'pending'] as const,
+  myCompletedTasks: (appId: string) => ['myTasks', appId, 'completed'] as const,
+  myArchivedTasks: (appId: string) => ['myTasks', appId, 'archived'] as const,
+
+  // My Projects (application-level, dashboard)
+  myProjects: (appId: string) => ['myProjects', appId] as const,
+
+  // Cross-app dashboard
+  myProjectsCrossApp: ['myProjects', 'cross-app'] as const,
+  myTasksCrossApp: ['myTasks', 'cross-app'] as const,
 
   // Comments
   comments: (taskId: string) => ['comments', taskId] as const,
@@ -76,45 +112,12 @@ export const queryKeys = {
   // Invitations
   invitations: ['invitations'] as const,
   pendingInvitations: ['invitations', 'pending'] as const,
+  receivedInvitations: (status?: string) => status ? ['invitations', 'received', status] as const : ['invitations', 'received'] as const,
+  sentInvitations: (applicationId?: string) => applicationId ? ['invitations', 'sent', applicationId] as const : ['invitations', 'sent'] as const,
+  pendingInvitationCount: ['invitations', 'count'] as const,
 
   // Statuses
   statuses: (projectId: string) => ['statuses', projectId] as const,
-}
-
-// ============================================================================
-// IndexedDB Storage Adapter
-// ============================================================================
-
-/**
- * Custom IndexedDB storage adapter using idb-keyval.
- * Provides async storage operations for query persistence.
- */
-const indexedDBStorage = {
-  getItem: async (key: string): Promise<string | null> => {
-    try {
-      const value = await get(key)
-      return value ?? null
-    } catch (error) {
-      console.warn('[QueryClient] Failed to read from IndexedDB:', error)
-      return null
-    }
-  },
-
-  setItem: async (key: string, value: string): Promise<void> => {
-    try {
-      await set(key, value)
-    } catch (error) {
-      console.warn('[QueryClient] Failed to write to IndexedDB:', error)
-    }
-  },
-
-  removeItem: async (key: string): Promise<void> => {
-    try {
-      await del(key)
-    } catch (error) {
-      console.warn('[QueryClient] Failed to delete from IndexedDB:', error)
-    }
-  },
 }
 
 // ============================================================================
@@ -127,7 +130,7 @@ const indexedDBStorage = {
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // Data is fresh for 5 minutes by default
+      // Data is fresh for 30 seconds by default
       staleTime: DEFAULT_STALE_TIME,
 
       // Keep unused data in cache for 24 hours (for offline support)
@@ -160,71 +163,48 @@ export const queryClient = new QueryClient({
 })
 
 // ============================================================================
-// Persistence Configuration
+// Persistence State
+// ============================================================================
+
+/** Unsubscribe function for cache subscription */
+let cacheUnsubscribe: (() => void) | null = null
+
+// ============================================================================
+// Persistence Initialization
 // ============================================================================
 
 /**
- * Filter function to determine which queries should be persisted.
- * Excludes volatile data that shouldn't survive refresh.
- */
-function shouldPersistQuery(queryKey: readonly unknown[]): boolean {
-  const firstKey = queryKey[0]
-
-  // Don't persist download URLs (presigned URLs expire)
-  if (firstKey === 'downloadUrl' || firstKey === 'downloadUrls') {
-    return false
-  }
-
-  // Don't persist search results (transient)
-  if (firstKey === 'search') {
-    return false
-  }
-
-  // Don't persist presence data (ephemeral)
-  if (firstKey === 'presence') {
-    return false
-  }
-
-  // Persist everything else
-  return true
-}
-
-/**
- * Create the async storage persister with selective persistence.
- */
-const persister = createAsyncStoragePersister({
-  storage: indexedDBStorage,
-  key: CACHE_KEY,
-  serialize: (data) => {
-    // Filter out queries that shouldn't be persisted
-    const filtered = {
-      ...data,
-      clientState: {
-        ...data.clientState,
-        queries: data.clientState.queries.filter((query) =>
-          shouldPersistQuery(query.queryKey)
-        ),
-      },
-    }
-    return JSON.stringify(filtered)
-  },
-  deserialize: (str) => JSON.parse(str),
-})
-
-/**
- * Initialize persistence after client is created.
+ * Initialize persistence with the new per-query storage.
+ *
+ * This performs:
+ * 1. Migration from legacy single-blob cache (if exists)
+ * 2. Progressive hydration of cached queries
+ * 3. Subscription to cache changes for persistence
+ *
  * Call this once in the app initialization.
  */
 export async function initializeQueryPersistence(): Promise<void> {
-  const persistOptions: PersistQueryClientOptions = {
-    queryClient,
-    persister,
-    maxAge: MAX_AGE,
-    buster: '', // Cache buster for version changes
-  }
+  const startTime = performance.now()
 
-  await persistQueryClient(persistOptions)
-  console.log('[QueryClient] Persistence initialized')
+  try {
+    // Step 1: Migrate from legacy cache (if exists)
+    await migrateFromLegacyCache()
+
+    // Step 2: Hydrate critical queries (blocking)
+    await initializeHydration(queryClient)
+
+    // Step 3: Subscribe to cache changes for persistence
+    if (cacheUnsubscribe) {
+      cacheUnsubscribe()
+    }
+    cacheUnsubscribe = subscribeToQueryCache(queryClient)
+
+    const duration = performance.now() - startTime
+    console.log(`[QueryClient] Persistence initialized in ${duration.toFixed(0)}ms`)
+  } catch (error) {
+    console.warn('[QueryClient] Persistence init failed:', error)
+    // Continue without persistence
+  }
 }
 
 // ============================================================================
@@ -236,28 +216,30 @@ export async function initializeQueryPersistence(): Promise<void> {
  * Call this on logout for security.
  */
 export async function clearQueryCache(): Promise<void> {
+  // Unsubscribe from cache changes
+  if (cacheUnsubscribe) {
+    cacheUnsubscribe()
+    cacheUnsubscribe = null
+  }
+
+  // Flush any pending writes
+  await forceFlush()
+
   // Clear in-memory cache
   queryClient.clear()
 
   // Clear IndexedDB cache
-  try {
-    await del(CACHE_KEY)
-    console.log('[QueryClient] Cache cleared')
-  } catch (error) {
-    console.warn('[QueryClient] Failed to clear IndexedDB cache:', error)
-  }
+  await clearPersistedCache()
+
+  console.log('[QueryClient] Cache cleared')
 }
 
 /**
  * Clear all IndexedDB data (for complete reset).
  */
 export async function clearAllIndexedDB(): Promise<void> {
-  try {
-    await clear()
-    console.log('[QueryClient] All IndexedDB data cleared')
-  } catch (error) {
-    console.warn('[QueryClient] Failed to clear IndexedDB:', error)
-  }
+  await clearQueryCacheDB()
+  console.log('[QueryClient] All IndexedDB data cleared')
 }
 
 /**
@@ -288,6 +270,29 @@ export async function prefetchQuery<T>(
     queryFn,
     staleTime: staleTime ?? DEFAULT_STALE_TIME,
   })
+}
+
+/**
+ * Check if persistence hydration is complete.
+ */
+export function isPersistenceReady(): boolean {
+  return isHydrationComplete()
+}
+
+/**
+ * Get cache statistics for debugging.
+ */
+export async function getCacheStats(): Promise<{
+  entryCount: number
+  totalSize: number
+  totalSizeMB: string
+  pendingWrites: number
+}> {
+  const stats = await getPersistedCacheStats()
+  return {
+    ...stats,
+    totalSizeMB: (stats.totalSize / (1024 * 1024)).toFixed(2),
+  }
 }
 
 // ============================================================================

@@ -11,7 +11,7 @@
 
 import { useCallback, ReactNode } from 'react'
 import { cn } from '@/lib/utils'
-import { useNotificationsStore } from '@/stores/notifications-store'
+import { useNotificationUIStore } from '@/stores/notification-ui-store'
 import { useUnreadCount } from '@/hooks/use-notifications'
 import {
   LayoutDashboard,
@@ -118,8 +118,8 @@ export function Sidebar({
 }: SidebarProps): JSX.Element {
   // Use TanStack Query for unread count (auto-refreshes)
   const { data: unreadCount = 0 } = useUnreadCount()
-  // Keep UI state (panel open/close) in notifications store
-  const toggleNotifications = useNotificationsStore((state) => state.toggleOpen)
+  // Keep UI state (panel open/close) in minimal store
+  const toggleNotifications = useNotificationUIStore((state) => state.toggleOpen)
 
   const handleNavigate = useCallback(
     (item: NavItem) => {

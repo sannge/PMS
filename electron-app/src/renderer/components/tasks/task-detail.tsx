@@ -43,6 +43,9 @@ import {
   ChevronUp,
   Wifi,
   WifiOff,
+  Pencil,
+  Save,
+  RotateCcw,
 } from 'lucide-react'
 import type { Task, TaskStatusValue as TaskStatus, TaskUpdate, TaskPriority, TaskType } from '@/hooks/use-queries'
 import { useProjectMembers, useAppMembers } from '@/hooks/use-members'
@@ -52,6 +55,7 @@ import { FileUpload } from '@/components/files/file-upload'
 import { AttachmentList } from '@/components/files/attachment-list'
 import { CommentThread } from '@/components/comments'
 import { ChecklistPanel } from '@/components/checklists'
+import { RichTextEditor } from '@/components/editor/RichTextEditor'
 import {
   useWebSocket,
   MessageType,
@@ -121,6 +125,12 @@ export interface TaskDetailProps {
    * Application ID for fetching application members for @mentions
    */
   applicationId?: string
+  /**
+   * Callback to revert task selection when user chooses to keep editing
+   * unsaved description changes instead of switching tasks.
+   * Called with the current task so parent can restore selection.
+   */
+  onRevertTaskSelection?: (task: Task) => void
 }
 
 // ============================================================================
@@ -436,11 +446,61 @@ export function TaskDetail({
   enableRealtime = true,
   canEdit = true,
   applicationId,
+  onRevertTaskSelection,
 }: TaskDetailProps): JSX.Element | null {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [assigneeError, setAssigneeError] = useState<string | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const [externalUpdateNotice, setExternalUpdateNotice] = useState<string | null>(null)
   const [mentionSuggestions, setMentionSuggestions] = useState<Array<{ id: string; name: string; email?: string; avatar_url?: string }>>([])
+
+  // Local state for description - only save on explicit action
+  const [localDescription, setLocalDescription] = useState(task.description || '')
+  const [hasDescriptionChanges, setHasDescriptionChanges] = useState(false)
+  const [isEditingDescription, setIsEditingDescription] = useState(false)
+  const [editorError, setEditorError] = useState<string | null>(null)
+  const [pendingTask, setPendingTask] = useState<Task | null>(null)
+  const [showUnsavedDialog, setShowUnsavedDialog] = useState(false)
+
+  // Track previous task id to detect task switches
+  const prevTaskIdRef = useRef(task.id)
+
+  // Sync local description when task changes from external source
+  useEffect(() => {
+    const isTaskSwitch = prevTaskIdRef.current !== task.id
+    prevTaskIdRef.current = task.id
+
+    if (isTaskSwitch && hasDescriptionChanges && isEditingDescription) {
+      // Task switched while editing - show unsaved dialog
+      setPendingTask(task)
+      setShowUnsavedDialog(true)
+      return
+    }
+
+    setLocalDescription(task.description || '')
+    setHasDescriptionChanges(false)
+    if (isTaskSwitch) {
+      setIsEditingDescription(false)
+    }
+  }, [task.description, task.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Clear assignee error when task changes or status becomes todo
+  useEffect(() => {
+    setAssigneeError(null)
+  }, [task.id, task.status])
+
+  // Auto-dismiss editor error after 5 seconds
+  useEffect(() => {
+    if (editorError) {
+      const timer = setTimeout(() => setEditorError(null), 5000)
+      return () => clearTimeout(timer)
+    }
+  }, [editorError])
+
+  // Check if task is done or archived (locked for editing except status change)
+  const isDone = task.status === 'done'
+  const isArchived = task.archived_at !== null
+  const isReadOnly = isDone || isArchived
 
   // Auth
   const token = useAuthStore((s) => s.token)
@@ -612,10 +672,16 @@ export function TaskDetail({
     (e: React.ChangeEvent<HTMLSelectElement>) => {
       if (onUpdate) {
         const value = e.target.value || null
+        // Prevent unassigning if task is not in todo status
+        if (!value && task.status !== 'todo') {
+          setAssigneeError("Cannot unassign a task that is not in 'Todo' status. Move the task back to 'Todo' first.")
+          return
+        }
+        setAssigneeError(null)
         onUpdate({ assignee_id: value })
       }
     },
-    [onUpdate]
+    [onUpdate, task.status]
   )
 
   // Handle delete confirmation
@@ -638,45 +704,54 @@ export function TaskDetail({
         onClick={onClose}
       />
 
-      {/* Panel */}
+      {/* Panel - Wide with split layout for rich text editing */}
       <div
         ref={panelRef}
         className={cn(
-          'fixed right-0 top-0 z-50 h-full w-full max-w-xl overflow-hidden',
-          'bg-background shadow-xl',
+          'fixed right-0 top-0 z-50 h-full w-full max-w-4xl overflow-hidden',
+          'bg-gradient-to-b from-background to-background/98 shadow-2xl',
           'transform transition-transform duration-300 ease-out',
           isOpen ? 'translate-x-0' : 'translate-x-full'
         )}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <div className="flex items-center gap-3">
-            {getTaskTypeIcon(task.task_type)}
-            <div>
-              <span className="text-sm font-medium text-muted-foreground font-mono">
-                {task.task_key}
-              </span>
-              <span className="mx-2 text-muted-foreground">·</span>
-              <span className="text-sm text-muted-foreground">
-                {getTaskTypeLabel(task.task_type)}
-              </span>
+        {/* Header - Refined */}
+        <div className="flex items-center justify-between border-b border-border/50 bg-muted/30 px-5 py-3.5">
+          <div className="flex items-center gap-4">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-background shadow-sm ring-1 ring-border/50">
+              {getTaskTypeIcon(task.task_type)}
             </div>
-            {/* Real-time connection indicator */}
-            {enableRealtime && (
-              <div
-                className={cn(
-                  'flex items-center gap-1 text-xs',
-                  status.isConnected ? 'text-green-500' : 'text-muted-foreground'
-                )}
-                title={status.isConnected ? 'Real-time updates active' : 'Not connected'}
-              >
-                {status.isConnected ? (
-                  <Wifi className="h-3 w-3" />
-                ) : (
-                  <WifiOff className="h-3 w-3" />
-                )}
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-foreground font-mono tracking-tight">
+                  {task.task_key}
+                </span>
+                <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
+                  {getTaskTypeLabel(task.task_type)}
+                </span>
               </div>
-            )}
+              {/* Real-time connection indicator */}
+              {enableRealtime && (
+                <div
+                  className={cn(
+                    'flex items-center gap-1.5 text-xs mt-0.5',
+                    status.isConnected ? 'text-green-600' : 'text-muted-foreground'
+                  )}
+                  title={status.isConnected ? 'Real-time updates active' : 'Not connected'}
+                >
+                  {status.isConnected ? (
+                    <>
+                      <Wifi className="h-3 w-3" />
+                      <span>Live</span>
+                    </>
+                  ) : (
+                    <>
+                      <WifiOff className="h-3 w-3" />
+                      <span>Offline</span>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="flex items-center gap-1">
@@ -684,7 +759,7 @@ export function TaskDetail({
               <button
                 onClick={onOpenFull}
                 className={cn(
-                  'rounded-md p-2 text-muted-foreground transition-colors',
+                  'rounded-lg p-2.5 text-muted-foreground transition-all duration-200',
                   'hover:bg-accent hover:text-accent-foreground',
                   'focus:outline-none focus:ring-2 focus:ring-ring'
                 )}
@@ -698,7 +773,7 @@ export function TaskDetail({
                 onClick={() => setShowDeleteConfirm(true)}
                 disabled={isDeleting}
                 className={cn(
-                  'rounded-md p-2 text-muted-foreground transition-colors',
+                  'rounded-lg p-2.5 text-muted-foreground transition-all duration-200',
                   'hover:bg-destructive/10 hover:text-destructive',
                   'focus:outline-none focus:ring-2 focus:ring-ring',
                   'disabled:pointer-events-none disabled:opacity-50'
@@ -715,8 +790,8 @@ export function TaskDetail({
             <button
               onClick={onClose}
               className={cn(
-                'rounded-md p-2 text-muted-foreground transition-colors',
-                'hover:bg-accent hover:text-accent-foreground',
+                'rounded-lg p-2.5 text-muted-foreground transition-all duration-200',
+                'hover:bg-destructive/10 hover:text-destructive',
                 'focus:outline-none focus:ring-2 focus:ring-ring'
               )}
               title="Close"
@@ -726,11 +801,11 @@ export function TaskDetail({
           </div>
         </div>
 
-        {/* Content */}
+        {/* Content - Split Layout */}
         <div className="h-[calc(100%-60px)] overflow-y-auto">
           {/* Error Alert */}
           {error && (
-            <div className="mx-4 mt-4 flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+            <div className="mx-5 mt-4 flex items-center gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
               <AlertCircle className="h-4 w-4 flex-shrink-0" />
               <span>{error}</span>
             </div>
@@ -738,7 +813,7 @@ export function TaskDetail({
 
           {/* External Update Notice */}
           {externalUpdateNotice && (
-            <div className="mx-4 mt-4 flex items-center gap-2 rounded-md border border-blue-500/50 bg-blue-500/10 p-3 text-sm text-blue-600 dark:text-blue-400 animate-in fade-in slide-in-from-top-2 duration-200">
+            <div className="mx-5 mt-4 flex items-center gap-3 rounded-lg border border-blue-500/30 bg-blue-500/5 px-4 py-3 text-sm text-blue-600 dark:text-blue-400 animate-in fade-in slide-in-from-top-2 duration-200">
               <Wifi className="h-4 w-4 flex-shrink-0" />
               <span>{externalUpdateNotice}</span>
             </div>
@@ -746,190 +821,337 @@ export function TaskDetail({
 
           {/* Loading indicator */}
           {isUpdating && (
-            <div className="absolute top-16 right-4 flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Saving...
+            <div className="absolute top-16 right-5 flex items-center gap-2 px-3 py-1.5 rounded-full bg-primary/10 text-sm text-primary">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <span className="text-xs font-medium">Saving...</span>
             </div>
           )}
 
-          <div className="p-4 space-y-6">
-            {/* Status */}
-            <div className="space-y-2">
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                Status
-              </label>
-              <TaskStatusBadge
-                status={task.status}
-                onStatusChange={onUpdate ? handleStatusChange : undefined}
-                disabled={isUpdating}
-                size="lg"
+          <div className="p-5 space-y-6">
+            {/* Status and Title Section */}
+            <div className="space-y-4">
+              {/* Status Badge - Prominent (disabled for archived tasks) */}
+              <div className="flex items-center gap-3">
+                <TaskStatusBadge
+                  status={task.status}
+                  onStatusChange={onUpdate && !isArchived ? handleStatusChange : undefined}
+                  disabled={isUpdating || isArchived}
+                  size="lg"
+                />
+                {isReadOnly && (
+                  <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded">
+                    {isArchived ? 'Archived - Status locked' : 'Read-only'}
+                  </span>
+                )}
+              </div>
+
+              {/* Title - Large and prominent */}
+              <EditableField
+                label="Title"
+                value={task.title}
+                placeholder="Task title..."
+                onSave={(value) => onUpdate?.({ title: value })}
+                disabled={isUpdating || !onUpdate || isReadOnly}
               />
             </div>
 
-            {/* Title */}
-            <EditableField
-              label="Title"
-              value={task.title}
-              placeholder="Task title..."
-              onSave={(value) => onUpdate?.({ title: value })}
-              disabled={isUpdating || !onUpdate}
-            />
-
-            {/* Description */}
-            <EditableField
-              label="Description"
-              value={task.description || ''}
-              placeholder="Add a description..."
-              multiline
-              onSave={(value) => onUpdate?.({ description: value || null })}
-              disabled={isUpdating || !onUpdate}
-            />
-
-            {/* Divider */}
-            <div className="border-t border-border" />
-
-            {/* Priority */}
-            <div className="space-y-2">
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1">
-                <Flag className="h-3.5 w-3.5" />
-                Priority
-              </label>
-              <select
-                value={task.priority}
-                onChange={handlePriorityChange}
-                disabled={isUpdating || !onUpdate}
-                className={cn(
-                  'w-full rounded-md border border-input bg-background px-3 py-2 text-foreground',
-                  'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1',
-                  'disabled:cursor-not-allowed disabled:opacity-50'
-                )}
-              >
-                {PRIORITIES.map((p) => (
-                  <option key={p.value} value={p.value}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Story Points */}
-            <div className="space-y-2">
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1">
-                <Hash className="h-3.5 w-3.5" />
-                Story Points
-              </label>
-              <input
-                type="number"
-                value={task.story_points ?? ''}
-                onChange={handleStoryPointsChange}
-                disabled={isUpdating || !onUpdate}
-                placeholder="0"
-                min="0"
-                max="100"
-                className={cn(
-                  'w-full rounded-md border border-input bg-background px-3 py-2 text-foreground',
-                  'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1',
-                  'disabled:cursor-not-allowed disabled:opacity-50'
-                )}
-              />
-            </div>
-
-            {/* Due Date */}
-            <div className="space-y-2">
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1">
-                <Calendar className="h-3.5 w-3.5" />
-                Due Date
-              </label>
-              <input
-                type="date"
-                value={formatDateForInput(task.due_date)}
-                onChange={handleDueDateChange}
-                disabled={isUpdating || !onUpdate}
-                className={cn(
-                  'w-full rounded-md border border-input bg-background px-3 py-2 text-foreground',
-                  'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1',
-                  'disabled:cursor-not-allowed disabled:opacity-50'
-                )}
-              />
-            </div>
-
-            {/* Assignee */}
-            <div className="space-y-2">
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1">
-                <User className="h-3.5 w-3.5" />
-                Assignee
-              </label>
-              {onUpdate ? (
+            {/* Properties Row - Compact horizontal layout */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4 rounded-lg border border-border/50 bg-muted/20">
+              {/* Priority */}
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                  <Flag className="h-3 w-3" />
+                  Priority
+                </label>
                 <select
-                  value={task.assignee_id || ''}
-                  onChange={handleAssigneeChange}
-                  disabled={isUpdating}
+                  value={task.priority}
+                  onChange={handlePriorityChange}
+                  disabled={isUpdating || !onUpdate || isReadOnly}
                   className={cn(
-                    'w-full rounded-md border border-input bg-background px-3 py-2 text-foreground',
-                    'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1',
+                    'w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm text-foreground',
+                    'focus:outline-none focus:ring-1 focus:ring-primary/30',
                     'disabled:cursor-not-allowed disabled:opacity-50'
                   )}
                 >
-                  <option value="">Unassigned</option>
-                  {projectMembers.map((member) => (
-                    <option key={member.user_id} value={member.user_id}>
-                      {member.user_display_name || member.user_email?.split('@')[0] || 'Unknown'} ({member.user_email})
+                  {PRIORITIES.map((p) => (
+                    <option key={p.value} value={p.value}>
+                      {p.label}
                     </option>
                   ))}
                 </select>
+              </div>
+
+              {/* Story Points */}
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                  <Hash className="h-3 w-3" />
+                  Points
+                </label>
+                <input
+                  type="number"
+                  value={task.story_points ?? ''}
+                  onChange={handleStoryPointsChange}
+                  disabled={isUpdating || !onUpdate || isReadOnly}
+                  placeholder="0"
+                  min="0"
+                  max="100"
+                  className={cn(
+                    'w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm text-foreground',
+                    'focus:outline-none focus:ring-1 focus:ring-primary/30',
+                    'disabled:cursor-not-allowed disabled:opacity-50'
+                  )}
+                />
+              </div>
+
+              {/* Due Date / Completed Date */}
+              {isDone && task.completed_at ? (
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                    <CheckCircle2 className="h-3 w-3 text-green-600" />
+                    Completed
+                  </label>
+                  <div className="rounded-md border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 px-2 py-1.5 text-sm text-green-700 dark:text-green-400">
+                    {new Date(task.completed_at).toLocaleDateString(undefined, {
+                      month: 'short',
+                      day: 'numeric',
+                    })}
+                  </div>
+                </div>
               ) : (
-                <div className="flex items-center gap-2 px-3 py-2 rounded-md border border-input bg-muted/50">
-                  {task.assignee ? (
-                    <>
-                      <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center">
-                        <User className="h-3.5 w-3.5 text-primary" />
-                      </div>
-                      <div className="flex flex-col">
-                        <span className="text-sm text-foreground">
-                          {task.assignee.display_name || task.assignee.email.split('@')[0]}
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                    <Calendar className="h-3 w-3" />
+                    Due Date
+                  </label>
+                  <input
+                    type="date"
+                    value={formatDateForInput(task.due_date)}
+                    onChange={handleDueDateChange}
+                    disabled={isUpdating || !onUpdate || isReadOnly}
+                    className={cn(
+                      'w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm text-foreground',
+                      'focus:outline-none focus:ring-1 focus:ring-primary/30',
+                      'disabled:cursor-not-allowed disabled:opacity-50'
+                    )}
+                  />
+                </div>
+              )}
+
+              {/* Assignee */}
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                  <User className="h-3 w-3" />
+                  Assignee
+                </label>
+                {onUpdate && !isReadOnly ? (
+                  <>
+                    <select
+                      value={task.assignee_id || ''}
+                      onChange={handleAssigneeChange}
+                      disabled={isUpdating}
+                      className={cn(
+                        'w-full rounded-md border bg-background px-2 py-1.5 text-sm text-foreground',
+                        'focus:outline-none focus:ring-1 focus:ring-primary/30',
+                        'disabled:cursor-not-allowed disabled:opacity-50',
+                        assigneeError ? 'border-destructive' : 'border-input'
+                      )}
+                    >
+                      <option value="">Unassigned</option>
+                      {projectMembers.map((member) => (
+                        <option key={member.user_id} value={member.user_id}>
+                          {member.user_display_name || member.user_email?.split('@')[0] || 'Unknown'}
+                        </option>
+                      ))}
+                    </select>
+                    {assigneeError && (
+                      <p className="text-[11px] text-destructive flex items-start gap-1 mt-1">
+                        <AlertCircle className="h-3 w-3 flex-shrink-0 mt-0.5" />
+                        {assigneeError}
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-md border border-input bg-muted/30 text-sm">
+                    {task.assignee ? (
+                      <span className="truncate">
+                        {task.assignee.display_name || task.assignee.email.split('@')[0]}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground italic">Unassigned</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Description - View/Edit Mode */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  Description
+                </label>
+                {!isEditingDescription && !isReadOnly && onUpdate && (
+                  <button
+                    onClick={() => setIsEditingDescription(true)}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                  >
+                    <Pencil className="h-3 w-3" />
+                    Edit
+                  </button>
+                )}
+              </div>
+
+              {/* Editor error banner */}
+              {editorError && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-destructive/30 bg-destructive/5 text-sm text-destructive">
+                  <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
+                  <span>{editorError}</span>
+                </div>
+              )}
+
+              {isEditingDescription ? (
+                <>
+                  {/* Save/Discard bar */}
+                  {hasDescriptionChanges && (
+                    <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30">
+                      <div className="flex items-center gap-2 text-xs text-amber-700 dark:text-amber-400">
+                        <span className="relative flex h-2 w-2">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                          <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
                         </span>
-                        <span className="text-xs text-muted-foreground">
-                          {task.assignee.email}
-                        </span>
+                        Unsaved changes
                       </div>
-                    </>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => {
+                            setLocalDescription(task.description || '')
+                            setHasDescriptionChanges(false)
+                            setIsEditingDescription(false)
+                          }}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                        >
+                          <RotateCcw className="h-3 w-3" />
+                          Discard
+                        </button>
+                        <button
+                          onClick={() => {
+                            onUpdate?.({ description: localDescription || null })
+                            setHasDescriptionChanges(false)
+                            setIsEditingDescription(false)
+                          }}
+                          disabled={isUpdating}
+                          className={cn(
+                            'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium',
+                            'bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm',
+                            'disabled:opacity-50 disabled:cursor-not-allowed',
+                            'transition-all duration-200'
+                          )}
+                        >
+                          {isUpdating ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <>
+                              <Save className="h-3 w-3" />
+                              Save
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  <RichTextEditor
+                    value={localDescription}
+                    onChange={(value) => {
+                      setLocalDescription(value)
+                      setHasDescriptionChanges(value !== (task.description || ''))
+                    }}
+                    onError={(msg) => setEditorError(msg)}
+                    placeholder="Add a detailed description with formatting, images, tables..."
+                    readOnly={isUpdating || !onUpdate || isReadOnly}
+                    maxLength={512000}
+                    className="min-h-[200px]"
+                  />
+                  {!hasDescriptionChanges && (
+                    <div className="flex justify-end">
+                      <button
+                        onClick={() => setIsEditingDescription(false)}
+                        className="text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-1 rounded hover:bg-muted"
+                      >
+                        Done editing
+                      </button>
+                    </div>
+                  )}
+                </>
+              ) : (
+                /* View mode - rendered HTML */
+                <div>
+                  {localDescription && localDescription !== '<p></p>' ? (
+                    <div
+                      className={cn(
+                        'prose prose-sm max-w-none rounded-lg border border-border/50 bg-muted/10 px-4 py-3',
+                        'prose-headings:font-semibold prose-p:my-2',
+                        'prose-ul:my-2 prose-ol:my-2 prose-li:my-1',
+                        '[&_table]:border-collapse [&_table]:w-full',
+                        '[&_th]:border [&_th]:border-border [&_th]:p-2 [&_th]:bg-muted',
+                        '[&_td]:border [&_td]:border-border [&_td]:p-2',
+                        '[&_a]:text-primary [&_a]:underline',
+                        '[&_img]:max-w-full [&_img]:h-auto [&_img]:rounded-md',
+                      )}
+                      dangerouslySetInnerHTML={{ __html: localDescription }}
+                    />
                   ) : (
-                    <span className="text-sm text-muted-foreground italic">Unassigned</span>
+                    <div
+                      className={cn(
+                        'w-full rounded-lg border border-dashed border-border/50 px-4 py-6',
+                        'text-sm text-muted-foreground italic',
+                      )}
+                    >
+                      No description
+                    </div>
                   )}
                 </div>
               )}
+
+              {isReadOnly && (
+                <p className="text-xs text-muted-foreground bg-muted/50 px-3 py-2 rounded-lg">
+                  {isArchived
+                    ? 'Task is archived. Unarchive to edit.'
+                    : 'Task is completed. Change status to edit.'}
+                </p>
+              )}
             </div>
 
-            {/* Divider */}
-            <div className="border-t border-border" />
-
-            {/* Subtasks Section (placeholder) */}
+            {/* Subtasks (if any) */}
             {task.subtasks_count != null && task.subtasks_count > 0 && (
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1">
-                  <Layers className="h-3.5 w-3.5" />
-                  Subtasks ({task.subtasks_count})
-                </label>
-                <button
-                  className={cn(
-                    'w-full flex items-center justify-between px-3 py-2 rounded-md',
-                    'border border-input bg-muted/50 text-sm text-muted-foreground',
-                    'hover:bg-accent transition-colors'
-                  )}
-                >
-                  <span>View subtasks</span>
-                  <ChevronRight className="h-4 w-4" />
-                </button>
-              </div>
+              <>
+                <div className="border-t border-border/40" />
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                    <Layers className="h-3.5 w-3.5" />
+                    Subtasks ({task.subtasks_count})
+                  </label>
+                  <button
+                    className={cn(
+                      'w-full flex items-center justify-between px-3 py-2 rounded-lg',
+                      'border border-input bg-background text-sm text-muted-foreground',
+                      'hover:bg-accent hover:text-foreground transition-colors'
+                    )}
+                  >
+                    <span>View subtasks</span>
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                </div>
+              </>
             )}
 
             {/* Metadata */}
+            <div className="border-t border-border/40" />
             <div className="space-y-2">
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1">
+              <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
                 <FileText className="h-3.5 w-3.5" />
                 Details
               </label>
-              <div className="rounded-md border border-input bg-muted/30 p-3 space-y-2 text-sm">
+              <div className="rounded-lg border border-input bg-muted/20 p-3 space-y-2 text-sm">
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Created</span>
                   <span className="text-foreground">{formatDate(task.created_at)}</span>
@@ -954,34 +1176,87 @@ export function TaskDetail({
               </div>
             </div>
 
-            {/* Divider */}
-            <div className="border-t border-border" />
-
             {/* Attachments Section */}
-            <TaskAttachmentsSection taskId={task.id} canEdit={canEdit} />
-
-            {/* Divider */}
-            <div className="border-t border-border" />
+            <div className="border-t border-border/40" />
+            <TaskAttachmentsSection taskId={task.id} canEdit={canEdit && !isReadOnly} />
 
             {/* Checklists Section */}
-            <div className="space-y-2">
-              <ChecklistPanel taskId={task.id} canEdit={canEdit} className="min-h-[200px]" />
-            </div>
-
-            {/* Divider */}
-            <div className="border-t border-border" />
+            <div className="border-t border-border/40" />
+            <ChecklistPanel taskId={task.id} canEdit={canEdit && !isReadOnly} className="min-h-[150px]" />
 
             {/* Comments Section */}
-            <div className="space-y-2">
-              <CommentThread
-                taskId={task.id}
-                className="min-h-[300px]"
-                onMentionSearch={handleMentionSearch}
-                mentionSuggestions={mentionSuggestions}
-              />
-            </div>
+            <div className="border-t border-border/40" />
+            <CommentThread
+              taskId={task.id}
+              className="min-h-[250px]"
+              onMentionSearch={handleMentionSearch}
+              mentionSuggestions={mentionSuggestions}
+            />
           </div>
         </div>
+
+        {/* Unsaved Changes Confirmation Modal */}
+        {showUnsavedDialog && pendingTask && (
+          <>
+            <div
+              className="fixed inset-0 z-[60] bg-black/50"
+              onClick={() => {
+                setShowUnsavedDialog(false)
+                setPendingTask(null)
+              }}
+            />
+            <div className="fixed left-1/2 top-1/2 z-[70] w-full max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-card p-6 shadow-xl">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-amber-500/10">
+                  <AlertCircle className="h-5 w-5 text-amber-500" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-foreground">Unsaved Changes</h3>
+                  <p className="text-sm text-muted-foreground">You have unsaved description changes.</p>
+                </div>
+              </div>
+              <p className="text-sm text-muted-foreground mb-6">
+                Do you want to discard your changes and switch to the other task, or keep editing?
+              </p>
+              <div className="flex items-center justify-end gap-3">
+                <button
+                  onClick={() => {
+                    // Keep editing - revert task selection
+                    setShowUnsavedDialog(false)
+                    const currentTask = task
+                    setPendingTask(null)
+                    onRevertTaskSelection?.(currentTask)
+                  }}
+                  className={cn(
+                    'rounded-md border border-input bg-background px-4 py-2 text-sm font-medium',
+                    'hover:bg-accent hover:text-accent-foreground',
+                    'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+                  )}
+                >
+                  Keep Editing
+                </button>
+                <button
+                  onClick={() => {
+                    // Discard and switch
+                    setShowUnsavedDialog(false)
+                    setIsEditingDescription(false)
+                    setHasDescriptionChanges(false)
+                    if (pendingTask) {
+                      setLocalDescription(pendingTask.description || '')
+                    }
+                    setPendingTask(null)
+                  }}
+                  className={cn(
+                    'rounded-md bg-amber-500 px-4 py-2 text-sm font-medium text-white',
+                    'hover:bg-amber-600 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+                  )}
+                >
+                  Discard Changes
+                </button>
+              </div>
+            </div>
+          </>
+        )}
 
         {/* Delete Confirmation Modal */}
         {showDeleteConfirm && (

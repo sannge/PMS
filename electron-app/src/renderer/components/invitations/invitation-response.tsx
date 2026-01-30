@@ -11,6 +11,8 @@
  * - Error handling
  * - Keyboard accessible
  * - Relative time display
+ *
+ * Uses TanStack Query for data mutations.
  */
 
 import { useCallback, useState } from 'react'
@@ -23,12 +25,12 @@ import {
   AlertCircle,
   Layers,
 } from 'lucide-react'
-import { useAuthStore } from '@/stores/auth-store'
 import {
-  useInvitationsStore,
+  useAcceptInvitation,
+  useRejectInvitation,
   type InvitationWithDetails,
   type ApplicationRole,
-} from '@/stores/invitations-store'
+} from '@/hooks/use-invitations'
 
 // ============================================================================
 // Types
@@ -135,8 +137,8 @@ function formatRelativeTime(dateString: string): string {
  * Get inviter display name
  */
 function getInviterName(invitation: InvitationWithDetails): string {
-  if (invitation.inviter?.full_name) {
-    return invitation.inviter.full_name
+  if (invitation.inviter?.display_name) {
+    return invitation.inviter.display_name
   }
   if (invitation.inviter?.email) {
     return invitation.inviter.email
@@ -164,16 +166,16 @@ export function InvitationResponse({
   variant = 'card',
   className,
 }: InvitationResponseProps): JSX.Element {
-  // Local state for action-specific loading
-  const [isAccepting, setIsAccepting] = useState(false)
-  const [isRejecting, setIsRejecting] = useState(false)
+  // Local state for error display
   const [error, setError] = useState<string | null>(null)
 
-  // Store hooks
-  const token = useAuthStore((state) => state.token)
-  const { acceptInvitation, rejectInvitation } = useInvitationsStore()
+  // TanStack Query mutations
+  const acceptInvitation = useAcceptInvitation()
+  const rejectInvitation = useRejectInvitation()
 
   const roleConfig = ROLE_CONFIG[invitation.role]
+  const isAccepting = acceptInvitation.isPending
+  const isRejecting = rejectInvitation.isPending
   const isProcessing = isAccepting || isRejecting
 
   // Handle accept
@@ -182,27 +184,18 @@ export function InvitationResponse({
       e.stopPropagation()
       if (disabled || isProcessing) return
 
-      setIsAccepting(true)
       setError(null)
 
       try {
-        const success = await acceptInvitation(token, invitation.id)
-        if (success) {
-          onAccept?.(invitation)
-        } else {
-          const errorMsg = 'Failed to accept invitation'
-          setError(errorMsg)
-          onError?.(errorMsg)
-        }
+        await acceptInvitation.mutateAsync(invitation.id)
+        onAccept?.(invitation)
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Failed to accept invitation'
         setError(errorMsg)
         onError?.(errorMsg)
-      } finally {
-        setIsAccepting(false)
       }
     },
-    [invitation, token, disabled, isProcessing, acceptInvitation, onAccept, onError]
+    [invitation, disabled, isProcessing, acceptInvitation, onAccept, onError]
   )
 
   // Handle reject
@@ -211,27 +204,18 @@ export function InvitationResponse({
       e.stopPropagation()
       if (disabled || isProcessing) return
 
-      setIsRejecting(true)
       setError(null)
 
       try {
-        const success = await rejectInvitation(token, invitation.id)
-        if (success) {
-          onReject?.(invitation)
-        } else {
-          const errorMsg = 'Failed to reject invitation'
-          setError(errorMsg)
-          onError?.(errorMsg)
-        }
+        await rejectInvitation.mutateAsync(invitation.id)
+        onReject?.(invitation)
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Failed to reject invitation'
         setError(errorMsg)
         onError?.(errorMsg)
-      } finally {
-        setIsRejecting(false)
       }
     },
-    [invitation, token, disabled, isProcessing, rejectInvitation, onReject, onError]
+    [invitation, disabled, isProcessing, rejectInvitation, onReject, onError]
   )
 
   // Render compact variant (for notification lists)

@@ -120,10 +120,14 @@ export async function showNotification(
     timeoutType = 'default'
   } = options
 
+  console.log('[Main-Notification] showNotification called:', { title, body, type })
+
   // Check if notifications are supported
   if (!Notification.isSupported()) {
+    console.log('[Main-Notification] Notifications not supported on this platform')
     return { id, clicked: false, closed: true }
   }
+  console.log('[Main-Notification] Notifications are supported')
 
   return new Promise((resolve) => {
     const icon = getNotificationIcon()
@@ -143,10 +147,12 @@ export async function showNotification(
     }
 
     // Create the notification
+    console.log('[Main-Notification] Creating notification with options:', notificationOptions)
     const notification = new Notification(notificationOptions)
 
     // Store reference
     activeNotifications.set(id, notification)
+    console.log('[Main-Notification] Notification created, calling show()')
 
     // Handle notification click
     notification.on('click', () => {
@@ -186,12 +192,14 @@ export async function showNotification(
 
     // Handle notification failed
     notification.on('failed', (_event, error) => {
+      console.error('[Main-Notification] Notification failed:', error)
       activeNotifications.delete(id)
       resolve({ id, clicked: false, closed: true })
     })
 
     // Show the notification
     notification.show()
+    console.log('[Main-Notification] notification.show() called')
   })
 }
 

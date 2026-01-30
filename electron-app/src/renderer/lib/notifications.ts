@@ -1,33 +1,42 @@
 /**
  * Notification Utilities
  *
- * Browser notification helper functions.
+ * Desktop notification helper functions using Electron's native notifications.
  */
 
 /**
  * Request browser notification permission if not already granted.
- * Safe to call multiple times - only prompts when permission is 'default'.
+ * In Electron, this is a no-op since Electron notifications don't require explicit permission.
  */
 export function requestNotificationPermission(): void {
-  if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-    Notification.requestPermission()
-  }
+  // Electron notifications don't require permission prompts like browser notifications
+  // This function exists for API compatibility
 }
 
 /**
- * Show a browser notification if permission is granted.
+ * Show a desktop notification using Electron's native notification system.
  */
 export function showBrowserNotification(title: string, message: string): void {
-  if (typeof Notification === 'undefined') return
-  if (Notification.permission !== 'granted') return
+  console.log('[Notification] showBrowserNotification called:', { title, message })
 
-  try {
-    new Notification(title, {
+  if (!title || !message) {
+    console.log('[Notification] Skipped - missing title or message')
+    return
+  }
+
+  // Use Electron's notification API via preload
+  if (window.electronAPI?.showNotification) {
+    console.log('[Notification] Calling electronAPI.showNotification')
+    window.electronAPI.showNotification({
+      title,
       body: message,
-      icon: '/icon.png',
-      tag: 'pm-notification',
+      type: 'info',
+    }).then((result) => {
+      console.log('[Notification] showNotification result:', result)
+    }).catch((err) => {
+      console.error('[Notification] showNotification error:', err)
     })
-  } catch {
-    // Ignore notification errors
+  } else {
+    console.log('[Notification] electronAPI.showNotification not available')
   }
 }

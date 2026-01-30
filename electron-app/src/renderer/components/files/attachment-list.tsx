@@ -35,13 +35,13 @@ import {
 import {
   type Attachment,
   type EntityType,
-  useFilesStore,
-  formatFileSize,
-  isImageFile,
-  getFileIconType,
-} from '@/stores/files-store'
+  useEntityAttachments,
+  useDeleteAttachment,
+  useGetDownloadUrl,
+  useGetDownloadUrls,
+} from '@/hooks/use-attachments'
+import { formatFileSize, isImageFile, getFileIconType } from '@/lib/file-utils'
 import { FilePreview } from './file-preview'
-import { wsClient, MessageType } from '@/lib/websocket'
 import { SkeletonAttachments } from '@/components/ui/skeleton'
 import { DeleteFileDialog } from '@/components/ui/confirm-dialog'
 
@@ -354,62 +354,18 @@ export function AttachmentList({
   const [deleteTarget, setDeleteTarget] = useState<Attachment | null>(null)
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
 
+  // TanStack Query hooks
   const {
-    attachments: allAttachments,
+    data: attachments = [],
     isLoading,
     error,
-    fetchAttachments,
-    deleteAttachment,
-    getDownloadUrl,
-    getDownloadUrls,
-    handleAttachmentUploaded,
-    handleAttachmentDeleted,
-  } = useFilesStore()
+  } = useEntityAttachments(entityType, entityId)
 
-  // Get attachments for this entity
-  const key = `${entityType}:${entityId}`
-  const attachments = allAttachments[key] || []
+  const deleteMutation = useDeleteAttachment()
+  const getDownloadUrl = useGetDownloadUrl()
+  const getDownloadUrls = useGetDownloadUrls()
 
-  // Fetch attachments on mount
-  useEffect(() => {
-    if (entityId) {
-      fetchAttachments(entityType, entityId)
-    }
-  }, [entityType, entityId, fetchAttachments])
-
-  // Subscribe to WebSocket room for real-time updates
-  useEffect(() => {
-    if (!entityId) return
-
-    const roomId = `${entityType}:${entityId}`
-
-    // Join the room for this entity
-    wsClient.joinRoom(roomId)
-
-    // Handle attachment uploaded event
-    // Note: wsClient.on() receives only the data portion, not the full message
-    const handleUploaded = (data: { attachment: Attachment; entity_type: string; entity_id: string }) => {
-      const { attachment, entity_type, entity_id } = data
-      handleAttachmentUploaded(entity_type, entity_id, attachment)
-    }
-
-    // Handle attachment deleted event
-    const handleDeleted = (data: { attachment_id: string; entity_type: string; entity_id: string }) => {
-      const { attachment_id, entity_type, entity_id } = data
-      handleAttachmentDeleted(entity_type, entity_id, attachment_id)
-    }
-
-    // Subscribe to events
-    wsClient.on(MessageType.ATTACHMENT_UPLOADED, handleUploaded)
-    wsClient.on(MessageType.ATTACHMENT_DELETED, handleDeleted)
-
-    // Cleanup: leave room and unsubscribe
-    return () => {
-      wsClient.leaveRoom(roomId)
-      wsClient.off(MessageType.ATTACHMENT_UPLOADED, handleUploaded)
-      wsClient.off(MessageType.ATTACHMENT_DELETED, handleDeleted)
-    }
-  }, [entityType, entityId, handleAttachmentUploaded, handleAttachmentDeleted])
+  // WebSocket cache invalidation is handled by global hook in use-websocket-cache.ts
 
   // Load preview URLs for images (grid view) - use batch fetching to reduce API calls
   useEffect(() => {
@@ -459,11 +415,15 @@ export function AttachmentList({
     if (!deleteTarget) return
 
     setDeletingId(deleteTarget.id)
-    await deleteAttachment(deleteTarget.id)
+    await deleteMutation.mutateAsync({
+      attachmentId: deleteTarget.id,
+      entityType,
+      entityId,
+    })
     setDeletingId(null)
     setIsDeleteDialogOpen(false)
     setDeleteTarget(null)
-  }, [deleteTarget, deleteAttachment])
+  }, [deleteTarget, deleteMutation, entityType, entityId])
 
   // Cancel delete
   const handleCancelDelete = useCallback(() => {
@@ -557,7 +517,7 @@ export function AttachmentList({
       {/* Error message */}
       {error && (
         <div className="mb-3 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-          {error}
+          {error.message}
         </div>
       )}
 

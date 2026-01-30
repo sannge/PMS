@@ -12,7 +12,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { cn } from '@/lib/utils'
 import { Check, X, Trash2, GripVertical } from 'lucide-react'
-import type { ChecklistItem as ChecklistItemType } from '@/stores/checklists-store'
+import type { ChecklistItem as ChecklistItemType } from '@/hooks/use-checklists'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 
 // ============================================================================
@@ -45,7 +45,7 @@ export function ChecklistItem({
   className,
 }: ChecklistItemProps): JSX.Element {
   const [isEditing, setIsEditing] = useState(false)
-  const [editText, setEditText] = useState(item.content)
+  const [editText, setEditText] = useState(item?.content || '')
   const [isHovered, setIsHovered] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -59,30 +59,30 @@ export function ChecklistItem({
   }, [isEditing])
 
   const handleToggle = useCallback(() => {
-    if (!disabled && onToggle) {
+    if (!disabled && onToggle && item?.id) {
       onToggle(item.id)
     }
-  }, [item.id, disabled, onToggle])
+  }, [item?.id, disabled, onToggle])
 
   const handleStartEdit = useCallback(() => {
     if (!disabled && onUpdate) {
-      setEditText(item.content)
+      setEditText(item?.content || '')
       setIsEditing(true)
     }
-  }, [disabled, onUpdate, item.content])
+  }, [disabled, onUpdate, item?.content])
 
   const handleSaveEdit = useCallback(() => {
     const trimmed = editText.trim()
-    if (trimmed && trimmed !== item.content && onUpdate) {
+    if (trimmed && trimmed !== item?.content && onUpdate) {
       onUpdate(item.id, trimmed)
     }
     setIsEditing(false)
-  }, [item.id, item.content, editText, onUpdate])
+  }, [item?.id, item?.content, editText, onUpdate])
 
   const handleCancelEdit = useCallback(() => {
-    setEditText(item.content)
+    setEditText(item?.content || '')
     setIsEditing(false)
-  }, [item.content])
+  }, [item?.content])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -103,11 +103,16 @@ export function ChecklistItem({
   }, [disabled, onDelete])
 
   const handleConfirmDelete = useCallback(() => {
-    if (onDelete) {
+    if (onDelete && item?.id) {
       onDelete(item.id)
     }
     setShowDeleteConfirm(false)
-  }, [item.id, onDelete])
+  }, [item?.id, onDelete])
+
+  // Guard against undefined item (can happen during optimistic updates)
+  if (!item || !item.id) {
+    return <div className="h-8" /> // Placeholder during loading
+  }
 
   return (
     <div
@@ -198,7 +203,7 @@ export function ChecklistItem({
               : 'text-foreground'
           )}
         >
-          {item.content}
+          {item.content || ''}
         </span>
       )}
 
@@ -224,7 +229,7 @@ export function ChecklistItem({
         open={showDeleteConfirm}
         onOpenChange={setShowDeleteConfirm}
         title="Delete item?"
-        description={`Are you sure you want to delete "${item.content.substring(0, 50)}${item.content.length > 50 ? '...' : ''}"?`}
+        description={`Are you sure you want to delete "${(item.content || '').substring(0, 50)}${(item.content || '').length > 50 ? '...' : ''}"?`}
         confirmLabel="Delete"
         variant="destructive"
         onConfirm={handleConfirmDelete}

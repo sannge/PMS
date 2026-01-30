@@ -16,10 +16,9 @@ import { cn } from '@/lib/utils'
 import { MessageSquare, Loader2, AlertCircle } from 'lucide-react'
 import { useCommentsList, useCreateComment, type Comment } from '@/hooks/use-comments'
 import { useAuthStore } from '@/stores/auth-store'
-import { useFilesStore } from '@/stores/files-store'
 import { queryKeys } from '@/lib/query-client'
 import { CommentItem } from './CommentItem'
-import { CommentInput, type MentionSuggestion } from './CommentInput'
+import { CommentInput, type MentionSuggestion, type UploadedAttachment } from './CommentInput'
 import { TypingIndicator } from '@/components/presence'
 import { SkeletonComments } from '@/components/ui/skeleton'
 import { wsClient, MessageType } from '@/lib/websocket'
@@ -51,7 +50,6 @@ export function CommentThread({
 }: CommentThreadProps): JSX.Element {
   const queryClient = useQueryClient()
   const userId = useAuthStore((state) => state.user?.id)
-  const removeAttachmentsByIds = useFilesStore((state) => state.removeAttachmentsByIds)
 
   // TanStack Query hooks
   const {
@@ -98,10 +96,9 @@ export function CommentThread({
     const onCommentDeleted = (data: { task_id?: string; attachment_ids?: string[] }) => {
       if (data.task_id === taskId) {
         queryClient.invalidateQueries({ queryKey: queryKeys.comments(taskId) })
-        // Remove associated attachments from the task's attachment list
-        if (data.attachment_ids && data.attachment_ids.length > 0) {
-          removeAttachmentsByIds(data.attachment_ids)
-        }
+        // Invalidate attachments cache - comment deletion may have removed attachments
+        queryClient.invalidateQueries({ queryKey: queryKeys.attachments(taskId) })
+        queryClient.invalidateQueries({ queryKey: ['attachments', 'task', taskId] })
       }
     }
 
@@ -117,7 +114,7 @@ export function CommentThread({
       wsClient.off(MessageType.COMMENT_UPDATED, onCommentUpdated)
       wsClient.off(MessageType.COMMENT_DELETED, onCommentDeleted)
     }
-  }, [taskId, queryClient, removeAttachmentsByIds])
+  }, [taskId, queryClient])
 
   // Setup infinite scroll observer
   useEffect(() => {
@@ -147,34 +144,19 @@ export function CommentThread({
 
   // Handlers
   const handleSubmit = useCallback(
-    async (content: { body_text: string; body_json?: Record<string, unknown> }, attachmentIds?: string[]) => {
+    async (content: { body_text: string; body_json?: Record<string, unknown> }, attachments?: UploadedAttachment[]) => {
       try {
         await createCommentMutation.mutateAsync({
           ...content,
-          attachment_ids: attachmentIds,
+          attachment_ids: attachments?.map((a) => a.id),
+          // Pass full attachment data for optimistic update
+          _attachments: attachments,
         })
       } catch (err) {
         setLocalError(err instanceof Error ? err : new Error('Failed to create comment'))
       }
     },
     [createCommentMutation]
-  )
-
-  // Note: Edit and delete are handled by CommentItem using its own hooks
-  const handleEdit = useCallback(
-    async (_commentId: string, _bodyText: string) => {
-      // This is a no-op - CommentItem handles its own editing via useUpdateComment
-      // Kept for interface compatibility
-    },
-    []
-  )
-
-  const handleDelete = useCallback(
-    async (_commentId: string) => {
-      // This is a no-op - CommentItem handles its own deletion via useDeleteComment
-      // Kept for interface compatibility
-    },
-    []
   )
 
   const clearError = useCallback(() => {
@@ -253,8 +235,6 @@ export function CommentThread({
                 key={comment.id}
                 comment={comment}
                 currentUserId={userId}
-                onEdit={handleEdit}
-                onDelete={handleDelete}
                 disabled={isCreating}
               />
             ))}

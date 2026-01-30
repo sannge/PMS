@@ -25,12 +25,6 @@ if (process.env.ELECTRON_USER_DATA_DIR) {
   app.setPath('userData', userDataPath)
 }
 
-// Enable remote debugging for development/testing with dynamic port
-if (is.dev) {
-  // Use port from env or default to 9222, allowing multiple instances
-  const debugPort = process.env.ELECTRON_DEBUG_PORT || '9222'
-  app.commandLine.appendSwitch('remote-debugging-port', debugPort)
-}
 
 // Keep a global reference of the window object to prevent garbage collection
 let mainWindow: BrowserWindow | null = null
@@ -112,8 +106,6 @@ function createWindow(): void {
   // Load the renderer
   if (is.dev && process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
-    // Open DevTools in development mode
-    mainWindow.webContents.openDevTools({ mode: 'detach' })
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }

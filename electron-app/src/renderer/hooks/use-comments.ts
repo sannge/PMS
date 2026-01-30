@@ -58,10 +58,20 @@ export interface Comment {
   isOptimistic?: boolean
 }
 
+/** Attachment data for optimistic updates (matches UploadedAttachment from CommentInput) */
+export interface OptimisticAttachment {
+  id: string
+  file_name: string
+  file_type: string | null
+  file_size: number | null
+}
+
 export interface CommentCreate {
   body_json?: Record<string, unknown>
   body_text?: string
   attachment_ids?: string[]
+  /** Client-side only: full attachment data for optimistic updates */
+  _attachments?: OptimisticAttachment[]
 }
 
 export interface CommentUpdate {
@@ -245,9 +255,12 @@ export function useCreateComment(
         throw new Error('Electron API not available')
       }
 
+      // Strip client-only fields before sending to server
+      const { _attachments, ...serverData } = data
+
       const response = await window.electronAPI.post<Comment>(
         `/api/tasks/${taskId}/comments`,
-        data,
+        serverData,
         getAuthHeaders(token)
       )
 
@@ -267,7 +280,15 @@ export function useCreateComment(
         queryKeys.comments(taskId)
       )
 
-      // Create optimistic comment
+      // Create optimistic comment with attachments
+      const optimisticAttachments: CommentAttachment[] = (newData._attachments || []).map((a) => ({
+        id: a.id,
+        file_name: a.file_name,
+        file_type: a.file_type,
+        file_size: a.file_size,
+        created_at: new Date().toISOString(),
+      }))
+
       const optimisticComment: Comment = {
         id: `temp-${Date.now()}`,
         task_id: taskId,
@@ -280,7 +301,7 @@ export function useCreateComment(
         created_at: new Date().toISOString(),
         updated_at: null,
         mentions: [],
-        attachments: [],
+        attachments: optimisticAttachments,
         isOptimistic: true,
       }
 
@@ -301,6 +322,30 @@ export function useCreateComment(
 
       return { previousData: previousData?.pages }
     },
+    onSuccess: (newComment) => {
+      // Replace optimistic comment with real comment
+      queryClient.setQueryData<{ pages: CommentListResponse[] }>(
+        queryKeys.comments(taskId),
+        (old) => {
+          if (!old) return old
+          return {
+            ...old,
+            pages: old.pages.map((page, index) => {
+              if (index === 0) {
+                // Replace temp comment with real one, or add if not found
+                const filteredItems = page.items.filter((c) => !c.id.startsWith('temp-'))
+                const hasNewComment = filteredItems.some((c) => c.id === newComment.id)
+                return {
+                  ...page,
+                  items: hasNewComment ? filteredItems : [newComment, ...filteredItems],
+                }
+              }
+              return page
+            }),
+          }
+        }
+      )
+    },
     onError: (_err, _vars, context) => {
       // Rollback on error
       if (context?.previousData) {
@@ -308,7 +353,7 @@ export function useCreateComment(
       }
     },
     onSettled: () => {
-      // Refetch to ensure consistency
+      // Refetch to ensure consistency (in background, won't cause loading state)
       queryClient.invalidateQueries({ queryKey: queryKeys.comments(taskId) })
     },
   })
@@ -444,6 +489,9 @@ export function useDeleteComment(
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.comments(taskId) })
+      // Invalidate attachments - comment deletion may have removed attachments
+      queryClient.invalidateQueries({ queryKey: queryKeys.attachments(taskId) })
+      queryClient.invalidateQueries({ queryKey: ['attachments', 'task', taskId] })
     },
   })
 }

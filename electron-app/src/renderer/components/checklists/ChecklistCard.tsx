@@ -40,7 +40,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import type { Checklist, ChecklistItem as ChecklistItemType } from '@/stores/checklists-store'
+import type { Checklist, ChecklistItem as ChecklistItemType } from '@/hooks/use-checklists'
 import { ChecklistItem } from './ChecklistItem'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 
@@ -82,6 +82,9 @@ function SortableChecklistItem({
   disabled,
   canReorder = true,
 }: SortableItemProps & { canReorder?: boolean }): JSX.Element {
+  // Guard: use empty string as fallback id to prevent crash
+  const itemId = item?.id || ''
+
   const {
     attributes,
     listeners,
@@ -89,12 +92,17 @@ function SortableChecklistItem({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: item.id, disabled: !canReorder })
+  } = useSortable({ id: itemId, disabled: !canReorder || !item?.id })
 
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : 1,
+  }
+
+  // Guard against undefined item
+  if (!item || !item.id) {
+    return <div className="h-8" />
   }
 
   return (
@@ -217,7 +225,7 @@ export function ChecklistCard({
   // Items are already in correct order from the store (after reordering)
   // We only sort by rank on initial load, the store maintains order after that
   const sortedItems = useMemo(
-    () => [...checklist.items],
+    () => [...(checklist.items || [])].filter((item) => item && item.id),
     [checklist.items]
   )
 

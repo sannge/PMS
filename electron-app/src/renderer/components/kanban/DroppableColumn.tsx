@@ -209,6 +209,7 @@ export function DroppableColumn({
                     key={task.id}
                     task={task}
                     onClick={onTaskClick}
+                    disabled={!!task.archived_at}
                   />
                 ))}
                 {/* Drop zone indicator when dragging */}

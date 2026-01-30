@@ -12,7 +12,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
-import { useWebSocket, MessageType, type MemberAddedEventData, type MemberRemovedEventData, type RoleUpdatedEventData } from '@/hooks/use-websocket'
+import { useWebSocket, MessageType, type MemberAddedEventData, type MemberRemovedEventData, type RoleUpdatedEventData, type WebSocketEventData } from '@/hooks/use-websocket'
 import { WebSocketClient } from '@/lib/websocket'
 import {
   useApplication,
@@ -22,17 +22,19 @@ import {
   useCreateProject,
   useUpdateProject,
   useDeleteProject,
-  useAppMembers,
-  useUpdateAppMemberRole,
-  useRemoveAppMember,
   type Application,
   type ApplicationUpdate,
   type Project,
   type ProjectCreate,
   type ProjectUpdate,
 } from '@/hooks/use-queries'
-import type { ApplicationMember, ApplicationRole } from '@/hooks/use-members'
-import { MessageType, type WebSocketEventData } from '@/hooks/use-websocket'
+import {
+  useAppMembers,
+  useUpdateAppMemberRole,
+  useRemoveAppMember,
+  type ApplicationMember,
+  type ApplicationRole,
+} from '@/hooks/use-members'
 
 // Define the event data type for project status changed
 interface ProjectStatusChangedEventData extends WebSocketEventData {
@@ -64,7 +66,10 @@ import {
   UserPlus,
   LayoutGrid,
   Columns,
+  Archive,
 } from 'lucide-react'
+import { ArchivedProjectsList } from '@/components/archive/ArchivedProjectsList'
+import { useArchivedProjectsCount } from '@/hooks/use-queries'
 
 // ============================================================================
 // Types
@@ -450,6 +455,10 @@ export function ApplicationDetailPage({
   const [deletingProject, setDeletingProject] = useState<Project | null>(null)
   const [projectSearchQuery, setProjectSearchQuery] = useState('')
   const [projectViewMode, setProjectViewMode] = useState<'kanban' | 'grid'>('kanban')
+  const [showArchive, setShowArchive] = useState(false)
+
+  // Archived projects count for tab badge
+  const { data: archivedProjectsCount = 0 } = useArchivedProjectsCount(applicationId)
   // Member management state
   const [editingMember, setEditingMember] = useState<ApplicationMember | null>(null)
   const [removingMember, setRemovingMember] = useState<ApplicationMember | null>(null)
@@ -849,7 +858,48 @@ export function ApplicationDetailPage({
 
       {/* Projects Section - Compact Header */}
       <div className="space-y-3 flex-1 flex flex-col min-h-0">
-        <div className="flex items-center justify-between gap-3">
+        {/* Projects/Archive Tab Toggle */}
+        <div className="flex items-center gap-1 border-b border-border">
+          <button
+            onClick={() => setShowArchive(false)}
+            className={cn(
+              'relative px-3 py-2 text-xs font-medium transition-colors',
+              !showArchive
+                ? 'text-foreground'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            Projects
+            {!showArchive && (
+              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
+            )}
+          </button>
+          <button
+            onClick={() => setShowArchive(true)}
+            className={cn(
+              'relative flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors',
+              showArchive
+                ? 'text-foreground'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            <Archive className="h-3 w-3" />
+            Archive
+            {archivedProjectsCount > 0 && (
+              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-semibold">
+                {archivedProjectsCount > 99 ? '99+' : archivedProjectsCount}
+              </span>
+            )}
+            {showArchive && (
+              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
+            )}
+          </button>
+        </div>
+
+        {/* Active Projects Header and Content (only show when not in archive view) */}
+        {!showArchive ? (
+        <>
+          <div className="flex items-center justify-between gap-3">
           {/* Search inline with title */}
           <div className="flex items-center gap-3 flex-1">
             <h2 className="text-sm font-medium text-foreground flex-shrink-0">Projects</h2>
@@ -1004,6 +1054,14 @@ export function ApplicationDetailPage({
               ))}
             </div>
           )
+        )}
+        </>
+        ) : (
+          <ArchivedProjectsList
+            applicationId={applicationId}
+            onProjectClick={onSelectProject ? (project) => onSelectProject(project.id) : undefined}
+            className="flex-1"
+          />
         )}
       </div>
 

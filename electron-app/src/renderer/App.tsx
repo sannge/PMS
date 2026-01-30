@@ -18,8 +18,7 @@ import { RegisterPage } from '@/pages/register'
 import { DashboardPage } from '@/pages/dashboard'
 import { AuthGate } from '@/components/protected-route'
 import { queryClient, initializeQueryPersistence, clearQueryCache } from '@/lib/query-client'
-import { useWebSocketCacheInvalidation } from '@/hooks/use-websocket-cache'
-import { useAuthStore } from '@/stores/auth-store'
+import { AuthProvider, useAuthStore, NotificationUIProvider, NotesProvider } from '@/contexts'
 
 // ============================================================================
 // Types
@@ -245,12 +244,12 @@ function useCacheClearOnLogout(): void {
 /**
  * The main application content shown when user is authenticated
  * Renders the dashboard layout with sidebar navigation
+ *
+ * Note: WebSocket cache invalidation is handled in DashboardPage
+ * so it has access to navigation state for member removal redirect.
  */
 function AuthenticatedApp(): JSX.Element {
   const { theme, setTheme } = useTheme()
-
-  // Enable WebSocket cache invalidation for real-time updates
-  useWebSocketCacheInvalidation()
 
   return <DashboardPage theme={theme} onThemeChange={setTheme} />
 }
@@ -330,13 +329,19 @@ function QueryClientInitializer({ children }: { children: ReactNode }): JSX.Elem
 function App(): JSX.Element {
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider>
-        <ErrorBoundary>
-          <QueryClientInitializer>
-            <AuthRouter />
-          </QueryClientInitializer>
-        </ErrorBoundary>
-      </ThemeProvider>
+      <AuthProvider>
+        <NotificationUIProvider>
+          <NotesProvider>
+            <ThemeProvider>
+              <ErrorBoundary>
+                <QueryClientInitializer>
+                  <AuthRouter />
+                </QueryClientInitializer>
+              </ErrorBoundary>
+            </ThemeProvider>
+          </NotesProvider>
+        </NotificationUIProvider>
+      </AuthProvider>
       {/* React Query Devtools - only shown in development */}
       {import.meta.env.DEV && <ReactQueryDevtools initialIsOpen={false} />}
     </QueryClientProvider>

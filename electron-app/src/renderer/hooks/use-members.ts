@@ -25,10 +25,10 @@ export type ApplicationRole = 'owner' | 'editor' | 'viewer'
 export type ProjectRole = 'admin' | 'member'
 
 export interface ApplicationMember {
+  id: string
   user_id: string
   application_id: string
   role: ApplicationRole
-  is_manager: boolean
   user_email: string
   user_display_name: string | null
   user_avatar_url: string | null
@@ -37,6 +37,7 @@ export interface ApplicationMember {
 }
 
 export interface ProjectMember {
+  id: string
   user_id: string
   project_id: string
   role: ProjectRole
@@ -50,6 +51,11 @@ export interface ProjectMember {
 export interface AddMemberPayload {
   email: string
   role: ApplicationRole | ProjectRole
+}
+
+export interface AddProjectMemberPayload {
+  user_id: string
+  role: ProjectRole
 }
 
 export interface UpdateRolePayload {
@@ -142,8 +148,9 @@ export function useAppMembers(
       return response.data || []
     },
     enabled: !!token && !!applicationId,
-    staleTime: 5 * 60 * 1000, // 5 minutes - members don't change often
+    staleTime: 30 * 1000, // 30 seconds - refetch when stale for add member dialogs
     gcTime: 24 * 60 * 60 * 1000,
+    refetchOnMount: 'always', // Always refetch when query mounts (dialog opens)
   })
 }
 
@@ -200,7 +207,7 @@ export function useUpdateAppMemberRole(
       }
 
       const response = await window.electronAPI.put<ApplicationMember>(
-        `/api/applications/${applicationId}/members/${userId}/role`,
+        `/api/applications/${applicationId}/members/${userId}`,
         { role: newRole },
         getAuthHeaders(token)
       )
@@ -321,7 +328,7 @@ export function useProjectMembers(
       return response.data || []
     },
     enabled: !!token && !!projectId,
-    staleTime: 5 * 60 * 1000, // 5 minutes
+    staleTime: 30 * 1000, // 30 seconds - members may change frequently
     gcTime: 24 * 60 * 60 * 1000,
   })
 }
@@ -331,19 +338,19 @@ export function useProjectMembers(
  */
 export function useAddProjectMember(
   projectId: string
-): UseMutationResult<ProjectMember, Error, AddMemberPayload> {
+): UseMutationResult<ProjectMember, Error, AddProjectMemberPayload> {
   const token = useAuthStore((s) => s.token)
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async (data: AddMemberPayload) => {
+    mutationFn: async (data: AddProjectMemberPayload) => {
       if (!window.electronAPI) {
         throw new Error('Electron API not available')
       }
 
       const response = await window.electronAPI.post<ProjectMember>(
         `/api/projects/${projectId}/members`,
-        { email: data.email, role: data.role },
+        { user_id: data.user_id, role: data.role },
         getAuthHeaders(token)
       )
 
@@ -378,7 +385,7 @@ export function useUpdateProjectMemberRole(
         throw new Error('Electron API not available')
       }
 
-      const response = await window.electronAPI.put<ProjectMember>(
+      const response = await window.electronAPI.patch<ProjectMember>(
         `/api/projects/${projectId}/members/${userId}/role`,
         { role: newRole },
         getAuthHeaders(token)

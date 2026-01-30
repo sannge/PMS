@@ -11,7 +11,7 @@
  * - User avatars and role badges
  */
 
-import { useEffect, useCallback, useState, useRef } from 'react'
+import { useEffect, useCallback, useState, useRef, useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import {
   Users,
@@ -30,7 +30,7 @@ import {
 } from 'lucide-react'
 import {
   useProjectMembers,
-  useApplicationMembers,
+  useAppMembers,
   useAddProjectMember,
   useRemoveProjectMember,
   useUpdateProjectMemberRole,
@@ -89,17 +89,17 @@ export function ProjectMemberPanel({
 
   // TanStack Query hooks
   const { data: members = [], isLoading, error: membersError } = useProjectMembers(projectId)
-  const { data: appMembers = [], isLoading: isLoadingApplicationMembers } = useApplicationMembers(showAddDialog ? applicationId : undefined)
+  const { data: appMembers = [], isLoading: isLoadingApplicationMembers } = useAppMembers(showAddDialog ? applicationId : undefined)
 
   // Mutations
   const addMemberMutation = useAddProjectMember(projectId)
   const removeMemberMutation = useRemoveProjectMember(projectId)
   const updateRoleMutation = useUpdateProjectMemberRole(projectId)
 
-  // Calculate available members (app members not already in project)
+  // Calculate available members (app members not already in project, excluding viewers)
   const memberUserIds = useMemo(() => new Set(members.map(m => m.user_id)), [members])
   const availableMembers = useMemo(
-    () => appMembers.filter(m => !memberUserIds.has(m.user_id)),
+    () => appMembers.filter(m => !memberUserIds.has(m.user_id) && m.role !== 'viewer'),
     [appMembers, memberUserIds]
   )
   const isLoadingAvailable = isLoadingApplicationMembers
@@ -123,9 +123,7 @@ export function ProjectMemberPanel({
   const handleAddMember = useCallback(
     async (userId: string) => {
       try {
-        const appMember = appMembers.find(m => m.user_id === userId)
-        if (!appMember) return
-        await addMemberMutation.mutateAsync({ email: appMember.user_email, role: 'member' })
+        await addMemberMutation.mutateAsync({ user_id: userId, role: 'member' })
         if (availableMembers.length <= 1) {
           setShowAddDialog(false)
         }
@@ -133,7 +131,7 @@ export function ProjectMemberPanel({
         setLocalError(err instanceof Error ? err : new Error('Failed to add member'))
       }
     },
-    [addMemberMutation, appMembers, availableMembers.length]
+    [addMemberMutation, availableMembers.length]
   )
 
   const handleRemoveMember = useCallback(
@@ -159,7 +157,7 @@ export function ProjectMemberPanel({
   )
 
   // Track which operations are pending
-  const addingUserId = addMemberMutation.isPending ? addMemberMutation.variables?.email : null
+  const addingUserId = addMemberMutation.isPending ? addMemberMutation.variables?.user_id : null
   const removingUserId = removeMemberMutation.isPending ? removeMemberMutation.variables : null
   const changingRoleUserId = updateRoleMutation.isPending ? updateRoleMutation.variables?.userId : null
 

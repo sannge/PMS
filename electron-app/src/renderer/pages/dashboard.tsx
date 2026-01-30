@@ -9,7 +9,7 @@
  * - Smooth staggered animations
  */
 
-import { useState, useCallback, useEffect, useRef, ReactNode } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo, ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { Sidebar, type NavItem } from '@/components/layout/sidebar'
 import { WindowTitleBar } from '@/components/layout/window-title-bar'
@@ -19,12 +19,17 @@ import { ApplicationDetailPage } from '@/pages/applications/[id]'
 import { ProjectsPage } from '@/pages/projects/index'
 import { ProjectDetailPage } from '@/pages/projects/[id]'
 import { NotesPage } from '@/pages/notes/index'
+import { MyTasksPanel } from '@/components/tasks/MyTasksPanel'
+import { MyProjectsPanel } from '@/components/dashboard/MyProjectsPanel'
+import { DashboardTasksList } from '@/components/dashboard/DashboardTasksList'
 import { useInvitationNotifications, useWebSocket, useNotificationReadSync, useProjectDeletedSync, useNotifications } from '@/hooks/use-websocket'
+import { useWebSocketCacheInvalidation } from '@/hooks/use-websocket-cache'
 import { requestNotificationPermission } from '@/lib/notifications'
 import { useAuthStore } from '@/stores/auth-store'
 import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '@/lib/query-client'
-import type { Project, Application } from '@/hooks/use-queries'
+import { useApplications } from '@/hooks/use-queries'
+import type { Project, Application, Task } from '@/hooks/use-queries'
 import {
   FolderKanban,
   ListTodo,
@@ -224,16 +229,26 @@ function QuickAction({ icon, label, description, color, onClick, index = 0 }: Qu
 // ============================================================================
 
 interface DashboardContentProps {
+  applicationId?: string | null
   onNavigateToApplications?: () => void
   onNavigateToTasks?: () => void
   onNavigateToNotes?: () => void
+  onProjectClick?: (project: Project) => void
+  onTaskClick?: (task: Task) => void
 }
 
 function DashboardContent({
+  applicationId,
   onNavigateToApplications,
   onNavigateToTasks,
   onNavigateToNotes,
+  onProjectClick,
+  onTaskClick,
 }: DashboardContentProps): JSX.Element {
+  const { data: applications } = useApplications()
+  const appCount = applications?.length ?? 0
+  const projectCount = applications?.reduce((sum, app) => sum + app.projects_count, 0) ?? 0
+
   return (
     <div className="space-y-8">
       {/* Welcome Section */}
@@ -266,14 +281,14 @@ function DashboardContent({
         <StatCard
           icon={<FolderKanban className="h-6 w-6" />}
           label="Applications"
-          value={0}
+          value={appCount}
           color="amber"
           index={0}
         />
         <StatCard
           icon={<LayoutDashboard className="h-6 w-6" />}
           label="Projects"
-          value={0}
+          value={projectCount}
           color="violet"
           index={1}
         />
@@ -288,11 +303,24 @@ function DashboardContent({
           icon={<CheckCircle2 className="h-6 w-6" />}
           label="Completed"
           value={0}
-          trend={{ value: 0, isPositive: true }}
           color="emerald"
           index={3}
         />
       </div>
+
+      {/* Two-column layout: Projects + Tasks */}
+      {applicationId && (
+        <div className="grid gap-6 lg:grid-cols-2" style={{ minHeight: '400px' }}>
+          <MyProjectsPanel
+            applicationId={applicationId}
+            onProjectClick={onProjectClick}
+          />
+          <DashboardTasksList
+            applicationId={applicationId}
+            onTaskClick={onTaskClick}
+          />
+        </div>
+      )}
 
       {/* Quick Actions */}
       <div>
@@ -328,32 +356,48 @@ function DashboardContent({
         </div>
       </div>
 
-      {/* Recent Activity */}
-      <div>
-        <div className="mb-5 flex items-center gap-3">
-          <Activity className="h-5 w-5 text-violet-500" />
-          <h3 className="text-lg font-semibold text-foreground">Recent Activity</h3>
-        </div>
-        <div className={cn(
-          'rounded-2xl border border-border bg-card overflow-hidden',
-          'animate-fade-in opacity-0'
-        )} style={{ animationDelay: '400ms' }}>
-          <div className="p-6">
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <div className={cn(
-                'flex h-16 w-16 items-center justify-center rounded-2xl mb-4',
-                'bg-muted/50'
-              )}>
-                <LayoutDashboard className="h-8 w-8 text-muted-foreground/50" />
+      {/* Prompt to select application if none selected */}
+      {!applicationId && (
+        <div>
+          <div className="mb-5 flex items-center gap-3">
+            <Activity className="h-5 w-5 text-violet-500" />
+            <h3 className="text-lg font-semibold text-foreground">Projects & Tasks</h3>
+          </div>
+          <div className={cn(
+            'rounded-2xl border border-border bg-card overflow-hidden',
+            'animate-fade-in opacity-0'
+          )} style={{ animationDelay: '400ms' }}>
+            <div className="p-6">
+              <div className="flex flex-col items-center justify-center py-12 text-center">
+                <div className={cn(
+                  'flex h-16 w-16 items-center justify-center rounded-2xl mb-4',
+                  'bg-muted/50'
+                )}>
+                  <LayoutDashboard className="h-8 w-8 text-muted-foreground/50" />
+                </div>
+                <p className="font-medium text-foreground">Select an application</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Choose an application from the sidebar to see your projects and tasks
+                </p>
+                <button
+                  onClick={onNavigateToApplications}
+                  className={cn(
+                    'mt-4 inline-flex items-center gap-2 rounded-xl px-5 py-2.5',
+                    'text-sm font-semibold',
+                    'bg-gradient-to-r from-amber-500 to-orange-500 text-white',
+                    'transition-all duration-300',
+                    'hover:from-amber-400 hover:to-orange-400 hover:shadow-lg hover:shadow-amber-500/25',
+                    'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+                  )}
+                >
+                  Go to Applications
+                  <ArrowRight className="h-4 w-4" />
+                </button>
               </div>
-              <p className="font-medium text-foreground">No recent activity</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Your recent updates will appear here
-              </p>
             </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }
@@ -371,6 +415,8 @@ export function DashboardPage({
   const [selectedApplicationId, setSelectedApplicationId] = useState<string | null>(null)
   const [selectedApplicationName, setSelectedApplicationName] = useState<string | null>(null)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
+  const [initialTaskId, setInitialTaskId] = useState<string | null>(null)
+  const handleInitialTaskConsumed = useCallback(() => setInitialTaskId(null), [])
 
   const [isCollapsed, setIsCollapsed] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
@@ -397,11 +443,50 @@ export function DashboardPage({
   const selectedApplicationIdRef = useRef<string | null>(selectedApplicationId)
   selectedApplicationIdRef.current = selectedApplicationId
 
+  // Track current project ID for WebSocket handlers (to detect if user is viewing deleted project)
+  const selectedProjectIdRef = useRef<string | null>(selectedProjectId)
+  selectedProjectIdRef.current = selectedProjectId
+
   // Sync notification read status across tabs/devices
   useNotificationReadSync()
 
   // Sync project deletions across tabs/devices
   useProjectDeletedSync()
+
+  // Memoize the callback to avoid recreating the options object on every render
+  const handleCurrentUserRemoved = useCallback((applicationId: string) => {
+    console.log('[Dashboard] onCurrentUserRemoved callback:', applicationId)
+    console.log('[Dashboard] selectedApplicationIdRef.current:', selectedApplicationIdRef.current)
+    // If user is viewing the application they were removed from, redirect to apps list
+    if (selectedApplicationIdRef.current === applicationId) {
+      console.log('[Dashboard] User was viewing removed app, redirecting to applications list')
+      setSelectedApplicationId(null)
+      setSelectedApplicationName(null)
+      setSelectedProjectId(null)
+      setActiveItem('applications')
+    }
+  }, []) // Empty deps - uses refs and stable setters
+
+  // Handle project deletion - redirect if user is viewing deleted project
+  const handleProjectDeleted = useCallback((projectId: string, _applicationId: string) => {
+    console.log('[Dashboard] onProjectDeleted callback:', projectId)
+    console.log('[Dashboard] selectedProjectIdRef.current:', selectedProjectIdRef.current)
+    // If user is viewing the project that was deleted, redirect to application view
+    if (selectedProjectIdRef.current === projectId) {
+      console.log('[Dashboard] User was viewing deleted project, redirecting to application view')
+      setSelectedProjectId(null)
+      // Stay in the same application, just clear the project
+    }
+  }, []) // Empty deps - uses refs and stable setters
+
+  // Memoize options to prevent unnecessary effect runs
+  const cacheOptions = useMemo(() => ({
+    onCurrentUserRemoved: handleCurrentUserRemoved,
+    onProjectDeleted: handleProjectDeleted,
+  }), [handleCurrentUserRemoved, handleProjectDeleted])
+
+  // WebSocket cache invalidation with redirect handling for member removal
+  useWebSocketCacheInvalidation(cacheOptions)
 
   // Request browser notification permission on mount
   useEffect(() => {
@@ -466,28 +551,10 @@ export function DashboardPage({
       queryClient.invalidateQueries({ queryKey: queryKeys.appMembers(data.application_id) })
     },
     onMemberRemoved: (data) => {
-      // Check if current user is the one being removed
-      const currentUserId = useAuthStore.getState().user?.id
-      const isCurrentUserRemoved = currentUserId === data.user_id
-
-      // Invalidate notifications
+      // Note: Cache invalidation and redirect are handled by useWebSocketCacheInvalidation
+      // This handler is kept for notification invalidation (different from NOTIFICATION event)
+      console.log('[Dashboard] onMemberRemoved from useInvitationNotifications:', data)
       queryClient.invalidateQueries({ queryKey: queryKeys.notifications })
-
-      // If current user was removed, kick them out if viewing that application
-      if (isCurrentUserRemoved) {
-        // Check if user is currently viewing the application they were removed from
-        if (selectedApplicationIdRef.current === data.application_id) {
-          // Kick user back to applications list
-          setSelectedApplicationId(null)
-          setSelectedApplicationName(null)
-          setSelectedProjectId(null)
-        }
-        // Invalidate applications list to remove the application they no longer have access to
-        queryClient.invalidateQueries({ queryKey: queryKeys.applications })
-      }
-
-      // Invalidate members for this application
-      queryClient.invalidateQueries({ queryKey: queryKeys.appMembers(data.application_id) })
     },
     onRoleUpdated: (data) => {
       // Invalidate notifications
@@ -552,9 +619,24 @@ export function DashboardPage({
       case 'dashboard':
         return (
           <DashboardContent
+            applicationId={selectedApplicationId}
             onNavigateToApplications={() => handleNavigate('applications')}
             onNavigateToTasks={() => handleNavigate('tasks')}
             onNavigateToNotes={() => handleNavigate('notes')}
+            onProjectClick={(project) => {
+              setSelectedApplicationId(project.application_id)
+              setSelectedProjectId(project.id)
+              setActiveItem('applications')
+            }}
+            onTaskClick={(task) => {
+              if (task.project_id) {
+                setSelectedApplicationId(task.application_id || null)
+                setSelectedApplicationName(task.application_name || null)
+                setSelectedProjectId(task.project_id)
+                setInitialTaskId(task.id)
+                setActiveItem('projects')
+              }
+            }}
           />
         )
       case 'applications':
@@ -563,6 +645,8 @@ export function DashboardPage({
             <ProjectDetailPage
               projectId={selectedProjectId}
               applicationId={selectedApplicationId}
+              initialTaskId={initialTaskId}
+              onInitialTaskConsumed={handleInitialTaskConsumed}
               onBack={handleBackToProjects}
               onDeleted={handleBackToProjects}
             />
@@ -589,6 +673,8 @@ export function DashboardPage({
             <ProjectDetailPage
               projectId={selectedProjectId}
               applicationId={selectedApplicationId}
+              initialTaskId={initialTaskId}
+              onInitialTaskConsumed={handleInitialTaskConsumed}
               onBack={handleBackToProjects}
               onDeleted={handleBackToProjects}
             />
@@ -636,18 +722,31 @@ export function DashboardPage({
         )
       case 'tasks':
         return (
-          <div className="flex flex-1 items-center justify-center">
-            <div className="text-center animate-fade-in">
-              <div className={cn(
-                'mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-2xl',
-                'bg-muted/50'
-              )}>
-                <ListTodo className="h-10 w-10 text-muted-foreground/50" />
-              </div>
-              <h2 className="text-xl font-semibold text-foreground">Tasks</h2>
-              <p className="mt-2 text-muted-foreground">
-                Task management coming soon...
-              </p>
+          <div className="flex absolute inset-0">
+            {/* Left pane: Projects */}
+            <div className="w-1/2 border-r border-border p-4 pb-0">
+              <MyProjectsPanel
+                onProjectClick={(project) => {
+                  setSelectedApplicationId(project.application_id)
+                  setSelectedApplicationName(project.application_name || null)
+                  setSelectedProjectId(project.id)
+                  setActiveItem('projects')
+                }}
+              />
+            </div>
+            {/* Right pane: Tasks */}
+            <div className="w-1/2 p-4 pb-0">
+              <DashboardTasksList
+                onTaskClick={(task) => {
+                  if (task.project_id) {
+                    setSelectedApplicationId(task.application_id || null)
+                    setSelectedApplicationName(task.application_name || null)
+                    setSelectedProjectId(task.project_id)
+                    setInitialTaskId(task.id)
+                    setActiveItem('projects')
+                  }
+                }}
+              />
             </div>
           </div>
         )
@@ -689,7 +788,7 @@ export function DashboardPage({
         />
 
         {/* Main Content Area - reduced padding for space efficiency */}
-        <main className="flex-1 overflow-auto p-4 lg:p-5">
+        <main className={cn("flex-1 overflow-auto p-4 lg:p-5", activeItem === 'tasks' && "relative")}>
           {renderContent()}
         </main>
       </div>

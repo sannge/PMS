@@ -16,7 +16,8 @@ import { cn } from '@/lib/utils'
 import { User, Edit2, Trash2, Check, X, FileText, FileImage, File, Download, Maximize2 } from 'lucide-react'
 import type { Comment, CommentAttachment } from '@/hooks/use-comments'
 import { useAuthStore } from '@/stores/auth-store'
-import { useFilesStore, formatFileSize, isImageFile } from '@/stores/files-store'
+import { useGetDownloadUrl, useGetDownloadUrls } from '@/hooks/use-attachments'
+import { formatFileSize, isImageFile } from '@/lib/file-utils'
 import { queryKeys } from '@/lib/query-client'
 import { ImageViewer } from '@/components/ui/image-viewer'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -28,10 +29,6 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 export interface CommentItemProps {
   comment: Comment
   currentUserId?: string
-  /** @deprecated No longer used - edit is handled internally */
-  onEdit?: (commentId: string, bodyText: string) => void
-  /** @deprecated No longer used - delete is handled internally */
-  onDelete?: (commentId: string) => void
   isEditing?: boolean
   disabled?: boolean
   className?: string
@@ -178,7 +175,7 @@ function CommentAttachmentItem({ attachment, preloadedUrl }: CommentAttachmentIt
   const [imageUrl, setImageUrl] = useState<string | null>(preloadedUrl || null)
   const [isLoadingUrl, setIsLoadingUrl] = useState(false)
   const [isViewerOpen, setIsViewerOpen] = useState(false)
-  const { getDownloadUrl } = useFilesStore()
+  const getDownloadUrl = useGetDownloadUrl()
 
   const isImage = isImageFile(attachment.file_type)
 
@@ -309,8 +306,6 @@ function CommentAttachmentItem({ attachment, preloadedUrl }: CommentAttachmentIt
 export function CommentItem({
   comment,
   currentUserId,
-  onEdit: _onEdit,
-  onDelete: _onDelete,
   isEditing = false,
   disabled = false,
   className,
@@ -322,7 +317,7 @@ export function CommentItem({
   const [editText, setEditText] = useState(comment.body_text || '')
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [attachmentUrls, setAttachmentUrls] = useState<Record<string, string>>({})
-  const { getDownloadUrls } = useFilesStore()
+  const getDownloadUrls = useGetDownloadUrls()
 
   // Update comment mutation
   const updateMutation = useMutation({

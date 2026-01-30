@@ -16,6 +16,7 @@ import {
   useUpdateProject,
   useDeleteProject,
   useApplication,
+  useTask,
   useCreateTask,
   useUpdateTask,
   useDeleteTask,
@@ -80,6 +81,14 @@ export interface ProjectDetailPageProps {
    * Callback when a task is selected
    */
   onSelectTask?: (task: Task) => void
+  /**
+   * Task ID to auto-open in the detail panel on mount
+   */
+  initialTaskId?: string | null
+  /**
+   * Callback to clear initialTaskId after it has been consumed
+   */
+  onInitialTaskConsumed?: () => void
 }
 
 // ============================================================================
@@ -283,6 +292,14 @@ function InfoTooltip({ project }: InfoTooltipProps): JSX.Element {
                 {typeInfo.label}
               </span>
             </div>
+            {project.due_date && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Due Date</span>
+                <span className="text-foreground">
+                  {new Date(project.due_date + 'T00:00:00').toLocaleDateString()}
+                </span>
+              </div>
+            )}
             <div className="flex justify-between">
               <span className="text-muted-foreground">Created</span>
               <span className="text-foreground">{formatDate(project.created_at)}</span>
@@ -407,6 +424,8 @@ export function ProjectDetailPage({
   onBack,
   onDeleted,
   onSelectTask,
+  initialTaskId,
+  onInitialTaskConsumed,
 }: ProjectDetailPageProps): JSX.Element {
   // Auth state
   const currentUserId = useAuthStore((state) => state.user?.id)
@@ -500,8 +519,12 @@ export function ProjectDetailPage({
   const [showTeamPanel, setShowTeamPanel] = useState(false)
   const [showStatusPanel, setShowStatusPanel] = useState(false)
   const [showTaskForm, setShowTaskForm] = useState(false)
-  const [initialTaskStatus, setInitialTaskStatus] = useState<TaskStatus | null>(null)
+  const [initialTaskStatus, setInitialTaskStatus] = useState<TaskStatus | undefined>(undefined)
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
+
+  // Fetch initial task for auto-open
+  const { data: initialTask } = useTask(initialTaskId || undefined)
+  const initialTaskConsumedRef = useRef(false)
 
   // Ref to hold the board refresh function
   const refreshBoardRef = useRef<(() => void) | null>(null)
@@ -518,6 +541,24 @@ export function ProjectDetailPage({
     projectId,
     enabled: true,
   })
+
+  // Auto-open task detail when initialTaskId is provided
+  useEffect(() => {
+    if (initialTask && initialTaskId && !initialTaskConsumedRef.current) {
+      initialTaskConsumedRef.current = true
+      setSelectedTask(initialTask)
+      setSelectedTaskId(initialTask.id)
+      setViewing(initialTask.id)
+      onInitialTaskConsumed?.()
+    }
+  }, [initialTask, initialTaskId, onInitialTaskConsumed, setViewing])
+
+  // Reset consumed ref when initialTaskId changes
+  useEffect(() => {
+    if (!initialTaskId) {
+      initialTaskConsumedRef.current = false
+    }
+  }, [initialTaskId])
 
   // Handle edit
   const handleEdit = useCallback(() => {
@@ -568,7 +609,7 @@ export function ProjectDetailPage({
   // Handle add task
   const handleAddTask = useCallback((status?: TaskStatus) => {
     setMutationError(null)
-    setInitialTaskStatus(status || null)
+    setInitialTaskStatus(status)
     setShowTaskForm(true)
   }, [])
 
@@ -754,6 +795,11 @@ export function ProjectDetailPage({
             <span className="text-xs text-muted-foreground flex-shrink-0 bg-muted px-1.5 py-0.5 rounded">
               {project.tasks_count} {project.tasks_count === 1 ? 'task' : 'tasks'}
             </span>
+            {project.due_date && (
+              <span className="text-xs text-muted-foreground flex-shrink-0 flex items-center gap-1">
+                Due {new Date(project.due_date + 'T00:00:00').toLocaleDateString()}
+              </span>
+            )}
           </div>
         </div>
 
@@ -968,6 +1014,11 @@ export function ProjectDetailPage({
             setSelectedTask(null)
             setSelectedTaskId(null)
             // Project query will auto-refetch via cache invalidation
+          }}
+          onRevertTaskSelection={(revertToTask) => {
+            // Restore previous task selection when user wants to keep editing
+            setSelectedTask(revertToTask)
+            setSelectedTaskId(revertToTask.id)
           }}
           enableRealtime
         />

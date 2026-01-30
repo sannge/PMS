@@ -10,6 +10,8 @@
  * - Loading states
  * - Error handling
  * - Keyboard accessible
+ *
+ * Uses TanStack Query for data mutations.
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react'
@@ -18,7 +20,7 @@ import * as Select from '@radix-ui/react-select'
 import { cn } from '@/lib/utils'
 import { X, UserPlus, ChevronDown, Check, Search, Loader2, AlertCircle } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth-store'
-import { useInvitationsStore, type ApplicationRole } from '@/stores/invitations-store'
+import { useSendInvitation, type ApplicationRole } from '@/hooks/use-invitations'
 
 // ============================================================================
 // Types
@@ -115,9 +117,11 @@ export function InvitationModal({
 
   // Store hooks
   const token = useAuthStore((state) => state.token)
-  const { sendInvitation, isSending, error: storeError, clearError } = useInvitationsStore()
 
-  // Reset form when modal opens/closes
+  // TanStack Query mutation
+  const sendInvitation = useSendInvitation(applicationId)
+
+  // Reset form when modal opens
   useEffect(() => {
     if (isOpen) {
       setSearchQuery('')
@@ -127,11 +131,12 @@ export function InvitationModal({
       setIsSearching(false)
       setSearchError(null)
       setShowResults(false)
-      clearError()
+      sendInvitation.reset()
       // Focus search input after modal opens
       setTimeout(() => searchInputRef.current?.focus(), 100)
     }
-  }, [isOpen, clearError])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only reset on isOpen change
+  }, [isOpen])
 
   // Default user search function using API
   const defaultSearchUsers = useCallback(
@@ -216,17 +221,19 @@ export function InvitationModal({
         return
       }
 
-      const result = await sendInvitation(token, applicationId, {
-        invitee_id: selectedUser.id,
-        role: selectedRole,
-      })
+      try {
+        await sendInvitation.mutateAsync({
+          invitee_id: selectedUser.id,
+          role: selectedRole,
+        })
 
-      if (result) {
         onInvitationSent?.(selectedUser.id, selectedRole)
         onClose()
+      } catch {
+        // Error is handled by mutation state
       }
     },
-    [selectedUser, selectedRole, token, applicationId, sendInvitation, onInvitationSent, onClose]
+    [selectedUser, selectedRole, sendInvitation, onInvitationSent, onClose]
   )
 
   // Handle close
@@ -246,6 +253,9 @@ export function InvitationModal({
       }
     }
   }, [])
+
+  const isSending = sendInvitation.isPending
+  const mutationError = sendInvitation.error
 
   return (
     <Dialog.Root open={isOpen} onOpenChange={(open) => !open && handleClose()}>
@@ -457,11 +467,11 @@ export function InvitationModal({
               </Select.Root>
             </div>
 
-            {/* Store Error */}
-            {storeError && (
+            {/* Mutation Error */}
+            {mutationError && (
               <div className="flex items-center gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
                 <AlertCircle className="h-4 w-4" />
-                {storeError.message}
+                {mutationError.message}
               </div>
             )}
 

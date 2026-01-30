@@ -4,16 +4,27 @@
  * Displays in-app notifications in a slide-out panel.
  * Shows real-time alerts for invitations, member changes, etc.
  * Adapts positioning based on sidebar collapsed state.
+ *
+ * Uses TanStack Query for data fetching and caching.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { cn } from '@/lib/utils'
 import { useAuthStore, getAuthHeaders } from '@/stores/auth-store'
+import { useNotificationUIStore } from '@/stores/notification-ui-store'
 import {
-  useNotificationsStore,
-  type InAppNotification,
-} from '@/stores/notifications-store'
-import { useInvitationsStore, type InvitationWithDetails } from '@/stores/invitations-store'
+  useNotifications,
+  useMarkAsRead,
+  useMarkAllAsRead,
+  useDeleteNotification,
+  useClearAllNotifications,
+  type Notification,
+} from '@/hooks/use-notifications'
+import {
+  useAcceptInvitation,
+  useRejectInvitation,
+  type InvitationWithDetails,
+} from '@/hooks/use-invitations'
 import {
   X,
   Bell,
@@ -41,10 +52,34 @@ export interface NotificationPanelProps {
 }
 
 // ============================================================================
+// Types
+// ============================================================================
+
+type NotificationType =
+  | 'task_assigned'
+  | 'task_status_changed'
+  | 'comment_mention'
+  | 'comment_added'
+  | 'member_added'
+  | 'member_removed'
+  | 'role_changed'
+  | 'project_member_added'
+  | 'project_member_removed'
+  | 'project_role_changed'
+  | 'invitation_received'
+  | 'invitation_accepted'
+  | 'invitation_rejected'
+  | 'application_invite'
+  | 'success'
+  | 'warning'
+  | 'error'
+  | 'info'
+
+// ============================================================================
 // Helper Functions
 // ============================================================================
 
-function getNotificationIcon(type: InAppNotification['type']) {
+function getNotificationIcon(type: string) {
   switch (type) {
     case 'invitation_received':
     case 'application_invite':
@@ -54,18 +89,15 @@ function getNotificationIcon(type: InAppNotification['type']) {
     case 'invitation_rejected':
       return <X className="h-4 w-4 text-red-500" />
     case 'member_added':
-    case 'member_joined':
     case 'project_member_added':
       return <UserPlus className="h-4 w-4 text-blue-500" />
     case 'member_removed':
-    case 'member_left':
     case 'project_member_removed':
       return <UserMinus className="h-4 w-4 text-orange-500" />
-    case 'role_updated':
     case 'role_changed':
     case 'project_role_changed':
       return <Shield className="h-4 w-4 text-violet-500" />
-    case 'task_reassignment_needed':
+    case 'task_assigned':
       return <AlertCircle className="h-4 w-4 text-amber-500" />
     case 'success':
       return <CheckCircle className="h-4 w-4 text-emerald-500" />
@@ -78,11 +110,20 @@ function getNotificationIcon(type: InAppNotification['type']) {
   }
 }
 
-function formatTimeAgo(date: Date): string {
+function formatTimeAgo(dateStr: string): string {
+  // Ensure UTC parsing - append 'Z' if no timezone indicator
+  // Backend sends timestamps in UTC without the 'Z' suffix
+  let normalizedDateStr = dateStr
+  if (!dateStr.endsWith('Z') && !dateStr.includes('+') && !dateStr.includes('-', 10)) {
+    normalizedDateStr = dateStr + 'Z'
+  }
+
+  const date = new Date(normalizedDateStr)
   const now = new Date()
   const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000)
 
-  if (diffInSeconds < 60) {
+  // Handle future dates or very recent (within 60 seconds)
+  if (diffInSeconds < 0 || diffInSeconds < 60) {
     return 'Just now'
   }
   if (diffInSeconds < 3600) {
@@ -102,10 +143,10 @@ function formatTimeAgo(date: Date): string {
 // ============================================================================
 
 interface NotificationItemProps {
-  notification: InAppNotification
+  notification: Notification
   onMarkAsRead: (id: string) => void
   onRemove: (id: string) => void
-  onClick?: (notification: InAppNotification) => void
+  onClick?: (notification: Notification) => void
 }
 
 function NotificationItem({
@@ -116,18 +157,19 @@ function NotificationItem({
 }: NotificationItemProps) {
   // Check if this is a clickable invitation notification
   const isInvitationNotification =
-    notification.type === 'invitation_received' ||
-    notification.type === 'application_invite'
+    notification.notification_type === 'invitation_received' ||
+    notification.notification_type === 'application_invite'
+
+  // Get entity status from notification data if available
+  const entityStatus = notification.data?.status as string | undefined
 
   // Check if the invitation is still pending
-  // entityStatus will be 'pending', 'accepted', 'rejected', or 'cancelled'
-  // If entityStatus is undefined (realtime notifications), treat as pending
   const isPendingInvitation = isInvitationNotification &&
-    (!notification.entityStatus || notification.entityStatus === 'pending')
+    (!entityStatus || entityStatus === 'pending')
 
   // Get status label for non-pending invitations
   const getInvitationStatusLabel = () => {
-    switch (notification.entityStatus) {
+    switch (entityStatus) {
       case 'accepted':
         return 'Accepted'
       case 'rejected':
@@ -151,18 +193,18 @@ function NotificationItem({
       className={cn(
         'group relative flex gap-3 p-3 rounded-lg transition-all duration-200',
         'hover:bg-muted/50',
-        !notification.read && 'bg-accent/5',
+        !notification.is_read && 'bg-accent/5',
         isInvitationNotification && 'cursor-pointer'
       )}
     >
       {/* Unread indicator */}
-      {!notification.read && (
+      {!notification.is_read && (
         <span className="absolute left-1 top-1/2 -translate-y-1/2 h-2 w-2 rounded-full bg-accent" />
       )}
 
       {/* Icon */}
       <div className="flex-shrink-0 mt-0.5">
-        {getNotificationIcon(notification.type)}
+        {getNotificationIcon(notification.notification_type)}
       </div>
 
       {/* Content */}
@@ -171,17 +213,12 @@ function NotificationItem({
           {notification.title}
         </p>
         <p className="text-xs text-muted-foreground mt-0.5">
-          {notification.message}
+          {notification.body}
         </p>
         <div className="flex items-center gap-2 mt-1.5">
           <span className="text-[10px] text-muted-foreground/70">
-            {formatTimeAgo(notification.timestamp)}
+            {formatTimeAgo(notification.created_at)}
           </span>
-          {notification.source === 'realtime' && (
-            <span className="text-[9px] px-1.5 py-0.5 rounded bg-accent/10 text-accent font-medium">
-              New
-            </span>
-          )}
           {isPendingInvitation && (
             <span className="text-[10px] font-medium text-accent">
               Click to respond
@@ -190,30 +227,19 @@ function NotificationItem({
           {isInvitationNotification && !isPendingInvitation && (
             <span className={cn(
               "text-[10px] font-medium",
-              notification.entityStatus === 'accepted' && 'text-emerald-600 dark:text-emerald-400',
-              notification.entityStatus === 'rejected' && 'text-red-600 dark:text-red-400',
-              notification.entityStatus === 'cancelled' && 'text-amber-600 dark:text-amber-400'
+              entityStatus === 'accepted' && 'text-emerald-600 dark:text-emerald-400',
+              entityStatus === 'rejected' && 'text-red-600 dark:text-red-400',
+              entityStatus === 'cancelled' && 'text-amber-600 dark:text-amber-400'
             )}>
               {getInvitationStatusLabel()}
             </span>
-          )}
-          {notification.action && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                notification.action?.onClick()
-              }}
-              className="text-[10px] font-medium text-accent hover:underline"
-            >
-              {notification.action.label}
-            </button>
           )}
         </div>
       </div>
 
       {/* Actions */}
       <div className="flex-shrink-0 flex items-start gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        {!notification.read && (
+        {!notification.is_read && (
           <button
             onClick={(e) => {
               e.stopPropagation()
@@ -245,24 +271,23 @@ function NotificationItem({
 // ============================================================================
 
 interface InvitationPopupProps {
-  notification: InAppNotification
+  notification: Notification
   onClose: () => void
   onSuccess: () => void
 }
 
 function InvitationDetailPopup({ notification, onClose, onSuccess }: InvitationPopupProps) {
   const token = useAuthStore((state) => state.token)
-  const { acceptInvitation, rejectInvitation } = useInvitationsStore()
+  const acceptInvitation = useAcceptInvitation()
+  const rejectInvitation = useRejectInvitation()
 
   const [invitation, setInvitation] = useState<InvitationWithDetails | null>(null)
   const [isLoading, setIsLoading] = useState(true)
-  const [isAccepting, setIsAccepting] = useState(false)
-  const [isRejecting, setIsRejecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   // Get invitation ID from notification
-  const invitationId = (notification.data?.invitationId as string | undefined) ||
-    (notification.entityType === 'invitation' ? notification.entityId : undefined)
+  const invitationId = (notification.data?.invitation_id as string | undefined) ||
+    (notification.data?.invitationId as string | undefined)
 
   // Fetch invitation details on mount
   useEffect(() => {
@@ -297,42 +322,32 @@ function InvitationDetailPopup({ notification, onClose, onSuccess }: InvitationP
   }, [invitationId, token])
 
   const handleAccept = async () => {
-    if (!invitationId || isAccepting || isRejecting) return
+    if (!invitationId || acceptInvitation.isPending || rejectInvitation.isPending) return
 
-    setIsAccepting(true)
     setError(null)
     try {
-      const success = await acceptInvitation(token, invitationId)
-      if (success) {
-        onSuccess()
-        onClose()
-      } else {
-        setError('Failed to accept invitation')
-      }
-    } finally {
-      setIsAccepting(false)
+      await acceptInvitation.mutateAsync(invitationId)
+      onSuccess()
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to accept invitation')
     }
   }
 
   const handleReject = async () => {
-    if (!invitationId || isAccepting || isRejecting) return
+    if (!invitationId || acceptInvitation.isPending || rejectInvitation.isPending) return
 
-    setIsRejecting(true)
     setError(null)
     try {
-      const success = await rejectInvitation(token, invitationId)
-      if (success) {
-        onSuccess()
-        onClose()
-      } else {
-        setError('Failed to decline invitation')
-      }
-    } finally {
-      setIsRejecting(false)
+      await rejectInvitation.mutateAsync(invitationId)
+      onSuccess()
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to decline invitation')
     }
   }
 
-  const isProcessing = isAccepting || isRejecting
+  const isProcessing = acceptInvitation.isPending || rejectInvitation.isPending
   const isPending = invitation?.status === 'pending'
 
   const formatDate = (dateStr: string) => {
@@ -412,7 +427,7 @@ function InvitationDetailPopup({ notification, onClose, onSuccess }: InvitationP
                 <User className="h-5 w-5 text-muted-foreground mt-0.5" />
                 <div>
                   <p className="text-sm font-medium text-foreground">
-                    {invitation.inviter?.full_name || invitation.inviter?.email || 'Unknown'}
+                    {invitation.inviter?.display_name || invitation.inviter?.email || 'Unknown'}
                   </p>
                   <p className="text-xs text-muted-foreground mt-0.5">Invited by</p>
                 </div>
@@ -482,7 +497,7 @@ function InvitationDetailPopup({ notification, onClose, onSuccess }: InvitationP
                 'disabled:opacity-50 disabled:pointer-events-none'
               )}
             >
-              {isRejecting ? (
+              {rejectInvitation.isPending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <X className="h-4 w-4" />
@@ -498,7 +513,7 @@ function InvitationDetailPopup({ notification, onClose, onSuccess }: InvitationP
                 'disabled:opacity-50 disabled:pointer-events-none'
               )}
             >
-              {isAccepting ? (
+              {acceptInvitation.isPending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <Check className="h-4 w-4" />
@@ -532,25 +547,40 @@ export function NotificationPanel({ sidebarCollapsed = false }: NotificationPane
   const panelRef = useRef<HTMLDivElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
 
-  // Auth store for token
-  const token = useAuthStore((state) => state.token)
+  // UI state from minimal store
+  const isOpen = useNotificationUIStore((state) => state.isOpen)
+  const setOpen = useNotificationUIStore((state) => state.setOpen)
 
-  // Notification store
-  const isOpen = useNotificationsStore((state) => state.isOpen)
-  const notifications = useNotificationsStore((state) => state.notifications)
-  const unreadCount = useNotificationsStore((state) => state.unreadCount)
-  const isLoading = useNotificationsStore((state) => state.isLoading)
-  const isLoadingMore = useNotificationsStore((state) => state.isLoadingMore)
-  const hasMore = useNotificationsStore((state) => state.hasMore)
-  const setOpen = useNotificationsStore((state) => state.setOpen)
-  const markAsRead = useNotificationsStore((state) => state.markAsRead)
-  const markAllAsRead = useNotificationsStore((state) => state.markAllAsRead)
-  const removeNotification = useNotificationsStore((state) => state.removeNotification)
-  const clearAll = useNotificationsStore((state) => state.clearAll)
-  const loadMoreNotifications = useNotificationsStore((state) => state.loadMoreNotifications)
+  // TanStack Query hooks for data (with infinite scroll)
+  const {
+    data: notificationData,
+    isLoading,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useNotifications()
+  const markAsRead = useMarkAsRead()
+  const markAllAsRead = useMarkAllAsRead()
+  const deleteNotification = useDeleteNotification()
+  const clearAll = useClearAllNotifications()
+
+  const notifications = notificationData?.items || []
+  const unreadCount = notificationData?.unread_count || 0
+
+  // Infinite scroll: load more when near bottom
+  const handleScroll = useCallback(() => {
+    const container = scrollContainerRef.current
+    if (!container || !hasNextPage || isFetchingNextPage) return
+
+    const { scrollTop, scrollHeight, clientHeight } = container
+    // Load more when within 100px of bottom
+    if (scrollHeight - scrollTop - clientHeight < 100) {
+      fetchNextPage()
+    }
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage])
 
   // Invitation popup state
-  const [selectedInvitationNotification, setSelectedInvitationNotification] = useState<InAppNotification | null>(null)
+  const [selectedInvitationNotification, setSelectedInvitationNotification] = useState<Notification | null>(null)
 
   // Close on click outside
   useEffect(() => {
@@ -586,48 +616,29 @@ export function NotificationPanel({ sidebarCollapsed = false }: NotificationPane
     }
   }, [isOpen, setOpen])
 
-  // Infinite scroll - load more when scrolling near bottom
-  useEffect(() => {
-    const scrollContainer = scrollContainerRef.current
-    if (!scrollContainer || !isOpen) return
-
-    const handleScroll = () => {
-      const { scrollTop, scrollHeight, clientHeight } = scrollContainer
-      // Load more when user scrolls within 100px of bottom
-      if (scrollHeight - scrollTop - clientHeight < 100) {
-        if (hasMore && !isLoadingMore && token) {
-          loadMoreNotifications(token)
-        }
-      }
-    }
-
-    scrollContainer.addEventListener('scroll', handleScroll)
-    return () => scrollContainer.removeEventListener('scroll', handleScroll)
-  }, [isOpen, hasMore, isLoadingMore, token, loadMoreNotifications])
-
-  // Handlers with token
+  // Handlers
   const handleMarkAsRead = (id: string) => {
-    markAsRead(id, token)
+    markAsRead.mutate(id)
   }
 
   const handleMarkAllAsRead = () => {
-    markAllAsRead(token)
+    markAllAsRead.mutate()
   }
 
   const handleRemove = (id: string) => {
-    removeNotification(id, token)
+    deleteNotification.mutate(id)
   }
 
   const handleClearAll = () => {
-    clearAll(token)
+    clearAll.mutate()
   }
 
   // Handle invitation notification click
-  const handleInvitationClick = (notification: InAppNotification) => {
+  const handleInvitationClick = (notification: Notification) => {
     setSelectedInvitationNotification(notification)
     // Mark as read when opened
-    if (!notification.read) {
-      markAsRead(notification.id, token)
+    if (!notification.is_read) {
+      markAsRead.mutate(notification.id)
     }
   }
 
@@ -640,7 +651,7 @@ export function NotificationPanel({ sidebarCollapsed = false }: NotificationPane
   const handleInvitationSuccess = () => {
     // Remove the notification after successful accept/reject
     if (selectedInvitationNotification) {
-      removeNotification(selectedInvitationNotification.id, token)
+      deleteNotification.mutate(selectedInvitationNotification.id)
     }
   }
 
@@ -679,7 +690,8 @@ export function NotificationPanel({ sidebarCollapsed = false }: NotificationPane
           {unreadCount > 0 && (
             <button
               onClick={handleMarkAllAsRead}
-              className="text-[10px] font-medium text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-muted"
+              disabled={markAllAsRead.isPending}
+              className="text-[10px] font-medium text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-muted disabled:opacity-50"
             >
               Mark all read
             </button>
@@ -693,8 +705,12 @@ export function NotificationPanel({ sidebarCollapsed = false }: NotificationPane
         </div>
       </div>
 
-      {/* Content */}
-      <div ref={scrollContainerRef} className="max-h-96 overflow-y-auto">
+      {/* Content with infinite scroll */}
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className="max-h-96 overflow-y-auto"
+      >
         {notifications.length === 0 && !isLoading ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted/50 mb-3">
@@ -718,16 +734,16 @@ export function NotificationPanel({ sidebarCollapsed = false }: NotificationPane
                 onClick={handleInvitationClick}
               />
             ))}
-            {/* Loading more indicator */}
-            {isLoadingMore && (
+            {/* Loading indicator for infinite scroll */}
+            {isFetchingNextPage && (
               <div className="flex items-center justify-center py-3">
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                 <span className="ml-2 text-xs text-muted-foreground">Loading more...</span>
               </div>
             )}
             {/* End of list indicator */}
-            {!hasMore && notifications.length > 0 && (
-              <div className="text-center py-3 text-xs text-muted-foreground/70">
+            {!hasNextPage && notifications.length > 0 && (
+              <div className="text-center py-2 text-[10px] text-muted-foreground/50">
                 No more notifications
               </div>
             )}
@@ -740,7 +756,8 @@ export function NotificationPanel({ sidebarCollapsed = false }: NotificationPane
         <div className="p-2 border-t border-border">
           <button
             onClick={handleClearAll}
-            className="w-full text-center text-xs text-muted-foreground hover:text-foreground py-1.5 rounded hover:bg-muted"
+            disabled={clearAll.isPending}
+            className="w-full text-center text-xs text-muted-foreground hover:text-foreground py-1.5 rounded hover:bg-muted disabled:opacity-50"
           >
             Clear all notifications
           </button>

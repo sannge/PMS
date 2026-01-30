@@ -37,6 +37,7 @@ import type {
   TaskPriority,
 } from '@/hooks/use-queries'
 import { getStatusOptions } from './task-status-badge'
+import { RichTextEditor } from '@/components/editor/RichTextEditor'
 
 // ============================================================================
 // Assignee Types
@@ -187,7 +188,7 @@ export function TaskForm({
     title: task?.title || '',
     description: task?.description || '',
     task_type: task?.task_type || 'task',
-    status: task?.status || initialStatus,
+    status: task?.status ?? initialStatus ?? 'todo',
     priority: task?.priority || 'medium',
     story_points: task?.story_points?.toString() || '',
     due_date: formatDateForInput(task?.due_date || null),
@@ -219,6 +220,11 @@ export function TaskForm({
     },
     []
   )
+
+  // Handle description change (for RichTextEditor)
+  const handleDescriptionChange = useCallback((value: string) => {
+    setFormData((prev) => ({ ...prev, description: value }))
+  }, [])
 
   // Handle submit
   const handleSubmit = useCallback(
@@ -293,27 +299,27 @@ export function TaskForm({
   const statusOptions = getStatusOptions()
 
   return (
-    <div className="rounded-lg border border-border bg-card shadow-lg">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-border p-4">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+    <div className="rounded-xl border border-border/60 bg-gradient-to-b from-card to-card/95 shadow-2xl w-[800px] max-w-[95vw]">
+      {/* Header - Refined with subtle gradient */}
+      <div className="flex items-center justify-between border-b border-border/40 bg-muted/20 px-6 py-4">
+        <div className="flex items-center gap-4">
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary shadow-sm ring-1 ring-primary/20">
             <CheckCircle2 className="h-5 w-5" />
           </div>
           <div>
-            <h2 className="text-lg font-semibold text-foreground">
-              {isEditMode ? 'Edit Task' : 'New Task'}
+            <h2 className="text-lg font-semibold tracking-tight text-foreground">
+              {isEditMode ? 'Edit Task' : 'Create New Task'}
             </h2>
             <p className="text-sm text-muted-foreground">
-              {isEditMode ? `Update ${task?.task_key}` : 'Create a new task'}
+              {isEditMode ? `Updating ${task?.task_key}` : 'Fill in the details below'}
             </p>
           </div>
         </div>
         <button
           onClick={onCancel}
           className={cn(
-            'rounded-md p-2 text-muted-foreground transition-colors',
-            'hover:bg-accent hover:text-accent-foreground',
+            'rounded-lg p-2.5 text-muted-foreground transition-all duration-200',
+            'hover:bg-destructive/10 hover:text-destructive',
             'focus:outline-none focus:ring-2 focus:ring-ring'
           )}
         >
@@ -321,250 +327,259 @@ export function TaskForm({
         </button>
       </div>
 
-      {/* Form */}
-      <form onSubmit={handleSubmit} className="p-4 space-y-4">
+      {/* Form - Two column layout */}
+      <form onSubmit={handleSubmit} className="p-6">
         {/* Error Alert */}
         {error && (
-          <div className="flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+          <div className="mb-6 flex items-center gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
             <AlertCircle className="h-4 w-4 flex-shrink-0" />
             <span>{error}</span>
           </div>
         )}
 
-        {/* Title Field */}
-        <div>
-          <label htmlFor="title" className="block text-sm font-medium text-foreground mb-1.5">
-            Title <span className="text-destructive">*</span>
-          </label>
-          <input
-            type="text"
-            id="title"
-            name="title"
-            value={formData.title}
-            onChange={handleChange}
-            onBlur={handleBlur}
-            disabled={isSubmitting}
-            placeholder="What needs to be done?"
-            className={cn(
-              'w-full rounded-md border bg-background px-3 py-2 text-foreground placeholder:text-muted-foreground',
-              'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background',
-              'disabled:cursor-not-allowed disabled:opacity-50',
-              touched.title && errors.title ? 'border-destructive' : 'border-input'
-            )}
-          />
-          {touched.title && errors.title && (
-            <p className="mt-1 text-sm text-destructive">{errors.title}</p>
-          )}
-        </div>
-
-        {/* Task Type and Status Row */}
-        <div className="grid grid-cols-2 gap-4">
-          {/* Task Type */}
-          <div>
-            <label htmlFor="task_type" className="block text-sm font-medium text-foreground mb-1.5">
-              Type
-            </label>
-            <select
-              id="task_type"
-              name="task_type"
-              value={formData.task_type}
-              onChange={handleChange}
-              disabled={isSubmitting}
-              className={cn(
-                'w-full rounded-md border border-input bg-background px-3 py-2 text-foreground',
-                'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background',
-                'disabled:cursor-not-allowed disabled:opacity-50'
-              )}
-            >
-              {TASK_TYPES.map((type) => (
-                <option key={type.value} value={type.value}>
-                  {type.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Status */}
-          <div>
-            <label htmlFor="status" className="block text-sm font-medium text-foreground mb-1.5">
-              Status
-            </label>
-            <select
-              id="status"
-              name="status"
-              value={formData.status}
-              onChange={handleChange}
-              disabled={isSubmitting}
-              className={cn(
-                'w-full rounded-md border border-input bg-background px-3 py-2 text-foreground',
-                'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background',
-                'disabled:cursor-not-allowed disabled:opacity-50'
-              )}
-            >
-              {statusOptions.map((status) => (
-                <option key={status.value} value={status.value}>
-                  {status.label}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        {/* Priority and Story Points Row */}
-        <div className="grid grid-cols-2 gap-4">
-          {/* Priority */}
-          <div>
-            <label htmlFor="priority" className="block text-sm font-medium text-foreground mb-1.5">
-              Priority
-            </label>
-            <select
-              id="priority"
-              name="priority"
-              value={formData.priority}
-              onChange={handleChange}
-              disabled={isSubmitting}
-              className={cn(
-                'w-full rounded-md border border-input bg-background px-3 py-2 text-foreground',
-                'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background',
-                'disabled:cursor-not-allowed disabled:opacity-50'
-              )}
-            >
-              {PRIORITIES.map((priority) => (
-                <option key={priority.value} value={priority.value}>
-                  {priority.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Story Points */}
-          <div>
-            <label htmlFor="story_points" className="block text-sm font-medium text-foreground mb-1.5">
-              Story Points
-            </label>
-            <input
-              type="number"
-              id="story_points"
-              name="story_points"
-              value={formData.story_points}
-              onChange={handleChange}
-              onBlur={handleBlur}
-              disabled={isSubmitting}
-              placeholder="0"
-              min="0"
-              max="100"
-              className={cn(
-                'w-full rounded-md border bg-background px-3 py-2 text-foreground placeholder:text-muted-foreground',
-                'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background',
-                'disabled:cursor-not-allowed disabled:opacity-50',
-                touched.story_points && errors.story_points ? 'border-destructive' : 'border-input'
-              )}
-            />
-            {touched.story_points && errors.story_points && (
-              <p className="mt-1 text-sm text-destructive">{errors.story_points}</p>
-            )}
-          </div>
-        </div>
-
-        {/* Due Date and Assignee Row */}
-        <div className="grid grid-cols-2 gap-4">
-          {/* Due Date */}
-          <div>
-            <label htmlFor="due_date" className="block text-sm font-medium text-foreground mb-1.5">
-              Due Date
-            </label>
-            <div className="relative">
+        <div className="grid grid-cols-[1fr_280px] gap-6">
+          {/* Left Column - Main Content */}
+          <div className="space-y-5">
+            {/* Title Field - Prominent */}
+            <div>
+              <label htmlFor="title" className="block text-sm font-medium text-foreground mb-2">
+                Task Title <span className="text-destructive">*</span>
+              </label>
               <input
-                type="date"
-                id="due_date"
-                name="due_date"
-                value={formData.due_date}
+                type="text"
+                id="title"
+                name="title"
+                value={formData.title}
                 onChange={handleChange}
                 onBlur={handleBlur}
                 disabled={isSubmitting}
+                placeholder="What needs to be done?"
                 className={cn(
-                  'w-full rounded-md border bg-background px-3 py-2 text-foreground',
-                  'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background',
+                  'w-full rounded-lg border bg-background px-4 py-3 text-base text-foreground placeholder:text-muted-foreground/60',
+                  'focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary',
                   'disabled:cursor-not-allowed disabled:opacity-50',
-                  touched.due_date && errors.due_date ? 'border-destructive' : 'border-input'
+                  'transition-all duration-200',
+                  touched.title && errors.title ? 'border-destructive ring-destructive/20' : 'border-input'
                 )}
               />
-              <Calendar className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+              {touched.title && errors.title && (
+                <p className="mt-1.5 text-sm text-destructive flex items-center gap-1">
+                  <AlertCircle className="h-3.5 w-3.5" />
+                  {errors.title}
+                </p>
+              )}
             </div>
-            {touched.due_date && errors.due_date && (
-              <p className="mt-1 text-sm text-destructive">{errors.due_date}</p>
-            )}
+
+            {/* Description Field - Rich Text Editor - Prominent space */}
+            <div className="flex-1">
+              <label className="block text-sm font-medium text-foreground mb-2">
+                Description
+              </label>
+              <RichTextEditor
+                value={formData.description}
+                onChange={handleDescriptionChange}
+                placeholder="Add a detailed description with formatting, images, tables..."
+                readOnly={isSubmitting}
+                maxLength={102400}
+                className="min-h-[280px] border-border"
+              />
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Supports rich text, images, tables, and more
+              </p>
+            </div>
           </div>
 
-          {/* Assignee */}
-          <div>
-            <label htmlFor="assignee_id" className="block text-sm font-medium text-foreground mb-1.5">
-              Assignee
-            </label>
-            <div className="relative">
+          {/* Right Column - Metadata Panel */}
+          <div className="space-y-4 rounded-xl border border-border/50 bg-muted/20 p-4">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground px-1">
+              Task Properties
+            </h3>
+
+            {/* Task Type */}
+            <div>
+              <label htmlFor="task_type" className="block text-xs font-medium text-muted-foreground mb-1.5 px-1">
+                Type
+              </label>
               <select
-                id="assignee_id"
-                name="assignee_id"
-                value={formData.assignee_id}
+                id="task_type"
+                name="task_type"
+                value={formData.task_type}
                 onChange={handleChange}
-                disabled={isSubmitting || assignees.length === 0}
+                disabled={isSubmitting}
                 className={cn(
-                  'w-full rounded-md border border-input bg-background px-3 py-2 text-foreground',
-                  'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background',
+                  'w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground',
+                  'focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary',
                   'disabled:cursor-not-allowed disabled:opacity-50',
-                  'appearance-none'
+                  'transition-all duration-200'
                 )}
               >
-                <option value="">Unassigned</option>
-                {assignees.map((assignee) => (
-                  <option key={assignee.id} value={assignee.id}>
-                    {assignee.display_name || assignee.email || 'Unknown user'}
+                {TASK_TYPES.map((type) => (
+                  <option key={type.value} value={type.value}>
+                    {type.label}
                   </option>
                 ))}
               </select>
-              <User className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
             </div>
-            {assignees.length === 0 && (
-              <p className="mt-1 text-xs text-muted-foreground">No team members available</p>
-            )}
+
+            {/* Status */}
+            <div>
+              <label htmlFor="status" className="block text-xs font-medium text-muted-foreground mb-1.5 px-1">
+                Status
+              </label>
+              <select
+                id="status"
+                name="status"
+                value={formData.status}
+                onChange={handleChange}
+                disabled={isSubmitting}
+                className={cn(
+                  'w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground',
+                  'focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary',
+                  'disabled:cursor-not-allowed disabled:opacity-50',
+                  'transition-all duration-200'
+                )}
+              >
+                {statusOptions.map((status) => (
+                  <option key={status.value} value={status.value}>
+                    {status.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Priority */}
+            <div>
+              <label htmlFor="priority" className="block text-xs font-medium text-muted-foreground mb-1.5 px-1">
+                Priority
+              </label>
+              <select
+                id="priority"
+                name="priority"
+                value={formData.priority}
+                onChange={handleChange}
+                disabled={isSubmitting}
+                className={cn(
+                  'w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground',
+                  'focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary',
+                  'disabled:cursor-not-allowed disabled:opacity-50',
+                  'transition-all duration-200'
+                )}
+              >
+                {PRIORITIES.map((priority) => (
+                  <option key={priority.value} value={priority.value}>
+                    {priority.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="border-t border-border/50 pt-4 mt-4" />
+
+            {/* Story Points */}
+            <div>
+              <label htmlFor="story_points" className="block text-xs font-medium text-muted-foreground mb-1.5 px-1">
+                Story Points
+              </label>
+              <input
+                type="number"
+                id="story_points"
+                name="story_points"
+                value={formData.story_points}
+                onChange={handleChange}
+                onBlur={handleBlur}
+                disabled={isSubmitting}
+                placeholder="0"
+                min="0"
+                max="100"
+                className={cn(
+                  'w-full rounded-lg border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60',
+                  'focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary',
+                  'disabled:cursor-not-allowed disabled:opacity-50',
+                  'transition-all duration-200',
+                  touched.story_points && errors.story_points ? 'border-destructive' : 'border-input'
+                )}
+              />
+              {touched.story_points && errors.story_points && (
+                <p className="mt-1 text-xs text-destructive">{errors.story_points}</p>
+              )}
+            </div>
+
+            {/* Due Date */}
+            <div>
+              <label htmlFor="due_date" className="block text-xs font-medium text-muted-foreground mb-1.5 px-1">
+                Due Date
+              </label>
+              <div className="relative">
+                <input
+                  type="date"
+                  id="due_date"
+                  name="due_date"
+                  value={formData.due_date}
+                  onChange={handleChange}
+                  onBlur={handleBlur}
+                  disabled={isSubmitting}
+                  className={cn(
+                    'w-full rounded-lg border bg-background px-3 py-2 text-sm text-foreground',
+                    'focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary',
+                    'disabled:cursor-not-allowed disabled:opacity-50',
+                    'transition-all duration-200',
+                    touched.due_date && errors.due_date ? 'border-destructive' : 'border-input'
+                  )}
+                />
+                <Calendar className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+              </div>
+              {touched.due_date && errors.due_date && (
+                <p className="mt-1 text-xs text-destructive">{errors.due_date}</p>
+              )}
+            </div>
+
+            {/* Assignee */}
+            <div>
+              <label htmlFor="assignee_id" className="block text-xs font-medium text-muted-foreground mb-1.5 px-1">
+                Assignee
+              </label>
+              <div className="relative">
+                <select
+                  id="assignee_id"
+                  name="assignee_id"
+                  value={formData.assignee_id}
+                  onChange={handleChange}
+                  disabled={isSubmitting || assignees.length === 0}
+                  className={cn(
+                    'w-full rounded-lg border border-input bg-background px-3 py-2 pr-8 text-sm text-foreground',
+                    'focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary',
+                    'disabled:cursor-not-allowed disabled:opacity-50',
+                    'appearance-none transition-all duration-200'
+                  )}
+                >
+                  <option value="">Unassigned</option>
+                  {assignees.map((assignee) => (
+                    <option key={assignee.id} value={assignee.id}>
+                      {assignee.display_name || assignee.email || 'Unknown user'}
+                    </option>
+                  ))}
+                </select>
+                <User className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+              </div>
+              {assignees.length === 0 && (
+                <p className="mt-1 text-xs text-muted-foreground/70">No team members available</p>
+              )}
+            </div>
           </div>
         </div>
 
-        {/* Description Field */}
-        <div>
-          <label htmlFor="description" className="block text-sm font-medium text-foreground mb-1.5">
-            Description
-          </label>
-          <textarea
-            id="description"
-            name="description"
-            value={formData.description}
-            onChange={handleChange}
-            onBlur={handleBlur}
-            disabled={isSubmitting}
-            placeholder="Add a detailed description..."
-            rows={4}
-            className={cn(
-              'w-full rounded-md border border-input bg-background px-3 py-2 text-foreground placeholder:text-muted-foreground',
-              'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background',
-              'disabled:cursor-not-allowed disabled:opacity-50',
-              'resize-none'
-            )}
-          />
-        </div>
-
-        {/* Actions */}
-        <div className="flex items-center justify-end gap-3 pt-4 border-t border-border">
+        {/* Actions - Full width footer */}
+        <div className="flex items-center justify-end gap-3 pt-6 mt-6 border-t border-border/40">
           <button
             type="button"
             onClick={onCancel}
             disabled={isSubmitting}
             className={cn(
-              'rounded-md border border-input bg-background px-4 py-2 text-sm font-medium text-foreground',
-              'hover:bg-accent hover:text-accent-foreground',
+              'rounded-lg border border-input bg-background px-5 py-2.5 text-sm font-medium text-foreground',
+              'hover:bg-muted hover:border-border',
               'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
               'disabled:cursor-not-allowed disabled:opacity-50',
-              'transition-colors duration-200'
+              'transition-all duration-200'
             )}
           >
             Cancel
@@ -573,10 +588,11 @@ export function TaskForm({
             type="submit"
             disabled={isSubmitting || Object.keys(errors).length > 0}
             className={cn(
-              'rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground',
-              'hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+              'rounded-lg bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground shadow-sm',
+              'hover:bg-primary/90 hover:shadow-md',
+              'focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
               'disabled:cursor-not-allowed disabled:opacity-50',
-              'transition-colors duration-200'
+              'transition-all duration-200'
             )}
           >
             {isSubmitting ? (

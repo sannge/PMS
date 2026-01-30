@@ -7,13 +7,26 @@
  * - List of checklist cards
  * - Add new checklist
  * - Empty state
+ * - Real-time updates via WebSocket cache invalidation
  */
 
 import { useEffect, useCallback, useState, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { CheckSquare, Plus, AlertCircle, X } from 'lucide-react'
-import { useChecklistsStore } from '@/stores/checklists-store'
-import { useAuthStore } from '@/stores/auth-store'
+import {
+  useChecklists,
+  useChecklistProgress,
+  useCreateChecklist,
+  useUpdateChecklist,
+  useDeleteChecklist,
+  useCreateChecklistItem,
+  useUpdateChecklistItem,
+  useToggleChecklistItem,
+  useDeleteChecklistItem,
+  useReorderChecklistItems,
+} from '@/hooks/use-checklists'
+import { queryKeys } from '@/lib/query-client'
 import { ChecklistCard } from './ChecklistCard'
 import { SkeletonChecklists } from '@/components/ui/skeleton'
 import { wsClient, MessageType } from '@/lib/websocket'
@@ -40,40 +53,25 @@ export function ChecklistPanel({
   className,
   canEdit = true,
 }: ChecklistPanelProps): JSX.Element {
-  const token = useAuthStore((state) => state.token)
+  const queryClient = useQueryClient()
   const [isAdding, setIsAdding] = useState(false)
   const [newTitle, setNewTitle] = useState('')
+  const [error, setError] = useState<Error | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const {
-    checklists,
-    isLoading,
-    error,
-    fetchChecklists,
-    createChecklist,
-    updateChecklist,
-    deleteChecklist,
-    createItem,
-    updateItem,
-    toggleItem,
-    deleteItem,
-    reorderItems,
-    getProgress,
-    clearError,
-    handleChecklistUpdated,
-    handleChecklistDeleted,
-    handleChecklistsReordered,
-    handleItemToggled,
-    handleItemAdded,
-    handleItemUpdated,
-    handleItemDeleted,
-    handleItemsReordered,
-  } = useChecklistsStore()
+  // Queries
+  const { data: checklists = [], isLoading } = useChecklists(taskId)
+  const progress = useChecklistProgress(taskId)
 
-  // Fetch checklists on mount
-  useEffect(() => {
-    fetchChecklists(token, taskId)
-  }, [token, taskId, fetchChecklists])
+  // Mutations
+  const createChecklist = useCreateChecklist(taskId)
+  const updateChecklist = useUpdateChecklist(taskId)
+  const deleteChecklist = useDeleteChecklist(taskId)
+  const createItem = useCreateChecklistItem(taskId)
+  const updateItem = useUpdateChecklistItem(taskId)
+  const toggleItem = useToggleChecklistItem(taskId)
+  const deleteItem = useDeleteChecklistItem(taskId)
+  const reorderItems = useReorderChecklistItems(taskId)
 
   // Focus input when adding
   useEffect(() => {
@@ -82,7 +80,7 @@ export function ChecklistPanel({
     }
   }, [isAdding])
 
-  // Subscribe to WebSocket events for real-time updates
+  // Subscribe to WebSocket events for real-time cache invalidation
   useEffect(() => {
     if (!taskId) return
 
@@ -91,99 +89,36 @@ export function ChecklistPanel({
     // Join the room for this task
     wsClient.joinRoom(roomId)
 
-    // Handle checklist created event
-    const onChecklistCreated = (data: { d?: { id: string; tid: string; title: string } }) => {
-      if (data.d?.tid === taskId) {
-        // Fetch fresh data since the WebSocket only sends minimal data
-        fetchChecklists(token, taskId)
-      }
+    // Invalidate checklists cache on any checklist event
+    const invalidateChecklists = () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.checklists(taskId) })
     }
 
-    // Handle checklist updated event
-    const onChecklistUpdated = (data: { d?: { id: string; title: string } }) => {
-      if (data.d?.id) {
-        handleChecklistUpdated(data.d.id, data.d.title)
-      }
-    }
-
-    // Handle checklist deleted event
-    const onChecklistDeleted = (data: { d?: { id: string } }) => {
-      if (data.d?.id) {
-        handleChecklistDeleted(data.d.id)
-      }
-    }
-
-    // Handle item toggled event
-    const onItemToggled = (data: { d?: { id: string; clid: string; done: boolean } }) => {
-      if (data.d?.clid && data.d?.id) {
-        handleItemToggled(data.d.clid, data.d.id, data.d.done)
-      }
-    }
-
-    // Handle item added event - refetch to get full item data
-    const onItemAdded = (data: { d?: { clid: string } }) => {
-      if (data.d?.clid) {
-        // Refetch to get full item data
-        fetchChecklists(token, taskId)
-      }
-    }
-
-    // Handle item updated event
-    const onItemUpdated = (data: { d?: { id: string; content: string } }) => {
-      if (data.d?.id) {
-        handleItemUpdated(data.d.id, data.d.content)
-      }
-    }
-
-    // Handle item deleted event
-    const onItemDeleted = (data: { d?: { id: string; clid: string } }) => {
-      if (data.d?.clid && data.d?.id) {
-        handleItemDeleted(data.d.clid, data.d.id)
-      }
-    }
-
-    // Handle checklists reordered event
-    const onChecklistsReordered = (data: { d?: { ids: string[] } }) => {
-      if (data.d?.ids) {
-        handleChecklistsReordered(data.d.ids)
-      }
-    }
-
-    // Handle items reordered event
-    const onItemsReordered = (data: { d?: { clid: string; ids: string[] } }) => {
-      if (data.d?.clid && data.d?.ids) {
-        handleItemsReordered(data.d.clid, data.d.ids)
-      }
-    }
-
-    // Subscribe to events
-    wsClient.on(MessageType.CHECKLIST_CREATED, onChecklistCreated)
-    wsClient.on(MessageType.CHECKLIST_UPDATED, onChecklistUpdated)
-    wsClient.on(MessageType.CHECKLIST_DELETED, onChecklistDeleted)
-    wsClient.on(MessageType.CHECKLISTS_REORDERED, onChecklistsReordered)
-    wsClient.on(MessageType.CHECKLIST_ITEM_TOGGLED, onItemToggled)
-    wsClient.on(MessageType.CHECKLIST_ITEM_ADDED, onItemAdded)
-    wsClient.on(MessageType.CHECKLIST_ITEM_UPDATED, onItemUpdated)
-    wsClient.on(MessageType.CHECKLIST_ITEM_DELETED, onItemDeleted)
-    wsClient.on(MessageType.CHECKLIST_ITEMS_REORDERED, onItemsReordered)
+    // Subscribe to all checklist events - invalidate cache to refetch
+    wsClient.on(MessageType.CHECKLIST_CREATED, invalidateChecklists)
+    wsClient.on(MessageType.CHECKLIST_UPDATED, invalidateChecklists)
+    wsClient.on(MessageType.CHECKLIST_DELETED, invalidateChecklists)
+    wsClient.on(MessageType.CHECKLISTS_REORDERED, invalidateChecklists)
+    wsClient.on(MessageType.CHECKLIST_ITEM_TOGGLED, invalidateChecklists)
+    wsClient.on(MessageType.CHECKLIST_ITEM_ADDED, invalidateChecklists)
+    wsClient.on(MessageType.CHECKLIST_ITEM_UPDATED, invalidateChecklists)
+    wsClient.on(MessageType.CHECKLIST_ITEM_DELETED, invalidateChecklists)
+    wsClient.on(MessageType.CHECKLIST_ITEMS_REORDERED, invalidateChecklists)
 
     // Cleanup: leave room and unsubscribe
     return () => {
       wsClient.leaveRoom(roomId)
-      wsClient.off(MessageType.CHECKLIST_CREATED, onChecklistCreated)
-      wsClient.off(MessageType.CHECKLIST_UPDATED, onChecklistUpdated)
-      wsClient.off(MessageType.CHECKLIST_DELETED, onChecklistDeleted)
-      wsClient.off(MessageType.CHECKLISTS_REORDERED, onChecklistsReordered)
-      wsClient.off(MessageType.CHECKLIST_ITEM_TOGGLED, onItemToggled)
-      wsClient.off(MessageType.CHECKLIST_ITEM_ADDED, onItemAdded)
-      wsClient.off(MessageType.CHECKLIST_ITEM_UPDATED, onItemUpdated)
-      wsClient.off(MessageType.CHECKLIST_ITEM_DELETED, onItemDeleted)
-      wsClient.off(MessageType.CHECKLIST_ITEMS_REORDERED, onItemsReordered)
+      wsClient.off(MessageType.CHECKLIST_CREATED, invalidateChecklists)
+      wsClient.off(MessageType.CHECKLIST_UPDATED, invalidateChecklists)
+      wsClient.off(MessageType.CHECKLIST_DELETED, invalidateChecklists)
+      wsClient.off(MessageType.CHECKLISTS_REORDERED, invalidateChecklists)
+      wsClient.off(MessageType.CHECKLIST_ITEM_TOGGLED, invalidateChecklists)
+      wsClient.off(MessageType.CHECKLIST_ITEM_ADDED, invalidateChecklists)
+      wsClient.off(MessageType.CHECKLIST_ITEM_UPDATED, invalidateChecklists)
+      wsClient.off(MessageType.CHECKLIST_ITEM_DELETED, invalidateChecklists)
+      wsClient.off(MessageType.CHECKLIST_ITEMS_REORDERED, invalidateChecklists)
     }
-  }, [taskId, token, fetchChecklists, handleChecklistUpdated, handleChecklistDeleted, handleChecklistsReordered, handleItemToggled, handleItemAdded, handleItemUpdated, handleItemDeleted, handleItemsReordered])
-
-  // Get progress
-  const progress = getProgress()
+  }, [taskId, queryClient])
 
   // Handlers
   const handleCreateChecklist = useCallback(async () => {
@@ -194,61 +129,93 @@ export function ChecklistPanel({
     setNewTitle('')
     setIsAdding(false)
 
-    // Create checklist (appears instantly via optimistic update)
-    await createChecklist(token, taskId, { title: trimmed })
-  }, [token, taskId, newTitle, createChecklist])
+    try {
+      await createChecklist.mutateAsync({ title: trimmed })
+    } catch (err) {
+      setError(err instanceof Error ? err : new Error('Failed to create checklist'))
+    }
+  }, [newTitle, createChecklist])
 
   const handleTitleUpdate = useCallback(
     async (checklistId: string, title: string) => {
-      await updateChecklist(token, checklistId, title)
+      try {
+        await updateChecklist.mutateAsync({ checklistId, title })
+      } catch (err) {
+        setError(err instanceof Error ? err : new Error('Failed to update checklist'))
+      }
     },
-    [token, updateChecklist]
+    [updateChecklist]
   )
 
   const handleDelete = useCallback(
     async (checklistId: string) => {
-      await deleteChecklist(token, checklistId)
+      try {
+        await deleteChecklist.mutateAsync(checklistId)
+      } catch (err) {
+        setError(err instanceof Error ? err : new Error('Failed to delete checklist'))
+      }
     },
-    [token, deleteChecklist]
+    [deleteChecklist]
   )
 
   const handleItemToggle = useCallback(
     async (itemId: string) => {
-      await toggleItem(token, itemId)
+      try {
+        await toggleItem.mutateAsync(itemId)
+      } catch (err) {
+        setError(err instanceof Error ? err : new Error('Failed to toggle item'))
+      }
     },
-    [token, toggleItem]
+    [toggleItem]
   )
 
   const handleItemUpdate = useCallback(
     async (itemId: string, content: string) => {
-      await updateItem(token, itemId, content)
+      try {
+        await updateItem.mutateAsync({ itemId, content })
+      } catch (err) {
+        setError(err instanceof Error ? err : new Error('Failed to update item'))
+      }
     },
-    [token, updateItem]
+    [updateItem]
   )
 
   const handleItemDelete = useCallback(
     async (itemId: string) => {
-      await deleteItem(token, itemId)
+      try {
+        await deleteItem.mutateAsync(itemId)
+      } catch (err) {
+        setError(err instanceof Error ? err : new Error('Failed to delete item'))
+      }
     },
-    [token, deleteItem]
+    [deleteItem]
   )
 
   const handleItemCreate = useCallback(
     async (checklistId: string, content: string) => {
-      await createItem(token, checklistId, { content })
+      try {
+        await createItem.mutateAsync({ checklistId, data: { content } })
+      } catch (err) {
+        setError(err instanceof Error ? err : new Error('Failed to create item'))
+      }
     },
-    [token, createItem]
+    [createItem]
   )
 
   const handleItemReorder = useCallback(
     async (checklistId: string, itemIds: string[]) => {
-      await reorderItems(token, checklistId, itemIds)
+      try {
+        await reorderItems.mutateAsync({ checklistId, itemIds })
+      } catch (err) {
+        setError(err instanceof Error ? err : new Error('Failed to reorder items'))
+      }
     },
-    [token, reorderItems]
+    [reorderItems]
   )
 
-  // Checklists are already sorted by rank from the store
-  const sortedChecklists = checklists
+  const clearError = useCallback(() => {
+    setError(null)
+  }, [])
 
   // Loading state - show skeleton
   if (isLoading && checklists.length === 0) {
@@ -316,7 +283,7 @@ export function ChecklistPanel({
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
         {/* Empty state */}
-        {sortedChecklists.length === 0 && !isAdding && (
+        {checklists.length === 0 && !isAdding && (
           <div className="flex flex-col items-center justify-center py-8 px-4">
             <CheckSquare className="h-10 w-10 text-muted-foreground/50 mb-2" />
             <p className="text-sm text-muted-foreground text-center mb-3">
@@ -340,7 +307,7 @@ export function ChecklistPanel({
         )}
 
         {/* Checklists */}
-        {sortedChecklists.map((checklist) => (
+        {checklists.map((checklist) => (
           <ChecklistCard
             key={checklist.id}
             checklist={checklist}
@@ -407,7 +374,7 @@ export function ChecklistPanel({
             </button>
           </div>
         ) : (
-          canEdit && sortedChecklists.length > 0 && (
+          canEdit && checklists.length > 0 && (
             <button
               onClick={() => setIsAdding(true)}
               className={cn(

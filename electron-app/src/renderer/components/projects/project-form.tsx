@@ -55,6 +55,7 @@ interface FormData {
   key: string
   description: string
   project_type: ProjectType
+  due_date: string
 }
 
 interface FormErrors {
@@ -62,6 +63,7 @@ interface FormErrors {
   key?: string
   description?: string
   project_type?: string
+  due_date?: string
 }
 
 // ============================================================================
@@ -81,6 +83,12 @@ function generateKey(name: string): string {
 /**
  * Validate form data
  */
+function getDefaultDueDate(): string {
+  const date = new Date()
+  date.setDate(date.getDate() + 30)
+  return date.toISOString().split('T')[0]
+}
+
 function validateForm(data: FormData): FormErrors {
   const errors: FormErrors = {}
 
@@ -96,6 +104,10 @@ function validateForm(data: FormData): FormErrors {
     errors.key = 'Key must start with a letter and contain only uppercase letters and numbers'
   } else if (data.key.length > 10) {
     errors.key = 'Key must be 10 characters or less'
+  }
+
+  if (!data.due_date) {
+    errors.due_date = 'Due date is required'
   }
 
   return errors
@@ -120,6 +132,7 @@ export function ProjectForm({
     key: project?.key || '',
     description: project?.description || '',
     project_type: project?.project_type || 'kanban',
+    due_date: project?.due_date || getDefaultDueDate(),
   })
   const [touched, setTouched] = useState<Record<string, boolean>>({})
   const [errors, setErrors] = useState<FormErrors>({})
@@ -139,9 +152,10 @@ export function ProjectForm({
         key: project.key || '',
         description: project.description || '',
         project_type: project.project_type || 'kanban',
+        due_date: project.due_date || getDefaultDueDate(),
       })
     }
-  }, [project?.name, project?.key, project?.description, project?.project_type])
+  }, [project?.name, project?.key, project?.description, project?.project_type, project?.due_date])
 
   // Auto-generate key from name in create mode
   useEffect(() => {
@@ -188,6 +202,7 @@ export function ProjectForm({
         key: true,
         description: true,
         project_type: true,
+        due_date: true,
       })
 
       // Validate
@@ -209,6 +224,9 @@ export function ProjectForm({
         if (formData.project_type !== project?.project_type) {
           updateData.project_type = formData.project_type
         }
+        if (formData.due_date !== project?.due_date) {
+          updateData.due_date = formData.due_date
+        }
         onSubmit(updateData)
       } else {
         const createData: ProjectCreate = {
@@ -216,6 +234,7 @@ export function ProjectForm({
           key: formData.key.trim().toUpperCase(),
           description: formData.description.trim() || undefined,
           project_type: formData.project_type,
+          due_date: formData.due_date,
         }
         onSubmit(createData)
       }
@@ -347,6 +366,33 @@ export function ProjectForm({
               'resize-none'
             )}
           />
+        </div>
+
+        {/* Due Date */}
+        <div>
+          <label htmlFor="due_date" className="block text-sm font-medium text-foreground mb-1.5">
+            Due Date <span className="text-destructive">*</span>
+          </label>
+          <input
+            type="date"
+            id="due_date"
+            name="due_date"
+            value={formData.due_date}
+            onChange={handleChange}
+            onBlur={handleBlur}
+            disabled={isSubmitting}
+            className={cn(
+              'w-full rounded-md border bg-background px-3 py-2 text-foreground',
+              'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background',
+              'disabled:cursor-not-allowed disabled:opacity-50',
+              touched.due_date && errors.due_date
+                ? 'border-destructive'
+                : 'border-input'
+            )}
+          />
+          {touched.due_date && errors.due_date && (
+            <p className="mt-1 text-sm text-destructive">{errors.due_date}</p>
+          )}
         </div>
 
         {/* Project Type Field */}

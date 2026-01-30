@@ -9,10 +9,13 @@
 
 import {
   useQuery,
+  useInfiniteQuery,
   useMutation,
   useQueryClient,
   UseQueryResult,
   UseMutationResult,
+  UseInfiniteQueryResult,
+  InfiniteData,
 } from '@tanstack/react-query'
 import { useAuthStore } from '@/stores/auth-store'
 import { queryKeys, queryClient } from '@/lib/query-client'
@@ -70,6 +73,7 @@ export interface Project {
   description: string | null
   project_type: ProjectType
   tasks_count: number
+  due_date: string
   created_at: string
   updated_at: string
   created_by: string | null
@@ -81,6 +85,15 @@ export interface Project {
   override_by_user_id: string | null
   override_expires_at: string | null
   row_version: number
+  archived_at: string | null
+  application_name?: string | null
+}
+
+export interface ProjectCursorPage {
+  items: Project[]
+  next_cursor: string | null
+  total?: number
+  can_restore?: boolean
 }
 
 export interface ProjectCreate {
@@ -89,6 +102,7 @@ export interface ProjectCreate {
   description?: string | null
   project_type?: ProjectType
   project_owner_user_id?: string | null
+  due_date: string
 }
 
 export interface ProjectUpdate {
@@ -96,6 +110,7 @@ export interface ProjectUpdate {
   description?: string | null
   project_type?: ProjectType
   project_owner_user_id?: string | null
+  due_date?: string
   row_version?: number
 }
 
@@ -118,6 +133,8 @@ export interface Task {
   due_date: string | null
   created_at: string
   updated_at: string
+  completed_at: string | null
+  archived_at: string | null
   subtasks_count?: number
   // Kanban board fields
   task_status_id: string | null
@@ -127,6 +144,16 @@ export interface Task {
   // Checklist aggregates (populated by API)
   checklist_total?: number
   checklist_done?: number
+  // Cross-app fields (populated by /api/me/tasks only)
+  application_id?: string | null
+  application_name?: string | null
+}
+
+export interface TaskCursorPage {
+  items: Task[]
+  next_cursor: string | null
+  total?: number
+  can_restore?: boolean
 }
 
 export interface TaskCreate {
@@ -421,7 +448,7 @@ export function useDeleteApplication(id: string): UseMutationResult<void, Error,
 
 /**
  * Fetch projects for an application.
- * Uses 5 min stale time since projects change less frequently.
+ * Uses 1 min stale time to keep task counts relatively fresh.
  */
 export function useProjects(applicationId: string | undefined): UseQueryResult<Project[], Error> {
   const token = useAuthStore((s) => s.token)
@@ -445,7 +472,7 @@ export function useProjects(applicationId: string | undefined): UseQueryResult<P
       return response.data || []
     },
     enabled: !!token && !!applicationId,
-    staleTime: 5 * 60 * 1000,
+    staleTime: 60 * 1000, // 1 minute - task counts can change frequently
     gcTime: 24 * 60 * 60 * 1000,
   })
 }
@@ -679,7 +706,7 @@ export function useCreateTask(projectId: string): UseMutationResult<Task, Error,
 
       const response = await window.electronAPI.post<Task>(
         `/api/projects/${projectId}/tasks`,
-        data,
+        { ...data, project_id: projectId },
         getAuthHeaders(token)
       )
 
@@ -694,12 +721,27 @@ export function useCreateTask(projectId: string): UseMutationResult<Task, Error,
       queryClient.setQueryData<Task[]>(queryKeys.tasks(projectId), (old) =>
         old ? [...old, newTask] : [newTask]
       )
-      // Increment tasks_count in project
-      queryClient.setQueryData<Project[]>(queryKeys.projects(newTask.project_id), (old) =>
-        old?.map((p) =>
-          p.id === projectId ? { ...p, tasks_count: p.tasks_count + 1 } : p
-        )
+      // Optimistically increment tasks_count on the single project cache
+      queryClient.setQueryData<Project>(queryKeys.project(projectId), (old) =>
+        old ? { ...old, tasks_count: old.tasks_count + 1 } : old
       )
+      // Also update tasks_count in any project list caches that contain this project.
+      // queryKeys.projects(appId) = ['projects', appId] — we don't know appId here,
+      // so scan all ['projects', *] list caches (but NOT ['projects', *, 'archived']).
+      const allProjectQueries = queryClient.getQueriesData<Project[]>({
+        queryKey: ['projects'],
+      })
+      for (const [queryKey, projects] of allProjectQueries) {
+        // Skip archived project queries (InfiniteData, not Project[]) and non-arrays
+        if (!projects || !Array.isArray(projects)) continue
+        if (projects.some((p) => p.id === projectId)) {
+          queryClient.setQueryData<Project[]>(queryKey, (old) =>
+            old?.map((p) =>
+              p.id === projectId ? { ...p, tasks_count: p.tasks_count + 1 } : p
+            )
+          )
+        }
+      }
     },
   })
 }
@@ -720,7 +762,7 @@ export function useUpdateTask(
         throw new Error('Electron API not available')
       }
 
-      const response = await window.electronAPI.patch<Task>(
+      const response = await window.electronAPI.put<Task>(
         `/api/tasks/${taskId}`,
         data,
         getAuthHeaders(token)
@@ -798,6 +840,24 @@ export function useDeleteTask(
       )
       // Remove individual task cache
       queryClient.removeQueries({ queryKey: queryKeys.task(taskId) })
+      // Optimistically decrement tasks_count on the single project cache
+      queryClient.setQueryData<Project>(queryKeys.project(projectId), (old) =>
+        old ? { ...old, tasks_count: Math.max(0, old.tasks_count - 1) } : old
+      )
+      // Also update tasks_count in any project list caches that contain this project
+      const allProjectQueries = queryClient.getQueriesData<Project[]>({
+        queryKey: ['projects'],
+      })
+      for (const [queryKey, projects] of allProjectQueries) {
+        if (!projects || !Array.isArray(projects)) continue
+        if (projects.some((p) => p.id === projectId)) {
+          queryClient.setQueryData<Project[]>(queryKey, (old) =>
+            old?.map((p) =>
+              p.id === projectId ? { ...p, tasks_count: Math.max(0, p.tasks_count - 1) } : p
+            )
+          )
+        }
+      }
     },
   })
 }
@@ -868,9 +928,17 @@ export function useMoveTask(
 
       const previous = queryClient.getQueryData<Task[]>(queryKeys.tasks(projectId))
 
-      // Optimistically update task status
+      // Optimistically update task status and completed_at
+      const now = new Date().toISOString()
       queryClient.setQueryData<Task[]>(queryKeys.tasks(projectId), (old) =>
-        old?.map((t) => (t.id === taskId ? { ...t, status: targetStatus } : t))
+        old?.map((t) => {
+          if (t.id !== taskId) return t
+          // Set completed_at when moving to done, clear when moving away
+          const completed_at = targetStatus === 'done'
+            ? (t.completed_at || now)
+            : (t.status === 'done' ? null : t.completed_at)
+          return { ...t, status: targetStatus, completed_at }
+        })
       )
 
       return { previous }
@@ -918,6 +986,642 @@ export function useTaskStatuses(projectId: string | undefined): UseQueryResult<T
     },
     enabled: !!token && !!projectId,
     staleTime: 5 * 60 * 1000, // Statuses don't change often
+    gcTime: 24 * 60 * 60 * 1000,
+  })
+}
+
+// ============================================================================
+// Archived Tasks Queries
+// ============================================================================
+
+/**
+ * Fetch archived tasks count for a project (lightweight).
+ * Only fetches 1 item to get the total count for display on tabs.
+ */
+export function useArchivedTasksCount(
+  projectId: string | undefined
+): UseQueryResult<number, Error> {
+  const token = useAuthStore((s) => s.token)
+
+  return useQuery({
+    queryKey: [...queryKeys.archivedTasks(projectId || ''), 'count'],
+    queryFn: async () => {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      // Fetch with limit=1 just to get the total count
+      const response = await window.electronAPI.get<TaskCursorPage>(
+        `/api/projects/${projectId}/tasks/archived?limit=1`,
+        getAuthHeaders(token)
+      )
+
+      if (response.status !== 200) {
+        throw new Error(parseApiError(response.status, response.data).message)
+      }
+
+      return response.data.total ?? 0
+    },
+    enabled: !!token && !!projectId,
+    staleTime: 30 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
+  })
+}
+
+/**
+ * Fetch archived tasks for a project with infinite scroll.
+ * Uses cursor-based pagination with optional search.
+ */
+export function useArchivedTasks(
+  projectId: string | undefined,
+  search?: string
+): UseInfiniteQueryResult<InfiniteData<TaskCursorPage>, Error> {
+  const token = useAuthStore((s) => s.token)
+
+  return useInfiniteQuery({
+    queryKey: [...queryKeys.archivedTasks(projectId || ''), search || ''],
+    queryFn: async ({ pageParam }) => {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      const params = new URLSearchParams()
+      params.set('limit', '30')
+      if (pageParam) {
+        params.set('cursor', pageParam)
+      }
+      if (search) {
+        params.set('search', search)
+      }
+
+      const response = await window.electronAPI.get<TaskCursorPage>(
+        `/api/projects/${projectId}/tasks/archived?${params.toString()}`,
+        getAuthHeaders(token)
+      )
+
+      if (response.status !== 200) {
+        throw new Error(parseApiError(response.status, response.data).message)
+      }
+
+      return response.data
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    enabled: !!token && !!projectId,
+    staleTime: 30 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
+  })
+}
+
+/**
+ * Unarchive a task (restore it to Done column).
+ * Uses optimistic updates for instant feedback.
+ */
+export function useUnarchiveTask(
+  projectId: string
+): UseMutationResult<Task, Error, string, { removedTask: Task | undefined }> {
+  const token = useAuthStore((s) => s.token)
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (taskId: string) => {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      const response = await window.electronAPI.post<Task>(
+        `/api/tasks/${taskId}/unarchive`,
+        {},
+        getAuthHeaders(token)
+      )
+
+      if (response.status !== 200) {
+        throw new Error(parseApiError(response.status, response.data).message)
+      }
+
+      return response.data
+    },
+    // Optimistic update: remove task from all archived query caches
+    onMutate: async (taskId: string) => {
+      // Cancel any outgoing refetches (partial match cancels all search variants)
+      await queryClient.cancelQueries({ queryKey: queryKeys.archivedTasks(projectId) })
+      await queryClient.cancelQueries({ queryKey: queryKeys.tasks(projectId) })
+
+      // Find the task being removed (for toast message in component)
+      let removedTask: Task | undefined
+
+      // Get all cached queries that match archived tasks for this project
+      // This handles both with and without search parameter
+      const archivedQueries = queryClient.getQueriesData<InfiniteData<TaskCursorPage>>({
+        queryKey: queryKeys.archivedTasks(projectId),
+      })
+
+      // Optimistically remove from ALL matching caches (handles search variants)
+      let taskWasFound = false
+      for (const [queryKey, data] of archivedQueries) {
+        // Skip non-infinite query data (e.g., the count query which is just a number)
+        if (!data || !data.pages || !Array.isArray(data.pages)) {
+          continue
+        }
+        // Check if this task exists in this specific query's data
+        let taskFoundInThisQuery = false
+        for (const page of data.pages) {
+          const found = page.items.find((t) => t.id === taskId)
+          if (found) {
+            taskFoundInThisQuery = true
+            taskWasFound = true
+            // Save the task for return value (only need to find once across all queries)
+            if (!removedTask) {
+              removedTask = found
+            }
+            break
+          }
+        }
+
+        // Only update cache if task exists in this query
+        if (taskFoundInThisQuery) {
+          queryClient.setQueryData<InfiniteData<TaskCursorPage>>(queryKey, {
+            ...data,
+            pages: data.pages.map((page) => ({
+              ...page,
+              items: page.items.filter((t) => t.id !== taskId),
+            })),
+          })
+        }
+      }
+
+      // Also update the standalone count query used for tab badge
+      if (taskWasFound) {
+        queryClient.setQueryData<number>(
+          [...queryKeys.archivedTasks(projectId), 'count'],
+          (old) => (old != null && old > 0 ? old - 1 : 0)
+        )
+      }
+
+      return { removedTask }
+    },
+    onSuccess: (restoredTask) => {
+      // Add the restored task to the main tasks list (with archived_at cleared)
+      queryClient.setQueryData<Task[]>(queryKeys.tasks(projectId), (old) => {
+        if (!old) return [restoredTask]
+        // Check if task already exists (avoid duplicates)
+        const exists = old.some((t) => t.id === restoredTask.id)
+        return exists ? old.map((t) => (t.id === restoredTask.id ? restoredTask : t)) : [...old, restoredTask]
+      })
+
+      // Get the project to check if it might have been restored
+      const cachedProject = queryClient.getQueryData<Project>(queryKeys.project(projectId))
+
+      // Check if project was archived - if so, the backend will restore it
+      const projectWasArchived = cachedProject?.archived_at != null
+
+      // Update project cache: clear archived_at if it was archived.
+      // tasks_count is NOT incremented because it now counts all tasks (active + archived),
+      // and the unarchived task was already included in the total.
+      queryClient.setQueryData<Project>(queryKeys.project(projectId), (old) => {
+        if (!old) return old
+        return {
+          ...old,
+          archived_at: null, // Clear archived_at since restoring a task restores the project
+        }
+      })
+
+      if (projectWasArchived && cachedProject?.application_id) {
+        // Project was archived and is now restored
+        // Invalidate the specific application's projects and archived projects lists
+        queryClient.invalidateQueries({ queryKey: queryKeys.projects(cachedProject.application_id) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.archivedProjects(cachedProject.application_id) })
+      } else {
+        // Project wasn't archived — no tasks_count update needed.
+        // tasks_count now includes all tasks (active + archived), so unarchiving
+        // a task doesn't change the total. The task was already counted.
+      }
+    },
+    onError: () => {
+      // On error, invalidate to refetch correct state
+      queryClient.invalidateQueries({ queryKey: queryKeys.archivedTasks(projectId) })
+    },
+    // No onSettled - optimistic updates handle the UI, avoid unnecessary refetches
+  })
+}
+
+// ============================================================================
+// Archived Projects Queries
+// ============================================================================
+
+/**
+ * Fetch archived projects count for an application (lightweight).
+ * Only fetches 1 item to get the total count for display on tabs.
+ */
+export function useArchivedProjectsCount(
+  applicationId: string | undefined
+): UseQueryResult<number, Error> {
+  const token = useAuthStore((s) => s.token)
+
+  return useQuery({
+    queryKey: [...queryKeys.archivedProjects(applicationId || ''), 'count'],
+    queryFn: async () => {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      // Fetch with limit=1 just to get the total count
+      const response = await window.electronAPI.get<ProjectCursorPage>(
+        `/api/applications/${applicationId}/projects/archived?limit=1`,
+        getAuthHeaders(token)
+      )
+
+      if (response.status !== 200) {
+        throw new Error(parseApiError(response.status, response.data).message)
+      }
+
+      return response.data.total ?? 0
+    },
+    enabled: !!token && !!applicationId,
+    staleTime: 30 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
+  })
+}
+
+/**
+ * Fetch archived projects for an application with infinite scroll.
+ * Uses cursor-based pagination with optional search.
+ */
+export function useArchivedProjects(
+  applicationId: string | undefined,
+  search?: string
+): UseInfiniteQueryResult<InfiniteData<ProjectCursorPage>, Error> {
+  const token = useAuthStore((s) => s.token)
+
+  return useInfiniteQuery({
+    queryKey: [...queryKeys.archivedProjects(applicationId || ''), search || ''],
+    queryFn: async ({ pageParam }) => {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      const params = new URLSearchParams()
+      params.set('limit', '30')
+      if (pageParam) {
+        params.set('cursor', pageParam)
+      }
+      if (search) {
+        params.set('search', search)
+      }
+
+      const response = await window.electronAPI.get<ProjectCursorPage>(
+        `/api/applications/${applicationId}/projects/archived?${params.toString()}`,
+        getAuthHeaders(token)
+      )
+
+      if (response.status !== 200) {
+        throw new Error(parseApiError(response.status, response.data).message)
+      }
+
+      return response.data
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    enabled: !!token && !!applicationId,
+    staleTime: 30 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
+  })
+}
+
+// ============================================================================
+// My Tasks Queries (Application-Level)
+// ============================================================================
+
+/**
+ * Fetch pending tasks assigned to the current user across all projects in an application.
+ * Uses infinite scroll with cursor-based pagination and optional search.
+ */
+export function useMyPendingTasks(
+  applicationId: string | undefined,
+  search?: string
+): UseInfiniteQueryResult<InfiniteData<TaskCursorPage>, Error> {
+  const token = useAuthStore((s) => s.token)
+
+  return useInfiniteQuery({
+    queryKey: [...queryKeys.myPendingTasks(applicationId || ''), search || ''],
+    queryFn: async ({ pageParam }) => {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      const params = new URLSearchParams()
+      params.set('limit', '30')
+      if (pageParam) {
+        params.set('cursor', pageParam)
+      }
+      if (search) {
+        params.set('search', search)
+      }
+
+      const response = await window.electronAPI.get<TaskCursorPage>(
+        `/api/applications/${applicationId}/tasks/my?${params.toString()}`,
+        getAuthHeaders(token)
+      )
+
+      if (response.status !== 200) {
+        throw new Error(parseApiError(response.status, response.data).message)
+      }
+
+      return response.data
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    enabled: !!token && !!applicationId,
+    staleTime: 30 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
+  })
+}
+
+/**
+ * Fetch recently completed tasks assigned to the current user.
+ * Tasks completed within the last 7 days (not yet archived).
+ */
+export function useMyCompletedTasks(
+  applicationId: string | undefined,
+  search?: string
+): UseInfiniteQueryResult<InfiniteData<TaskCursorPage>, Error> {
+  const token = useAuthStore((s) => s.token)
+
+  return useInfiniteQuery({
+    queryKey: [...queryKeys.myCompletedTasks(applicationId || ''), search || ''],
+    queryFn: async ({ pageParam }) => {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      const params = new URLSearchParams()
+      params.set('limit', '30')
+      if (pageParam) {
+        params.set('cursor', pageParam)
+      }
+      if (search) {
+        params.set('search', search)
+      }
+
+      const response = await window.electronAPI.get<TaskCursorPage>(
+        `/api/applications/${applicationId}/tasks/my/completed?${params.toString()}`,
+        getAuthHeaders(token)
+      )
+
+      if (response.status !== 200) {
+        throw new Error(parseApiError(response.status, response.data).message)
+      }
+
+      return response.data
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    enabled: !!token && !!applicationId,
+    staleTime: 30 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
+  })
+}
+
+/**
+ * Fetch archived tasks assigned to the current user.
+ * Tasks that have been in Done status for 7+ days.
+ */
+export function useMyArchivedTasks(
+  applicationId: string | undefined,
+  search?: string
+): UseInfiniteQueryResult<InfiniteData<TaskCursorPage>, Error> {
+  const token = useAuthStore((s) => s.token)
+
+  return useInfiniteQuery({
+    queryKey: [...queryKeys.myArchivedTasks(applicationId || ''), search || ''],
+    queryFn: async ({ pageParam }) => {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      const params = new URLSearchParams()
+      params.set('limit', '30')
+      if (pageParam) {
+        params.set('cursor', pageParam)
+      }
+      if (search) {
+        params.set('search', search)
+      }
+
+      const response = await window.electronAPI.get<TaskCursorPage>(
+        `/api/applications/${applicationId}/tasks/my/archived?${params.toString()}`,
+        getAuthHeaders(token)
+      )
+
+      if (response.status !== 200) {
+        throw new Error(parseApiError(response.status, response.data).message)
+      }
+
+      return response.data
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    enabled: !!token && !!applicationId,
+    staleTime: 30 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
+  })
+}
+
+// ============================================================================
+// My Projects Queries (Dashboard)
+// ============================================================================
+
+export interface MyProjectsParams {
+  search?: string
+  sortBy?: 'due_date' | 'name' | 'updated_at'
+  sortOrder?: 'asc' | 'desc'
+  status?: string
+}
+
+/**
+ * Fetch projects for the dashboard with sorting and filtering.
+ * Uses infinite scroll with cursor-based pagination.
+ */
+export function useMyProjects(
+  applicationId: string | undefined,
+  params?: MyProjectsParams
+): UseInfiniteQueryResult<InfiniteData<ProjectCursorPage>, Error> {
+  const token = useAuthStore((s) => s.token)
+
+  return useInfiniteQuery({
+    queryKey: [
+      ...queryKeys.myProjects(applicationId || ''),
+      params?.search || '',
+      params?.sortBy || 'due_date',
+      params?.sortOrder || 'asc',
+      params?.status || '',
+    ],
+    queryFn: async ({ pageParam }) => {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      const searchParams = new URLSearchParams()
+      searchParams.set('limit', '30')
+      if (pageParam) {
+        searchParams.set('cursor', pageParam)
+      }
+      if (params?.search) {
+        searchParams.set('search', params.search)
+      }
+      if (params?.sortBy) {
+        searchParams.set('sort_by', params.sortBy)
+      }
+      if (params?.sortOrder) {
+        searchParams.set('sort_order', params.sortOrder)
+      }
+      if (params?.status) {
+        searchParams.set('status', params.status)
+      }
+
+      const response = await window.electronAPI.get<ProjectCursorPage>(
+        `/api/applications/${applicationId}/projects/my?${searchParams.toString()}`,
+        getAuthHeaders(token)
+      )
+
+      if (response.status !== 200) {
+        throw new Error(parseApiError(response.status, response.data).message)
+      }
+
+      return response.data
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    enabled: !!token && !!applicationId,
+    staleTime: 30 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
+  })
+}
+
+/**
+ * Fetch projects across all applications for the dashboard.
+ * Uses infinite scroll with cursor-based pagination.
+ */
+export function useMyProjectsCrossApp(
+  params?: MyProjectsParams
+): UseInfiniteQueryResult<InfiniteData<ProjectCursorPage>, Error> {
+  const token = useAuthStore((s) => s.token)
+
+  return useInfiniteQuery({
+    queryKey: [
+      ...queryKeys.myProjectsCrossApp,
+      params?.search || '',
+      params?.sortBy || 'due_date',
+      params?.sortOrder || 'asc',
+      params?.status || '',
+    ],
+    queryFn: async ({ pageParam }) => {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      const searchParams = new URLSearchParams()
+      searchParams.set('limit', '30')
+      if (pageParam) {
+        searchParams.set('cursor', pageParam)
+      }
+      if (params?.search) {
+        searchParams.set('search', params.search)
+      }
+      if (params?.sortBy) {
+        searchParams.set('sort_by', params.sortBy)
+      }
+      if (params?.sortOrder) {
+        searchParams.set('sort_order', params.sortOrder)
+      }
+      if (params?.status) {
+        searchParams.set('status', params.status)
+      }
+
+      const response = await window.electronAPI.get<ProjectCursorPage>(
+        `/api/me/projects?${searchParams.toString()}`,
+        getAuthHeaders(token)
+      )
+
+      if (response.status !== 200) {
+        throw new Error(parseApiError(response.status, response.data).message)
+      }
+
+      return response.data
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    enabled: !!token,
+    staleTime: 30 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
+  })
+}
+
+/**
+ * Parameters for cross-app task queries.
+ */
+export interface MyTasksParams {
+  search?: string
+  sortBy?: 'due_date' | 'title' | 'updated_at'
+  sortOrder?: 'asc' | 'desc'
+  status?: string
+}
+
+/**
+ * Fetch pending tasks across all applications for the dashboard.
+ * Uses infinite scroll with cursor-based pagination.
+ */
+export function useMyTasksCrossApp(
+  params?: MyTasksParams
+): UseInfiniteQueryResult<InfiniteData<TaskCursorPage>, Error> {
+  const token = useAuthStore((s) => s.token)
+
+  return useInfiniteQuery({
+    queryKey: [
+      ...queryKeys.myTasksCrossApp,
+      params?.search || '',
+      params?.sortBy || 'updated_at',
+      params?.sortOrder || 'desc',
+      params?.status || '',
+    ],
+    queryFn: async ({ pageParam }) => {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      const searchParams = new URLSearchParams()
+      searchParams.set('limit', '30')
+      if (pageParam) {
+        searchParams.set('cursor', pageParam)
+      }
+      if (params?.search) {
+        searchParams.set('search', params.search)
+      }
+      if (params?.sortBy) {
+        searchParams.set('sort_by', params.sortBy)
+      }
+      if (params?.sortOrder) {
+        searchParams.set('sort_order', params.sortOrder)
+      }
+      if (params?.status) {
+        searchParams.set('status', params.status)
+      }
+
+      const response = await window.electronAPI.get<TaskCursorPage>(
+        `/api/me/tasks?${searchParams.toString()}`,
+        getAuthHeaders(token)
+      )
+
+      if (response.status !== 200) {
+        throw new Error(parseApiError(response.status, response.data).message)
+      }
+
+      return response.data
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    enabled: !!token,
+    staleTime: 30 * 1000,
     gcTime: 24 * 60 * 60 * 1000,
   })
 }

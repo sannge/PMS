@@ -165,6 +165,17 @@ function formatDueDate(dateString: string): { text: string; isOverdue: boolean; 
 }
 
 /**
+ * Format completed date for done tasks
+ */
+function formatCompletedDate(dateString: string): string {
+  const date = new Date(dateString)
+  if (isNaN(date.getTime())) {
+    return 'Completed'
+  }
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+/**
  * Format a timestamp into a compact relative time string
  * e.g., "2m", "1h", "3d", "1w", "2mo"
  */
@@ -345,7 +356,10 @@ export function TaskCard({
   )
 
   const priorityConfig = PRIORITY_CONFIG[task.priority]
-  const dueInfo = task.due_date ? formatDueDate(task.due_date) : null
+  const isDone = task.status === 'done'
+  // For done tasks, show completed date instead of due date
+  const dueInfo = isDone ? null : (task.due_date ? formatDueDate(task.due_date) : null)
+  const completedInfo = isDone && task.completed_at ? formatCompletedDate(task.completed_at) : null
 
   // Compact variant - minimal single row
   if (variant === 'compact') {
@@ -474,7 +488,7 @@ export function TaskCard({
         </span>
       )}
 
-      {/* Due Date */}
+      {/* Due Date (only for non-done tasks) */}
       {dueInfo && (
         <span
           className={cn(
@@ -489,6 +503,17 @@ export function TaskCard({
         >
           <Clock className="h-2.5 w-2.5" />
           {dueInfo.text}
+        </span>
+      )}
+
+      {/* Completed Date (only for done tasks) */}
+      {completedInfo && (
+        <span
+          className="flex-shrink-0 flex items-center gap-0.5 text-[10px] text-green-600 dark:text-green-500"
+          title={`Completed: ${new Date(task.completed_at!).toLocaleString()}`}
+        >
+          <CheckCircle2 className="h-2.5 w-2.5" />
+          {completedInfo}
         </span>
       )}
 

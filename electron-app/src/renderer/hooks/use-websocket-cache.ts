@@ -11,10 +11,12 @@
  * @see https://tanstack.com/query/latest/docs/react/guides/invalidations
  */
 
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { wsClient, MessageType, type Unsubscribe } from '@/lib/websocket'
 import { queryKeys } from '@/lib/query-client'
+import { showBrowserNotification } from '@/lib/notifications'
+import { useAuthStore } from '@/stores/auth-store'
 
 // ============================================================================
 // Types for WebSocket Event Data
@@ -40,6 +42,7 @@ interface TaskEventData {
 interface CommentEventData {
   task_id: string
   comment_id?: string
+  attachment_ids?: string[]
   [key: string]: unknown
 }
 
@@ -63,6 +66,11 @@ interface ProjectMemberEventData {
 
 interface NotificationEventData {
   notification_id?: string
+  notification_type?: string
+  title?: string
+  message?: string
+  entity_type?: string
+  entity_id?: string
   [key: string]: unknown
 }
 
@@ -77,16 +85,49 @@ interface AttachmentEventData {
 // ============================================================================
 
 /**
+ * Options for the WebSocket cache invalidation hook.
+ */
+export interface WebSocketCacheOptions {
+  /**
+   * Callback when current user is removed from an application.
+   * Use this to handle navigation (e.g., redirect away from removed app).
+   */
+  onCurrentUserRemoved?: (applicationId: string) => void
+
+  /**
+   * Callback when a project is deleted.
+   * Use this to handle navigation (e.g., redirect away from deleted project).
+   */
+  onProjectDeleted?: (projectId: string, applicationId: string) => void
+}
+
+/**
  * Hook that subscribes to WebSocket events and invalidates
  * the corresponding TanStack Query caches.
  *
  * Call this once at the app level (e.g., in Dashboard or App component).
  */
-export function useWebSocketCacheInvalidation(): void {
+export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {}): void {
   const queryClient = useQueryClient()
+  const optionsRef = useRef(options)
+
+  // Keep options ref up to date
+  useEffect(() => {
+    optionsRef.current = options
+  }, [options])
 
   useEffect(() => {
+    console.log('[WebSocket-Cache] Hook mounted, setting up listeners')
+    console.log('[WebSocket-Cache] wsClient:', wsClient)
+    console.log('[WebSocket-Cache] wsClient.isConnected:', wsClient?.isConnected?.())
     const unsubscribers: Unsubscribe[] = []
+
+    // Debug: log ALL incoming WebSocket messages
+    unsubscribers.push(
+      wsClient.onMessage((message) => {
+        console.log('[WebSocket-Cache] Received message:', message.type, message.data)
+      })
+    )
 
     // ========================================================================
     // Application Events
@@ -114,6 +155,8 @@ export function useWebSocketCacheInvalidation(): void {
       wsClient.on<ProjectEventData>(MessageType.PROJECT_CREATED, (data) => {
         if (data.application_id) {
           queryClient.invalidateQueries({ queryKey: queryKeys.projects(data.application_id) })
+          queryClient.invalidateQueries({ queryKey: queryKeys.myProjects(data.application_id) })
+          queryClient.invalidateQueries({ queryKey: queryKeys.myProjectsCrossApp })
         }
       })
     )
@@ -123,6 +166,13 @@ export function useWebSocketCacheInvalidation(): void {
         queryClient.invalidateQueries({ queryKey: queryKeys.project(data.project_id) })
         if (data.application_id) {
           queryClient.invalidateQueries({ queryKey: queryKeys.projects(data.application_id) })
+          queryClient.invalidateQueries({ queryKey: queryKeys.myProjects(data.application_id) })
+          queryClient.invalidateQueries({ queryKey: queryKeys.myProjectsCrossApp })
+          // Also invalidate archived projects cache (project may have been archived/restored)
+          queryClient.invalidateQueries({ queryKey: queryKeys.archivedProjects(data.application_id) })
+          // Invalidate application cache to update projects_count
+          queryClient.invalidateQueries({ queryKey: queryKeys.application(data.application_id) })
+          queryClient.invalidateQueries({ queryKey: queryKeys.applications })
         }
       })
     )
@@ -133,6 +183,12 @@ export function useWebSocketCacheInvalidation(): void {
         queryClient.removeQueries({ queryKey: queryKeys.tasks(data.project_id) })
         if (data.application_id) {
           queryClient.invalidateQueries({ queryKey: queryKeys.projects(data.application_id) })
+          queryClient.invalidateQueries({ queryKey: queryKeys.myProjects(data.application_id) })
+          queryClient.invalidateQueries({ queryKey: queryKeys.myProjectsCrossApp })
+          queryClient.invalidateQueries({ queryKey: queryKeys.application(data.application_id) })
+          queryClient.invalidateQueries({ queryKey: queryKeys.applications })
+          // Notify parent to redirect if user is viewing this project
+          optionsRef.current.onProjectDeleted?.(data.project_id, data.application_id)
         }
       })
     )
@@ -142,6 +198,8 @@ export function useWebSocketCacheInvalidation(): void {
         queryClient.invalidateQueries({ queryKey: queryKeys.project(data.project_id) })
         if (data.application_id) {
           queryClient.invalidateQueries({ queryKey: queryKeys.projects(data.application_id) })
+          queryClient.invalidateQueries({ queryKey: queryKeys.myProjects(data.application_id) })
+          queryClient.invalidateQueries({ queryKey: queryKeys.myProjectsCrossApp })
         }
       })
     )
@@ -153,6 +211,9 @@ export function useWebSocketCacheInvalidation(): void {
     unsubscribers.push(
       wsClient.on<TaskEventData>(MessageType.TASK_CREATED, (data) => {
         queryClient.invalidateQueries({ queryKey: queryKeys.tasks(data.project_id) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.project(data.project_id) })
+        queryClient.invalidateQueries({ queryKey: ['projects'] })
+        queryClient.invalidateQueries({ queryKey: queryKeys.myTasksCrossApp })
       })
     )
 
@@ -160,6 +221,7 @@ export function useWebSocketCacheInvalidation(): void {
       wsClient.on<TaskEventData>(MessageType.TASK_UPDATED, (data) => {
         queryClient.invalidateQueries({ queryKey: queryKeys.task(data.task_id) })
         queryClient.invalidateQueries({ queryKey: queryKeys.tasks(data.project_id) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.myTasksCrossApp })
       })
     )
 
@@ -167,6 +229,9 @@ export function useWebSocketCacheInvalidation(): void {
       wsClient.on<TaskEventData>(MessageType.TASK_DELETED, (data) => {
         queryClient.removeQueries({ queryKey: queryKeys.task(data.task_id) })
         queryClient.invalidateQueries({ queryKey: queryKeys.tasks(data.project_id) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.project(data.project_id) })
+        queryClient.invalidateQueries({ queryKey: ['projects'] })
+        queryClient.invalidateQueries({ queryKey: queryKeys.myTasksCrossApp })
       })
     )
 
@@ -174,6 +239,7 @@ export function useWebSocketCacheInvalidation(): void {
       wsClient.on<TaskEventData>(MessageType.TASK_STATUS_CHANGED, (data) => {
         queryClient.invalidateQueries({ queryKey: queryKeys.task(data.task_id) })
         queryClient.invalidateQueries({ queryKey: queryKeys.tasks(data.project_id) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.myTasksCrossApp })
       })
     )
 
@@ -181,6 +247,7 @@ export function useWebSocketCacheInvalidation(): void {
       wsClient.on<TaskEventData>(MessageType.TASK_MOVED, (data) => {
         queryClient.invalidateQueries({ queryKey: queryKeys.task(data.task_id) })
         queryClient.invalidateQueries({ queryKey: queryKeys.tasks(data.project_id) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.myTasksCrossApp })
       })
     )
 
@@ -206,6 +273,9 @@ export function useWebSocketCacheInvalidation(): void {
     unsubscribers.push(
       wsClient.on<CommentEventData>(MessageType.COMMENT_DELETED, (data) => {
         queryClient.invalidateQueries({ queryKey: queryKeys.comments(data.task_id) })
+        // Invalidate attachments cache - comment deletion may have removed attachments
+        queryClient.invalidateQueries({ queryKey: queryKeys.attachments(data.task_id) })
+        queryClient.invalidateQueries({ queryKey: ['attachments', 'task', data.task_id] })
       })
     )
 
@@ -283,13 +353,52 @@ export function useWebSocketCacheInvalidation(): void {
 
     unsubscribers.push(
       wsClient.on<MemberEventData>(MessageType.MEMBER_REMOVED, (data) => {
+        console.log('[WebSocket-Cache] MEMBER_REMOVED received:', data)
+
+        // Check if current user is the one being removed
+        const currentUserId = useAuthStore.getState().user?.id
+        const isCurrentUserRemoved = currentUserId === data.user_id
+        console.log('[WebSocket-Cache] MEMBER_REMOVED check: currentUserId=', currentUserId, 'data.user_id=', data.user_id, 'isCurrentUserRemoved=', isCurrentUserRemoved)
+
+        // Always invalidate the members list
         queryClient.invalidateQueries({ queryKey: queryKeys.appMembers(data.application_id) })
+
+        if (isCurrentUserRemoved) {
+          // For removed user: force immediate cache update and notify for redirect
+          console.log('[WebSocket-Cache] Current user was removed, updating cache and notifying')
+
+          // Remove the specific application from cache (user no longer has access)
+          queryClient.removeQueries({ queryKey: queryKeys.application(data.application_id) })
+
+          // Directly remove from applications list cache (instant UI update)
+          queryClient.setQueryData<{ id: string }[]>(
+            queryKeys.applications,
+            (old) => {
+              if (!old) return old
+              const filtered = old.filter((app) => app.id !== data.application_id)
+              console.log('[WebSocket-Cache] Filtered applications:', old.length, '->', filtered.length)
+              return filtered
+            }
+          )
+
+          // Also refetch to ensure consistency with backend
+          queryClient.refetchQueries({ queryKey: queryKeys.applications })
+
+          // Call the callback so the app can redirect if needed
+          optionsRef.current.onCurrentUserRemoved?.(data.application_id)
+        } else {
+          // For other users: just invalidate to update member lists
+          queryClient.invalidateQueries({ queryKey: queryKeys.applications })
+          queryClient.invalidateQueries({ queryKey: queryKeys.application(data.application_id) })
+        }
       })
     )
 
     unsubscribers.push(
       wsClient.on<MemberEventData>(MessageType.ROLE_UPDATED, (data) => {
         queryClient.invalidateQueries({ queryKey: queryKeys.appMembers(data.application_id) })
+        // Also invalidate application to refresh user_role for permission checks
+        queryClient.invalidateQueries({ queryKey: queryKeys.application(data.application_id) })
       })
     )
 
@@ -324,9 +433,43 @@ export function useWebSocketCacheInvalidation(): void {
     // ========================================================================
 
     unsubscribers.push(
-      wsClient.on<NotificationEventData>(MessageType.NOTIFICATION, () => {
+      wsClient.on<NotificationEventData>(MessageType.NOTIFICATION, (data) => {
+        console.log('[WebSocket-Cache] NOTIFICATION event received:', data)
         queryClient.invalidateQueries({ queryKey: queryKeys.notifications })
         queryClient.invalidateQueries({ queryKey: queryKeys.unreadCount })
+
+        // Handle member_removed notification as fallback (in case MEMBER_REMOVED event missed)
+        if (data.notification_type === 'member_removed' && data.entity_type === 'application' && data.entity_id) {
+          console.log('[WebSocket-Cache] NOTIFICATION: member_removed detected, updating cache for app:', data.entity_id)
+
+          // Remove the specific application from cache
+          queryClient.removeQueries({ queryKey: queryKeys.application(data.entity_id) })
+
+          // Directly remove from applications list cache
+          queryClient.setQueryData<{ id: string }[]>(
+            queryKeys.applications,
+            (old) => {
+              if (!old) return old
+              const filtered = old.filter((app) => app.id !== data.entity_id)
+              console.log('[WebSocket-Cache] Filtered applications via NOTIFICATION:', old.length, '->', filtered.length)
+              return filtered
+            }
+          )
+
+          // Refetch to ensure consistency
+          queryClient.refetchQueries({ queryKey: queryKeys.applications })
+
+          // Call redirect callback
+          optionsRef.current.onCurrentUserRemoved?.(data.entity_id)
+        }
+
+        // Show desktop notification if title and message are provided
+        if (data.title && data.message) {
+          console.log('[WebSocket-Cache] Calling showBrowserNotification')
+          showBrowserNotification(data.title, data.message)
+        } else {
+          console.log('[WebSocket-Cache] Missing title or message, skipping desktop notification')
+        }
       })
     )
 
@@ -377,6 +520,7 @@ export function useWebSocketCacheInvalidation(): void {
 
     // Cleanup on unmount
     return () => {
+      console.log('[WebSocket-Cache] Hook cleanup, removing listeners')
       unsubscribers.forEach((unsubscribe) => unsubscribe())
     }
   }, [queryClient])

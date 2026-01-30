@@ -24,7 +24,7 @@ import {
 } from '@dnd-kit/core'
 import { cn } from '@/lib/utils'
 import { useAuthStore, getAuthHeaders } from '@/stores/auth-store'
-import { useMoveTask, type Task, type TaskStatusValue as TaskStatus } from '@/hooks/use-queries'
+import { useMoveTask, useArchivedTasksCount, type Task, type TaskStatusValue as TaskStatus } from '@/hooks/use-queries'
 import {
   LayoutGrid,
   Plus,
@@ -32,6 +32,8 @@ import {
   Wifi,
   WifiOff,
   Eye,
+  Archive,
+  Columns,
 } from 'lucide-react'
 import { ProgressBar } from '@/components/ui/skeleton'
 import {
@@ -44,6 +46,7 @@ import {
 import { useDragAndDrop } from '@/hooks/use-drag-and-drop'
 import { DroppableColumn, DEFAULT_COLUMNS } from './DroppableColumn'
 import { TaskCard } from '../tasks/task-card'
+import { ArchivedTasksList } from '../archive/ArchivedTasksList'
 
 // ============================================================================
 // Types
@@ -141,6 +144,7 @@ export function KanbanBoard({
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [realtimeNotice, setRealtimeNotice] = useState<string | null>(null)
+  const [showArchive, setShowArchive] = useState(false)
 
   // Ref to always have access to latest tasks (avoids stale closure issues)
   const tasksRef = useRef<Task[]>([])
@@ -154,6 +158,9 @@ export function KanbanBoard({
   // Task move mutation
   const moveTaskMutation = useMoveTask(projectId)
   const isMoving = moveTaskMutation.isPending
+
+  // Archived tasks count for tab badge
+  const { data: archivedCount } = useArchivedTasksCount(projectId)
 
   // WebSocket status
   const { status } = useWebSocket()
@@ -183,10 +190,16 @@ export function KanbanBoard({
 
       // Optimistic update
       const originalTasks = [...currentTasks]
+      const now = new Date().toISOString()
       setTasks((prevTasks) =>
-        prevTasks.map((t) =>
-          t.id === taskId ? { ...t, status: targetStatus } : t
-        )
+        prevTasks.map((t) => {
+          if (t.id !== taskId) return t
+          // Set completed_at when moving to done, clear when moving away
+          const completed_at = targetStatus === 'done'
+            ? (t.completed_at || now) // Keep existing or set new
+            : (t.status === 'done' ? null : t.completed_at) // Clear if was done
+          return { ...t, status: targetStatus, completed_at }
+        })
       )
 
       // Notify callback
@@ -507,62 +520,122 @@ export function KanbanBoard({
           )}
         </div>
 
-        {/* Add Task Button - only show when user can edit */}
-        {onAddTask && canEdit && (
-          <button
-            onClick={() => onAddTask()}
-            className={cn(
-              'inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground',
-              'hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
-              'transition-colors duration-200'
-            )}
-          >
-            <Plus className="h-4 w-4" />
-            Add Task
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {/* Add Task Button - only show when user can edit and not in archive view */}
+          {onAddTask && canEdit && !showArchive && (
+            <button
+              onClick={() => onAddTask()}
+              className={cn(
+                'inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground',
+                'hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                'transition-colors duration-200'
+              )}
+            >
+              <Plus className="h-4 w-4" />
+              Add Task
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Progress bar */}
-      <ProgressBar isActive={isLoading && tasks.length > 0} />
+      {/* Tab Navigation - Proper underline style tabs */}
+      <div className="flex border-b px-1">
+        <button
+          onClick={() => setShowArchive(false)}
+          className={cn(
+            'flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors',
+            !showArchive
+              ? 'border-primary text-foreground'
+              : 'border-transparent text-muted-foreground hover:border-muted hover:text-foreground'
+          )}
+        >
+          <Columns className="h-4 w-4" />
+          <span>Board</span>
+        </button>
+        <button
+          onClick={() => setShowArchive(true)}
+          className={cn(
+            'flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors',
+            showArchive
+              ? 'border-primary text-foreground'
+              : 'border-transparent text-muted-foreground hover:border-muted hover:text-foreground'
+          )}
+        >
+          <Archive className="h-4 w-4" />
+          <span>Archive</span>
+          {archivedCount != null && archivedCount > 0 && (
+            <span
+              className={cn(
+                'ml-0.5 inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-xs font-medium tabular-nums',
+                showArchive
+                  ? 'bg-primary/15 text-primary'
+                  : 'bg-muted text-muted-foreground'
+              )}
+            >
+              {archivedCount}
+            </span>
+          )}
+        </button>
+      </div>
 
-      {/* Board with DnD Context */}
-      <DndContext
-        sensors={sensors}
-        collisionDetection={customCollisionDetection}
-        onDragStart={handleDragStart}
-        onDragOver={handleDragOver}
-        onDragEnd={handleDragEnd}
-        onDragCancel={handleDragCancel}
-      >
-        <div className="flex-1 overflow-x-auto">
-          <div className="flex gap-4 pb-4 min-w-max">
-            {DEFAULT_COLUMNS.map((column) => (
-              <DroppableColumn
-                key={column.id}
-                column={column}
-                tasks={tasksByStatus[column.id] || []}
-                isOver={overColumnId === column.id}
-                isLoading={isLoading && tasks.length === 0}
-                onTaskClick={onTaskClick}
-                onAddTask={onAddTask}
-              />
-            ))}
-          </div>
-        </div>
+      {/* Progress bar - only show for board view */}
+      {!showArchive && <ProgressBar isActive={isLoading && tasks.length > 0} />}
 
-        {/* Drag Overlay - shows the dragging card */}
-        <DragOverlay dropAnimation={null}>
-          {activeTask ? (
-            <div className="shadow-xl ring-2 ring-primary/50 rounded-lg opacity-90">
-              <TaskCard task={activeTask} variant="default" />
+      {/* Archive View */}
+      {showArchive ? (
+        <ArchivedTasksList
+          projectId={projectId}
+          onTaskClick={onTaskClick}
+          onTaskRestored={(task) => {
+            // Add restored task to local state (task is now in Done status)
+            setTasks((prev) => {
+              const exists = prev.some((t) => t.id === task.id)
+              return exists ? prev : [...prev, task]
+            })
+          }}
+          className="flex-1"
+        />
+      ) : (
+        <>
+          {/* Board with DnD Context */}
+          <DndContext
+            sensors={sensors}
+            collisionDetection={customCollisionDetection}
+            onDragStart={handleDragStart}
+            onDragOver={handleDragOver}
+            onDragEnd={handleDragEnd}
+            onDragCancel={handleDragCancel}
+          >
+            <div className="flex-1 overflow-x-auto">
+              <div className="flex gap-4 pb-4 min-w-max">
+                {DEFAULT_COLUMNS.map((column) => (
+                  <DroppableColumn
+                    key={column.id}
+                    column={column}
+                    tasks={tasksByStatus[column.id] || []}
+                    isOver={overColumnId === column.id}
+                    isLoading={isLoading && tasks.length === 0}
+                    onTaskClick={onTaskClick}
+                    onAddTask={onAddTask}
+                  />
+                ))}
+              </div>
             </div>
-          ) : null}
-        </DragOverlay>
-      </DndContext>
 
-      {/* Empty State */}
-      {!isLoading && tasks.length === 0 && (
+            {/* Drag Overlay - shows the dragging card */}
+            <DragOverlay dropAnimation={null}>
+              {activeTask ? (
+                <div className="shadow-xl ring-2 ring-primary/50 rounded-lg opacity-90">
+                  <TaskCard task={activeTask} variant="default" />
+                </div>
+              ) : null}
+            </DragOverlay>
+          </DndContext>
+        </>
+      )}
+
+      {/* Empty State - only show for board view */}
+      {!showArchive && !isLoading && tasks.length === 0 && (
         <div className="flex flex-col items-center justify-center py-12">
           <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted">
             <LayoutGrid className="h-8 w-8 text-muted-foreground" />

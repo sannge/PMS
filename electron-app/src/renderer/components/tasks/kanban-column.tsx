@@ -496,7 +496,7 @@ export function KanbanColumn({
                 onDragStart={onDragStart}
                 onDragEnd={onDragEnd}
                 isDragging={draggingTaskId === task.id}
-                disabled={disabled}
+                disabled={disabled || !!task.archived_at}
               />
             ))}
             {/* Drop zone indicator at the bottom when dragging */}

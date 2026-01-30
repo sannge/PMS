@@ -33,16 +33,15 @@ import {
   RotateCw,
   Maximize2,
 } from 'lucide-react'
+import { type Attachment, useGetDownloadUrl } from '@/hooks/use-attachments'
 import {
-  type Attachment,
-  useFilesStore,
   formatFileSize,
   isImageFile,
   isPdfFile,
   isVideoFile,
   isAudioFile,
   getFileIconType,
-} from '@/stores/files-store'
+} from '@/lib/file-utils'
 
 // ============================================================================
 // Types
@@ -289,7 +288,7 @@ export function FilePreview({
 }: FilePreviewProps): JSX.Element | null {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [isLoadingUrl, setIsLoadingUrl] = useState(false)
-  const { getDownloadUrl } = useFilesStore()
+  const getDownloadUrl = useGetDownloadUrl()
 
   // Find current index for navigation
   const currentIndex = attachment

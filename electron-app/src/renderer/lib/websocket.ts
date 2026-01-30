@@ -514,6 +514,7 @@ export class WebSocketClient {
    * Connect to WebSocket server
    */
   connect(token?: string): void {
+    console.log('[WebSocket] connect() called, token provided:', !!token)
     // Update token if provided
     if (token !== undefined) {
       this.config.token = token || ''
@@ -521,9 +522,11 @@ export class WebSocketClient {
 
     // Don't connect without token
     if (!this.config.token) {
+      console.log('[WebSocket] No token, staying disconnected')
       this.setState(WebSocketState.DISCONNECTED)
       return
     }
+    console.log('[WebSocket] Has token, proceeding to connect')
 
     // Don't connect if already connecting
     if (this.state === WebSocketState.CONNECTING) {
@@ -547,6 +550,7 @@ export class WebSocketClient {
       // Build URL with token as query parameter
       const url = new URL(this.config.url)
       url.searchParams.set('token', this.config.token)
+      console.log('[WebSocket] Connecting to:', url.origin + url.pathname)
 
       this.ws = new WebSocket(url.toString())
 
@@ -777,6 +781,7 @@ export class WebSocketClient {
   }
 
   private handleOpen(): void {
+    console.log('[WebSocket] Connection opened!')
     this.setState(WebSocketState.CONNECTED)
     this.reconnectAttempts = 0
 
@@ -800,6 +805,7 @@ export class WebSocketClient {
   }
 
   private handleClose(event: CloseEvent): void {
+    console.log('[WebSocket] Connection closed:', event.code, event.reason)
     this.clearTimers()
     this.ws = null
 
@@ -817,7 +823,8 @@ export class WebSocketClient {
     })
   }
 
-  private handleError(_event: Event): void {
+  private handleError(event: Event): void {
+    console.error('[WebSocket] Connection error:', event)
     // Error handling - connection will be closed after error
     this.emit(MessageType.ERROR, {
       message: 'WebSocket connection error',

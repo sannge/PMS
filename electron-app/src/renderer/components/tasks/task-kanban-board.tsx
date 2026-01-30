@@ -112,12 +112,14 @@ const BOARD_COLUMNS: BoardColumn[] = [
 interface DraggableTaskCardProps {
   task: Task
   onClick?: (task: Task) => void
+  disabled?: boolean
 }
 
-function DraggableTaskCard({ task, onClick }: DraggableTaskCardProps): JSX.Element {
+function DraggableTaskCard({ task, onClick, disabled = false }: DraggableTaskCardProps): JSX.Element {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: task.id,
     data: { task },
+    disabled,
   })
 
   // Track drag state to differentiate from click
@@ -148,7 +150,7 @@ function DraggableTaskCard({ task, onClick }: DraggableTaskCardProps): JSX.Eleme
       onClick={handleClick}
       style={{ touchAction: 'none' }}
       className={cn(
-        'cursor-grab active:cursor-grabbing',
+        disabled ? 'cursor-default' : 'cursor-grab active:cursor-grabbing',
         isDragging && 'opacity-50'
       )}
     >
@@ -253,6 +255,7 @@ function DroppableColumn({
                 key={task.id}
                 task={task}
                 onClick={onTaskClick}
+                disabled={!!task.archived_at}
               />
             ))}
             {/* Drop indicator at bottom */}

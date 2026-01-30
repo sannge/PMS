@@ -193,10 +193,13 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
 
   // Connect when token is available
   useEffect(() => {
+    console.log('[useWebSocket] Connect effect:', { autoConnect, hasToken: !!token })
     if (!autoConnect || !token) {
+      console.log('[useWebSocket] Skipping connect - autoConnect:', autoConnect, 'token:', !!token)
       return
     }
 
+    console.log('[useWebSocket] Connecting with token...')
     client.setToken(token)
     client.connect()
 

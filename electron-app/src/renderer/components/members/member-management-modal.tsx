@@ -347,8 +347,8 @@ export function MemberManagementModal({
     const query = searchQuery.toLowerCase()
     return members.filter(
       (member) =>
-        member.user?.full_name?.toLowerCase().includes(query) ||
-        member.user?.email?.toLowerCase().includes(query)
+        member.user_display_name?.toLowerCase().includes(query) ||
+        member.user_email?.toLowerCase().includes(query)
     )
   }, [members, searchQuery, onSearch])
 
