@@ -12,7 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
-DB_URL = "postgresql+asyncpg://pmsdbuser:never%21again@10.18.137.202:5432/pmsdb"
+DB_URL = os.environ.get("DATABASE_URL", "postgresql+asyncpg://pmsdbuser:password@localhost:5432/pmsdb")
 
 async def test():
     engine = create_async_engine(DB_URL, echo=False)

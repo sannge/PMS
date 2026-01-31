@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
 # Database connection - same as insert_archived_tasks.py
-DB_URL = "postgresql+asyncpg://pmsdbuser:never%21again@10.18.137.202:5432/pmsdb"
+DB_URL = os.environ.get("DATABASE_URL", "postgresql+asyncpg://pmsdbuser:password@localhost:5432/pmsdb")
 
 # Configuration
 USER_EMAILS = [
