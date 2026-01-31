@@ -27,11 +27,7 @@ from sqlalchemy.orm import sessionmaker
 DB_URL = os.environ.get("DATABASE_URL", "postgresql+asyncpg://pmsdbuser:password@localhost:5432/pmsdb")
 
 # Configuration
-USER_EMAILS = [
-    "samngestep@gmail.com",
-    "samngestep2@gmail.com",
-    "bellaeaint@gmail.com",
-]
+USER_EMAILS = os.environ.get("SEED_USER_EMAILS", "").split(",") if os.environ.get("SEED_USER_EMAILS") else []
 APPLICATION_NAME = "WMS3"
 NUM_PROJECTS = 80
 DAYS_AGO = 10  # Tasks completed this many days ago
@@ -87,6 +83,10 @@ PROJECT_NAMES = [
 
 async def main():
     """Main function to insert archived projects."""
+    if not USER_EMAILS:
+        print("Error: Set SEED_USER_EMAILS env var (comma-separated emails)")
+        return
+
     print(f"Creating {NUM_PROJECTS} archived projects in '{APPLICATION_NAME}'...")
 
     # Create engine

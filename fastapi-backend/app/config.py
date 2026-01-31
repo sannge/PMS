@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     minio_secure: bool = False
 
     # JWT settings
-    jwt_secret: str = "your-super-secret-key-change-in-production"
+    jwt_secret: str
     jwt_algorithm: str = "HS256"
     jwt_expiration_minutes: int = 1440
 
@@ -70,11 +70,16 @@ class Settings(BaseSettings):
             f"@{self.db_server}:{self.db_port}/{self.db_name}"
         )
 
+    # Test database settings
+    test_db_user: str = "pmsdbtestuser"
+    test_db_password: str = ""
+
     @property
     def test_database_url(self) -> str:
         """Build test database connection string."""
+        from urllib.parse import quote_plus
         return (
-            f"postgresql+asyncpg://pmsdbtestuser:never!again"
+            f"postgresql+asyncpg://{self.test_db_user}:{quote_plus(self.test_db_password)}"
             f"@{self.db_server}:{self.db_port}/pmsdb_test"
         )
 
