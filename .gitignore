@@ -10,6 +10,11 @@
 .worktrees/
 
 # --------------------------------
+# GSD (Get Shit Done) Framework
+# --------------------------------
+# .planning/ tracked in git (commit_docs=true)
+
+# --------------------------------
 # Specify (spec workflow tooling)
 # --------------------------------
 .specify/
