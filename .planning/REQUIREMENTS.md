@@ -1,4 +1,4 @@
-# Requirements: PM Desktop — Knowledge Base & Documents
+# Requirements: PM Desktop -- Knowledge Base & Documents
 
 **Defined:** 2026-01-31
 **Core Value:** Teams can create, organize, and find internal documentation without leaving their project management tool.
@@ -10,17 +10,18 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Migration
 
 - [ ] **MIGR-01**: Existing notes system completely removed (old code, old database tables, old API endpoints)
-- [ ] **MIGR-02**: Clean slate — no backward compatibility with old notes system
+- [ ] **MIGR-02**: Clean slate -- no backward compatibility with old notes system
+- [ ] **MIGR-03**: All Zustand stores used by knowledge base replaced with React Context + TanStack Query (no new Zustand stores introduced; existing stores auth-store, notes-store, notification-ui-store migrated to Context)
 
 ### Data Model
 
 - [ ] **DATA-01**: Documents support three scopes: personal (user-only), application-wide, and project-specific
 - [ ] **DATA-02**: Hierarchical folder structure with nested folders within each scope
 - [ ] **DATA-03**: Documents not in a folder appear in an "Unfiled" section
-- [ ] **DATA-04**: Tag system — documents can have multiple tags, tags filterable in sidebar
+- [ ] **DATA-04**: Tag system -- documents can have multiple tags, tags filterable in sidebar
 - [ ] **DATA-05**: Documents stored in three formats: TipTap JSON (editor), Markdown (AI), plain text (search)
 - [ ] **DATA-06**: Schema supports future version history (snapshot table in schema, not populated yet)
-- [ ] **DATA-07**: Soft delete — deleted documents move to trash, recoverable for 30 days, auto-purged after
+- [ ] **DATA-07**: Soft delete -- deleted documents move to trash, recoverable for 30 days, auto-purged after
 
 ### Rich Text Editor
 
@@ -44,8 +45,14 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **SAVE-01**: Auto-save after 10 seconds of typing inactivity
 - [ ] **SAVE-02**: Save on navigate away or app close
 - [ ] **SAVE-03**: Status bar shows "Saving..." / "Saved Xs ago" / "Save failed" indicator
-- [ ] **SAVE-04**: Client-side dirty check — skip save if content hasn't changed since last save
+- [ ] **SAVE-04**: Client-side dirty check -- skip save if content hasn't changed since last save
 - [ ] **SAVE-05**: Server generates Markdown and plain text from TipTap JSON on each save
+
+### Local Caching (IndexedDB)
+
+- [ ] **CACHE-01**: Local draft persistence -- unsaved editor content auto-saved to IndexedDB so content survives crashes, navigation, and app restarts
+- [ ] **CACHE-02**: Document content caching -- recently opened documents load instantly from IndexedDB via TanStack Query persistence layer (per-query-persister)
+- [ ] **CACHE-03**: Folder tree caching -- sidebar folder tree renders immediately from IndexedDB cache, then refreshes from server in background
 
 ### Document Locking
 
@@ -55,7 +62,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **LOCK-04**: User can manually stop editing to release lock
 - [ ] **LOCK-05**: Server-side lock expiry (Redis TTL) for crashed/disconnected clients
 - [ ] **LOCK-06**: Application owners can force-take lock (saves previous editor's work first)
-- [ ] **LOCK-07**: Lock heartbeat — client sends periodic heartbeat to extend lock TTL while actively editing
+- [ ] **LOCK-07**: Lock heartbeat -- client sends periodic heartbeat to extend lock TTL while actively editing
 
 ### Notes Screen UI
 
@@ -141,7 +148,7 @@ Deferred to future release. Tracked but not in current roadmap.
 
 ### Real-Time Collaboration
 
-- **COLLAB-01**: Real-time collaborative editing with CRDT (Yjs) — multiple simultaneous editors
+- **COLLAB-01**: Real-time collaborative editing with CRDT (Yjs) -- multiple simultaneous editors
 
 ## Out of Scope
 
@@ -162,75 +169,79 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| MIGR-01 | — | Pending |
-| MIGR-02 | — | Pending |
-| DATA-01 | — | Pending |
-| DATA-02 | — | Pending |
-| DATA-03 | — | Pending |
-| DATA-04 | — | Pending |
-| DATA-05 | — | Pending |
-| DATA-06 | — | Pending |
-| DATA-07 | — | Pending |
-| EDIT-01 | — | Pending |
-| EDIT-02 | — | Pending |
-| EDIT-03 | — | Pending |
-| EDIT-04 | — | Pending |
-| EDIT-05 | — | Pending |
-| EDIT-06 | — | Pending |
-| EDIT-07 | — | Pending |
-| EDIT-08 | — | Pending |
-| EDIT-09 | — | Pending |
-| EDIT-10 | — | Pending |
-| EDIT-11 | — | Pending |
-| EDIT-12 | — | Pending |
-| EDIT-13 | — | Pending |
-| EDIT-14 | — | Pending |
-| SAVE-01 | — | Pending |
-| SAVE-02 | — | Pending |
-| SAVE-03 | — | Pending |
-| SAVE-04 | — | Pending |
-| SAVE-05 | — | Pending |
-| LOCK-01 | — | Pending |
-| LOCK-02 | — | Pending |
-| LOCK-03 | — | Pending |
-| LOCK-04 | — | Pending |
-| LOCK-05 | — | Pending |
-| LOCK-06 | — | Pending |
-| LOCK-07 | — | Pending |
-| UI-01 | — | Pending |
-| UI-02 | — | Pending |
-| UI-03 | — | Pending |
-| UI-04 | — | Pending |
-| UI-05 | — | Pending |
-| UI-06 | — | Pending |
-| UI-07 | — | Pending |
-| UI-08 | — | Pending |
-| UI-09 | — | Pending |
-| UI-10 | — | Pending |
-| EMBED-01 | — | Pending |
-| EMBED-02 | — | Pending |
-| PERM-01 | — | Pending |
-| PERM-02 | — | Pending |
-| PERM-03 | — | Pending |
-| PERM-04 | — | Pending |
-| PERM-05 | — | Pending |
-| PERM-06 | — | Pending |
-| SRCH-01 | — | Pending |
-| SRCH-02 | — | Pending |
-| SRCH-03 | — | Pending |
-| TMPL-01 | — | Pending |
-| TMPL-02 | — | Pending |
-| TMPL-03 | — | Pending |
-| MENT-01 | — | Pending |
-| MENT-02 | — | Pending |
-| MENT-03 | — | Pending |
-| EXPR-01 | — | Pending |
+| MIGR-01 | Phase 1 | Pending |
+| MIGR-02 | Phase 1 | Pending |
+| MIGR-03 | Phase 1 | Pending |
+| DATA-01 | Phase 1 | Pending |
+| DATA-02 | Phase 1 | Pending |
+| DATA-03 | Phase 1 | Pending |
+| DATA-04 | Phase 1 | Pending |
+| DATA-05 | Phase 1 | Pending |
+| DATA-06 | Phase 1 | Pending |
+| DATA-07 | Phase 1 | Pending |
+| EDIT-01 | Phase 3 | Pending |
+| EDIT-02 | Phase 3 | Pending |
+| EDIT-03 | Phase 3 | Pending |
+| EDIT-04 | Phase 3 | Pending |
+| EDIT-05 | Phase 3 | Pending |
+| EDIT-06 | Phase 3 | Pending |
+| EDIT-07 | Phase 3 | Pending |
+| EDIT-08 | Phase 3 | Pending |
+| EDIT-09 | Phase 3 | Pending |
+| EDIT-10 | Phase 7 | Pending |
+| EDIT-11 | Phase 7 | Pending |
+| EDIT-12 | Phase 7 | Pending |
+| EDIT-13 | Phase 7 | Pending |
+| EDIT-14 | Phase 3 | Pending |
+| SAVE-01 | Phase 4 | Pending |
+| SAVE-02 | Phase 4 | Pending |
+| SAVE-03 | Phase 4 | Pending |
+| SAVE-04 | Phase 4 | Pending |
+| SAVE-05 | Phase 4 | Pending |
+| CACHE-01 | Phase 4 | Pending |
+| CACHE-02 | Phase 2 | Pending |
+| CACHE-03 | Phase 2 | Pending |
+| LOCK-01 | Phase 5 | Pending |
+| LOCK-02 | Phase 5 | Pending |
+| LOCK-03 | Phase 5 | Pending |
+| LOCK-04 | Phase 5 | Pending |
+| LOCK-05 | Phase 5 | Pending |
+| LOCK-06 | Phase 5 | Pending |
+| LOCK-07 | Phase 5 | Pending |
+| UI-01 | Phase 2 | Pending |
+| UI-02 | Phase 2 | Pending |
+| UI-03 | Phase 2 | Pending |
+| UI-04 | Phase 6 | Pending |
+| UI-05 | Phase 6 | Pending |
+| UI-06 | Phase 6 | Pending |
+| UI-07 | Phase 6 | Pending |
+| UI-08 | Phase 6 | Pending |
+| UI-09 | Phase 6 | Pending |
+| UI-10 | Phase 2 | Pending |
+| EMBED-01 | Phase 10 | Pending |
+| EMBED-02 | Phase 10 | Pending |
+| PERM-01 | Phase 8 | Pending |
+| PERM-02 | Phase 8 | Pending |
+| PERM-03 | Phase 8 | Pending |
+| PERM-04 | Phase 8 | Pending |
+| PERM-05 | Phase 8 | Pending |
+| PERM-06 | Phase 8 | Pending |
+| SRCH-01 | Phase 9 | Pending |
+| SRCH-02 | Phase 9 | Pending |
+| SRCH-03 | Phase 9 | Pending |
+| TMPL-01 | Phase 9 | Pending |
+| TMPL-02 | Phase 9 | Pending |
+| TMPL-03 | Phase 9 | Pending |
+| MENT-01 | Phase 10 | Pending |
+| MENT-02 | Phase 10 | Pending |
+| MENT-03 | Phase 10 | Pending |
+| EXPR-01 | Phase 9 | Pending |
 
 **Coverage:**
-- v1 requirements: 57 total
-- Mapped to phases: 0
-- Unmapped: 57
+- v1 requirements: 61 total
+- Mapped to phases: 61
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-01-31*
-*Last updated: 2026-01-31 after initial definition*
+*Last updated: 2026-01-31 after roadmap revision*
