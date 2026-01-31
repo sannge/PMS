@@ -36,13 +36,13 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. Folders can be created and nested within any scope, and documents not in a folder appear in an Unfiled section
   5. Tags can be created, assigned to documents, and queried via API
   6. Deleted documents move to trash and are recoverable; schema includes snapshot table for future version history
-**Plans**: TBD
+**Plans**: 4 plans
 
 Plans:
-- [ ] 01-01: Remove old notes system (code, routes, models, migrations)
-- [ ] 01-02: Migrate Zustand stores to React Context + TanStack Query (auth-store, notes-store, notification-ui-store)
-- [ ] 01-03: Document and folder models, Alembic migration, and CRUD endpoints
-- [ ] 01-04: Tag system models, assignment endpoints, and soft delete with trash
+- [ ] 01-01-PLAN.md — Remove old notes system (backend models/routes/schemas, frontend contexts/pages/components, all references)
+- [ ] 01-02-PLAN.md — Remove Zustand store shims and update all imports to point directly at React Context providers
+- [ ] 01-03-PLAN.md — Create Document, DocumentFolder, DocumentSnapshot models, Alembic migration, and CRUD endpoints
+- [ ] 01-04-PLAN.md — Add tag system (DocumentTag + assignments), trash/restore/permanent-delete endpoints
 
 ### Phase 2: Notes Screen Shell & Folder Navigation
 **Goal**: Users can navigate the Notes screen with a working sidebar showing folders, search bar, tag filters, and scope selection, with the folder tree and document content loading instantly from IndexedDB cache
@@ -205,7 +205,7 @@ Note: Phases 5, 6, 7, 9 all depend on Phase 4 and can potentially be parallelize
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Migration & Data Foundation | 0/4 | Not started | - |
+| 1. Migration & Data Foundation | 0/4 | Planned | - |
 | 2. Notes Screen Shell & Folder Navigation | 0/3 | Not started | - |
 | 3. Rich Text Editor Core | 0/4 | Not started | - |
 | 4. Auto-Save & Content Pipeline | 0/4 | Not started | - |
