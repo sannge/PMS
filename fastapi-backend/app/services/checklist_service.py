@@ -11,8 +11,9 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
-from sqlalchemy import func
-from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy import func, select, update, delete
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from ..models.checklist import Checklist
 from ..models.checklist_item import ChecklistItem
@@ -53,8 +54,8 @@ def _generate_lexorank(before_rank: Optional[str] = None, after_rank: Optional[s
 # ============================================================================
 
 
-def create_checklist(
-    db: Session,
+async def create_checklist(
+    db: AsyncSession,
     task_id: UUID,
     checklist_data: ChecklistCreate,
 ) -> Checklist:
@@ -70,9 +71,13 @@ def create_checklist(
         Created checklist
     """
     # Get current max rank for this task's checklists
-    last_checklist = db.query(Checklist).filter(
-        Checklist.task_id == task_id
-    ).order_by(Checklist.rank.desc()).first()
+    result = await db.execute(
+        select(Checklist)
+        .where(Checklist.task_id == task_id)
+        .order_by(Checklist.rank.desc())
+        .limit(1)
+    )
+    last_checklist = result.scalar_one_or_none()
 
     new_rank = _generate_lexorank(last_checklist.rank if last_checklist else None, None)
 
@@ -85,14 +90,14 @@ def create_checklist(
         created_at=datetime.utcnow(),
     )
     db.add(checklist)
-    db.commit()
-    db.refresh(checklist)
+    await db.commit()
+    await db.refresh(checklist)
 
     return checklist
 
 
-def update_checklist(
-    db: Session,
+async def update_checklist(
+    db: AsyncSession,
     checklist_id: UUID,
     checklist_data: ChecklistUpdate,
 ) -> Optional[Checklist]:
@@ -107,7 +112,10 @@ def update_checklist(
     Returns:
         Updated checklist or None if not found
     """
-    checklist = db.query(Checklist).filter(Checklist.id == checklist_id).first()
+    result = await db.execute(
+        select(Checklist).where(Checklist.id == checklist_id)
+    )
+    checklist = result.scalar_one_or_none()
     if not checklist:
         return None
 
@@ -115,14 +123,14 @@ def update_checklist(
         checklist.title = checklist_data.title
 
     checklist.updated_at = datetime.utcnow()
-    db.commit()
-    db.refresh(checklist)
+    await db.commit()
+    await db.refresh(checklist)
 
     return checklist
 
 
-def delete_checklist(
-    db: Session,
+async def delete_checklist(
+    db: AsyncSession,
     checklist_id: UUID,
 ) -> bool:
     """
@@ -135,34 +143,39 @@ def delete_checklist(
     Returns:
         True if deleted, False if not found
     """
-    checklist = db.query(Checklist).filter(Checklist.id == checklist_id).first()
+    result = await db.execute(
+        select(Checklist).where(Checklist.id == checklist_id)
+    )
+    checklist = result.scalar_one_or_none()
     if not checklist:
         return False
 
     task_id = checklist.task_id
 
     # Delete all items
-    db.query(ChecklistItem).filter(ChecklistItem.checklist_id == checklist_id).delete()
+    await db.execute(
+        delete(ChecklistItem).where(ChecklistItem.checklist_id == checklist_id)
+    )
 
     # Delete checklist
-    db.delete(checklist)
-    db.commit()
+    await db.delete(checklist)
+    await db.commit()
 
     # Update task counts
-    _update_task_checklist_counts(db, task_id)
+    await _update_task_checklist_counts(db, task_id)
 
     return True
 
 
-def get_checklist(
-    db: Session,
+async def get_checklist(
+    db: AsyncSession,
     checklist_id: UUID,
 ) -> Optional[Checklist]:
     """
     Get a checklist by ID with items loaded.
 
     Uses selectinload for items to avoid cartesian product,
-    and nested joinedload for completer to prevent N+1 queries.
+    and nested selectinload for completer to prevent N+1 queries.
 
     Args:
         db: Database session
@@ -171,22 +184,23 @@ def get_checklist(
     Returns:
         Checklist or None if not found
     """
-    return db.query(Checklist).options(
-        selectinload(Checklist.items).joinedload(ChecklistItem.completer)
-    ).filter(
-        Checklist.id == checklist_id
-    ).first()
+    result = await db.execute(
+        select(Checklist)
+        .options(selectinload(Checklist.items).selectinload(ChecklistItem.completer))
+        .where(Checklist.id == checklist_id)
+    )
+    return result.scalar_one_or_none()
 
 
-def get_checklists_for_task(
-    db: Session,
+async def get_checklists_for_task(
+    db: AsyncSession,
     task_id: UUID,
 ) -> List[Checklist]:
     """
     Get all checklists for a task with items.
 
     Uses selectinload for items to avoid cartesian product,
-    and nested joinedload for completer to prevent N+1 queries.
+    and nested selectinload for completer to prevent N+1 queries.
 
     Args:
         db: Database session
@@ -195,13 +209,13 @@ def get_checklists_for_task(
     Returns:
         List of checklists ordered by rank
     """
-    return db.query(Checklist).options(
-        selectinload(Checklist.items).joinedload(ChecklistItem.completer)
-    ).filter(
-        Checklist.task_id == task_id
-    ).order_by(
-        Checklist.rank
-    ).all()
+    result = await db.execute(
+        select(Checklist)
+        .options(selectinload(Checklist.items).selectinload(ChecklistItem.completer))
+        .where(Checklist.task_id == task_id)
+        .order_by(Checklist.rank)
+    )
+    return list(result.scalars().all())
 
 
 # ============================================================================
@@ -209,8 +223,8 @@ def get_checklists_for_task(
 # ============================================================================
 
 
-def create_checklist_item(
-    db: Session,
+async def create_checklist_item(
+    db: AsyncSession,
     checklist_id: UUID,
     item_data: ChecklistItemCreate,
     user_id: Optional[UUID] = None,
@@ -227,14 +241,21 @@ def create_checklist_item(
     Returns:
         Created item or None if checklist not found
     """
-    checklist = db.query(Checklist).filter(Checklist.id == checklist_id).first()
+    result = await db.execute(
+        select(Checklist).where(Checklist.id == checklist_id)
+    )
+    checklist = result.scalar_one_or_none()
     if not checklist:
         return None
 
     # Get last item rank
-    last_item = db.query(ChecklistItem).filter(
-        ChecklistItem.checklist_id == checklist_id
-    ).order_by(ChecklistItem.rank.desc()).first()
+    result = await db.execute(
+        select(ChecklistItem)
+        .where(ChecklistItem.checklist_id == checklist_id)
+        .order_by(ChecklistItem.rank.desc())
+        .limit(1)
+    )
+    last_item = result.scalar_one_or_none()
 
     new_rank = _generate_lexorank(last_item.rank if last_item else None, None)
 
@@ -251,17 +272,17 @@ def create_checklist_item(
     checklist.total_items += 1
     # No need to update completed_items since new items are not done
 
-    db.commit()
-    db.refresh(item)
+    await db.commit()
+    await db.refresh(item)
 
     # Update task counts
-    _update_task_checklist_counts(db, checklist.task_id)
+    await _update_task_checklist_counts(db, checklist.task_id)
 
     return item
 
 
-def update_checklist_item(
-    db: Session,
+async def update_checklist_item(
+    db: AsyncSession,
     item_id: UUID,
     item_data: ChecklistItemUpdate,
     user_id: Optional[UUID] = None,
@@ -278,11 +299,17 @@ def update_checklist_item(
     Returns:
         Updated item or None if not found
     """
-    item = db.query(ChecklistItem).filter(ChecklistItem.id == item_id).first()
+    result = await db.execute(
+        select(ChecklistItem).where(ChecklistItem.id == item_id)
+    )
+    item = result.scalar_one_or_none()
     if not item:
         return None
 
-    checklist = db.query(Checklist).filter(Checklist.id == item.checklist_id).first()
+    result = await db.execute(
+        select(Checklist).where(Checklist.id == item.checklist_id)
+    )
+    checklist = result.scalar_one_or_none()
     if not checklist:
         return None
 
@@ -310,17 +337,17 @@ def update_checklist_item(
         else:
             checklist.completed_items = max(0, checklist.completed_items - 1)
 
-    db.commit()
-    db.refresh(item)
+    await db.commit()
+    await db.refresh(item)
 
     # Update task counts
-    _update_task_checklist_counts(db, checklist.task_id)
+    await _update_task_checklist_counts(db, checklist.task_id)
 
     return item
 
 
-def toggle_checklist_item(
-    db: Session,
+async def toggle_checklist_item(
+    db: AsyncSession,
     item_id: UUID,
     user_id: Optional[UUID] = None,
 ) -> Optional[Tuple[ChecklistItem, UUID, UUID]]:
@@ -335,11 +362,17 @@ def toggle_checklist_item(
     Returns:
         Tuple of (updated item, checklist_id, task_id) or None if not found
     """
-    item = db.query(ChecklistItem).filter(ChecklistItem.id == item_id).first()
+    result = await db.execute(
+        select(ChecklistItem).where(ChecklistItem.id == item_id)
+    )
+    item = result.scalar_one_or_none()
     if not item:
         return None
 
-    checklist = db.query(Checklist).filter(Checklist.id == item.checklist_id).first()
+    result = await db.execute(
+        select(Checklist).where(Checklist.id == item.checklist_id)
+    )
+    checklist = result.scalar_one_or_none()
     if not checklist:
         return None
 
@@ -360,17 +393,17 @@ def toggle_checklist_item(
     else:
         checklist.completed_items = max(0, checklist.completed_items - 1)
 
-    db.commit()
-    db.refresh(item)
+    await db.commit()
+    await db.refresh(item)
 
     # Update task counts
-    _update_task_checklist_counts(db, checklist.task_id)
+    await _update_task_checklist_counts(db, checklist.task_id)
 
     return item, checklist.id, checklist.task_id
 
 
-def delete_checklist_item(
-    db: Session,
+async def delete_checklist_item(
+    db: AsyncSession,
     item_id: UUID,
 ) -> Optional[Tuple[UUID, UUID]]:
     """
@@ -383,11 +416,17 @@ def delete_checklist_item(
     Returns:
         Tuple of (checklist_id, task_id) or None if not found
     """
-    item = db.query(ChecklistItem).filter(ChecklistItem.id == item_id).first()
+    result = await db.execute(
+        select(ChecklistItem).where(ChecklistItem.id == item_id)
+    )
+    item = result.scalar_one_or_none()
     if not item:
         return None
 
-    checklist = db.query(Checklist).filter(Checklist.id == item.checklist_id).first()
+    result = await db.execute(
+        select(Checklist).where(Checklist.id == item.checklist_id)
+    )
+    checklist = result.scalar_one_or_none()
     if not checklist:
         return None
 
@@ -399,11 +438,11 @@ def delete_checklist_item(
     if item.is_done:
         checklist.completed_items = max(0, checklist.completed_items - 1)
 
-    db.delete(item)
-    db.commit()
+    await db.delete(item)
+    await db.commit()
 
     # Update task counts
-    _update_task_checklist_counts(db, task_id)
+    await _update_task_checklist_counts(db, task_id)
 
     return checklist_id, task_id
 
@@ -413,8 +452,8 @@ def delete_checklist_item(
 # ============================================================================
 
 
-def reorder_checklist_items(
-    db: Session,
+async def reorder_checklist_items(
+    db: AsyncSession,
     checklist_id: UUID,
     item_ids: List[UUID],
 ) -> bool:
@@ -430,10 +469,13 @@ def reorder_checklist_items(
         True if successful, False if validation fails
     """
     # Verify all items belong to the checklist
-    items = db.query(ChecklistItem).filter(
-        ChecklistItem.checklist_id == checklist_id,
-        ChecklistItem.id.in_(item_ids),
-    ).all()
+    result = await db.execute(
+        select(ChecklistItem).where(
+            ChecklistItem.checklist_id == checklist_id,
+            ChecklistItem.id.in_(item_ids),
+        )
+    )
+    items = result.scalars().all()
 
     if len(items) != len(item_ids):
         return False
@@ -441,17 +483,19 @@ def reorder_checklist_items(
     # Generate new ranks based on order
     current_rank = "a"
     for item_id in item_ids:
-        db.query(ChecklistItem).filter(
-            ChecklistItem.id == item_id
-        ).update({"rank": current_rank})
+        await db.execute(
+            update(ChecklistItem)
+            .where(ChecklistItem.id == item_id)
+            .values(rank=current_rank)
+        )
         current_rank = _generate_lexorank(current_rank, None)
 
-    db.commit()
+    await db.commit()
     return True
 
 
-def reorder_checklists(
-    db: Session,
+async def reorder_checklists(
+    db: AsyncSession,
     task_id: UUID,
     checklist_ids: List[UUID],
 ) -> bool:
@@ -467,10 +511,13 @@ def reorder_checklists(
         True if successful, False if validation fails
     """
     # Verify all checklists belong to the task
-    checklists = db.query(Checklist).filter(
-        Checklist.task_id == task_id,
-        Checklist.id.in_(checklist_ids),
-    ).all()
+    result = await db.execute(
+        select(Checklist).where(
+            Checklist.task_id == task_id,
+            Checklist.id.in_(checklist_ids),
+        )
+    )
+    checklists = result.scalars().all()
 
     if len(checklists) != len(checklist_ids):
         return False
@@ -478,12 +525,14 @@ def reorder_checklists(
     # Generate new ranks based on order
     current_rank = "a"
     for checklist_id in checklist_ids:
-        db.query(Checklist).filter(
-            Checklist.id == checklist_id
-        ).update({"rank": current_rank})
+        await db.execute(
+            update(Checklist)
+            .where(Checklist.id == checklist_id)
+            .values(rank=current_rank)
+        )
         current_rank = _generate_lexorank(current_rank, None)
 
-    db.commit()
+    await db.commit()
     return True
 
 
@@ -492,7 +541,7 @@ def reorder_checklists(
 # ============================================================================
 
 
-def _update_task_checklist_counts(db: Session, task_id: UUID) -> None:
+async def _update_task_checklist_counts(db: AsyncSession, task_id: UUID) -> None:
     """
     Update denormalized checklist counts on task.
 
@@ -501,22 +550,25 @@ def _update_task_checklist_counts(db: Session, task_id: UUID) -> None:
         task_id: Task ID to update
     """
     # Calculate totals across all checklists
-    result = db.query(
-        func.sum(Checklist.total_items).label("total"),
-        func.sum(Checklist.completed_items).label("done"),
-    ).filter(
-        Checklist.task_id == task_id
-    ).first()
+    result = await db.execute(
+        select(
+            func.sum(Checklist.total_items).label("total"),
+            func.sum(Checklist.completed_items).label("done"),
+        )
+        .where(Checklist.task_id == task_id)
+    )
+    row = result.first()
 
-    total = result.total or 0 if result else 0
-    done = result.done or 0 if result else 0
+    total = row.total or 0 if row else 0
+    done = row.done or 0 if row else 0
 
     # Update task
-    db.query(Task).filter(Task.id == task_id).update({
-        "checklist_total": total,
-        "checklist_done": done,
-    })
-    db.commit()
+    await db.execute(
+        update(Task)
+        .where(Task.id == task_id)
+        .values(checklist_total=total, checklist_done=done)
+    )
+    await db.commit()
 
 
 # ============================================================================

@@ -1,0 +1,12 @@
+Method,Name,Error,Occurrences
+GET,/api/applications/f0851605-562c-4f4a-a11b-01923eb10ce1/projects,"ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)",1
+GET,/api/projects/ae2f73a4-f75c-44fe-8078-0acb69cdeac3/tasks,RemoteDisconnected('Remote end closed connection without response'),2
+PATCH,/api/tasks/2b53b1b5-60dd-44bf-9919-23711e882993,HTTPError('405 Client Error: Method Not Allowed for url: /api/tasks/2b53b1b5-60dd-44bf-9919-23711e882993'),2
+GET,/api/applications/f0851605-562c-4f4a-a11b-01923eb10ce1/projects,RemoteDisconnected('Remote end closed connection without response'),1
+POST,/api/projects/ae2f73a4-f75c-44fe-8078-0acb69cdeac3/tasks,"ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)",1
+PATCH,/api/tasks/2b53b1b5-60dd-44bf-9919-23711e882993,"ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)",1
+GET,/api/projects/ae2f73a4-f75c-44fe-8078-0acb69cdeac3,RemoteDisconnected('Remote end closed connection without response'),1
+GET,/api/tasks/2b53b1b5-60dd-44bf-9919-23711e882993/comments,"ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)",1
+GET,/api/tasks/2b53b1b5-60dd-44bf-9919-23711e882993,RemoteDisconnected('Remote end closed connection without response'),2
+GET,/api/tasks/2b53b1b5-60dd-44bf-9919-23711e882993/comments,RemoteDisconnected('Remote end closed connection without response'),3
+GET,/api/applications,RemoteDisconnected('Remote end closed connection without response'),1

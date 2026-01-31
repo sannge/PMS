@@ -428,16 +428,25 @@ async def handle_application_update(
     action: UpdateAction,
     application_data: dict[str, Any],
     user_id: Optional[UUID | str] = None,
+    member_user_ids: Optional[list[UUID]] = None,
     connection_manager: Optional[ConnectionManager] = None,
 ) -> BroadcastResult:
     """
     Handle application update events and broadcast to application room.
+
+    Broadcasts to:
+    1. Users in the application room (viewing the detail page)
+    2. Specific users in member_user_ids (typically the user who made the change)
+
+    For other members on the dashboard, updates are seen on next navigation
+    (handled by TanStack Query's stale-while-revalidate).
 
     Args:
         application_id: The application's UUID
         action: The type of update (created, updated, deleted)
         application_data: The application data to broadcast
         user_id: The user who made the change
+        member_user_ids: Specific users to notify directly (e.g., the updater)
         connection_manager: Optional custom manager (defaults to global)
 
     Returns:
@@ -470,17 +479,16 @@ async def handle_application_update(
         "data": payload,
     }
 
-    recipients = await mgr.broadcast_to_room(room_id, message)
-
-    # Note: We intentionally do NOT broadcast_to_all for deleted applications
-    # as that would leak application information to unauthorized users.
-    # Users viewing the application get notified via room broadcast.
-    # Users with the application in their list will discover the deletion
-    # when they next fetch/interact with it (lazy invalidation).
+    # Broadcast to all members (room + direct to those not in room)
+    if member_user_ids:
+        recipients = await broadcast_to_target_users(mgr, room_id, message, member_user_ids)
+    else:
+        # Fallback to room-only broadcast
+        recipients = await mgr.broadcast_to_room(room_id, message)
 
     logger.info(
         f"Application {action.value}: application_id={application_id}, "
-        f"recipients={recipients}"
+        f"recipients={recipients}, target_members={len(member_user_ids) if member_user_ids else 0}"
     )
 
     return BroadcastResult(
@@ -826,7 +834,6 @@ async def handle_member_added(
             - user_name: Name of the new member
             - user_email: Email of the new member
             - role: The member's role
-            - is_manager: Whether the member has manager privileges
             - added_by: UUID of who added the member
         connection_manager: Optional custom manager (defaults to global)
 
@@ -935,8 +942,9 @@ async def handle_member_removed(
 
     recipients = await broadcast_to_target_users(mgr, room_id, message, target_users)
 
-    logger.debug(
-        f"member_removed: app={application_id}, user={removed_user_id}, recipients={recipients}"
+    logger.info(
+        f"member_removed: app={application_id}, user={removed_user_id}, "
+        f"target_users={[str(u) for u in target_users]}, recipients={recipients}"
     )
 
     return BroadcastResult(

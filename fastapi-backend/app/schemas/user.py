@@ -63,12 +63,12 @@ class UserResponse(UserBase):
         None,
         description="URL to user's avatar image",
     )
-    created_at: datetime = Field(
-        ...,
+    created_at: Optional[datetime] = Field(
+        None,
         description="When the user was created",
     )
-    updated_at: datetime = Field(
-        ...,
+    updated_at: Optional[datetime] = Field(
+        None,
         description="When the user was last updated",
     )
 

@@ -8,7 +8,9 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import make_transient
 
 from ..config import settings
 from ..database import get_db
@@ -101,7 +103,7 @@ def decode_access_token(token: str) -> Optional[TokenData]:
         return None
 
 
-def get_user_by_email(db: Session, email: str) -> Optional[User]:
+async def get_user_by_email(db: AsyncSession, email: str) -> Optional[User]:
     """
     Get a user by their email address.
 
@@ -112,10 +114,11 @@ def get_user_by_email(db: Session, email: str) -> Optional[User]:
     Returns:
         User object if found, None otherwise
     """
-    return db.query(User).filter(User.email == email).first()
+    result = await db.execute(select(User).where(User.email == email))
+    return result.scalar_one_or_none()
 
 
-def get_user_by_id(db: Session, user_id: UUID) -> Optional[User]:
+async def get_user_by_id(db: AsyncSession, user_id: UUID) -> Optional[User]:
     """
     Get a user by their ID.
 
@@ -126,10 +129,11 @@ def get_user_by_id(db: Session, user_id: UUID) -> Optional[User]:
     Returns:
         User object if found, None otherwise
     """
-    return db.query(User).filter(User.id == user_id).first()
+    result = await db.execute(select(User).where(User.id == user_id))
+    return result.scalar_one_or_none()
 
 
-def authenticate_user(db: Session, email: str, password: str) -> Optional[User]:
+async def authenticate_user(db: AsyncSession, email: str, password: str) -> Optional[User]:
     """
     Authenticate a user with email and password.
 
@@ -141,7 +145,7 @@ def authenticate_user(db: Session, email: str, password: str) -> Optional[User]:
     Returns:
         User object if authentication successful, None otherwise
     """
-    user = get_user_by_email(db, email)
+    user = await get_user_by_email(db, email)
 
     if not user:
         return None
@@ -152,7 +156,7 @@ def authenticate_user(db: Session, email: str, password: str) -> Optional[User]:
     return user
 
 
-def create_user(db: Session, user_data: UserCreate) -> User:
+async def create_user(db: AsyncSession, user_data: UserCreate) -> User:
     """
     Create a new user in the database.
 
@@ -167,7 +171,7 @@ def create_user(db: Session, user_data: UserCreate) -> User:
         HTTPException: If email already exists
     """
     # Check if user already exists
-    existing_user = get_user_by_email(db, user_data.email)
+    existing_user = await get_user_by_email(db, user_data.email)
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -186,8 +190,8 @@ def create_user(db: Session, user_data: UserCreate) -> User:
 
     # Add to database
     db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
+    await db.commit()
+    await db.refresh(db_user)
 
     return db_user
 
@@ -196,8 +200,9 @@ def _user_from_cache(cached: CachedUser) -> User:
     """
     Create a User-like object from cache without ORM session.
 
-    This creates a detached User instance that can be used for
+    This creates a transient User instance that can be used for
     authentication checks without requiring database queries.
+    The object is not bound to any session.
 
     Args:
         cached: The cached user data
@@ -205,17 +210,22 @@ def _user_from_cache(cached: CachedUser) -> User:
     Returns:
         A User instance with essential fields populated
     """
-    user = User.__new__(User)
-    object.__setattr__(user, "id", cached.id)
-    object.__setattr__(user, "email", cached.email)
-    object.__setattr__(user, "display_name", cached.display_name)
-    object.__setattr__(user, "avatar_url", cached.avatar_url)
+    # Create User using normal constructor (makes it a transient ORM object)
+    user = User(
+        id=cached.id,
+        email=cached.email,
+        password_hash="",  # Empty placeholder - not used for auth checks
+        display_name=cached.display_name,
+        avatar_url=cached.avatar_url,
+    )
+    # Mark as transient (not associated with any session)
+    make_transient(user)
     return user
 
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> User:
     """
     Get the current authenticated user from the JWT token.
@@ -257,7 +267,7 @@ async def get_current_user(
         return _user_from_cache(cached)
 
     # Cache miss - query database
-    user = get_user_by_id(db, user_id)
+    user = await get_user_by_id(db, user_id)
     if user is None:
         raise credentials_exception
 

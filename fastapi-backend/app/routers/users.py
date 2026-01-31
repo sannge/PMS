@@ -8,8 +8,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import or_
-from sqlalchemy.orm import Session
+from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..models.user import User
@@ -37,7 +37,7 @@ async def search_users(
     name: Optional[str] = Query(None, min_length=1, description="Name to search for (partial match)"),
     limit: int = Query(10, ge=1, le=50, description="Maximum results to return"),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> list[UserSearchResponse]:
     """
     Search for users by email or display name.
@@ -46,8 +46,6 @@ async def search_users(
     - Excludes the current user from results
     - Returns up to `limit` results
     """
-    query = db.query(User)
-
     # Build search conditions
     conditions = []
     if email:
@@ -59,14 +57,16 @@ async def search_users(
     if not conditions:
         return []
 
-    # Apply OR conditions for search
-    query = query.filter(or_(*conditions))
+    # Build async query
+    stmt = (
+        select(User)
+        .where(or_(*conditions))
+        .where(User.id != current_user.id)
+        .limit(limit)
+    )
 
-    # Exclude current user
-    query = query.filter(User.id != current_user.id)
-
-    # Limit results
-    users = query.limit(limit).all()
+    result = await db.execute(stmt)
+    users = result.scalars().all()
 
     return [
         UserSearchResponse(

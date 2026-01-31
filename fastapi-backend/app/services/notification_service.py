@@ -8,10 +8,11 @@ Provides business logic for notification management, including:
 
 import logging
 from datetime import datetime
-from typing import Any, Optional
+from typing import Optional
 from uuid import UUID
 
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.notification import Notification
 from ..models.task import Task
@@ -36,7 +37,7 @@ class NotificationService:
 
     @staticmethod
     async def create_notification(
-        db: Session,
+        db: AsyncSession,
         notification_data: NotificationCreate,
         deliver_realtime: bool = True,
     ) -> Notification:
@@ -64,8 +65,8 @@ class NotificationService:
 
         # Save to database
         db.add(notification)
-        db.commit()
-        db.refresh(notification)
+        await db.commit()
+        await db.refresh(notification)
 
         logger.info(
             f"Notification created: id={notification.id}, "
@@ -107,7 +108,7 @@ class NotificationService:
 
     @staticmethod
     async def notify_task_assigned(
-        db: Session,
+        db: AsyncSession,
         task: Task,
         assignee: User,
         assigner: User,
@@ -141,7 +142,7 @@ class NotificationService:
 
     @staticmethod
     async def notify_task_status_changed(
-        db: Session,
+        db: AsyncSession,
         task: Task,
         old_status: str,
         new_status: str,
@@ -187,7 +188,7 @@ class NotificationService:
 
     @staticmethod
     async def notify_mentioned(
-        db: Session,
+        db: AsyncSession,
         mentioned_user: User,
         mentioner: User,
         entity_type: EntityType,
@@ -227,7 +228,7 @@ class NotificationService:
 
     @staticmethod
     async def notify_comment_added(
-        db: Session,
+        db: AsyncSession,
         task: Task,
         commenter: User,
         notify_users: list[User],
@@ -271,7 +272,7 @@ class NotificationService:
 
     @staticmethod
     async def notify_due_date_reminder(
-        db: Session,
+        db: AsyncSession,
         task: Task,
         user: User,
         days_until_due: int,
@@ -308,7 +309,7 @@ class NotificationService:
 
     @staticmethod
     async def notify_system(
-        db: Session,
+        db: AsyncSession,
         user_id: UUID,
         title: str,
         message: str,
@@ -343,7 +344,7 @@ class NotificationService:
 
 # Convenience functions for direct use
 async def create_notification(
-    db: Session,
+    db: AsyncSession,
     notification_data: NotificationCreate,
     deliver_realtime: bool = True,
 ) -> Notification:
@@ -354,7 +355,7 @@ async def create_notification(
 
 
 async def notify_task_assigned(
-    db: Session,
+    db: AsyncSession,
     task: Task,
     assignee: User,
     assigner: User,
@@ -366,7 +367,7 @@ async def notify_task_assigned(
 
 
 async def notify_task_status_changed(
-    db: Session,
+    db: AsyncSession,
     task: Task,
     old_status: str,
     new_status: str,
@@ -380,7 +381,7 @@ async def notify_task_status_changed(
 
 
 async def notify_mentioned(
-    db: Session,
+    db: AsyncSession,
     mentioned_user: User,
     mentioner: User,
     entity_type: EntityType,
@@ -395,7 +396,7 @@ async def notify_mentioned(
 
 
 async def notify_comment_added(
-    db: Session,
+    db: AsyncSession,
     task: Task,
     commenter: User,
     notify_users: list[User],
@@ -408,7 +409,7 @@ async def notify_comment_added(
 
 
 async def create_mention_notification(
-    db: Session,
+    db: AsyncSession,
     mentioned_user_id: UUID,
     mentioner_id: UUID,
     task_id: UUID,
@@ -435,9 +436,14 @@ async def create_mention_notification(
         return None
 
     # Fetch required entities
-    mentioned_user = db.query(User).filter(User.id == mentioned_user_id).first()
-    mentioner = db.query(User).filter(User.id == mentioner_id).first()
-    task = db.query(Task).filter(Task.id == task_id).first()
+    result = await db.execute(select(User).where(User.id == mentioned_user_id))
+    mentioned_user = result.scalar_one_or_none()
+
+    result = await db.execute(select(User).where(User.id == mentioner_id))
+    mentioner = result.scalar_one_or_none()
+
+    result = await db.execute(select(Task).where(Task.id == task_id))
+    task = result.scalar_one_or_none()
 
     if not mentioned_user or not mentioner or not task:
         logger.warning(

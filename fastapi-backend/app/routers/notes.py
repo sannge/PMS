@@ -11,8 +11,8 @@ from typing import Annotated, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select, update, delete
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..models.application import Application
@@ -30,10 +30,10 @@ from ..services.auth_service import get_current_user
 router = APIRouter(tags=["Notes"])
 
 
-def verify_application_ownership(
+async def verify_application_ownership(
     application_id: UUID,
     current_user: User,
-    db: Session,
+    db: AsyncSession,
 ) -> Application:
     """
     Verify that the application exists and the user owns it.
@@ -49,9 +49,8 @@ def verify_application_ownership(
     Raises:
         HTTPException: If application not found or user doesn't own it
     """
-    application = db.query(Application).filter(
-        Application.id == application_id,
-    ).first()
+    result = await db.execute(select(Application).where(Application.id == application_id))
+    application = result.scalar_one_or_none()
 
     if not application:
         raise HTTPException(
@@ -68,10 +67,10 @@ def verify_application_ownership(
     return application
 
 
-def verify_note_access(
+async def verify_note_access(
     note_id: UUID,
     current_user: User,
-    db: Session,
+    db: AsyncSession,
 ) -> Note:
     """
     Verify that the note exists and the user has access via application ownership.
@@ -87,9 +86,8 @@ def verify_note_access(
     Raises:
         HTTPException: If note not found or user doesn't have access
     """
-    note = db.query(Note).filter(
-        Note.id == note_id,
-    ).first()
+    result = await db.execute(select(Note).where(Note.id == note_id))
+    note = result.scalar_one_or_none()
 
     if not note:
         raise HTTPException(
@@ -98,9 +96,8 @@ def verify_note_access(
         )
 
     # Verify ownership through the parent application
-    application = db.query(Application).filter(
-        Application.id == note.application_id,
-    ).first()
+    result = await db.execute(select(Application).where(Application.id == note.application_id))
+    application = result.scalar_one_or_none()
 
     if not application or application.owner_id != current_user.id:
         raise HTTPException(
@@ -167,7 +164,7 @@ def build_note_tree(
 async def list_notes(
     application_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=500, description="Maximum number of records to return"),
     search: Optional[str] = Query(None, description="Search term for note title"),
@@ -187,43 +184,44 @@ async def list_notes(
     Returns notes with their children counts.
     """
     # Verify application ownership
-    verify_application_ownership(application_id, current_user, db)
+    await verify_application_ownership(application_id, current_user, db)
 
     # Build subquery for counting children
-    children_count_subquery = db.query(
-        Note.parent_id,
-        func.count(Note.id).label("children_count"),
-    ).filter(
-        Note.parent_id.isnot(None),
-    ).group_by(
-        Note.parent_id,
-    ).subquery()
+    children_count_subquery = (
+        select(
+            Note.parent_id,
+            func.count(Note.id).label("children_count"),
+        )
+        .where(Note.parent_id.isnot(None))
+        .group_by(Note.parent_id)
+        .subquery()
+    )
 
-    query = db.query(
-        Note,
-        func.coalesce(children_count_subquery.c.children_count, 0).label("children_count"),
-    ).outerjoin(
-        children_count_subquery,
-        Note.id == children_count_subquery.c.parent_id,
-    ).filter(
-        Note.application_id == application_id,
+    query = (
+        select(
+            Note,
+            func.coalesce(children_count_subquery.c.children_count, 0).label("children_count"),
+        )
+        .outerjoin(children_count_subquery, Note.id == children_count_subquery.c.parent_id)
+        .where(Note.application_id == application_id)
     )
 
     # Apply search filter if provided
     if search:
-        query = query.filter(Note.title.ilike(f"%{search}%"))
+        query = query.where(Note.title.ilike(f"%{search}%"))
 
     # Apply parent filter if provided
     if root_only:
-        query = query.filter(Note.parent_id.is_(None))
+        query = query.where(Note.parent_id.is_(None))
     elif parent_id:
-        query = query.filter(Note.parent_id == parent_id)
+        query = query.where(Note.parent_id == parent_id)
 
     # Order by tab_order then by title
     query = query.order_by(Note.tab_order.asc(), Note.title.asc())
 
     # Apply pagination
-    results = query.offset(skip).limit(limit).all()
+    result = await db.execute(query.offset(skip).limit(limit))
+    results = result.all()
 
     # Convert to response format
     notes = []
@@ -260,7 +258,7 @@ async def list_notes(
 async def get_note_tree(
     application_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> List[NoteTree]:
     """
     Get all notes within an application as a hierarchical tree.
@@ -269,15 +267,15 @@ async def get_note_tree(
     Useful for rendering the note sidebar/navigation.
     """
     # Verify application ownership
-    verify_application_ownership(application_id, current_user, db)
+    await verify_application_ownership(application_id, current_user, db)
 
     # Get all notes for this application
-    notes = db.query(Note).filter(
-        Note.application_id == application_id,
-    ).order_by(
-        Note.tab_order.asc(),
-        Note.title.asc(),
-    ).all()
+    result = await db.execute(
+        select(Note)
+        .where(Note.application_id == application_id)
+        .order_by(Note.tab_order.asc(), Note.title.asc())
+    )
+    notes = list(result.scalars().all())
 
     # Build and return the tree
     return build_note_tree(notes)
@@ -301,7 +299,7 @@ async def create_note(
     application_id: UUID,
     note_data: NoteCreate,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> NoteResponse:
     """
     Create a new note within an application.
@@ -315,7 +313,7 @@ async def create_note(
     Creator will be set to the current user.
     """
     # Verify application ownership
-    verify_application_ownership(application_id, current_user, db)
+    await verify_application_ownership(application_id, current_user, db)
 
     # Validate that application_id in body matches URL
     if note_data.application_id != application_id:
@@ -326,10 +324,13 @@ async def create_note(
 
     # Validate parent note if provided
     if note_data.parent_id:
-        parent_note = db.query(Note).filter(
-            Note.id == note_data.parent_id,
-            Note.application_id == application_id,
-        ).first()
+        result = await db.execute(
+            select(Note).where(
+                Note.id == note_data.parent_id,
+                Note.application_id == application_id,
+            )
+        )
+        parent_note = result.scalar_one_or_none()
 
         if not parent_note:
             raise HTTPException(
@@ -339,10 +340,13 @@ async def create_note(
 
     # Calculate tab_order if not provided (append to end)
     if note_data.tab_order == 0:
-        max_order = db.query(func.max(Note.tab_order)).filter(
-            Note.application_id == application_id,
-            Note.parent_id == note_data.parent_id,
-        ).scalar() or 0
+        result = await db.execute(
+            select(func.max(Note.tab_order)).where(
+                Note.application_id == application_id,
+                Note.parent_id == note_data.parent_id,
+            )
+        )
+        max_order = result.scalar() or 0
         tab_order = max_order + 1
     else:
         tab_order = note_data.tab_order
@@ -359,8 +363,8 @@ async def create_note(
 
     # Save to database
     db.add(note)
-    db.commit()
-    db.refresh(note)
+    await db.commit()
+    await db.refresh(note)
 
     return note
 
@@ -385,7 +389,7 @@ async def create_note(
 async def get_note(
     note_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> NoteWithChildren:
     """
     Get a specific note by its ID.
@@ -394,37 +398,37 @@ async def get_note(
     Only the application owner can access their notes.
     """
     # Query note with children count
-    children_count_subquery = db.query(
-        Note.parent_id,
-        func.count(Note.id).label("children_count"),
-    ).filter(
-        Note.parent_id.isnot(None),
-    ).group_by(
-        Note.parent_id,
-    ).subquery()
+    children_count_subquery = (
+        select(
+            Note.parent_id,
+            func.count(Note.id).label("children_count"),
+        )
+        .where(Note.parent_id.isnot(None))
+        .group_by(Note.parent_id)
+        .subquery()
+    )
 
-    result = db.query(
-        Note,
-        func.coalesce(children_count_subquery.c.children_count, 0).label("children_count"),
-    ).outerjoin(
-        children_count_subquery,
-        Note.id == children_count_subquery.c.parent_id,
-    ).filter(
-        Note.id == note_id,
-    ).first()
+    result = await db.execute(
+        select(
+            Note,
+            func.coalesce(children_count_subquery.c.children_count, 0).label("children_count"),
+        )
+        .outerjoin(children_count_subquery, Note.id == children_count_subquery.c.parent_id)
+        .where(Note.id == note_id)
+    )
+    row = result.first()
 
-    if not result:
+    if not row:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Note with ID {note_id} not found",
         )
 
-    note, children_count = result
+    note, children_count = row
 
     # Verify ownership through the parent application
-    application = db.query(Application).filter(
-        Application.id == note.application_id,
-    ).first()
+    result = await db.execute(select(Application).where(Application.id == note.application_id))
+    application = result.scalar_one_or_none()
 
     if not application or application.owner_id != current_user.id:
         raise HTTPException(
@@ -461,7 +465,7 @@ async def get_note(
 async def get_note_children(
     note_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=500, description="Maximum number of records to return"),
 ) -> List[NoteWithChildren]:
@@ -472,30 +476,31 @@ async def get_note_children(
     Useful for lazy-loading nested sections.
     """
     # Verify the parent note exists and user has access
-    verify_note_access(note_id, current_user, db)
+    await verify_note_access(note_id, current_user, db)
 
     # Query children with their children counts
-    children_count_subquery = db.query(
-        Note.parent_id,
-        func.count(Note.id).label("children_count"),
-    ).filter(
-        Note.parent_id.isnot(None),
-    ).group_by(
-        Note.parent_id,
-    ).subquery()
+    children_count_subquery = (
+        select(
+            Note.parent_id,
+            func.count(Note.id).label("children_count"),
+        )
+        .where(Note.parent_id.isnot(None))
+        .group_by(Note.parent_id)
+        .subquery()
+    )
 
-    results = db.query(
-        Note,
-        func.coalesce(children_count_subquery.c.children_count, 0).label("children_count"),
-    ).outerjoin(
-        children_count_subquery,
-        Note.id == children_count_subquery.c.parent_id,
-    ).filter(
-        Note.parent_id == note_id,
-    ).order_by(
-        Note.tab_order.asc(),
-        Note.title.asc(),
-    ).offset(skip).limit(limit).all()
+    result = await db.execute(
+        select(
+            Note,
+            func.coalesce(children_count_subquery.c.children_count, 0).label("children_count"),
+        )
+        .outerjoin(children_count_subquery, Note.id == children_count_subquery.c.parent_id)
+        .where(Note.parent_id == note_id)
+        .order_by(Note.tab_order.asc(), Note.title.asc())
+        .offset(skip)
+        .limit(limit)
+    )
+    results = result.all()
 
     # Convert to response format
     notes = []
@@ -534,7 +539,7 @@ async def update_note(
     note_id: UUID,
     note_data: NoteUpdate,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> NoteResponse:
     """
     Update an existing note.
@@ -547,7 +552,7 @@ async def update_note(
     Only the application owner can update their notes.
     """
     # Verify access and get note
-    note = verify_note_access(note_id, current_user, db)
+    note = await verify_note_access(note_id, current_user, db)
 
     # Update fields if provided
     update_data = note_data.model_dump(exclude_unset=True)
@@ -567,32 +572,38 @@ async def update_note(
             )
 
         # Cannot set a descendant as parent (would create cycle)
-        def is_descendant(potential_parent_id: UUID, note_id: UUID) -> bool:
-            """Check if note_id is a descendant of potential_parent_id."""
-            parent = db.query(Note).filter(Note.id == potential_parent_id).first()
+        async def is_descendant(potential_parent_id: UUID, check_note_id: UUID) -> bool:
+            """Check if check_note_id is a descendant of potential_parent_id."""
+            result = await db.execute(select(Note).where(Note.id == potential_parent_id))
+            parent = result.scalar_one_or_none()
             while parent:
-                if parent.id == note_id:
+                if parent.id == check_note_id:
                     return True
                 if parent.parent_id:
-                    parent = db.query(Note).filter(Note.id == parent.parent_id).first()
+                    result = await db.execute(select(Note).where(Note.id == parent.parent_id))
+                    parent = result.scalar_one_or_none()
                 else:
                     break
             return False
 
         # Check if the new parent is actually a child of the current note
-        children = db.query(Note).filter(Note.parent_id == note_id).all()
+        result = await db.execute(select(Note).where(Note.parent_id == note_id))
+        children = list(result.scalars().all())
         for child in children:
-            if child.id == update_data["parent_id"] or is_descendant(update_data["parent_id"], child.id):
+            if child.id == update_data["parent_id"] or await is_descendant(update_data["parent_id"], child.id):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Cannot set a descendant as parent (would create cycle)",
                 )
 
         # Validate that new parent exists and belongs to same application
-        parent_note = db.query(Note).filter(
-            Note.id == update_data["parent_id"],
-            Note.application_id == note.application_id,
-        ).first()
+        result = await db.execute(
+            select(Note).where(
+                Note.id == update_data["parent_id"],
+                Note.application_id == note.application_id,
+            )
+        )
+        parent_note = result.scalar_one_or_none()
 
         if not parent_note:
             raise HTTPException(
@@ -608,8 +619,8 @@ async def update_note(
     note.updated_at = datetime.utcnow()
 
     # Save changes
-    db.commit()
-    db.refresh(note)
+    await db.commit()
+    await db.refresh(note)
 
     return note
 
@@ -630,7 +641,7 @@ async def update_note(
 async def reorder_note(
     note_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     new_order: int = Query(..., ge=0, description="New tab order position"),
 ) -> NoteResponse:
     """
@@ -640,7 +651,7 @@ async def reorder_note(
     - **new_order**: The new position for the note (0-indexed)
     """
     # Verify access and get note
-    note = verify_note_access(note_id, current_user, db)
+    note = await verify_note_access(note_id, current_user, db)
 
     old_order = note.tab_order
 
@@ -648,11 +659,16 @@ async def reorder_note(
         return note
 
     # Get sibling notes (same parent)
-    siblings = db.query(Note).filter(
-        Note.application_id == note.application_id,
-        Note.parent_id == note.parent_id,
-        Note.id != note_id,
-    ).order_by(Note.tab_order.asc()).all()
+    result = await db.execute(
+        select(Note)
+        .where(
+            Note.application_id == note.application_id,
+            Note.parent_id == note.parent_id,
+            Note.id != note_id,
+        )
+        .order_by(Note.tab_order.asc())
+    )
+    siblings = list(result.scalars().all())
 
     # Update orders
     if new_order < old_order:
@@ -671,8 +687,8 @@ async def reorder_note(
     note.updated_at = datetime.utcnow()
 
     # Save changes
-    db.commit()
-    db.refresh(note)
+    await db.commit()
+    await db.refresh(note)
 
     return note
 
@@ -692,7 +708,7 @@ async def reorder_note(
 async def delete_note(
     note_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     cascade: bool = Query(True, description="Delete all child notes recursively"),
 ) -> None:
     """
@@ -706,26 +722,26 @@ async def delete_note(
     This action is irreversible.
     """
     # Verify access and get note
-    note = verify_note_access(note_id, current_user, db)
+    note = await verify_note_access(note_id, current_user, db)
 
     if cascade:
         # Recursively delete all children
-        def delete_children(parent_id: UUID):
-            children = db.query(Note).filter(Note.parent_id == parent_id).all()
+        async def delete_children(parent_id: UUID):
+            result = await db.execute(select(Note).where(Note.parent_id == parent_id))
+            children = list(result.scalars().all())
             for child in children:
-                delete_children(child.id)
-                db.delete(child)
+                await delete_children(child.id)
+                await db.delete(child)
 
-        delete_children(note_id)
+        await delete_children(note_id)
     else:
         # Orphan children (set parent_id to null)
-        db.query(Note).filter(Note.parent_id == note_id).update(
-            {"parent_id": None},
-            synchronize_session=False,
+        await db.execute(
+            update(Note).where(Note.parent_id == note_id).values(parent_id=None)
         )
 
     # Delete the note (cascade will handle attachments)
-    db.delete(note)
-    db.commit()
+    await db.delete(note)
+    await db.commit()
 
     return None

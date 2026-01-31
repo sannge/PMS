@@ -1,15 +1,20 @@
 """Presence management infrastructure for real-time collaboration.
 
-Redis-based presence tracking optimized for 5000+ concurrent users.
-Provides heartbeat-based presence with automatic expiration.
+Redis-based presence tracking optimized for 5000+ concurrent users
+across multiple Uvicorn workers.
+
+Uses Redis sorted sets for timestamp-based presence tracking and
+Redis hashes for user metadata (name, avatar, idle status).
 """
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
-from uuid import UUID
+
+from ..services.redis_service import redis_service
 
 logger = logging.getLogger(__name__)
 
@@ -31,34 +36,40 @@ class UserPresence:
 
 class PresenceManager:
     """
-    In-memory presence manager with Redis-like interface.
+    Redis-backed presence manager for cross-worker state.
 
-    For production with multiple server instances, replace with Redis implementation:
-    - Use Redis sorted sets (ZADD) for presence tracking
-    - Use Redis pub/sub for cross-instance presence updates
+    Uses:
+    - Redis sorted sets (ZADD/ZRANGEBYSCORE) for presence tracking
+    - Redis hashes for user metadata (name, avatar, idle)
+    - Redis pub/sub for presence change notifications
 
-    This implementation is optimized for single-instance deployment (5000 concurrent users).
+    This enables accurate presence across multiple server instances
+    (5000+ concurrent users).
     """
+
+    # Key prefixes
+    _PRESENCE_PREFIX = "presence:"
+    _USER_DATA_PREFIX = "presence_data:"
+    _PRESENCE_CHANNEL = "ws:presence"
 
     def __init__(self) -> None:
         """Initialize the presence manager."""
-        # room_id -> {user_id: UserPresence}
-        self._presence: dict[str, dict[str, UserPresence]] = {}
-        # user_id -> set of room_ids (for efficient cleanup)
-        self._user_rooms: dict[str, set[str]] = {}
-        # Lock for thread-safe operations
-        self._lock = asyncio.Lock()
-        # Background task for cleanup
         self._cleanup_task: Optional[asyncio.Task] = None
+        self._running = False
+        # Fallback in-memory storage when Redis is not available
+        self._local_presence: dict[str, dict[str, UserPresence]] = {}
+        self._local_user_rooms: dict[str, set[str]] = {}
+        self._lock = asyncio.Lock()
 
     async def start(self) -> None:
         """Start the background cleanup task."""
-        if self._cleanup_task is None:
-            self._cleanup_task = asyncio.create_task(self._cleanup_loop())
-            logger.info("Presence manager started")
+        self._running = True
+        self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+        logger.info("Presence manager started")
 
     async def stop(self) -> None:
-        """Stop the background cleanup task."""
+        """Stop the presence manager."""
+        self._running = False
         if self._cleanup_task:
             self._cleanup_task.cancel()
             try:
@@ -66,47 +77,50 @@ class PresenceManager:
             except asyncio.CancelledError:
                 pass
             self._cleanup_task = None
-            logger.info("Presence manager stopped")
+        logger.info("Presence manager stopped")
 
     async def _cleanup_loop(self) -> None:
-        """Background task to clean up stale presence entries."""
-        while True:
+        """Periodically clean up stale presence entries."""
+        while self._running:
             try:
                 await asyncio.sleep(HEARTBEAT_INTERVAL)
                 await self._cleanup_stale_presence()
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Error in presence cleanup: {e}")
+                logger.error(f"Presence cleanup error: {e}")
 
     async def _cleanup_stale_presence(self) -> None:
-        """Remove presence entries that haven't been updated within TTL."""
+        """Remove presence entries older than PRESENCE_TTL."""
         cutoff = time.time() - PRESENCE_TTL
-        rooms_to_update = []
 
-        async with self._lock:
-            for room_id, users in list(self._presence.items()):
-                stale_users = [
-                    uid for uid, presence in users.items()
-                    if presence.last_seen < cutoff
-                ]
-
-                if stale_users:
+        if redis_service.is_connected:
+            # Clean up Redis presence entries
+            try:
+                keys = await redis_service.client.keys(f"{self._PRESENCE_PREFIX}*")
+                for key in keys:
+                    room_id = key.replace(self._PRESENCE_PREFIX, "")
+                    removed = await redis_service.presence_cleanup(room_id, cutoff)
+                    if removed > 0:
+                        logger.debug(f"Cleaned {removed} stale entries from room {room_id}")
+            except Exception as e:
+                logger.error(f"Redis presence cleanup error: {e}")
+        else:
+            # Fallback: clean up local storage
+            async with self._lock:
+                for room_id, users in list(self._local_presence.items()):
+                    stale_users = [
+                        uid for uid, p in users.items()
+                        if p.last_seen < cutoff
+                    ]
                     for uid in stale_users:
                         del users[uid]
-                        if uid in self._user_rooms:
-                            self._user_rooms[uid].discard(room_id)
-                            if not self._user_rooms[uid]:
-                                del self._user_rooms[uid]
-
-                    rooms_to_update.append(room_id)
-
-                # Remove empty rooms
-                if not users:
-                    del self._presence[room_id]
-
-        if rooms_to_update:
-            logger.debug(f"Cleaned up stale presence in {len(rooms_to_update)} rooms")
+                        if uid in self._local_user_rooms:
+                            self._local_user_rooms[uid].discard(room_id)
+                            if not self._local_user_rooms[uid]:
+                                del self._local_user_rooms[uid]
+                    if not users:
+                        del self._local_presence[room_id]
 
     async def heartbeat(
         self,
@@ -126,21 +140,44 @@ class PresenceManager:
             avatar_url: Optional avatar URL
             idle: Whether the user is idle
         """
-        async with self._lock:
-            if room_id not in self._presence:
-                self._presence[room_id] = {}
+        now = time.time()
 
-            self._presence[room_id][user_id] = UserPresence(
-                user_id=user_id,
-                user_name=user_name,
-                avatar_url=avatar_url,
-                idle=idle,
-                last_seen=time.time(),
-            )
+        if redis_service.is_connected:
+            try:
+                # Update presence timestamp in sorted set
+                await redis_service.presence_set(room_id, user_id, now)
 
-            if user_id not in self._user_rooms:
-                self._user_rooms[user_id] = set()
-            self._user_rooms[user_id].add(room_id)
+                # Store user metadata in hash
+                user_data = json.dumps({
+                    "name": user_name,
+                    "avatar": avatar_url,
+                    "idle": idle,
+                })
+                await redis_service.client.hset(
+                    f"{self._USER_DATA_PREFIX}{room_id}",
+                    user_id,
+                    user_data
+                )
+            except Exception as e:
+                logger.error(f"Redis heartbeat error: {e}")
+                # Fall through to local storage
+        else:
+            # Fallback: update local storage
+            async with self._lock:
+                if room_id not in self._local_presence:
+                    self._local_presence[room_id] = {}
+
+                self._local_presence[room_id][user_id] = UserPresence(
+                    user_id=user_id,
+                    user_name=user_name,
+                    avatar_url=avatar_url,
+                    idle=idle,
+                    last_seen=now,
+                )
+
+                if user_id not in self._local_user_rooms:
+                    self._local_user_rooms[user_id] = set()
+                self._local_user_rooms[user_id].add(room_id)
 
     async def leave(
         self,
@@ -154,18 +191,40 @@ class PresenceManager:
             room_id: The room to leave
             user_id: The user's ID
         """
-        async with self._lock:
-            if room_id in self._presence and user_id in self._presence[room_id]:
-                del self._presence[room_id][user_id]
+        if redis_service.is_connected:
+            try:
+                # Remove from sorted set
+                await redis_service.presence_remove(room_id, user_id)
 
-                # Clean up empty room
-                if not self._presence[room_id]:
-                    del self._presence[room_id]
+                # Remove user metadata
+                await redis_service.client.hdel(
+                    f"{self._USER_DATA_PREFIX}{room_id}",
+                    user_id
+                )
 
-            if user_id in self._user_rooms:
-                self._user_rooms[user_id].discard(room_id)
-                if not self._user_rooms[user_id]:
-                    del self._user_rooms[user_id]
+                # Broadcast leave event
+                await redis_service.publish(
+                    self._PRESENCE_CHANNEL,
+                    {
+                        "type": "user_left",
+                        "room_id": room_id,
+                        "user_id": user_id,
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Redis leave error: {e}")
+        else:
+            # Fallback: update local storage
+            async with self._lock:
+                if room_id in self._local_presence and user_id in self._local_presence[room_id]:
+                    del self._local_presence[room_id][user_id]
+                    if not self._local_presence[room_id]:
+                        del self._local_presence[room_id]
+
+                if user_id in self._local_user_rooms:
+                    self._local_user_rooms[user_id].discard(room_id)
+                    if not self._local_user_rooms[user_id]:
+                        del self._local_user_rooms[user_id]
 
     async def leave_all(
         self,
@@ -182,19 +241,34 @@ class PresenceManager:
         """
         rooms_left = []
 
-        async with self._lock:
-            if user_id in self._user_rooms:
-                rooms = list(self._user_rooms[user_id])
-                for room_id in rooms:
-                    if room_id in self._presence and user_id in self._presence[room_id]:
-                        del self._presence[room_id][user_id]
-
-                        if not self._presence[room_id]:
-                            del self._presence[room_id]
-
+        if redis_service.is_connected:
+            try:
+                # Find all rooms where user has presence
+                keys = await redis_service.client.keys(f"{self._PRESENCE_PREFIX}*")
+                for key in keys:
+                    room_id = key.replace(self._PRESENCE_PREFIX, "")
+                    score = await redis_service.presence_get_score(room_id, user_id)
+                    if score is not None:
+                        await redis_service.presence_remove(room_id, user_id)
+                        await redis_service.client.hdel(
+                            f"{self._USER_DATA_PREFIX}{room_id}",
+                            user_id
+                        )
                         rooms_left.append(room_id)
-
-                del self._user_rooms[user_id]
+            except Exception as e:
+                logger.error(f"Redis leave_all error: {e}")
+        else:
+            # Fallback: update local storage
+            async with self._lock:
+                if user_id in self._local_user_rooms:
+                    rooms = list(self._local_user_rooms[user_id])
+                    for room_id in rooms:
+                        if room_id in self._local_presence and user_id in self._local_presence[room_id]:
+                            del self._local_presence[room_id][user_id]
+                            if not self._local_presence[room_id]:
+                                del self._local_presence[room_id]
+                            rooms_left.append(room_id)
+                    del self._local_user_rooms[user_id]
 
         return rooms_left
 
@@ -213,18 +287,55 @@ class PresenceManager:
         """
         cutoff = time.time() - PRESENCE_TTL
 
-        async with self._lock:
-            users = self._presence.get(room_id, {})
-            return [
-                {
-                    "id": p.user_id,
-                    "name": p.user_name,
-                    "avatar": p.avatar_url,
-                    "idle": p.idle,
-                }
-                for p in users.values()
-                if p.last_seen > cutoff
-            ]
+        if redis_service.is_connected:
+            try:
+                # Get active users from sorted set
+                user_ids = await redis_service.presence_get_room(room_id, cutoff)
+
+                if not user_ids:
+                    return []
+
+                # Get user metadata from hash
+                user_data_key = f"{self._USER_DATA_PREFIX}{room_id}"
+                result = []
+
+                for user_id in user_ids:
+                    data_str = await redis_service.client.hget(user_data_key, user_id)
+                    if data_str:
+                        data = json.loads(data_str)
+                        result.append({
+                            "id": user_id,
+                            "name": data.get("name", "Unknown"),
+                            "avatar": data.get("avatar"),
+                            "idle": data.get("idle", False),
+                        })
+                    else:
+                        # User in sorted set but no metadata
+                        result.append({
+                            "id": user_id,
+                            "name": "Unknown",
+                            "avatar": None,
+                            "idle": False,
+                        })
+
+                return result
+            except Exception as e:
+                logger.error(f"Redis get_presence error: {e}")
+                return []
+        else:
+            # Fallback: query local storage
+            async with self._lock:
+                users = self._local_presence.get(room_id, {})
+                return [
+                    {
+                        "id": p.user_id,
+                        "name": p.user_name,
+                        "avatar": p.avatar_url,
+                        "idle": p.idle,
+                    }
+                    for p in users.values()
+                    if p.last_seen > cutoff
+                ]
 
     async def get_user_rooms(
         self,
@@ -239,8 +350,25 @@ class PresenceManager:
         Returns:
             List of room IDs
         """
-        async with self._lock:
-            return list(self._user_rooms.get(user_id, set()))
+        cutoff = time.time() - PRESENCE_TTL
+
+        if redis_service.is_connected:
+            try:
+                rooms = []
+                keys = await redis_service.client.keys(f"{self._PRESENCE_PREFIX}*")
+                for key in keys:
+                    room_id = key.replace(self._PRESENCE_PREFIX, "")
+                    score = await redis_service.presence_get_score(room_id, user_id)
+                    if score is not None and score > cutoff:
+                        rooms.append(room_id)
+                return rooms
+            except Exception as e:
+                logger.error(f"Redis get_user_rooms error: {e}")
+                return []
+        else:
+            # Fallback: query local storage
+            async with self._lock:
+                return list(self._local_user_rooms.get(user_id, set()))
 
     async def is_present(
         self,
@@ -259,28 +387,60 @@ class PresenceManager:
         """
         cutoff = time.time() - PRESENCE_TTL
 
-        async with self._lock:
-            users = self._presence.get(room_id, {})
-            presence = users.get(user_id)
-            return presence is not None and presence.last_seen > cutoff
+        if redis_service.is_connected:
+            try:
+                score = await redis_service.presence_get_score(room_id, user_id)
+                return score is not None and score > cutoff
+            except Exception as e:
+                logger.error(f"Redis is_present error: {e}")
+                return False
+        else:
+            # Fallback: query local storage
+            async with self._lock:
+                users = self._local_presence.get(room_id, {})
+                presence = users.get(user_id)
+                return presence is not None and presence.last_seen > cutoff
 
-    def get_stats(self) -> dict[str, Any]:
+    async def get_stats(self) -> dict[str, Any]:
         """
         Get presence manager statistics.
 
         Returns:
             Dictionary with stats
         """
-        total_users = len(self._user_rooms)
-        total_rooms = len(self._presence)
-        total_presence_entries = sum(len(users) for users in self._presence.values())
+        if redis_service.is_connected:
+            try:
+                keys = await redis_service.client.keys(f"{self._PRESENCE_PREFIX}*")
+                total_rooms = len(keys)
+                total_entries = 0
+                cutoff = time.time() - PRESENCE_TTL
 
-        return {
-            "total_users": total_users,
-            "total_rooms": total_rooms,
-            "total_presence_entries": total_presence_entries,
-            "memory_estimate_bytes": total_presence_entries * 200,  # ~200 bytes per entry
-        }
+                for key in keys:
+                    room_id = key.replace(self._PRESENCE_PREFIX, "")
+                    users = await redis_service.presence_get_room(room_id, cutoff)
+                    total_entries += len(users)
+
+                return {
+                    "backend": "redis",
+                    "total_rooms": total_rooms,
+                    "total_presence_entries": total_entries,
+                }
+            except Exception as e:
+                logger.error(f"Redis get_stats error: {e}")
+                return {"backend": "redis", "error": str(e)}
+        else:
+            # Fallback: query local storage
+            total_users = len(self._local_user_rooms)
+            total_rooms = len(self._local_presence)
+            total_entries = sum(len(users) for users in self._local_presence.values())
+
+            return {
+                "backend": "memory",
+                "total_users": total_users,
+                "total_rooms": total_rooms,
+                "total_presence_entries": total_entries,
+                "memory_estimate_bytes": total_entries * 200,
+            }
 
 
 # Global singleton instance

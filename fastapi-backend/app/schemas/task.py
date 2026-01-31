@@ -61,7 +61,8 @@ class TaskBase(BaseModel):
     )
     description: Optional[str] = Field(
         None,
-        description="Detailed task description",
+        max_length=102400,  # 100KB max for rich text HTML content
+        description="Detailed task description (rich text HTML)",
         examples=["Add JWT-based authentication with login and logout endpoints"],
     )
     task_type: TaskType = Field(
@@ -139,7 +140,8 @@ class TaskUpdate(BaseModel):
     )
     description: Optional[str] = Field(
         None,
-        description="Detailed task description",
+        max_length=102400,  # 100KB max for rich text HTML content
+        description="Detailed task description (rich text HTML)",
     )
     task_type: Optional[TaskType] = Field(
         None,
@@ -262,6 +264,22 @@ class TaskResponse(TaskBase):
         ...,
         description="When the task was last updated",
     )
+    completed_at: Optional[datetime] = Field(
+        None,
+        description="When the task was completed (moved to done status)",
+    )
+    archived_at: Optional[datetime] = Field(
+        None,
+        description="When the task was archived (7+ days in done status)",
+    )
+    application_id: Optional[UUID] = Field(
+        None,
+        description="Application ID (populated in cross-app queries)",
+    )
+    application_name: Optional[str] = Field(
+        None,
+        description="Application name (populated in cross-app queries)",
+    )
 
 
 class TaskWithSubtasks(TaskResponse):
@@ -316,4 +334,25 @@ class TaskMove(BaseModel):
         None,
         ge=1,
         description="Row version for optimistic concurrency control",
+    )
+
+
+class TaskCursorPage(BaseModel):
+    """Paginated response for tasks with cursor-based pagination."""
+
+    items: list[TaskResponse] = Field(
+        ...,
+        description="List of tasks in this page",
+    )
+    next_cursor: Optional[str] = Field(
+        None,
+        description="Cursor for fetching the next page (null if no more items)",
+    )
+    total: Optional[int] = Field(
+        None,
+        description="Total count of items (only included when requested)",
+    )
+    can_restore: Optional[bool] = Field(
+        None,
+        description="Whether the current user can restore/unarchive tasks (only included for archived tasks endpoint)",
     )

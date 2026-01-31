@@ -15,13 +15,13 @@ from typing import Annotated, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from ..database import get_db
 from ..models.application import Application
 from ..models.application_member import ApplicationMember
-from ..models.notification import Notification
 from ..models.user import User
 from ..schemas.application_member import (
     MemberResponse,
@@ -31,7 +31,9 @@ from ..schemas.application_member import (
 from ..schemas.invitation import ApplicationRole
 from ..schemas.notification import EntityType, NotificationType
 from ..services.auth_service import get_current_user
+from ..services.notification_service import NotificationService
 from ..services.user_cache_service import invalidate_app_role
+from ..schemas.notification import NotificationCreate
 from ..websocket.handlers import (
     handle_member_removed,
     handle_role_updated,
@@ -45,8 +47,8 @@ router = APIRouter(prefix="/api/applications", tags=["Application Members"])
 # ============================================================================
 
 
-def get_user_application_role(
-    db: Session,
+async def get_user_application_role(
+    db: AsyncSession,
     user_id: UUID,
     application_id: UUID,
     application: Optional[Application] = None,
@@ -65,7 +67,8 @@ def get_user_application_role(
     """
     # If application is provided, use it; otherwise fetch
     if application is None:
-        application = db.query(Application).filter(Application.id == application_id).first()
+        result = await db.execute(select(Application).where(Application.id == application_id))
+        application = result.scalar_one_or_none()
 
     if not application:
         return None
@@ -75,44 +78,47 @@ def get_user_application_role(
         return "owner"
 
     # Check ApplicationMembers table
-    member = db.query(ApplicationMember).filter(
-        ApplicationMember.application_id == application_id,
-        ApplicationMember.user_id == user_id,
-    ).first()
+    result = await db.execute(
+        select(ApplicationMember).where(
+            ApplicationMember.application_id == application_id,
+            ApplicationMember.user_id == user_id,
+        )
+    )
+    member = result.scalar_one_or_none()
 
     return member.role if member else None
 
 
-def is_application_owner(
-    db: Session,
+async def is_application_owner(
+    db: AsyncSession,
     user_id: UUID,
     application_id: UUID,
 ) -> bool:
     """Check if the user is the owner of the application."""
-    return get_user_application_role(db, user_id, application_id) == "owner"
+    return await get_user_application_role(db, user_id, application_id) == "owner"
 
 
-def is_application_member(
-    db: Session,
+async def is_application_member(
+    db: AsyncSession,
     user_id: UUID,
     application_id: UUID,
 ) -> bool:
     """Check if the user is a member of the application (any role)."""
-    return get_user_application_role(db, user_id, application_id) is not None
+    return await get_user_application_role(db, user_id, application_id) is not None
 
 
-def is_application_editor_or_above(
-    db: Session,
+async def is_application_editor_or_above(
+    db: AsyncSession,
     user_id: UUID,
     application_id: UUID,
 ) -> bool:
     """Check if the user is an editor or owner of the application."""
-    role = get_user_application_role(db, user_id, application_id)
+    role = await get_user_application_role(db, user_id, application_id)
     return role in ("owner", "editor")
 
 
-def get_owner_count(
-    db: Session,
+async def get_owner_count(
+    db: AsyncSession,
     application_id: UUID,
 ) -> int:
     """
@@ -122,20 +128,27 @@ def get_owner_count(
     members with the 'owner' role.
     """
     # Count members with owner role
-    member_owners = db.query(func.count(ApplicationMember.id)).filter(
-        ApplicationMember.application_id == application_id,
-        ApplicationMember.role == ApplicationRole.OWNER.value,
-    ).scalar() or 0
+    result = await db.execute(
+        select(func.count(ApplicationMember.id)).where(
+            ApplicationMember.application_id == application_id,
+            ApplicationMember.role == ApplicationRole.OWNER.value,
+        )
+    )
+    member_owners = result.scalar() or 0
 
     # Check if original owner still exists
-    app = db.query(Application).filter(Application.id == application_id).first()
+    result = await db.execute(select(Application).where(Application.id == application_id))
+    app = result.scalar_one_or_none()
     if app and app.owner_id:
         # Check if original owner is also in members table
-        original_in_members = db.query(ApplicationMember).filter(
-            ApplicationMember.application_id == application_id,
-            ApplicationMember.user_id == app.owner_id,
-            ApplicationMember.role == ApplicationRole.OWNER.value,
-        ).first()
+        result = await db.execute(
+            select(ApplicationMember).where(
+                ApplicationMember.application_id == application_id,
+                ApplicationMember.user_id == app.owner_id,
+                ApplicationMember.role == ApplicationRole.OWNER.value,
+            )
+        )
+        original_in_members = result.scalar_one_or_none()
 
         # If not in members, count them as an additional owner
         if not original_in_members:
@@ -164,7 +177,7 @@ def get_owner_count(
 async def list_application_members(
     application_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(50, ge=1, le=100, description="Maximum number of records to return"),
     role_filter: Optional[ApplicationRole] = Query(
@@ -188,11 +201,12 @@ async def list_application_members(
     The owner appears first.
     """
     # Fetch application with owner eagerly loaded in single query
-    application = db.query(Application).options(
-        joinedload(Application.owner)
-    ).filter(
-        Application.id == application_id,
-    ).first()
+    result = await db.execute(
+        select(Application)
+        .options(selectinload(Application.owner))
+        .where(Application.id == application_id)
+    )
+    application = result.scalar_one_or_none()
 
     if not application:
         raise HTTPException(
@@ -202,13 +216,12 @@ async def list_application_members(
 
     # Fetch all members with users eagerly loaded in a single optimized query
     # This also serves to check if current user is a member
-    all_members_query = db.query(ApplicationMember).options(
-        joinedload(ApplicationMember.user)
-    ).filter(
-        ApplicationMember.application_id == application_id,
+    result = await db.execute(
+        select(ApplicationMember)
+        .options(selectinload(ApplicationMember.user))
+        .where(ApplicationMember.application_id == application_id)
     )
-
-    all_members = all_members_query.all()
+    all_members = list(result.scalars().all())
 
     # Check if current user is a member (either app owner or in members list)
     is_app_owner = application.owner_id == current_user.id
@@ -242,7 +255,6 @@ async def list_application_members(
                 application_id=application_id,
                 user_id=application.owner_id,
                 role=ApplicationRole.OWNER.value,
-                is_manager=False,
                 created_at=application.created_at,  # Use app creation date
                 updated_at=application.updated_at,
             )
@@ -284,7 +296,7 @@ async def list_application_members(
 async def get_member_count(
     application_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
     """
     Get member count for an application.
@@ -294,9 +306,8 @@ async def get_member_count(
     - by_role: Count breakdown by role
     """
     # Verify application exists
-    application = db.query(Application).filter(
-        Application.id == application_id,
-    ).first()
+    result = await db.execute(select(Application).where(Application.id == application_id))
+    application = result.scalar_one_or_none()
 
     if not application:
         raise HTTPException(
@@ -305,21 +316,22 @@ async def get_member_count(
         )
 
     # Verify current user is a member
-    if not is_application_member(db, current_user.id, application_id):
+    if not await is_application_member(db, current_user.id, application_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied. You must be a member of this application.",
         )
 
     # Single query with GROUP BY instead of 4 separate queries
-    role_counts = db.query(
-        ApplicationMember.role,
-        func.count(ApplicationMember.id).label("count"),
-    ).filter(
-        ApplicationMember.application_id == application_id,
-    ).group_by(
-        ApplicationMember.role,
-    ).all()
+    result = await db.execute(
+        select(
+            ApplicationMember.role,
+            func.count(ApplicationMember.id).label("count"),
+        )
+        .where(ApplicationMember.application_id == application_id)
+        .group_by(ApplicationMember.role)
+    )
+    role_counts = result.all()
 
     # Convert to dict for easy lookup
     counts_by_role = {role: count for role, count in role_counts}
@@ -360,7 +372,7 @@ async def get_member(
     application_id: UUID,
     user_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> MemberWithUser:
     """
     Get a specific member by user ID.
@@ -368,9 +380,8 @@ async def get_member(
     Any member of the application can view member details.
     """
     # Verify application exists
-    application = db.query(Application).filter(
-        Application.id == application_id,
-    ).first()
+    result = await db.execute(select(Application).where(Application.id == application_id))
+    application = result.scalar_one_or_none()
 
     if not application:
         raise HTTPException(
@@ -379,16 +390,19 @@ async def get_member(
         )
 
     # Verify current user is a member
-    if not is_application_member(db, current_user.id, application_id):
+    if not await is_application_member(db, current_user.id, application_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied. You must be a member of this application.",
         )
 
-    member = db.query(ApplicationMember).filter(
-        ApplicationMember.application_id == application_id,
-        ApplicationMember.user_id == user_id,
-    ).first()
+    result = await db.execute(
+        select(ApplicationMember).where(
+            ApplicationMember.application_id == application_id,
+            ApplicationMember.user_id == user_id,
+        )
+    )
+    member = result.scalar_one_or_none()
 
     if not member:
         raise HTTPException(
@@ -417,7 +431,7 @@ async def update_member_role(
     user_id: UUID,
     member_data: MemberUpdate,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> MemberWithUser:
     """
     Update a member's role.
@@ -430,9 +444,8 @@ async def update_member_role(
     Cannot remove the last owner from an application.
     """
     # Verify application exists
-    application = db.query(Application).filter(
-        Application.id == application_id,
-    ).first()
+    result = await db.execute(select(Application).where(Application.id == application_id))
+    application = result.scalar_one_or_none()
 
     if not application:
         raise HTTPException(
@@ -441,7 +454,7 @@ async def update_member_role(
         )
 
     # Get current user's role (pass application to avoid re-fetching)
-    current_user_role = get_user_application_role(db, current_user.id, application_id, application)
+    current_user_role = await get_user_application_role(db, current_user.id, application_id, application)
 
     if current_user_role is None:
         raise HTTPException(
@@ -464,12 +477,15 @@ async def update_member_role(
         )
 
     # Fetch member with user eagerly loaded
-    member = db.query(ApplicationMember).options(
-        joinedload(ApplicationMember.user)
-    ).filter(
-        ApplicationMember.application_id == application_id,
-        ApplicationMember.user_id == user_id,
-    ).first()
+    result = await db.execute(
+        select(ApplicationMember)
+        .options(selectinload(ApplicationMember.user))
+        .where(
+            ApplicationMember.application_id == application_id,
+            ApplicationMember.user_id == user_id,
+        )
+    )
+    member = result.scalar_one_or_none()
 
     if not member:
         raise HTTPException(
@@ -505,7 +521,7 @@ async def update_member_role(
     if current_user_role == "owner":
         # Prevent removing last owner
         if old_role == ApplicationRole.OWNER.value and new_role != ApplicationRole.OWNER.value:
-            owner_count = get_owner_count(db, application_id)
+            owner_count = await get_owner_count(db, application_id)
             if owner_count <= 1:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -514,24 +530,23 @@ async def update_member_role(
 
     member.role = new_role
     member.updated_at = datetime.utcnow()
-    db.commit()
-    db.refresh(member)
+    await db.commit()
+    await db.refresh(member)
 
     # Invalidate role cache for affected user
     invalidate_app_role(user_id, application_id)
 
-    # Create notification for affected user
+    # Create notification for affected user (with WebSocket broadcast)
     if old_role != member.role:
-        notification = Notification(
+        notification_data = NotificationCreate(
             user_id=user_id,
-            type=NotificationType.ROLE_CHANGED.value,
+            type=NotificationType.ROLE_CHANGED,
             title="Role Changed",
             message=f"Your role in '{application.name}' has been changed from {old_role} to {member.role}",
-            entity_type=EntityType.APPLICATION_MEMBER.value,
+            entity_type=EntityType.APPLICATION_MEMBER,
             entity_id=member.id,
         )
-        db.add(notification)
-        db.commit()
+        await NotificationService.create_notification(db, notification_data)
 
         # Send WebSocket notification
         await handle_role_updated(
@@ -568,7 +583,7 @@ async def remove_member(
     application_id: UUID,
     user_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> None:
     """
     Remove a member from the application.
@@ -582,9 +597,8 @@ async def remove_member(
     Cannot remove the last owner.
     """
     # Verify application exists
-    application = db.query(Application).filter(
-        Application.id == application_id,
-    ).first()
+    result = await db.execute(select(Application).where(Application.id == application_id))
+    application = result.scalar_one_or_none()
 
     if not application:
         raise HTTPException(
@@ -593,7 +607,7 @@ async def remove_member(
         )
 
     # Get current user's role (pass application to avoid re-fetching)
-    current_user_role = get_user_application_role(db, current_user.id, application_id, application)
+    current_user_role = await get_user_application_role(db, current_user.id, application_id, application)
 
     if current_user_role is None:
         raise HTTPException(
@@ -612,12 +626,15 @@ async def remove_member(
         )
 
     # Fetch member with user eagerly loaded
-    member = db.query(ApplicationMember).options(
-        joinedload(ApplicationMember.user)
-    ).filter(
-        ApplicationMember.application_id == application_id,
-        ApplicationMember.user_id == user_id,
-    ).first()
+    result = await db.execute(
+        select(ApplicationMember)
+        .options(selectinload(ApplicationMember.user))
+        .where(
+            ApplicationMember.application_id == application_id,
+            ApplicationMember.user_id == user_id,
+        )
+    )
+    member = result.scalar_one_or_none()
 
     if not member:
         raise HTTPException(
@@ -627,7 +644,7 @@ async def remove_member(
 
     # Prevent removing last owner
     if member.role == ApplicationRole.OWNER.value:
-        owner_count = get_owner_count(db, application_id)
+        owner_count = await get_owner_count(db, application_id)
         if owner_count <= 1:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -638,25 +655,24 @@ async def remove_member(
     member_user = member.user
     member_name = member_user.display_name or member_user.email if member_user else None
 
-    db.delete(member)
-    db.commit()
+    await db.delete(member)
+    await db.commit()
 
     # Invalidate role cache for removed user
     invalidate_app_role(user_id, application_id)
 
-    # Create notification for removed user (unless self-removal)
+    # Create notification for removed user (with WebSocket broadcast, unless self-removal)
     if not is_self_removal:
         remover_name = current_user.display_name or current_user.email
-        notification = Notification(
+        notification_data = NotificationCreate(
             user_id=user_id,
-            type=NotificationType.MEMBER_REMOVED.value,
+            type=NotificationType.MEMBER_REMOVED,
             title="Removed from Application",
             message=f"You were removed from '{application.name}' by {remover_name}",
-            entity_type=EntityType.APPLICATION.value,
+            entity_type=EntityType.APPLICATION,
             entity_id=application_id,
         )
-        db.add(notification)
-        db.commit()
+        await NotificationService.create_notification(db, notification_data)
 
     # Send WebSocket notification
     remover_name = current_user.display_name or current_user.email

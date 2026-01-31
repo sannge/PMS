@@ -4,8 +4,8 @@ from datetime import timedelta
 from uuid import uuid4
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy.orm import Session
+from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
 from app.services.auth_service import (
@@ -127,60 +127,61 @@ class TestTokenFunctions:
         assert token_data is None
 
 
+@pytest.mark.asyncio
 class TestUserFunctions:
     """Tests for user-related service functions."""
 
-    def test_get_user_by_email_found(self, db_session: Session, test_user: User):
+    async def test_get_user_by_email_found(self, db_session: AsyncSession, test_user: User):
         """Test getting a user by email when user exists."""
-        user = get_user_by_email(db_session, test_user.email)
+        user = await get_user_by_email(db_session, test_user.email)
 
         assert user is not None
         assert user.id == test_user.id
         assert user.email == test_user.email
 
-    def test_get_user_by_email_not_found(self, db_session: Session):
+    async def test_get_user_by_email_not_found(self, db_session: AsyncSession):
         """Test getting a user by email when user doesn't exist."""
-        user = get_user_by_email(db_session, "nonexistent@example.com")
+        user = await get_user_by_email(db_session, "nonexistent@example.com")
 
         assert user is None
 
-    def test_get_user_by_id_found(self, db_session: Session, test_user: User):
+    async def test_get_user_by_id_found(self, db_session: AsyncSession, test_user: User):
         """Test getting a user by ID when user exists."""
-        user = get_user_by_id(db_session, test_user.id)
+        user = await get_user_by_id(db_session, test_user.id)
 
         assert user is not None
         assert user.id == test_user.id
         assert user.email == test_user.email
 
-    def test_get_user_by_id_not_found(self, db_session: Session):
+    async def test_get_user_by_id_not_found(self, db_session: AsyncSession):
         """Test getting a user by ID when user doesn't exist."""
-        user = get_user_by_id(db_session, uuid4())
+        user = await get_user_by_id(db_session, uuid4())
 
         assert user is None
 
     @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
-    def test_authenticate_user_success(self, db_session: Session, test_user: User):
+    async def test_authenticate_user_success(self, db_session: AsyncSession, test_user: User):
         """Test successful user authentication."""
-        user = authenticate_user(db_session, test_user.email, "TestPassword123!")
+        user = await authenticate_user(db_session, test_user.email, "TestPassword123!")
 
         assert user is not None
         assert user.id == test_user.id
 
     @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
-    def test_authenticate_user_wrong_password(self, db_session: Session, test_user: User):
+    async def test_authenticate_user_wrong_password(self, db_session: AsyncSession, test_user: User):
         """Test authentication with wrong password."""
-        user = authenticate_user(db_session, test_user.email, "WrongPassword!")
+        user = await authenticate_user(db_session, test_user.email, "WrongPassword!")
 
         assert user is None
 
-    def test_authenticate_user_nonexistent_user(self, db_session: Session):
+    async def test_authenticate_user_nonexistent_user(self, db_session: AsyncSession):
         """Test authentication with nonexistent user."""
-        user = authenticate_user(db_session, "nonexistent@example.com", "password")
+        user = await authenticate_user(db_session, "nonexistent@example.com", "password")
 
         assert user is None
 
     @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
-    def test_create_user_success(self, db_session: Session):
+    async def test_create_user_success(self, db_session: AsyncSession):
         """Test creating a new user."""
         user_data = UserCreate(
             email="newuser@example.com",
@@ -188,7 +189,7 @@ class TestUserFunctions:
             display_name="New User",
         )
 
-        user = create_user(db_session, user_data)
+        user = await create_user(db_session, user_data)
 
         assert user is not None
         assert user.email == user_data.email
@@ -196,7 +197,7 @@ class TestUserFunctions:
         assert user.password_hash is not None
         assert user.password_hash != user_data.password
 
-    def test_create_user_duplicate_email(self, db_session: Session, test_user: User):
+    async def test_create_user_duplicate_email(self, db_session: AsyncSession, test_user: User):
         """Test creating a user with duplicate email raises error."""
         user_data = UserCreate(
             email=test_user.email,  # Same email as existing user
@@ -205,16 +206,17 @@ class TestUserFunctions:
         )
 
         with pytest.raises(Exception):  # HTTPException
-            create_user(db_session, user_data)
+            await create_user(db_session, user_data)
 
 
+@pytest.mark.asyncio
 class TestAuthEndpoints:
     """Tests for authentication API endpoints."""
 
     @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
-    def test_register_success(self, client: TestClient):
+    async def test_register_success(self, client: AsyncClient):
         """Test successful user registration."""
-        response = client.post(
+        response = await client.post(
             "/auth/register",
             json={
                 "email": "newuser@example.com",
@@ -231,9 +233,9 @@ class TestAuthEndpoints:
         assert "password" not in data
         assert "password_hash" not in data
 
-    def test_register_duplicate_email(self, client: TestClient, test_user: User):
+    async def test_register_duplicate_email(self, client: AsyncClient, test_user: User):
         """Test registration with duplicate email fails."""
-        response = client.post(
+        response = await client.post(
             "/auth/register",
             json={
                 "email": test_user.email,
@@ -245,9 +247,9 @@ class TestAuthEndpoints:
         assert response.status_code == 400
         assert "already registered" in response.json()["detail"].lower()
 
-    def test_register_invalid_email(self, client: TestClient):
+    async def test_register_invalid_email(self, client: AsyncClient):
         """Test registration with invalid email fails."""
-        response = client.post(
+        response = await client.post(
             "/auth/register",
             json={
                 "email": "invalid-email",
@@ -259,9 +261,9 @@ class TestAuthEndpoints:
         assert response.status_code == 422  # Validation error
 
     @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
-    def test_login_success(self, client: TestClient, test_user: User):
+    async def test_login_success(self, client: AsyncClient, test_user: User):
         """Test successful login."""
-        response = client.post(
+        response = await client.post(
             "/auth/login",
             data={
                 "username": test_user.email,
@@ -275,9 +277,9 @@ class TestAuthEndpoints:
         assert data["token_type"] == "bearer"
 
     @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
-    def test_login_wrong_password(self, client: TestClient, test_user: User):
+    async def test_login_wrong_password(self, client: AsyncClient, test_user: User):
         """Test login with wrong password fails."""
-        response = client.post(
+        response = await client.post(
             "/auth/login",
             data={
                 "username": test_user.email,
@@ -287,9 +289,9 @@ class TestAuthEndpoints:
 
         assert response.status_code == 401
 
-    def test_login_nonexistent_user(self, client: TestClient):
+    async def test_login_nonexistent_user(self, client: AsyncClient):
         """Test login with nonexistent user fails."""
-        response = client.post(
+        response = await client.post(
             "/auth/login",
             data={
                 "username": "nonexistent@example.com",
@@ -299,39 +301,39 @@ class TestAuthEndpoints:
 
         assert response.status_code == 401
 
-    def test_get_current_user(self, client: TestClient, auth_headers: dict, test_user: User):
+    async def test_get_current_user(self, client: AsyncClient, auth_headers: dict, test_user: User):
         """Test getting current user profile."""
-        response = client.get("/auth/me", headers=auth_headers)
+        response = await client.get("/auth/me", headers=auth_headers)
 
         assert response.status_code == 200
         data = response.json()
         assert data["email"] == test_user.email
         assert data["display_name"] == test_user.display_name
 
-    def test_get_current_user_no_token(self, client: TestClient):
+    async def test_get_current_user_no_token(self, client: AsyncClient):
         """Test getting current user without token fails."""
-        response = client.get("/auth/me")
+        response = await client.get("/auth/me")
 
         assert response.status_code == 401
 
-    def test_get_current_user_invalid_token(self, client: TestClient):
+    async def test_get_current_user_invalid_token(self, client: AsyncClient):
         """Test getting current user with invalid token fails."""
-        response = client.get(
+        response = await client.get(
             "/auth/me",
             headers={"Authorization": "Bearer invalid.token.here"},
         )
 
         assert response.status_code == 401
 
-    def test_logout(self, client: TestClient, auth_headers: dict):
+    async def test_logout(self, client: AsyncClient, auth_headers: dict):
         """Test logout endpoint."""
-        response = client.post("/auth/logout", headers=auth_headers)
+        response = await client.post("/auth/logout", headers=auth_headers)
 
         assert response.status_code == 200
         assert "message" in response.json()
 
-    def test_logout_no_token(self, client: TestClient):
+    async def test_logout_no_token(self, client: AsyncClient):
         """Test logout without token fails."""
-        response = client.post("/auth/logout")
+        response = await client.post("/auth/logout")
 
         assert response.status_code == 401

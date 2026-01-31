@@ -9,7 +9,9 @@ from typing import Annotated, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import exists, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from ..database import get_db
 from ..models.application_member import ApplicationMember
@@ -47,10 +49,10 @@ router = APIRouter(tags=["Comments"])
 # ============================================================================
 
 
-def verify_task_access(
+async def verify_task_access(
     task_id: UUID,
     current_user: User,
-    db: Session,
+    db: AsyncSession,
 ) -> Task:
     """
     Verify that the user has access to the task via application membership.
@@ -69,11 +71,14 @@ def verify_task_access(
         HTTPException: If task not found or user doesn't have access
     """
     # Fetch task with project and application
-    task = db.query(Task).options(
-        joinedload(Task.project).joinedload(Project.application)
-    ).filter(
-        Task.id == task_id,
-    ).first()
+    result = await db.execute(
+        select(Task)
+        .options(
+            selectinload(Task.project).selectinload(Project.application)
+        )
+        .where(Task.id == task_id)
+    )
+    task = result.scalar_one_or_none()
 
     if not task:
         raise HTTPException(
@@ -88,13 +93,18 @@ def verify_task_access(
     if task.project.application.owner_id == current_user.id:
         return task
 
-    # Check ApplicationMembers
-    member = db.query(ApplicationMember).filter(
-        ApplicationMember.application_id == application_id,
-        ApplicationMember.user_id == current_user.id,
-    ).first()
+    # Check ApplicationMembers using EXISTS for optimal performance
+    result = await db.execute(
+        select(
+            exists().where(
+                ApplicationMember.application_id == application_id,
+                ApplicationMember.user_id == current_user.id,
+            )
+        )
+    )
+    is_member = result.scalar() or False
 
-    if not member:
+    if not is_member:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied. You are not a member of this application.",
@@ -126,7 +136,7 @@ def verify_task_access(
 async def list_comments(
     task_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     cursor: Optional[str] = Query(
         None,
         description="Cursor for pagination (ISO datetime string)",
@@ -146,7 +156,7 @@ async def list_comments(
     from the previous page.
     """
     # Verify access
-    verify_task_access(task_id, current_user, db)
+    await verify_task_access(task_id, current_user, db)
 
     # Parse cursor
     cursor_dt = None
@@ -160,7 +170,7 @@ async def list_comments(
             )
 
     # Get comments
-    comments, next_cursor = get_comments_for_task(
+    comments, next_cursor = await get_comments_for_task(
         db=db,
         task_id=task_id,
         cursor=cursor_dt,
@@ -194,7 +204,7 @@ async def create_comment_endpoint(
     task_id: UUID,
     comment_data: CommentCreate,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> CommentResponse:
     """
     Create a new comment on a task.
@@ -203,10 +213,10 @@ async def create_comment_endpoint(
     Mentioned users will receive notifications.
     """
     # Verify access - any application member can comment
-    task = verify_task_access(task_id, current_user, db)
+    task = await verify_task_access(task_id, current_user, db)
 
     # Create comment
-    comment, mentioned_user_ids = create_comment(
+    comment, mentioned_user_ids = await create_comment(
         db=db,
         task_id=task_id,
         author_id=current_user.id,
@@ -214,7 +224,7 @@ async def create_comment_endpoint(
     )
 
     # Reload comment with relationships
-    comment = get_comment(db, comment.id)
+    comment = await get_comment(db, comment.id)
 
     # Build response
     response = build_comment_response(comment)
@@ -257,7 +267,7 @@ async def update_comment_endpoint(
     comment_id: UUID,
     comment_data: CommentUpdate,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> CommentResponse:
     """
     Update an existing comment.
@@ -265,7 +275,7 @@ async def update_comment_endpoint(
     Only the comment author can update their own comments.
     """
     # Update comment
-    result = update_comment(
+    result = await update_comment(
         db=db,
         comment_id=comment_id,
         author_id=current_user.id,
@@ -281,7 +291,7 @@ async def update_comment_endpoint(
     comment, added_mentions, removed_mentions = result
 
     # Reload with relationships
-    comment = get_comment(db, comment.id)
+    comment = await get_comment(db, comment.id)
 
     # Build response
     response = build_comment_response(comment)
@@ -322,7 +332,7 @@ async def update_comment_endpoint(
 async def delete_comment_endpoint(
     comment_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     minio: MinIOService = Depends(get_minio_service),
 ) -> None:
     """
@@ -332,13 +342,16 @@ async def delete_comment_endpoint(
     This will also delete any file attachments from MinIO storage.
     """
     # Get comment with attachments
-    comment = db.query(Comment).options(
-        joinedload(Comment.attachments)
-    ).filter(
-        Comment.id == comment_id,
-        Comment.author_id == current_user.id,
-        Comment.is_deleted == False,
-    ).first()
+    result = await db.execute(
+        select(Comment)
+        .options(selectinload(Comment.attachments))
+        .where(
+            Comment.id == comment_id,
+            Comment.author_id == current_user.id,
+            Comment.is_deleted == False,
+        )
+    )
+    comment = result.scalar_one_or_none()
 
     if not comment:
         raise HTTPException(
@@ -357,8 +370,8 @@ async def delete_comment_endpoint(
     ]
 
     # Delete comment from database (cascade will delete attachment records)
-    db.delete(comment)
-    db.commit()
+    await db.delete(comment)
+    await db.commit()
 
     # Delete files from MinIO storage (after successful DB commit)
     for bucket, key in minio_files:

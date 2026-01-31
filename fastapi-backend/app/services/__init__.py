@@ -53,6 +53,10 @@ from .permission_service import (
     PermissionService,
     get_permission_service,
 )
+from .archive_service import (
+    ArchiveService,
+    archive_service,
+)
 
 __all__ = [
     # Auth service
@@ -102,4 +106,7 @@ __all__ = [
     # Permission service
     "PermissionService",
     "get_permission_service",
+    # Archive service
+    "ArchiveService",
+    "archive_service",
 ]

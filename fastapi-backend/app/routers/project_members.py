@@ -19,8 +19,9 @@ from typing import Annotated, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from ..database import get_db
 from ..models.application import Application
@@ -53,8 +54,8 @@ router = APIRouter(tags=["Project Members"])
 # ============================================================================
 
 
-def get_user_application_role(
-    db: Session,
+async def get_user_application_role(
+    db: AsyncSession,
     user_id: UUID,
     application_id: UUID,
     application: Optional[Application] = None,
@@ -73,7 +74,8 @@ def get_user_application_role(
     """
     # If application is provided, use it; otherwise fetch
     if application is None:
-        application = db.query(Application).filter(Application.id == application_id).first()
+        result = await db.execute(select(Application).where(Application.id == application_id))
+        application = result.scalar_one_or_none()
 
     if not application:
         return None
@@ -83,18 +85,21 @@ def get_user_application_role(
         return "owner"
 
     # Check ApplicationMembers table
-    member = db.query(ApplicationMember).filter(
-        ApplicationMember.application_id == application_id,
-        ApplicationMember.user_id == user_id,
-    ).first()
+    result = await db.execute(
+        select(ApplicationMember).where(
+            ApplicationMember.application_id == application_id,
+            ApplicationMember.user_id == user_id,
+        )
+    )
+    member = result.scalar_one_or_none()
 
     return member.role if member else None
 
 
-def verify_project_access(
+async def verify_project_access(
     project_id: UUID,
     current_user: User,
-    db: Session,
+    db: AsyncSession,
     require_member_management: bool = False,
 ) -> Project:
     """
@@ -114,11 +119,12 @@ def verify_project_access(
         HTTPException: If project not found or user doesn't have access
     """
     # Fetch project with application eagerly loaded
-    project = db.query(Project).options(
-        joinedload(Project.application)
-    ).filter(
-        Project.id == project_id,
-    ).first()
+    result = await db.execute(
+        select(Project)
+        .options(selectinload(Project.application))
+        .where(Project.id == project_id)
+    )
+    project = result.scalar_one_or_none()
 
     if not project:
         raise HTTPException(
@@ -127,7 +133,7 @@ def verify_project_access(
         )
 
     # Get user's role in the parent application
-    user_role = get_user_application_role(
+    user_role = await get_user_application_role(
         db, current_user.id, project.application_id, project.application
     )
 
@@ -140,7 +146,7 @@ def verify_project_access(
     if require_member_management:
         # Check if user can manage members (app owner OR project admin)
         permission_service = get_permission_service(db)
-        can_manage = permission_service.check_can_manage_project_members(
+        can_manage = await permission_service.check_can_manage_project_members(
             current_user, project_id, project.application_id
         )
         if not can_manage:
@@ -152,12 +158,15 @@ def verify_project_access(
     return project
 
 
-def get_project_member_role(db: Session, user_id: UUID, project_id: UUID) -> Optional[str]:
+async def get_project_member_role(db: AsyncSession, user_id: UUID, project_id: UUID) -> Optional[str]:
     """Get the user's role within a project."""
-    member = db.query(ProjectMember).filter(
-        ProjectMember.project_id == project_id,
-        ProjectMember.user_id == user_id,
-    ).first()
+    result = await db.execute(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == user_id,
+        )
+    )
+    member = result.scalar_one_or_none()
     return member.role if member else None
 
 
@@ -181,7 +190,7 @@ def get_project_member_role(db: Session, user_id: UUID, project_id: UUID) -> Opt
 async def list_project_members(
     project_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(50, ge=1, le=100, description="Maximum number of records to return"),
 ) -> List[ProjectMemberWithUser]:
@@ -197,22 +206,21 @@ async def list_project_members(
     Returns members ordered by creation date (oldest first).
     """
     # Verify user has access to view the project (any application member)
-    project = verify_project_access(project_id, current_user, db)
+    project = await verify_project_access(project_id, current_user, db)
 
     # Fetch all project members with users eagerly loaded
-    members_query = db.query(ProjectMember).options(
-        joinedload(ProjectMember.user)
-    ).filter(
-        ProjectMember.project_id == project_id,
-    ).order_by(
-        ProjectMember.created_at.asc()
+    result = await db.execute(
+        select(ProjectMember)
+        .options(selectinload(ProjectMember.user))
+        .where(ProjectMember.project_id == project_id)
+        .order_by(ProjectMember.created_at.asc())
+        .offset(skip)
+        .limit(limit)
     )
-
-    # Apply pagination
-    members = members_query.offset(skip).limit(limit).all()
+    members = result.scalars().all()
 
     # Convert to response model with user info
-    result = []
+    result_list = []
     for member in members:
         user_summary = None
         if member.user:
@@ -232,9 +240,9 @@ async def list_project_members(
             updated_at=member.updated_at,
             user=user_summary,
         )
-        result.append(member_response)
+        result_list.append(member_response)
 
-    return result
+    return result_list
 
 
 @router.get(
@@ -252,7 +260,7 @@ async def list_project_members(
 async def get_project_member_count(
     project_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
     """
     Get member count for a project.
@@ -261,11 +269,12 @@ async def get_project_member_count(
     - total: Total number of project members
     """
     # Verify user has access to view the project
-    project = verify_project_access(project_id, current_user, db)
+    project = await verify_project_access(project_id, current_user, db)
 
-    total = db.query(func.count(ProjectMember.id)).filter(
-        ProjectMember.project_id == project_id,
-    ).scalar() or 0
+    result = await db.execute(
+        select(func.count(ProjectMember.id)).where(ProjectMember.project_id == project_id)
+    )
+    total = result.scalar() or 0
 
     return {"total": total}
 
@@ -291,7 +300,7 @@ async def get_project_member(
     project_id: UUID,
     user_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> ProjectMemberWithUser:
     """
     Get a specific project member by user ID.
@@ -299,14 +308,17 @@ async def get_project_member(
     Any member of the parent application can view member details.
     """
     # Verify user has access to view the project
-    project = verify_project_access(project_id, current_user, db)
+    project = await verify_project_access(project_id, current_user, db)
 
-    member = db.query(ProjectMember).options(
-        joinedload(ProjectMember.user)
-    ).filter(
-        ProjectMember.project_id == project_id,
-        ProjectMember.user_id == user_id,
-    ).first()
+    result = await db.execute(
+        select(ProjectMember)
+        .options(selectinload(ProjectMember.user))
+        .where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == user_id,
+        )
+    )
+    member = result.scalar_one_or_none()
 
     if not member:
         raise HTTPException(
@@ -364,7 +376,7 @@ async def add_project_member(
     project_id: UUID,
     member_data: AddProjectMemberRequest,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> ProjectMemberWithUser:
     """
     Add a user as a project member.
@@ -377,10 +389,11 @@ async def add_project_member(
     tasks within this project.
     """
     # Verify current user can manage members (app owner OR project admin)
-    project = verify_project_access(project_id, current_user, db, require_member_management=True)
+    project = await verify_project_access(project_id, current_user, db, require_member_management=True)
 
     # Verify the target user exists
-    target_user = db.query(User).filter(User.id == member_data.user_id).first()
+    result = await db.execute(select(User).where(User.id == member_data.user_id))
+    target_user = result.scalar_one_or_none()
     if not target_user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -388,7 +401,7 @@ async def add_project_member(
         )
 
     # Verify the target user is an owner or editor of the application (not viewer)
-    target_role = get_user_application_role(
+    target_role = await get_user_application_role(
         db, member_data.user_id, project.application_id, project.application
     )
     if not target_role:
@@ -404,10 +417,13 @@ async def add_project_member(
         )
 
     # Check if user is already a project member
-    existing_member = db.query(ProjectMember).filter(
-        ProjectMember.project_id == project_id,
-        ProjectMember.user_id == member_data.user_id,
-    ).first()
+    result = await db.execute(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == member_data.user_id,
+        )
+    )
+    existing_member = result.scalar_one_or_none()
 
     if existing_member:
         raise HTTPException(
@@ -424,8 +440,8 @@ async def add_project_member(
     )
 
     db.add(new_member)
-    db.commit()
-    db.refresh(new_member)
+    await db.commit()
+    await db.refresh(new_member)
 
     # Create notification for the added user
     notification_data = NotificationCreate(
@@ -497,7 +513,7 @@ async def remove_project_member(
     project_id: UUID,
     user_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
     """
     Remove a user from project membership.
@@ -512,15 +528,18 @@ async def remove_project_member(
     Cannot remove the last admin - must promote another member first.
     """
     # Verify current user can manage members (app owner OR project admin)
-    project = verify_project_access(project_id, current_user, db, require_member_management=True)
+    project = await verify_project_access(project_id, current_user, db, require_member_management=True)
 
     # Find the member record
-    member = db.query(ProjectMember).options(
-        joinedload(ProjectMember.user)
-    ).filter(
-        ProjectMember.project_id == project_id,
-        ProjectMember.user_id == user_id,
-    ).first()
+    result = await db.execute(
+        select(ProjectMember)
+        .options(selectinload(ProjectMember.user))
+        .where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == user_id,
+        )
+    )
+    member = result.scalar_one_or_none()
 
     if not member:
         raise HTTPException(
@@ -537,10 +556,13 @@ async def remove_project_member(
 
     # Check if this is the last admin
     if member.role == "admin":
-        admin_count = db.query(func.count(ProjectMember.id)).filter(
-            ProjectMember.project_id == project_id,
-            ProjectMember.role == "admin",
-        ).scalar()
+        result = await db.execute(
+            select(func.count(ProjectMember.id)).where(
+                ProjectMember.project_id == project_id,
+                ProjectMember.role == "admin",
+            )
+        )
+        admin_count = result.scalar()
         if admin_count <= 1:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -548,10 +570,13 @@ async def remove_project_member(
             )
 
     # Find all tasks assigned to this user in this project
-    assigned_tasks = db.query(Task).filter(
-        Task.project_id == project_id,
-        Task.assignee_id == user_id,
-    ).all()
+    result = await db.execute(
+        select(Task).where(
+            Task.project_id == project_id,
+            Task.assignee_id == user_id,
+        )
+    )
+    assigned_tasks = result.scalars().all()
 
     # Clear assignee from all tasks
     task_ids_cleared = []
@@ -564,8 +589,8 @@ async def remove_project_member(
     removed_user_name = member.user.display_name or member.user.email if member.user else "User"
 
     # Remove the member
-    db.delete(member)
-    db.commit()
+    await db.delete(member)
+    await db.commit()
 
     # Invalidate project role cache for removed user
     invalidate_project_role(user_id, project_id)
@@ -584,10 +609,13 @@ async def remove_project_member(
 
     # Notify project admins about tasks needing reassignment
     if task_ids_cleared:
-        project_admins = db.query(ProjectMember).filter(
-            ProjectMember.project_id == project_id,
-            ProjectMember.role == "admin",
-        ).all()
+        result = await db.execute(
+            select(ProjectMember).where(
+                ProjectMember.project_id == project_id,
+                ProjectMember.role == "admin",
+            )
+        )
+        project_admins = result.scalars().all()
 
         for admin in project_admins:
             admin_notification = NotificationCreate(
@@ -639,7 +667,7 @@ async def change_project_member_role(
     user_id: UUID,
     role_data: ProjectMemberUpdate,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> ProjectMemberWithUser:
     """
     Change a project member's role.
@@ -648,7 +676,7 @@ async def change_project_member_role(
     Cannot demote the last admin - must have at least one admin.
     """
     # Verify current user can manage members (app owner OR project admin)
-    project = verify_project_access(project_id, current_user, db, require_member_management=True)
+    project = await verify_project_access(project_id, current_user, db, require_member_management=True)
 
     if not role_data.role:
         raise HTTPException(
@@ -657,12 +685,15 @@ async def change_project_member_role(
         )
 
     # Find the member record
-    member = db.query(ProjectMember).options(
-        joinedload(ProjectMember.user)
-    ).filter(
-        ProjectMember.project_id == project_id,
-        ProjectMember.user_id == user_id,
-    ).first()
+    result = await db.execute(
+        select(ProjectMember)
+        .options(selectinload(ProjectMember.user))
+        .where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == user_id,
+        )
+    )
+    member = result.scalar_one_or_none()
 
     if not member:
         raise HTTPException(
@@ -702,10 +733,13 @@ async def change_project_member_role(
 
     # Check if demoting the last admin
     if old_role == "admin" and new_role == "member":
-        admin_count = db.query(func.count(ProjectMember.id)).filter(
-            ProjectMember.project_id == project_id,
-            ProjectMember.role == "admin",
-        ).scalar()
+        result = await db.execute(
+            select(func.count(ProjectMember.id)).where(
+                ProjectMember.project_id == project_id,
+                ProjectMember.role == "admin",
+            )
+        )
+        admin_count = result.scalar()
         if admin_count <= 1:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -715,8 +749,8 @@ async def change_project_member_role(
     # Update the role
     member.role = new_role
     member.updated_at = datetime.utcnow()
-    db.commit()
-    db.refresh(member)
+    await db.commit()
+    await db.refresh(member)
 
     # Invalidate project role cache for affected user
     invalidate_project_role(user_id, project_id)
@@ -787,7 +821,7 @@ async def change_project_member_role(
 async def list_assignable_users(
     project_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> List[ProjectMemberWithUser]:
     """
     List users who can be assigned to tasks in this project.
@@ -799,21 +833,22 @@ async def list_assignable_users(
     Any member of the parent application can view assignable users.
     """
     # Verify user has access to view the project
-    project = verify_project_access(project_id, current_user, db)
+    project = await verify_project_access(project_id, current_user, db)
 
     # Get all project members
-    members = db.query(ProjectMember).options(
-        joinedload(ProjectMember.user)
-    ).filter(
-        ProjectMember.project_id == project_id,
-    ).all()
+    result = await db.execute(
+        select(ProjectMember)
+        .options(selectinload(ProjectMember.user))
+        .where(ProjectMember.project_id == project_id)
+    )
+    members = result.scalars().all()
 
     # Filter to only those with owner/editor role in the application
     assignable = []
     seen_user_ids = set()
 
     for member in members:
-        app_role = get_user_application_role(
+        app_role = await get_user_application_role(
             db, member.user_id, project.application_id, project.application
         )
         if app_role in ("owner", "editor"):
@@ -840,9 +875,10 @@ async def list_assignable_users(
     # Also include App Owners even if not project members
     # Include the original owner
     if project.application.owner_id not in seen_user_ids:
-        owner_user = db.query(User).filter(
-            User.id == project.application.owner_id
-        ).first()
+        result = await db.execute(
+            select(User).where(User.id == project.application.owner_id)
+        )
+        owner_user = result.scalar_one_or_none()
         if owner_user:
             user_summary = UserSummary(
                 id=owner_user.id,
@@ -881,7 +917,7 @@ async def check_project_membership(
     project_id: UUID,
     user_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
     """
     Check if a user is a member of a project.
@@ -890,12 +926,15 @@ async def check_project_membership(
     Any member of the parent application can check membership.
     """
     # Verify user has access to view the project
-    project = verify_project_access(project_id, current_user, db)
+    project = await verify_project_access(project_id, current_user, db)
 
-    member = db.query(ProjectMember).filter(
-        ProjectMember.project_id == project_id,
-        ProjectMember.user_id == user_id,
-    ).first()
+    result = await db.execute(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == user_id,
+        )
+    )
+    member = result.scalar_one_or_none()
 
     return {
         "is_member": member is not None,

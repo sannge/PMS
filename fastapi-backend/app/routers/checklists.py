@@ -8,7 +8,9 @@ from typing import Annotated, List
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import exists, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from ..database import get_db
 from ..models.checklist import Checklist
@@ -61,10 +63,10 @@ router = APIRouter(tags=["Checklists"])
 # ============================================================================
 
 
-def verify_task_access(
+async def verify_task_access(
     task_id: UUID,
     current_user: User,
-    db: Session,
+    db: AsyncSession,
     require_edit: bool = False,
 ) -> Task:
     """
@@ -95,11 +97,12 @@ def verify_task_access(
     """
     from ..models.application_member import ApplicationMember
 
-    task = db.query(Task).options(
-        joinedload(Task.project).joinedload(Project.application)
-    ).filter(
-        Task.id == task_id,
-    ).first()
+    result = await db.execute(
+        select(Task)
+        .options(selectinload(Task.project).selectinload(Project.application))
+        .where(Task.id == task_id)
+    )
+    task = result.scalar_one_or_none()
 
     if not task:
         raise HTTPException(
@@ -107,17 +110,30 @@ def verify_task_access(
             detail=f"Task with ID {task_id} not found",
         )
 
+    # Business rule: Done tasks cannot have checklists modified
+    if require_edit and task.status == "done":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot modify checklists on a completed task. Reopen the task first.",
+        )
+
     # Check if user is the application owner - always has full access
     if task.project.application.owner_id == current_user.id:
         return task
 
     # Check if user is a project member (admin or member) - always has full access
-    project_member = db.query(ProjectMember).filter(
-        ProjectMember.project_id == task.project_id,
-        ProjectMember.user_id == current_user.id,
-    ).first()
+    # Uses EXISTS pattern for optimal performance
+    result = await db.execute(
+        select(
+            exists().where(
+                ProjectMember.project_id == task.project_id,
+                ProjectMember.user_id == current_user.id,
+            )
+        )
+    )
+    is_project_member = result.scalar() or False
 
-    if project_member:
+    if is_project_member:
         return task
 
     # For edit operations, only owner and project members are allowed
@@ -128,12 +144,18 @@ def verify_task_access(
         )
 
     # For view operations, check if user is an application member (viewer/editor)
-    application_member = db.query(ApplicationMember).filter(
-        ApplicationMember.application_id == task.project.application_id,
-        ApplicationMember.user_id == current_user.id,
-    ).first()
+    # Uses EXISTS pattern for optimal performance
+    result = await db.execute(
+        select(
+            exists().where(
+                ApplicationMember.application_id == task.project.application_id,
+                ApplicationMember.user_id == current_user.id,
+            )
+        )
+    )
+    is_application_member = result.scalar() or False
 
-    if application_member:
+    if is_application_member:
         return task
 
     # User doesn't have access
@@ -163,12 +185,12 @@ def verify_task_access(
 async def list_checklists(
     task_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> List[ChecklistResponse]:
     """Get all checklists for a task."""
-    verify_task_access(task_id, current_user, db)
+    await verify_task_access(task_id, current_user, db)
 
-    checklists = get_checklists_for_task(db, task_id)
+    checklists = await get_checklists_for_task(db, task_id)
     return [ChecklistResponse(**build_checklist_response(c)) for c in checklists]
 
 
@@ -190,15 +212,15 @@ async def create_checklist_endpoint(
     task_id: UUID,
     checklist_data: ChecklistCreate,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> ChecklistResponse:
     """Create a new checklist for a task."""
-    task = verify_task_access(task_id, current_user, db, require_edit=True)
+    task = await verify_task_access(task_id, current_user, db, require_edit=True)
 
-    checklist = create_checklist(db, task_id, checklist_data)
+    checklist = await create_checklist(db, task_id, checklist_data)
 
     # Reload with items
-    checklist = get_checklist(db, checklist.id)
+    checklist = await get_checklist(db, checklist.id)
     response = build_checklist_response(checklist)
 
     # Broadcast WebSocket event
@@ -228,20 +250,20 @@ async def update_checklist_endpoint(
     checklist_id: UUID,
     checklist_data: ChecklistUpdate,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> ChecklistResponse:
     """Update a checklist."""
     # Get checklist to find task_id
-    checklist = get_checklist(db, checklist_id)
+    checklist = await get_checklist(db, checklist_id)
     if not checklist:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Checklist not found",
         )
 
-    verify_task_access(checklist.task_id, current_user, db, require_edit=True)
+    await verify_task_access(checklist.task_id, current_user, db, require_edit=True)
 
-    updated = update_checklist(db, checklist_id, checklist_data)
+    updated = await update_checklist(db, checklist_id, checklist_data)
     if not updated:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -249,7 +271,7 @@ async def update_checklist_endpoint(
         )
 
     # Reload with items
-    updated = get_checklist(db, checklist_id)
+    updated = await get_checklist(db, checklist_id)
     response = build_checklist_response(updated)
 
     # Broadcast WebSocket event
@@ -277,20 +299,20 @@ async def update_checklist_endpoint(
 async def delete_checklist_endpoint(
     checklist_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> None:
     """Delete a checklist."""
     # Get checklist to find task_id
-    checklist = get_checklist(db, checklist_id)
+    checklist = await get_checklist(db, checklist_id)
     if not checklist:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Checklist not found",
         )
 
-    task = verify_task_access(checklist.task_id, current_user, db, require_edit=True)
+    task = await verify_task_access(checklist.task_id, current_user, db, require_edit=True)
 
-    deleted = delete_checklist(db, checklist_id)
+    deleted = await delete_checklist(db, checklist_id)
     if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -322,12 +344,12 @@ async def reorder_checklists_endpoint(
     task_id: UUID,
     reorder_data: ReorderRequest,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> None:
     """Reorder checklists for a task."""
-    verify_task_access(task_id, current_user, db, require_edit=True)
+    await verify_task_access(task_id, current_user, db, require_edit=True)
 
-    success = reorder_checklists(db, task_id, reorder_data.item_ids)
+    success = await reorder_checklists(db, task_id, reorder_data.item_ids)
     if not success:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -364,20 +386,20 @@ async def create_item_endpoint(
     checklist_id: UUID,
     item_data: ChecklistItemCreate,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> ChecklistItemResponse:
     """Create a new item in a checklist."""
     # Get checklist to find task_id
-    checklist = get_checklist(db, checklist_id)
+    checklist = await get_checklist(db, checklist_id)
     if not checklist:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Checklist not found",
         )
 
-    verify_task_access(checklist.task_id, current_user, db, require_edit=True)
+    await verify_task_access(checklist.task_id, current_user, db, require_edit=True)
 
-    item = create_checklist_item(db, checklist_id, item_data)
+    item = await create_checklist_item(db, checklist_id, item_data)
     if not item:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -413,28 +435,31 @@ async def update_item_endpoint(
     item_id: UUID,
     item_data: ChecklistItemUpdate,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> ChecklistItemResponse:
     """Update a checklist item."""
     # Get item to find checklist and task
     from ..models.checklist_item import ChecklistItem
-    item = db.query(ChecklistItem).filter(ChecklistItem.id == item_id).first()
+    result = await db.execute(
+        select(ChecklistItem).where(ChecklistItem.id == item_id)
+    )
+    item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Item not found",
         )
 
-    checklist = get_checklist(db, item.checklist_id)
+    checklist = await get_checklist(db, item.checklist_id)
     if not checklist:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Checklist not found",
         )
 
-    verify_task_access(checklist.task_id, current_user, db, require_edit=True)
+    await verify_task_access(checklist.task_id, current_user, db, require_edit=True)
 
-    updated = update_checklist_item(db, item_id, item_data)
+    updated = await update_checklist_item(db, item_id, item_data)
     if not updated:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -468,28 +493,31 @@ async def update_item_endpoint(
 async def toggle_item_endpoint(
     item_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> ChecklistItemResponse:
     """Toggle a checklist item's done status."""
     # Get item to find checklist and task
     from ..models.checklist_item import ChecklistItem
-    item = db.query(ChecklistItem).filter(ChecklistItem.id == item_id).first()
+    result = await db.execute(
+        select(ChecklistItem).where(ChecklistItem.id == item_id)
+    )
+    item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Item not found",
         )
 
-    checklist = get_checklist(db, item.checklist_id)
+    checklist = await get_checklist(db, item.checklist_id)
     if not checklist:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Checklist not found",
         )
 
-    task = verify_task_access(checklist.task_id, current_user, db, require_edit=True)
+    task = await verify_task_access(checklist.task_id, current_user, db, require_edit=True)
 
-    result = toggle_checklist_item(db, item_id, user_id=current_user.id)
+    result = await toggle_checklist_item(db, item_id, user_id=current_user.id)
     if not result:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -526,28 +554,31 @@ async def toggle_item_endpoint(
 async def delete_item_endpoint(
     item_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> None:
     """Delete a checklist item."""
     # Get item to find checklist and task
     from ..models.checklist_item import ChecklistItem
-    item = db.query(ChecklistItem).filter(ChecklistItem.id == item_id).first()
+    result = await db.execute(
+        select(ChecklistItem).where(ChecklistItem.id == item_id)
+    )
+    item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Item not found",
         )
 
-    checklist = get_checklist(db, item.checklist_id)
+    checklist = await get_checklist(db, item.checklist_id)
     if not checklist:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Checklist not found",
         )
 
-    verify_task_access(checklist.task_id, current_user, db, require_edit=True)
+    await verify_task_access(checklist.task_id, current_user, db, require_edit=True)
 
-    result = delete_checklist_item(db, item_id)
+    result = await delete_checklist_item(db, item_id)
     if not result:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -579,20 +610,20 @@ async def reorder_items_endpoint(
     checklist_id: UUID,
     reorder_data: ReorderRequest,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> None:
     """Reorder items within a checklist."""
     # Get checklist to find task_id
-    checklist = get_checklist(db, checklist_id)
+    checklist = await get_checklist(db, checklist_id)
     if not checklist:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Checklist not found",
         )
 
-    verify_task_access(checklist.task_id, current_user, db, require_edit=True)
+    await verify_task_access(checklist.task_id, current_user, db, require_edit=True)
 
-    success = reorder_checklist_items(db, checklist_id, reorder_data.item_ids)
+    success = await reorder_checklist_items(db, checklist_id, reorder_data.item_ids)
     if not success:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

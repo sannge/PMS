@@ -1,34 +1,24 @@
-"""Shared pytest fixtures for backend tests."""
+"""Shared pytest fixtures for backend tests with async PostgreSQL."""
 
+import asyncio
 import os
 import sys
 from datetime import datetime, timedelta
-from typing import Generator
+from typing import AsyncGenerator, Generator
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event, String
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 # Add app to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Patch UNIQUEIDENTIFIER for SQLite BEFORE importing models
-from sqlalchemy.dialects import sqlite
-from sqlalchemy.dialects.mssql import UNIQUEIDENTIFIER
-
-# Add SQLite type compiler method to handle UNIQUEIDENTIFIER
-def visit_UNIQUEIDENTIFIER(self, type_, **kw):
-    """Compile UNIQUEIDENTIFIER as VARCHAR(36) for SQLite."""
-    return "VARCHAR(36)"
-
-# Apply the patch to SQLite type compiler
-sqlite.base.SQLiteTypeCompiler.visit_UNIQUEIDENTIFIER = visit_UNIQUEIDENTIFIER
-
-# Now import app modules after patching
+# Now import app modules
+from app.config import settings
 from app.database import Base, get_db
 from app.main import app
 from app.models import Application, Note, Notification, Project, Task, User
@@ -50,72 +40,111 @@ def get_test_password_hash(password: str) -> str:
     return hashed.decode('utf-8')
 
 
-# Use in-memory SQLite for testing
-SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
+# Use PostgreSQL test database
+TEST_DATABASE_URL = settings.test_database_url
 
 
-@pytest.fixture(scope="function")
-def engine():
-    """Create a test database engine with SQLite."""
-    engine = create_engine(
-        SQLALCHEMY_DATABASE_URL,
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
+@pytest.fixture(scope="session")
+def event_loop():
+    """Create event loop for async tests."""
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    yield loop
+    loop.close()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def engine():
+    """Create async test engine with PostgreSQL."""
+    engine = create_async_engine(
+        TEST_DATABASE_URL,
+        echo=False,
+        pool_pre_ping=True,
     )
 
-    # Enable foreign key support for SQLite
-    @event.listens_for(engine, "connect")
-    def set_sqlite_pragma(dbapi_conn, connection_record):
-        cursor = dbapi_conn.cursor()
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
+    # Drop all tables first (clean slate)
+    async with engine.begin() as conn:
+        # Use raw SQL for tables with circular FK dependencies
+        await conn.execute(text("DROP TABLE IF EXISTS \"Mentions\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"ChecklistItems\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"Attachments\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"ApplicationMembers\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"Comments\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"Checklists\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"Notes\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"Invitations\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"Tasks\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"ProjectTaskStatusAgg\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"ProjectMembers\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"ProjectAssignments\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"TaskStatuses\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"Projects\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"Notifications\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"Applications\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"Users\" CASCADE"))
 
     # Create all tables
-    Base.metadata.create_all(bind=engine)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
     yield engine
 
-    # Clean up
-    Base.metadata.drop_all(bind=engine)
-    engine.dispose()
+    # Drop all tables at end
+    async with engine.begin() as conn:
+        await conn.execute(text("DROP TABLE IF EXISTS \"Mentions\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"ChecklistItems\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"Attachments\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"ApplicationMembers\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"Comments\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"Checklists\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"Notes\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"Invitations\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"Tasks\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"ProjectTaskStatusAgg\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"ProjectMembers\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"ProjectAssignments\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"TaskStatuses\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"Projects\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"Notifications\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"Applications\" CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"Users\" CASCADE"))
+
+    await engine.dispose()
 
 
-@pytest.fixture(scope="function")
-def db_session(engine) -> Generator[Session, None, None]:
-    """Create a test database session."""
-    TestingSessionLocal = sessionmaker(
-        autocommit=False,
+@pytest_asyncio.fixture(scope="function")
+async def db_session(engine) -> AsyncGenerator[AsyncSession, None]:
+    """Create async test database session."""
+    async_session = async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
         autoflush=False,
-        bind=engine,
     )
-    session = TestingSessionLocal()
 
-    try:
+    async with async_session() as session:
         yield session
-    finally:
-        session.rollback()
-        session.close()
+        await session.rollback()
 
 
-@pytest.fixture(scope="function")
-def client(db_session: Session) -> Generator[TestClient, None, None]:
-    """Create a test client with database dependency override."""
-    def override_get_db():
-        try:
-            yield db_session
-        finally:
-            pass
+@pytest_asyncio.fixture(scope="function")
+async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
+    """Create async test client with database dependency override."""
+    async def override_get_db():
+        yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
 
-    with TestClient(app) as test_client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test"
+    ) as test_client:
         yield test_client
 
     app.dependency_overrides.clear()
 
 
-@pytest.fixture
-def test_user(db_session: Session) -> User:
+@pytest_asyncio.fixture
+async def test_user(db_session: AsyncSession) -> User:
     """Create a test user."""
     user = User(
         id=uuid4(),
@@ -124,13 +153,13 @@ def test_user(db_session: Session) -> User:
         display_name="Test User",
     )
     db_session.add(user)
-    db_session.commit()
-    db_session.refresh(user)
+    await db_session.commit()
+    await db_session.refresh(user)
     return user
 
 
-@pytest.fixture
-def test_user_2(db_session: Session) -> User:
+@pytest_asyncio.fixture
+async def test_user_2(db_session: AsyncSession) -> User:
     """Create a second test user."""
     user = User(
         id=uuid4(),
@@ -139,8 +168,8 @@ def test_user_2(db_session: Session) -> User:
         display_name="Test User 2",
     )
     db_session.add(user)
-    db_session.commit()
-    db_session.refresh(user)
+    await db_session.commit()
+    await db_session.refresh(user)
     return user
 
 
@@ -172,8 +201,8 @@ def auth_headers_2(auth_token_2: str) -> dict:
     return {"Authorization": f"Bearer {auth_token_2}"}
 
 
-@pytest.fixture
-def test_application(db_session: Session, test_user: User) -> Application:
+@pytest_asyncio.fixture
+async def test_application(db_session: AsyncSession, test_user: User) -> Application:
     """Create a test application."""
     application = Application(
         id=uuid4(),
@@ -182,13 +211,13 @@ def test_application(db_session: Session, test_user: User) -> Application:
         owner_id=test_user.id,
     )
     db_session.add(application)
-    db_session.commit()
-    db_session.refresh(application)
+    await db_session.commit()
+    await db_session.refresh(application)
     return application
 
 
-@pytest.fixture
-def test_project(db_session: Session, test_application: Application) -> Project:
+@pytest_asyncio.fixture
+async def test_project(db_session: AsyncSession, test_application: Application) -> Project:
     """Create a test project."""
     project = Project(
         id=uuid4(),
@@ -199,13 +228,13 @@ def test_project(db_session: Session, test_application: Application) -> Project:
         project_type="kanban",
     )
     db_session.add(project)
-    db_session.commit()
-    db_session.refresh(project)
+    await db_session.commit()
+    await db_session.refresh(project)
     return project
 
 
-@pytest.fixture
-def test_task(db_session: Session, test_project: Project, test_user: User) -> Task:
+@pytest_asyncio.fixture
+async def test_task(db_session: AsyncSession, test_project: Project, test_user: User) -> Task:
     """Create a test task."""
     task = Task(
         id=uuid4(),
@@ -219,13 +248,13 @@ def test_task(db_session: Session, test_project: Project, test_user: User) -> Ta
         reporter_id=test_user.id,
     )
     db_session.add(task)
-    db_session.commit()
-    db_session.refresh(task)
+    await db_session.commit()
+    await db_session.refresh(task)
     return task
 
 
-@pytest.fixture
-def test_note(db_session: Session, test_application: Application, test_user: User) -> Note:
+@pytest_asyncio.fixture
+async def test_note(db_session: AsyncSession, test_application: Application, test_user: User) -> Note:
     """Create a test note."""
     note = Note(
         id=uuid4(),
@@ -236,13 +265,13 @@ def test_note(db_session: Session, test_application: Application, test_user: Use
         created_by=test_user.id,
     )
     db_session.add(note)
-    db_session.commit()
-    db_session.refresh(note)
+    await db_session.commit()
+    await db_session.refresh(note)
     return note
 
 
-@pytest.fixture
-def test_notification(db_session: Session, test_user: User) -> Notification:
+@pytest_asyncio.fixture
+async def test_notification(db_session: AsyncSession, test_user: User) -> Notification:
     """Create a test notification."""
     notification = Notification(
         id=uuid4(),
@@ -253,8 +282,8 @@ def test_notification(db_session: Session, test_user: User) -> Notification:
         is_read=False,
     )
     db_session.add(notification)
-    db_session.commit()
-    db_session.refresh(notification)
+    await db_session.commit()
+    await db_session.refresh(notification)
     return notification
 
 

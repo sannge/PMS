@@ -10,8 +10,8 @@ from typing import Annotated, List
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..models.application import Application
@@ -36,10 +36,10 @@ router = APIRouter(prefix="/api/projects", tags=["Project Assignments"])
 # ============================================================================
 
 
-def get_project_with_access(
+async def get_project_with_access(
     project_id: UUID,
     current_user: User,
-    db: Session,
+    db: AsyncSession,
 ) -> tuple[Project, ApplicationMember | None]:
     """
     Get a project and verify user has access via application membership.
@@ -55,9 +55,8 @@ def get_project_with_access(
     Raises:
         HTTPException: If project not found or user doesn't have access
     """
-    project = db.query(Project).filter(
-        Project.id == project_id,
-    ).first()
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
 
     if not project:
         raise HTTPException(
@@ -66,9 +65,8 @@ def get_project_with_access(
         )
 
     # Get the application
-    application = db.query(Application).filter(
-        Application.id == project.application_id,
-    ).first()
+    result = await db.execute(select(Application).where(Application.id == project.application_id))
+    application = result.scalar_one_or_none()
 
     if not application:
         raise HTTPException(
@@ -81,10 +79,13 @@ def get_project_with_access(
         return project, None
 
     # Check if user is a member
-    member = db.query(ApplicationMember).filter(
-        ApplicationMember.application_id == application.id,
-        ApplicationMember.user_id == current_user.id,
-    ).first()
+    result = await db.execute(
+        select(ApplicationMember).where(
+            ApplicationMember.application_id == application.id,
+            ApplicationMember.user_id == current_user.id,
+        )
+    )
+    member = result.scalar_one_or_none()
 
     if not member:
         raise HTTPException(
@@ -99,12 +100,12 @@ def verify_assignment_permission(
     project: Project,
     current_user: User,
     member: ApplicationMember | None,
-    db: Session,
+    db: AsyncSession,
 ) -> None:
     """
     Verify the current user has permission to manage assignments.
 
-    Only owners and managers (editors with is_manager=True) can assign users.
+    Only owners can assign users to projects.
 
     Args:
         project: The project being modified
@@ -119,23 +120,20 @@ def verify_assignment_permission(
     if member is None:
         return
 
-    # Check if user is an editor with manager privileges
+    # Check if user is an owner
     if member.role == ApplicationRole.OWNER.value:
-        return
-
-    if member.role == ApplicationRole.EDITOR.value and member.is_manager:
         return
 
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail="Access denied. Only owners and managers can manage project assignments.",
+        detail="Access denied. Only owners can manage project assignments.",
     )
 
 
-def get_assignable_member(
+async def get_assignable_member(
     application_id: UUID,
     user_id: UUID,
-    db: Session,
+    db: AsyncSession,
 ) -> ApplicationMember:
     """
     Get a member that can be assigned to a project.
@@ -153,10 +151,13 @@ def get_assignable_member(
     Raises:
         HTTPException: If user is not a member or is a viewer
     """
-    member = db.query(ApplicationMember).filter(
-        ApplicationMember.application_id == application_id,
-        ApplicationMember.user_id == user_id,
-    ).first()
+    result = await db.execute(
+        select(ApplicationMember).where(
+            ApplicationMember.application_id == application_id,
+            ApplicationMember.user_id == user_id,
+        )
+    )
+    member = result.scalar_one_or_none()
 
     if not member:
         raise HTTPException(
@@ -193,7 +194,7 @@ def get_assignable_member(
 async def list_assignments(
     project_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(50, ge=1, le=100, description="Maximum number of records to return"),
 ) -> AssignmentList:
@@ -208,19 +209,23 @@ async def list_assignments(
     Returns assignments ordered by creation date (newest first).
     """
     # Verify access
-    project, _ = get_project_with_access(project_id, current_user, db)
+    project, _ = await get_project_with_access(project_id, current_user, db)
 
     # Get total count
-    total = db.query(func.count(ProjectAssignment.id)).filter(
-        ProjectAssignment.project_id == project_id,
-    ).scalar() or 0
+    result = await db.execute(
+        select(func.count(ProjectAssignment.id)).where(ProjectAssignment.project_id == project_id)
+    )
+    total = result.scalar() or 0
 
     # Query assignments with user details
-    assignments = db.query(ProjectAssignment).filter(
-        ProjectAssignment.project_id == project_id,
-    ).order_by(
-        ProjectAssignment.created_at.desc(),
-    ).offset(skip).limit(limit).all()
+    result = await db.execute(
+        select(ProjectAssignment)
+        .where(ProjectAssignment.project_id == project_id)
+        .order_by(ProjectAssignment.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+    )
+    assignments = result.scalars().all()
 
     return AssignmentList(
         items=assignments,
@@ -254,7 +259,7 @@ async def create_assignment(
     project_id: UUID,
     assignment_data: AssignmentCreate,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> AssignmentWithUser:
     """
     Assign a user to a project.
@@ -268,25 +273,27 @@ async def create_assignment(
     - User cannot already be assigned to this project
     """
     # Verify access and permission
-    project, member = get_project_with_access(project_id, current_user, db)
+    project, member = await get_project_with_access(project_id, current_user, db)
     verify_assignment_permission(project, current_user, member, db)
 
     # Check if user is the owner (owners can always be assigned)
-    application = db.query(Application).filter(
-        Application.id == project.application_id,
-    ).first()
+    result = await db.execute(select(Application).where(Application.id == project.application_id))
+    application = result.scalar_one_or_none()
 
     is_owner = application.owner_id == assignment_data.user_id
 
     # If not owner, verify user is an assignable member
     if not is_owner:
-        get_assignable_member(project.application_id, assignment_data.user_id, db)
+        await get_assignable_member(project.application_id, assignment_data.user_id, db)
 
     # Check for existing assignment
-    existing = db.query(ProjectAssignment).filter(
-        ProjectAssignment.project_id == project_id,
-        ProjectAssignment.user_id == assignment_data.user_id,
-    ).first()
+    result = await db.execute(
+        select(ProjectAssignment).where(
+            ProjectAssignment.project_id == project_id,
+            ProjectAssignment.user_id == assignment_data.user_id,
+        )
+    )
+    existing = result.scalar_one_or_none()
 
     if existing:
         raise HTTPException(
@@ -302,8 +309,8 @@ async def create_assignment(
     )
 
     db.add(assignment)
-    db.commit()
-    db.refresh(assignment)
+    await db.commit()
+    await db.refresh(assignment)
 
     return assignment
 
@@ -329,7 +336,7 @@ async def remove_assignment(
     project_id: UUID,
     user_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> None:
     """
     Remove a user's assignment from a project.
@@ -341,14 +348,17 @@ async def remove_assignment(
     This action is irreversible.
     """
     # Verify access and permission
-    project, member = get_project_with_access(project_id, current_user, db)
+    project, member = await get_project_with_access(project_id, current_user, db)
     verify_assignment_permission(project, current_user, member, db)
 
     # Find the assignment
-    assignment = db.query(ProjectAssignment).filter(
-        ProjectAssignment.project_id == project_id,
-        ProjectAssignment.user_id == user_id,
-    ).first()
+    result = await db.execute(
+        select(ProjectAssignment).where(
+            ProjectAssignment.project_id == project_id,
+            ProjectAssignment.user_id == user_id,
+        )
+    )
+    assignment = result.scalar_one_or_none()
 
     if not assignment:
         raise HTTPException(
@@ -356,7 +366,7 @@ async def remove_assignment(
             detail=f"Assignment for user {user_id} not found in this project.",
         )
 
-    db.delete(assignment)
-    db.commit()
+    await db.delete(assignment)
+    await db.commit()
 
     return None

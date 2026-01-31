@@ -1,0 +1,25 @@
+Method,Name,Error,Occurrences
+GET,/api/applications/f0851605-562c-4f4a-a11b-01923eb10ce1/projects,"ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)",1
+PUT,/api/tasks/2b53b1b5-60dd-44bf-9919-23711e882993,HTTPError('500 Server Error: Internal Server Error for url: /api/tasks/2b53b1b5-60dd-44bf-9919-23711e882993'),241
+GET,/api/applications,HTTPError('500 Server Error: Internal Server Error for url: /api/applications'),333
+POST,/api/projects/ae2f73a4-f75c-44fe-8078-0acb69cdeac3/tasks,"ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)",2
+GET,/api/projects/ae2f73a4-f75c-44fe-8078-0acb69cdeac3/tasks,HTTPError('500 Server Error: Internal Server Error for url: /api/projects/ae2f73a4-f75c-44fe-8078-0acb69cdeac3/tasks'),1647
+PUT,/api/tasks/2b53b1b5-60dd-44bf-9919-23711e882993,"ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)",5
+GET,/api/projects/ae2f73a4-f75c-44fe-8078-0acb69cdeac3,HTTPError('500 Server Error: Internal Server Error for url: /api/projects/ae2f73a4-f75c-44fe-8078-0acb69cdeac3'),239
+GET,/api/tasks/2b53b1b5-60dd-44bf-9919-23711e882993/checklists,HTTPError('500 Server Error: Internal Server Error for url: /api/tasks/2b53b1b5-60dd-44bf-9919-23711e882993/checklists'),190
+GET,/api/tasks/2b53b1b5-60dd-44bf-9919-23711e882993/comments,"ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)",1
+GET,/api/tasks/2b53b1b5-60dd-44bf-9919-23711e882993/checklists,"ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)",1
+GET,/api/applications/f0851605-562c-4f4a-a11b-01923eb10ce1/projects,HTTPError('500 Server Error: Internal Server Error for url: /api/applications/f0851605-562c-4f4a-a11b-01923eb10ce1/projects'),413
+GET,/api/projects/ae2f73a4-f75c-44fe-8078-0acb69cdeac3/tasks,"ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)",13
+GET,/api/tasks/2b53b1b5-60dd-44bf-9919-23711e882993,"ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)",1
+GET,/api/applications,"ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)",1
+GET,/api/tasks/2b53b1b5-60dd-44bf-9919-23711e882993/comments,HTTPError('500 Server Error: Internal Server Error for url: /api/tasks/2b53b1b5-60dd-44bf-9919-23711e882993/comments'),447
+GET,/api/projects/ae2f73a4-f75c-44fe-8078-0acb69cdeac3/members,"ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)",1
+GET,/api/applications/f0851605-562c-4f4a-a11b-01923eb10ce1/members,HTTPError('500 Server Error: Internal Server Error for url: /api/applications/f0851605-562c-4f4a-a11b-01923eb10ce1/members'),106
+POST,/api/tasks/2b53b1b5-60dd-44bf-9919-23711e882993/comments,HTTPError('500 Server Error: Internal Server Error for url: /api/tasks/2b53b1b5-60dd-44bf-9919-23711e882993/comments'),212
+GET,/api/applications/f0851605-562c-4f4a-a11b-01923eb10ce1,HTTPError('500 Server Error: Internal Server Error for url: /api/applications/f0851605-562c-4f4a-a11b-01923eb10ce1'),96
+GET,/api/tasks/2b53b1b5-60dd-44bf-9919-23711e882993,HTTPError('500 Server Error: Internal Server Error for url: /api/tasks/2b53b1b5-60dd-44bf-9919-23711e882993'),530
+GET,/api/projects/ae2f73a4-f75c-44fe-8078-0acb69cdeac3/members,HTTPError('500 Server Error: Internal Server Error for url: /api/projects/ae2f73a4-f75c-44fe-8078-0acb69cdeac3/members'),108
+POST,/api/tasks/2b53b1b5-60dd-44bf-9919-23711e882993/comments,"ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)",1
+GET,/api/projects/ae2f73a4-f75c-44fe-8078-0acb69cdeac3,"ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)",6
+POST,/api/projects/ae2f73a4-f75c-44fe-8078-0acb69cdeac3/tasks,HTTPError('500 Server Error: Internal Server Error for url: /api/projects/ae2f73a4-f75c-44fe-8078-0acb69cdeac3/tasks'),310

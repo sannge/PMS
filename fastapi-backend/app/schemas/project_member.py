@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 
 class ProjectMemberRole(str, Enum):
@@ -93,12 +93,12 @@ class ProjectMemberResponse(BaseModel):
         None,
         description="ID of the user who added this member",
     )
-    created_at: datetime = Field(
-        ...,
+    created_at: Optional[datetime] = Field(
+        None,
         description="When the membership was created",
     )
-    updated_at: datetime = Field(
-        ...,
+    updated_at: Optional[datetime] = Field(
+        None,
         description="When the membership was last updated",
     )
 
@@ -106,7 +106,28 @@ class ProjectMemberResponse(BaseModel):
 class ProjectMemberWithUser(ProjectMemberResponse):
     """Schema for project member response with nested user info."""
 
+    # Internal user object - excluded from serialization
     user: Optional[UserSummary] = Field(
         None,
         description="User details of the member",
+        exclude=True,
     )
+
+    # Flat user properties for frontend compatibility (computed from user)
+    @computed_field
+    @property
+    def user_email(self) -> Optional[str]:
+        """User email address."""
+        return self.user.email if self.user else None
+
+    @computed_field
+    @property
+    def user_display_name(self) -> Optional[str]:
+        """User display name."""
+        return self.user.display_name if self.user else None
+
+    @computed_field
+    @property
+    def user_avatar_url(self) -> Optional[str]:
+        """User avatar URL."""
+        return self.user.avatar_url if self.user else None

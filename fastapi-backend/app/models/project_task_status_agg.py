@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer
-from sqlalchemy.dialects.mssql import UNIQUEIDENTIFIER
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
 from ..database import Base
@@ -37,7 +37,7 @@ class ProjectTaskStatusAgg(Base):
 
     # Primary key is also foreign key to Projects
     project_id = Column(
-        UNIQUEIDENTIFIER,
+        UUID(as_uuid=True),
         ForeignKey("Projects.id", ondelete="CASCADE"),
         primary_key=True,
         nullable=False,

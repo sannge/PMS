@@ -1,64 +1,94 @@
-"""SQL Server database connection and session management."""
+"""PostgreSQL async database connection and session management."""
 
-from typing import Generator
+import asyncio
+import logging
+from typing import AsyncGenerator
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, declarative_base, sessionmaker
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase
 
 from .config import settings
 
-# URL encode special characters in password
-# The password contains '!' which needs to be percent-encoded
-from urllib.parse import quote_plus
+logger = logging.getLogger(__name__)
 
-# Build connection string with properly encoded password
-DATABASE_URL = (
-    f"mssql+pyodbc://{settings.db_user}:{quote_plus(settings.db_password)}"
-    f"@{settings.db_server}/{settings.db_name}"
-    "?driver=ODBC+Driver+17+for+SQL+Server"
-)
-
-# Create SQLAlchemy engine
-# - pool_size: Base number of connections to keep open (increased for concurrent users)
-# - max_overflow: Additional connections allowed when pool is full
-# - pool_timeout: Seconds to wait for a connection before timeout
-# - pool_pre_ping: Verify connections before use (handles stale connections)
-# - pool_recycle: Recycle connections after 3600 seconds (1 hour)
-engine = create_engine(
-    DATABASE_URL,
-    pool_size=20,  # Increased from default 5 to handle concurrent requests
-    max_overflow=30,  # Increased from default 10 for burst traffic
-    pool_timeout=60,  # Increased from default 30 for slow queries
+# Create async engine with optimized pool settings for 5000 concurrent users
+engine = create_async_engine(
+    settings.database_url,
+    echo=settings.sql_echo,
+    pool_size=settings.db_pool_size,      # 50 base connections
+    max_overflow=settings.db_max_overflow,  # 100 overflow connections
+    pool_timeout=15,  # Fail fast - let clients retry rather than hang
     pool_pre_ping=True,
     pool_recycle=3600,
 )
 
-# Create session factory
-# - autocommit=False: Require explicit commits
-# - autoflush=False: Don't auto-flush to allow batching
-SessionLocal = sessionmaker(
-    autocommit=False,
+# Create async session factory
+async_session_maker = async_sessionmaker(
+    engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
     autoflush=False,
-    bind=engine,
 )
 
-# Declarative base for ORM models
-Base = declarative_base()
+
+class Base(DeclarativeBase):
+    """Declarative base for ORM models."""
+    pass
 
 
-def get_db() -> Generator[Session, None, None]:
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """
-    Dependency injection function for FastAPI.
+    Async dependency injection for FastAPI.
 
-    Yields a database session and ensures proper cleanup.
+    Auto-commits on success, rollbacks on exception.
 
     Usage:
         @app.get("/items")
-        def get_items(db: Session = Depends(get_db)):
-            return db.query(Item).all()
+        async def get_items(db: AsyncSession = Depends(get_db)):
+            result = await db.execute(select(Item))
+            return result.scalars().all()
     """
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+    async with async_session_maker() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+
+async def warmup_connection_pool(pool_size: int = None) -> None:
+    """
+    Pre-warm the database connection pool at startup.
+
+    SQLAlchemy + asyncpg runs initialization queries on each new connection
+    (pg_catalog.version, current_schema, standard_conforming_strings).
+    With remote databases, this can take 2-3 seconds per connection.
+
+    Pre-warming creates connections upfront so they're ready when needed,
+    avoiding timeouts during load spikes.
+
+    Args:
+        pool_size: Number of connections to warm up. Defaults to settings.db_pool_size.
+    """
+    target_size = pool_size or settings.db_pool_size
+    logger.info(f"Warming up connection pool with {target_size} connections...")
+
+    async def create_connection(i: int):
+        """Create a single connection to warm the pool."""
+        try:
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            logger.debug(f"  Connection {i + 1}/{target_size} warmed")
+        except Exception as e:
+            logger.warning(f"  Connection {i + 1} warmup failed: {e}")
+
+    # Create connections concurrently (but not all at once to avoid overwhelming DB)
+    batch_size = 10
+    for batch_start in range(0, target_size, batch_size):
+        batch_end = min(batch_start + batch_size, target_size)
+        tasks = [create_connection(i) for i in range(batch_start, batch_end)]
+        await asyncio.gather(*tasks)
+
+    logger.info(f"Connection pool warmup complete ({target_size} connections)")

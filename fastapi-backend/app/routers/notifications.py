@@ -9,8 +9,8 @@ from typing import Annotated, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..models.invitation import Invitation
@@ -47,7 +47,7 @@ router = APIRouter(prefix="/api/notifications", tags=["Notifications"])
 )
 async def list_notifications(
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(50, ge=1, le=100, description="Maximum number of records to return"),
     unread_only: bool = Query(False, description="Return only unread notifications"),
@@ -72,27 +72,30 @@ async def list_notifications(
 
     Returns notifications ordered by creation date (newest first).
     """
-    query = db.query(Notification).filter(
+    query = select(Notification).where(
         Notification.user_id == current_user.id,
     )
 
     # Apply unread filter if requested
     if unread_only:
-        query = query.filter(Notification.is_read == False)
+        query = query.where(Notification.is_read == False)
 
     # Apply notification type filter if provided
     if notification_type:
-        query = query.filter(Notification.type == notification_type.value)
+        query = query.where(Notification.type == notification_type.value)
 
     # Apply entity type filter if provided
     if entity_type:
-        query = query.filter(Notification.entity_type == entity_type.value)
+        query = query.where(Notification.entity_type == entity_type.value)
 
     # Order by newest first
     query = query.order_by(Notification.created_at.desc())
 
     # Apply pagination
-    notifications = query.offset(skip).limit(limit).all()
+    query = query.offset(skip).limit(limit)
+
+    result = await db.execute(query)
+    notifications = result.scalars().all()
 
     # Enrich notifications with entity status (e.g., invitation status)
     # Collect invitation entity IDs
@@ -104,21 +107,24 @@ async def list_notifications(
     # Fetch invitation statuses in bulk if there are any
     invitation_status_map: dict[UUID, str] = {}
     if invitation_ids:
-        invitations = db.query(Invitation.id, Invitation.status).filter(
-            Invitation.id.in_(invitation_ids)
-        ).all()
+        result = await db.execute(
+            select(Invitation.id, Invitation.status).where(
+                Invitation.id.in_(invitation_ids)
+            )
+        )
+        invitations = result.all()
         invitation_status_map = {inv.id: inv.status for inv in invitations}
 
     # Build response with entity_status
-    result = []
+    response_list = []
     for notification in notifications:
         response = NotificationResponse.model_validate(notification)
         # Add entity_status for invitation notifications
         if notification.entity_type == EntityType.INVITATION.value and notification.entity_id:
             response.entity_status = invitation_status_map.get(notification.entity_id)
-        result.append(response)
+        response_list.append(response)
 
-    return result
+    return response_list
 
 
 @router.get(
@@ -133,7 +139,7 @@ async def list_notifications(
 )
 async def get_notification_count(
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> NotificationCount:
     """
     Get notification counts for the authenticated user.
@@ -142,14 +148,20 @@ async def get_notification_count(
     - total: Total number of notifications
     - unread: Number of unread notifications
     """
-    total = db.query(func.count(Notification.id)).filter(
-        Notification.user_id == current_user.id,
-    ).scalar() or 0
+    result = await db.execute(
+        select(func.count(Notification.id)).where(
+            Notification.user_id == current_user.id,
+        )
+    )
+    total = result.scalar() or 0
 
-    unread = db.query(func.count(Notification.id)).filter(
-        Notification.user_id == current_user.id,
-        Notification.is_read == False,
-    ).scalar() or 0
+    result = await db.execute(
+        select(func.count(Notification.id)).where(
+            Notification.user_id == current_user.id,
+            Notification.is_read == False,
+        )
+    )
+    unread = result.scalar() or 0
 
     return NotificationCount(total=total, unread=unread)
 
@@ -173,7 +185,7 @@ async def get_notification_count(
 async def get_notification(
     notification_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> NotificationResponse:
     """
     Get a specific notification by its ID.
@@ -182,10 +194,13 @@ async def get_notification(
     """
     # Filter by user_id in the query to prevent information leakage
     # (attacker can't discover if notification IDs belonging to other users exist)
-    notification = db.query(Notification).filter(
-        Notification.id == notification_id,
-        Notification.user_id == current_user.id,
-    ).first()
+    result = await db.execute(
+        select(Notification).where(
+            Notification.id == notification_id,
+            Notification.user_id == current_user.id,
+        )
+    )
+    notification = result.scalar_one_or_none()
 
     if not notification:
         raise HTTPException(
@@ -211,7 +226,7 @@ async def update_notification(
     notification_id: UUID,
     notification_data: NotificationUpdate,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> NotificationResponse:
     """
     Update a notification's read status.
@@ -222,10 +237,13 @@ async def update_notification(
     Broadcasts the read status change via WebSocket to sync across devices.
     """
     # Filter by user_id in the query to prevent information leakage
-    notification = db.query(Notification).filter(
-        Notification.id == notification_id,
-        Notification.user_id == current_user.id,
-    ).first()
+    result = await db.execute(
+        select(Notification).where(
+            Notification.id == notification_id,
+            Notification.user_id == current_user.id,
+        )
+    )
+    notification = result.scalar_one_or_none()
 
     if not notification:
         raise HTTPException(
@@ -237,8 +255,8 @@ async def update_notification(
     if notification_data.is_read is not None:
         notification.is_read = notification_data.is_read
 
-    db.commit()
-    db.refresh(notification)
+    await db.commit()
+    await db.refresh(notification)
 
     # Broadcast read status via WebSocket if marked as read
     if notification_data.is_read:
@@ -261,7 +279,7 @@ async def update_notification(
 async def delete_notification(
     notification_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> None:
     """
     Delete a notification.
@@ -270,10 +288,13 @@ async def delete_notification(
     This action is irreversible.
     """
     # Filter by user_id in the query to prevent information leakage
-    notification = db.query(Notification).filter(
-        Notification.id == notification_id,
-        Notification.user_id == current_user.id,
-    ).first()
+    result = await db.execute(
+        select(Notification).where(
+            Notification.id == notification_id,
+            Notification.user_id == current_user.id,
+        )
+    )
+    notification = result.scalar_one_or_none()
 
     if not notification:
         raise HTTPException(
@@ -281,8 +302,8 @@ async def delete_notification(
             detail="Notification not found",
         )
 
-    db.delete(notification)
-    db.commit()
+    await db.delete(notification)
+    await db.commit()
 
     return None
 
@@ -305,7 +326,7 @@ async def delete_notification(
 async def mark_notifications_read(
     bulk_data: NotificationBulkUpdate,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
     """
     Mark multiple notifications as read.
@@ -316,15 +337,17 @@ async def mark_notifications_read(
     Only notifications belonging to the current user will be updated.
     Returns the count of successfully updated notifications.
     """
-    updated_count = db.query(Notification).filter(
-        Notification.id.in_(bulk_data.notification_ids),
-        Notification.user_id == current_user.id,
-    ).update(
-        {"is_read": bulk_data.is_read},
-        synchronize_session=False,
+    result = await db.execute(
+        update(Notification)
+        .where(
+            Notification.id.in_(bulk_data.notification_ids),
+            Notification.user_id == current_user.id,
+        )
+        .values(is_read=bulk_data.is_read)
     )
+    updated_count = result.rowcount
 
-    db.commit()
+    await db.commit()
 
     # Broadcast read status for each notification via WebSocket
     if bulk_data.is_read:
@@ -349,7 +372,7 @@ async def mark_notifications_read(
 )
 async def mark_all_notifications_read(
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
     """
     Mark all unread notifications as read.
@@ -357,15 +380,17 @@ async def mark_all_notifications_read(
     Updates all notifications belonging to the current user
     where is_read is false.
     """
-    updated_count = db.query(Notification).filter(
-        Notification.user_id == current_user.id,
-        Notification.is_read == False,
-    ).update(
-        {"is_read": True},
-        synchronize_session=False,
+    result = await db.execute(
+        update(Notification)
+        .where(
+            Notification.user_id == current_user.id,
+            Notification.is_read == False,
+        )
+        .values(is_read=True)
     )
+    updated_count = result.rowcount
 
-    db.commit()
+    await db.commit()
 
     return {
         "message": f"Marked {updated_count} notifications as read",
@@ -385,7 +410,7 @@ async def mark_all_notifications_read(
 )
 async def delete_all_notifications(
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     read_only: bool = Query(False, description="Delete only read notifications"),
 ) -> None:
     """
@@ -395,14 +420,19 @@ async def delete_all_notifications(
 
     This action is irreversible.
     """
-    query = db.query(Notification).filter(
+    query = select(Notification).where(
         Notification.user_id == current_user.id,
     )
 
     if read_only:
-        query = query.filter(Notification.is_read == True)
+        query = query.where(Notification.is_read == True)
 
-    query.delete(synchronize_session=False)
-    db.commit()
+    result = await db.execute(query)
+    notifications = result.scalars().all()
+
+    for notification in notifications:
+        await db.delete(notification)
+
+    await db.commit()
 
     return None

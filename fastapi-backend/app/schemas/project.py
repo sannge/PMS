@@ -1,6 +1,6 @@
 """Pydantic schemas for Project model validation."""
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 from uuid import UUID
 
@@ -34,6 +34,11 @@ class ProjectBase(BaseModel):
         "kanban",
         description="Project type (scrum, kanban, etc.)",
         examples=["kanban", "scrum"],
+    )
+    due_date: date = Field(
+        ...,
+        description="Project due date (required)",
+        examples=["2026-03-01"],
     )
 
 
@@ -70,6 +75,10 @@ class ProjectUpdate(BaseModel):
     project_owner_user_id: Optional[UUID] = Field(
         None,
         description="ID of the project owner",
+    )
+    due_date: Optional[date] = Field(
+        None,
+        description="Project due date",
     )
     row_version: Optional[int] = Field(
         None,
@@ -136,6 +145,10 @@ class ProjectResponse(ProjectBase):
         ...,
         description="When the project was last updated",
     )
+    archived_at: Optional[datetime] = Field(
+        None,
+        description="When the project was archived (null if active)",
+    )
 
 
 class ProjectWithTasks(ProjectResponse):
@@ -144,6 +157,10 @@ class ProjectWithTasks(ProjectResponse):
     tasks_count: int = Field(
         0,
         description="Number of tasks in this project",
+    )
+    application_name: Optional[str] = Field(
+        None,
+        description="Name of the parent application (populated in cross-app queries)",
     )
 
 
@@ -171,3 +188,24 @@ class ProjectStatusOverrideClear(BaseModel):
     """Schema for clearing project status override."""
 
     pass  # No fields needed - just clears the override
+
+
+class ProjectCursorPage(BaseModel):
+    """Schema for cursor-paginated project list (for archived projects)."""
+
+    items: list[ProjectWithTasks] = Field(
+        default_factory=list,
+        description="List of projects in this page",
+    )
+    next_cursor: Optional[str] = Field(
+        None,
+        description="Cursor for the next page (null if no more results)",
+    )
+    total: int = Field(
+        0,
+        description="Total number of matching projects",
+    )
+    can_restore: bool = Field(
+        False,
+        description="Whether the current user can restore projects",
+    )

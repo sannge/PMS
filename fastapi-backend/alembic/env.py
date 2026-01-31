@@ -1,7 +1,7 @@
 """Alembic environment configuration for database migrations.
 
 This module configures Alembic to work with our SQLAlchemy models
-and SQL Server database connection.
+and PostgreSQL database connection.
 """
 
 import sys
@@ -15,17 +15,28 @@ from sqlalchemy import engine_from_config, pool
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Import our application's database configuration
-from app.database import DATABASE_URL, Base
+from app.config import settings
+from app.database import Base
 
 # Import all models to ensure they are registered with Base.metadata
 # This is required for autogenerate to detect all tables
 from app.models import (
     Application,
+    ApplicationMember,
     Attachment,
+    Checklist,
+    ChecklistItem,
+    Comment,
+    Invitation,
+    Mention,
     Note,
     Notification,
     Project,
+    ProjectAssignment,
+    ProjectMember,
+    ProjectTaskStatusAgg,
     Task,
+    TaskStatus,
     User,
 )
 
@@ -38,9 +49,9 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Set the SQLAlchemy URL from our application config
-# This overrides the dummy URL in alembic.ini
+# Use sync URL for Alembic (psycopg2 instead of asyncpg)
 # Escape % characters for configparser (% needs to be %% for interpolation)
-config.set_main_option("sqlalchemy.url", DATABASE_URL.replace("%", "%%"))
+config.set_main_option("sqlalchemy.url", settings.sync_database_url.replace("%", "%%"))
 
 # Target metadata for 'autogenerate' support
 # This tells Alembic what tables/columns should exist
@@ -68,7 +79,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
-        # SQL Server specific options
+        # PostgreSQL specific options
         compare_type=True,
         compare_server_default=True,
     )
@@ -123,11 +134,8 @@ def include_object(object, name, type_, reflected, compare_to):
     """
     # Exclude system tables and internal tables
     if type_ == "table":
-        # Exclude SQL Server system tables
-        if name.startswith("sys") or name.startswith("INFORMATION_SCHEMA"):
-            return False
-        # Exclude trace/extended events tables
-        if name.startswith("trace_") or name.startswith("queue_"):
+        # Exclude PostgreSQL system tables
+        if name.startswith("pg_") or name.startswith("sql_"):
             return False
 
     return True

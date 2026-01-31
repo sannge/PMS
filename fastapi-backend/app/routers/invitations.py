@@ -15,14 +15,14 @@ from typing import Annotated, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import and_, func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import lazyload
 
 from ..database import get_db
 from ..models.application import Application
 from ..models.application_member import ApplicationMember
 from ..models.invitation import Invitation
-from ..models.notification import Notification
 from ..models.user import User
 from ..schemas.invitation import (
     ApplicationRole,
@@ -32,8 +32,9 @@ from ..schemas.invitation import (
     InvitationWithDetails,
     InvitationList,
 )
-from ..schemas.notification import EntityType, NotificationType
+from ..schemas.notification import EntityType, NotificationType, NotificationCreate
 from ..services.auth_service import get_current_user
+from ..services.notification_service import NotificationService
 from ..websocket.handlers import (
     handle_invitation_notification,
     handle_invitation_response,
@@ -48,8 +49,8 @@ router = APIRouter(prefix="/api/invitations", tags=["Invitations"])
 # ============================================================================
 
 
-def get_user_application_role(
-    db: Session,
+async def get_user_application_role(
+    db: AsyncSession,
     user_id: UUID,
     application_id: UUID,
     application: Optional[Application] = None,
@@ -68,7 +69,8 @@ def get_user_application_role(
     """
     # If application is provided, use it; otherwise fetch
     if application is None:
-        application = db.query(Application).filter(Application.id == application_id).first()
+        result = await db.execute(select(Application).where(Application.id == application_id))
+        application = result.scalar_one_or_none()
 
     if not application:
         return None
@@ -78,34 +80,37 @@ def get_user_application_role(
         return "owner"
 
     # Check ApplicationMembers table
-    member = db.query(ApplicationMember).filter(
-        ApplicationMember.application_id == application_id,
-        ApplicationMember.user_id == user_id,
-    ).first()
+    result = await db.execute(
+        select(ApplicationMember).where(
+            ApplicationMember.application_id == application_id,
+            ApplicationMember.user_id == user_id,
+        )
+    )
+    member = result.scalar_one_or_none()
 
     return member.role if member else None
 
 
-def is_application_owner(
-    db: Session,
+async def is_application_owner(
+    db: AsyncSession,
     user_id: UUID,
     application_id: UUID,
 ) -> bool:
     """Check if the user is the owner of the application."""
-    return get_user_application_role(db, user_id, application_id) == "owner"
+    return await get_user_application_role(db, user_id, application_id) == "owner"
 
 
-def is_application_member(
-    db: Session,
+async def is_application_member(
+    db: AsyncSession,
     user_id: UUID,
     application_id: UUID,
 ) -> bool:
     """Check if the user is a member of the application (any role)."""
-    return get_user_application_role(db, user_id, application_id) is not None
+    return await get_user_application_role(db, user_id, application_id) is not None
 
 
 async def create_invitation_notification(
-    db: Session,
+    db: AsyncSession,
     invitation: Invitation,
     inviter: User,
     application: Application,
@@ -113,19 +118,18 @@ async def create_invitation_notification(
     """
     Create a notification and send WebSocket message for a new invitation.
     """
-    # Create notification in database
-    notification = Notification(
+    # Create notification with WebSocket broadcast
+    notification_data = NotificationCreate(
         user_id=invitation.invitee_id,
-        type=NotificationType.APPLICATION_INVITE.value,
+        type=NotificationType.APPLICATION_INVITE,
         title="Application Invitation",
         message=f"{inviter.display_name or inviter.email} invited you to join '{application.name}' as {invitation.role}",
-        entity_type=EntityType.INVITATION.value,
+        entity_type=EntityType.INVITATION,
         entity_id=invitation.id,
     )
-    db.add(notification)
-    db.commit()
+    await NotificationService.create_notification(db, notification_data)
 
-    # Send WebSocket notification
+    # Send WebSocket notification (for invitation-specific UI updates)
     await handle_invitation_notification(
         user_id=invitation.invitee_id,
         invitation_data={
@@ -157,7 +161,7 @@ async def create_invitation_notification(
 )
 async def list_my_invitations(
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(50, ge=1, le=100, description="Maximum number of records to return"),
     status_filter: Optional[InvitationStatus] = Query(
@@ -177,21 +181,20 @@ async def list_my_invitations(
 
     Returns invitations ordered by creation date (newest first).
     """
-    query = db.query(Invitation).filter(
-        Invitation.invitee_id == current_user.id,
-    )
+    query = select(Invitation).where(Invitation.invitee_id == current_user.id)
 
     # Apply status filter - default to pending if not specified
     if status_filter:
-        query = query.filter(Invitation.status == status_filter.value)
+        query = query.where(Invitation.status == status_filter.value)
     else:
-        query = query.filter(Invitation.status == InvitationStatus.PENDING.value)
+        query = query.where(Invitation.status == InvitationStatus.PENDING.value)
 
     # Order by newest first
     query = query.order_by(Invitation.created_at.desc())
 
     # Apply pagination
-    invitations = query.offset(skip).limit(limit).all()
+    result = await db.execute(query.offset(skip).limit(limit))
+    invitations = list(result.scalars().all())
 
     return invitations
 
@@ -208,7 +211,7 @@ async def list_my_invitations(
 )
 async def list_sent_invitations(
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(50, ge=1, le=100, description="Maximum number of records to return"),
     status_filter: Optional[InvitationStatus] = Query(
@@ -226,19 +229,18 @@ async def list_sent_invitations(
 
     Returns invitations ordered by creation date (newest first).
     """
-    query = db.query(Invitation).filter(
-        Invitation.inviter_id == current_user.id,
-    )
+    query = select(Invitation).where(Invitation.inviter_id == current_user.id)
 
     # Apply status filter if provided
     if status_filter:
-        query = query.filter(Invitation.status == status_filter.value)
+        query = query.where(Invitation.status == status_filter.value)
 
     # Order by newest first
     query = query.order_by(Invitation.created_at.desc())
 
     # Apply pagination
-    invitations = query.offset(skip).limit(limit).all()
+    result = await db.execute(query.offset(skip).limit(limit))
+    invitations = list(result.scalars().all())
 
     return invitations
 
@@ -255,7 +257,7 @@ async def list_sent_invitations(
 )
 async def get_invitation_count(
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
     """
     Get pending invitation count for the authenticated user.
@@ -263,10 +265,13 @@ async def get_invitation_count(
     Returns:
     - count: Number of pending invitations
     """
-    count = db.query(func.count(Invitation.id)).filter(
-        Invitation.invitee_id == current_user.id,
-        Invitation.status == InvitationStatus.PENDING.value,
-    ).scalar() or 0
+    result = await db.execute(
+        select(func.count(Invitation.id)).where(
+            Invitation.invitee_id == current_user.id,
+            Invitation.status == InvitationStatus.PENDING.value,
+        )
+    )
+    count = result.scalar() or 0
 
     return {"count": count}
 
@@ -290,7 +295,7 @@ async def get_invitation_count(
 async def get_invitation(
     invitation_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> InvitationWithDetails:
     """
     Get a specific invitation by its ID.
@@ -299,13 +304,16 @@ async def get_invitation(
     """
     # Include auth check in query to prevent information leakage
     # (attacker can't discover if invitation IDs exist by comparing error responses)
-    invitation = db.query(Invitation).filter(
-        Invitation.id == invitation_id,
-        or_(
-            Invitation.inviter_id == current_user.id,
-            Invitation.invitee_id == current_user.id,
-        ),
-    ).first()
+    result = await db.execute(
+        select(Invitation).where(
+            Invitation.id == invitation_id,
+            or_(
+                Invitation.inviter_id == current_user.id,
+                Invitation.invitee_id == current_user.id,
+            ),
+        )
+    )
+    invitation = result.scalar_one_or_none()
 
     if not invitation:
         raise HTTPException(
@@ -332,7 +340,7 @@ async def get_invitation(
 async def accept_invitation(
     invitation_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> InvitationResponse:
     """
     Accept a pending invitation.
@@ -346,14 +354,22 @@ async def accept_invitation(
     """
     # Use SELECT FOR UPDATE to prevent race conditions
     # Filter by invitee_id in the same query for efficiency and security
-    invitation = db.query(Invitation).filter(
-        Invitation.id == invitation_id,
-        Invitation.invitee_id == current_user.id,  # Auth check in query
-    ).with_for_update().first()
+    # Use lazyload('*') - FOR UPDATE can't be used with outer joins from eager loading
+    result = await db.execute(
+        select(Invitation)
+        .where(
+            Invitation.id == invitation_id,
+            Invitation.invitee_id == current_user.id,  # Auth check in query
+        )
+        .options(lazyload('*'))
+        .with_for_update()
+    )
+    invitation = result.scalar_one_or_none()
 
     if not invitation:
         # Check if invitation exists at all (for better error message)
-        exists = db.query(Invitation.id).filter(Invitation.id == invitation_id).first()
+        result = await db.execute(select(Invitation.id).where(Invitation.id == invitation_id))
+        exists = result.scalar_one_or_none()
         if not exists:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -372,16 +388,29 @@ async def accept_invitation(
         )
 
     # Check if user is already a member (with lock to prevent race)
-    existing_member = db.query(ApplicationMember).filter(
-        ApplicationMember.application_id == invitation.application_id,
-        ApplicationMember.user_id == current_user.id,
-    ).with_for_update().first()
+    # Use lazyload('*') - FOR UPDATE can't be used with outer joins from eager loading
+    result = await db.execute(
+        select(ApplicationMember)
+        .where(
+            ApplicationMember.application_id == invitation.application_id,
+            ApplicationMember.user_id == current_user.id,
+        )
+        .options(lazyload('*'))
+        .with_for_update()
+    )
+    existing_member = result.scalar_one_or_none()
 
     if existing_member:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="You are already a member of this application.",
         )
+
+    # Fetch application name separately (can't eager load with FOR UPDATE)
+    app_result = await db.execute(
+        select(Application.name).where(Application.id == invitation.application_id)
+    )
+    app_name = app_result.scalar_one()
 
     # Update invitation status
     invitation.status = InvitationStatus.ACCEPTED.value
@@ -393,23 +422,21 @@ async def accept_invitation(
         user_id=current_user.id,
         role=invitation.role,
         invitation_id=invitation.id,
-        is_manager=False,
     )
     db.add(member)
+    await db.commit()
+    await db.refresh(invitation)
 
-    # Create notification for inviter
-    notification = Notification(
+    # Create notification for inviter (with WebSocket broadcast)
+    notification_data = NotificationCreate(
         user_id=invitation.inviter_id,
-        type=NotificationType.INVITATION_ACCEPTED.value,
+        type=NotificationType.INVITATION_ACCEPTED,
         title="Invitation Accepted",
-        message=f"{current_user.display_name or current_user.email} accepted your invitation to join '{invitation.application.name}'",
-        entity_type=EntityType.INVITATION.value,
+        message=f"{current_user.display_name or current_user.email} accepted your invitation to join '{app_name}'",
+        entity_type=EntityType.INVITATION,
         entity_id=invitation.id,
     )
-    db.add(notification)
-
-    db.commit()
-    db.refresh(invitation)
+    await NotificationService.create_notification(db, notification_data)
 
     # Send WebSocket notifications
     await handle_invitation_response(
@@ -431,9 +458,8 @@ async def accept_invitation(
             "user_id": str(current_user.id),
             "user_name": current_user.display_name or current_user.email,
             "user_email": current_user.email,
-            "application_name": invitation.application.name,
+            "application_name": app_name,
             "role": invitation.role,
-            "is_manager": False,
             "added_by": str(invitation.inviter_id),
         },
     )
@@ -457,7 +483,7 @@ async def accept_invitation(
 async def reject_invitation(
     invitation_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> InvitationResponse:
     """
     Reject a pending invitation.
@@ -469,14 +495,22 @@ async def reject_invitation(
     Uses pessimistic locking to prevent race conditions.
     """
     # Use SELECT FOR UPDATE with auth check in query
-    invitation = db.query(Invitation).filter(
-        Invitation.id == invitation_id,
-        Invitation.invitee_id == current_user.id,  # Auth check in query
-    ).with_for_update().first()
+    # Use lazyload('*') - FOR UPDATE can't be used with outer joins from eager loading
+    result = await db.execute(
+        select(Invitation)
+        .where(
+            Invitation.id == invitation_id,
+            Invitation.invitee_id == current_user.id,  # Auth check in query
+        )
+        .options(lazyload('*'))
+        .with_for_update()
+    )
+    invitation = result.scalar_one_or_none()
 
     if not invitation:
         # Check if invitation exists at all (for better error message)
-        exists = db.query(Invitation.id).filter(Invitation.id == invitation_id).first()
+        result = await db.execute(select(Invitation.id).where(Invitation.id == invitation_id))
+        exists = result.scalar_one_or_none()
         if not exists:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -494,23 +528,28 @@ async def reject_invitation(
             detail=f"Invitation is not pending. Current status: {invitation.status}",
         )
 
+    # Fetch application name separately (can't eager load with FOR UPDATE)
+    app_result = await db.execute(
+        select(Application.name).where(Application.id == invitation.application_id)
+    )
+    app_name = app_result.scalar_one()
+
     # Update invitation status
     invitation.status = InvitationStatus.REJECTED.value
     invitation.responded_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(invitation)
 
-    # Create notification for inviter
-    notification = Notification(
+    # Create notification for inviter (with WebSocket broadcast)
+    notification_data = NotificationCreate(
         user_id=invitation.inviter_id,
-        type=NotificationType.INVITATION_REJECTED.value,
+        type=NotificationType.INVITATION_REJECTED,
         title="Invitation Rejected",
-        message=f"{current_user.display_name or current_user.email} declined your invitation to join '{invitation.application.name}'",
-        entity_type=EntityType.INVITATION.value,
+        message=f"{current_user.display_name or current_user.email} declined your invitation to join '{app_name}'",
+        entity_type=EntityType.INVITATION,
         entity_id=invitation.id,
     )
-    db.add(notification)
-
-    db.commit()
-    db.refresh(invitation)
+    await NotificationService.create_notification(db, notification_data)
 
     # Send WebSocket notification to inviter
     await handle_invitation_response(
@@ -545,7 +584,7 @@ async def reject_invitation(
 async def cancel_invitation(
     invitation_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> None:
     """
     Cancel a pending invitation.
@@ -555,10 +594,17 @@ async def cancel_invitation(
     """
     # Use pessimistic locking and include auth check in query to prevent
     # race conditions and information leakage
-    invitation = db.query(Invitation).filter(
-        Invitation.id == invitation_id,
-        Invitation.inviter_id == current_user.id,  # Auth check in query
-    ).with_for_update().first()
+    # Use lazyload('*') - FOR UPDATE can't be used with outer joins from eager loading
+    result = await db.execute(
+        select(Invitation)
+        .where(
+            Invitation.id == invitation_id,
+            Invitation.inviter_id == current_user.id,  # Auth check in query
+        )
+        .options(lazyload('*'))
+        .with_for_update()
+    )
+    invitation = result.scalar_one_or_none()
 
     if not invitation:
         raise HTTPException(
@@ -581,7 +627,7 @@ async def cancel_invitation(
     invitation.status = InvitationStatus.CANCELLED.value
     invitation.responded_at = datetime.utcnow()
 
-    db.commit()
+    await db.commit()
 
     # Notify the invitee that the invitation was cancelled
     await handle_invitation_response(
@@ -622,7 +668,7 @@ async def create_invitation(
     application_id: UUID,
     invitation_data: InvitationCreate,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> InvitationResponse:
     """
     Create an invitation to invite a user to an application.
@@ -641,9 +687,8 @@ async def create_invitation(
     - Cannot invite someone who has a pending invitation
     """
     # Verify application exists
-    application = db.query(Application).filter(
-        Application.id == application_id,
-    ).first()
+    result = await db.execute(select(Application).where(Application.id == application_id))
+    application = result.scalar_one_or_none()
 
     if not application:
         raise HTTPException(
@@ -652,7 +697,7 @@ async def create_invitation(
         )
 
     # Get current user's role (pass application to avoid re-fetching)
-    current_user_role = get_user_application_role(db, current_user.id, application_id, application)
+    current_user_role = await get_user_application_role(db, current_user.id, application_id, application)
 
     if current_user_role is None:
         raise HTTPException(
@@ -683,9 +728,8 @@ async def create_invitation(
         )
 
     # Verify invitee exists
-    invitee = db.query(User).filter(
-        User.id == invitation_data.invitee_id,
-    ).first()
+    result = await db.execute(select(User).where(User.id == invitation_data.invitee_id))
+    invitee = result.scalar_one_or_none()
 
     if not invitee:
         raise HTTPException(
@@ -694,18 +738,21 @@ async def create_invitation(
         )
 
     # Check if invitee is already a member
-    if is_application_member(db, invitation_data.invitee_id, application_id):
+    if await is_application_member(db, invitation_data.invitee_id, application_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="This user is already a member of the application.",
         )
 
     # Check for existing pending invitation
-    existing_invitation = db.query(Invitation).filter(
-        Invitation.application_id == application_id,
-        Invitation.invitee_id == invitation_data.invitee_id,
-        Invitation.status == InvitationStatus.PENDING.value,
-    ).first()
+    result = await db.execute(
+        select(Invitation).where(
+            Invitation.application_id == application_id,
+            Invitation.invitee_id == invitation_data.invitee_id,
+            Invitation.status == InvitationStatus.PENDING.value,
+        )
+    )
+    existing_invitation = result.scalar_one_or_none()
 
     if existing_invitation:
         raise HTTPException(
@@ -722,8 +769,8 @@ async def create_invitation(
         status=InvitationStatus.PENDING.value,
     )
     db.add(invitation)
-    db.commit()
-    db.refresh(invitation)
+    await db.commit()
+    await db.refresh(invitation)
 
     # Create notification and send WebSocket message
     await create_invitation_notification(
@@ -751,7 +798,7 @@ async def create_invitation(
 async def list_application_invitations(
     application_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(50, ge=1, le=100, description="Maximum number of records to return"),
     status_filter: Optional[InvitationStatus] = Query(
@@ -772,9 +819,8 @@ async def list_application_invitations(
     Returns invitations ordered by creation date (newest first).
     """
     # Verify application exists
-    application = db.query(Application).filter(
-        Application.id == application_id,
-    ).first()
+    result = await db.execute(select(Application).where(Application.id == application_id))
+    application = result.scalar_one_or_none()
 
     if not application:
         raise HTTPException(
@@ -783,24 +829,23 @@ async def list_application_invitations(
         )
 
     # Verify current user is owner
-    if not is_application_owner(db, current_user.id, application_id):
+    if not await is_application_owner(db, current_user.id, application_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied. Only application owners can view all invitations.",
         )
 
-    query = db.query(Invitation).filter(
-        Invitation.application_id == application_id,
-    )
+    query = select(Invitation).where(Invitation.application_id == application_id)
 
     # Apply status filter if provided
     if status_filter:
-        query = query.filter(Invitation.status == status_filter.value)
+        query = query.where(Invitation.status == status_filter.value)
 
     # Order by newest first
     query = query.order_by(Invitation.created_at.desc())
 
     # Apply pagination
-    invitations = query.offset(skip).limit(limit).all()
+    result = await db.execute(query.offset(skip).limit(limit))
+    invitations = list(result.scalars().all())
 
     return invitations

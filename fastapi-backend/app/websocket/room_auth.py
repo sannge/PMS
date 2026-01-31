@@ -2,26 +2,23 @@
 
 Validates that users have access to rooms they attempt to join.
 
-IMPORTANT: Database operations are run in a thread pool to avoid blocking
-the asyncio event loop, which would cause WebSocket ping/pong timeouts.
-
 Features:
+- Native async database operations (no thread pool needed)
 - TTL-based caching to prevent DB overload during reconnection storms
-- Thread pool for non-blocking DB operations
 - Hierarchical access checks (application -> project -> task)
 """
 
 import asyncio
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor
-from functools import partial
 from typing import Optional, Dict, Tuple
 from uuid import UUID
 
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..database import SessionLocal
+from ..database import async_session_maker
+from ..models.application import Application
 from ..models.application_member import ApplicationMember
 from ..models.project import Project
 from ..models.project_member import ProjectMember
@@ -29,10 +26,6 @@ from ..models.task import Task
 from ..models.note import Note
 
 logger = logging.getLogger(__name__)
-
-# Thread pool for running blocking DB operations without blocking the event loop
-# Increased from 4 to 20 to handle concurrent room auth checks at scale (5000+ users)
-_db_executor = ThreadPoolExecutor(max_workers=20, thread_name_prefix="room_auth_db")
 
 # ============================================================================
 # Auth Result Caching
@@ -130,13 +123,9 @@ async def check_room_access(user_id: UUID, room_id: str) -> bool:
     if cached_result is not None:
         return cached_result
 
-    # Run blocking DB operations in thread pool to avoid blocking event loop
-    loop = asyncio.get_event_loop()
+    # Perform async DB check
     try:
-        result = await loop.run_in_executor(
-            _db_executor,
-            partial(_check_room_access_sync, user_id, room_type, resource_id)
-        )
+        result = await _check_room_access_async(user_id, room_type, resource_id)
         # Cache the result
         await _set_cached_auth(user_id, room_id, result)
         return result
@@ -145,84 +134,87 @@ async def check_room_access(user_id: UUID, room_id: str) -> bool:
         return False
 
 
-def _check_room_access_sync(user_id: UUID, room_type: str, resource_id: UUID) -> bool:
+async def _check_room_access_async(user_id: UUID, room_type: str, resource_id: UUID) -> bool:
     """
-    Synchronous room access check - runs in thread pool.
-
-    This function performs blocking database operations and should only
-    be called via run_in_executor to avoid blocking the event loop.
+    Async room access check using native async SQLAlchemy.
     """
-    db: Optional[Session] = None
-    try:
-        db = SessionLocal()
-
+    async with async_session_maker() as db:
         if room_type == "application":
-            return _check_application_access(db, user_id, resource_id)
+            return await _check_application_access(db, user_id, resource_id)
         elif room_type == "project":
-            return _check_project_access(db, user_id, resource_id)
+            return await _check_project_access(db, user_id, resource_id)
         elif room_type == "task":
-            return _check_task_access(db, user_id, resource_id)
+            return await _check_task_access(db, user_id, resource_id)
         elif room_type == "note":
-            return _check_note_access(db, user_id, resource_id)
+            return await _check_note_access(db, user_id, resource_id)
         else:
             logger.warning(f"[Room Auth] DENIED - unknown room type: {room_type}")
             return False
 
-    except Exception as e:
-        logger.error(f"[Room Auth] DB error: {e}")
-        return False
-    finally:
-        if db:
-            db.close()
 
-
-def _check_application_access(db: Session, user_id: UUID, application_id: UUID) -> bool:
+async def _check_application_access(db: AsyncSession, user_id: UUID, application_id: UUID) -> bool:
     """Check if user is a member of the application or the owner."""
-    from ..models.application import Application
-
     # First check if user is the application owner (for backwards compatibility
     # with applications created before ApplicationMember records were created for owners)
-    application = db.query(Application).filter(Application.id == application_id).first()
+    result = await db.execute(
+        select(Application).where(Application.id == application_id)
+    )
+    application = result.scalar_one_or_none()
     if application and application.owner_id == user_id:
         return True
 
     # Then check ApplicationMember table
-    member = db.query(ApplicationMember).filter(
-        ApplicationMember.application_id == application_id,
-        ApplicationMember.user_id == user_id,
-    ).first()
+    result = await db.execute(
+        select(ApplicationMember).where(
+            ApplicationMember.application_id == application_id,
+            ApplicationMember.user_id == user_id,
+        )
+    )
+    member = result.scalar_one_or_none()
     return member is not None
 
 
-def _check_project_access(db: Session, user_id: UUID, project_id: UUID) -> bool:
+async def _check_project_access(db: AsyncSession, user_id: UUID, project_id: UUID) -> bool:
     """Check if user has access to the project via application or project membership."""
-    project = db.query(Project).filter(Project.id == project_id).first()
+    result = await db.execute(
+        select(Project).where(Project.id == project_id)
+    )
+    project = result.scalar_one_or_none()
     if not project:
         return False
 
     # Check if user is an application member (has access to all projects)
-    if _check_application_access(db, user_id, project.application_id):
+    if await _check_application_access(db, user_id, project.application_id):
         return True
 
     # Check if user is a project member (has access to this specific project)
-    project_member = db.query(ProjectMember).filter(
-        ProjectMember.project_id == project_id,
-        ProjectMember.user_id == user_id,
-    ).first()
+    result = await db.execute(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == user_id,
+        )
+    )
+    project_member = result.scalar_one_or_none()
     return project_member is not None
 
 
-def _check_task_access(db: Session, user_id: UUID, task_id: UUID) -> bool:
+async def _check_task_access(db: AsyncSession, user_id: UUID, task_id: UUID) -> bool:
     """Check if user has access to the task via project/application membership."""
-    task = db.query(Task).filter(Task.id == task_id).first()
+    result = await db.execute(
+        select(Task).where(Task.id == task_id)
+    )
+    task = result.scalar_one_or_none()
     if not task:
         return False
-    return _check_project_access(db, user_id, task.project_id)
+    return await _check_project_access(db, user_id, task.project_id)
 
 
-def _check_note_access(db: Session, user_id: UUID, note_id: UUID) -> bool:
+async def _check_note_access(db: AsyncSession, user_id: UUID, note_id: UUID) -> bool:
     """Check if user has access to the note via application membership."""
-    note = db.query(Note).filter(Note.id == note_id).first()
+    result = await db.execute(
+        select(Note).where(Note.id == note_id)
+    )
+    note = result.scalar_one_or_none()
     if not note:
         return False
-    return _check_application_access(db, user_id, note.application_id)
+    return await _check_application_access(db, user_id, note.application_id)

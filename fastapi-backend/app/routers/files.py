@@ -9,7 +9,9 @@ from typing import Annotated, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from ..database import get_db
 from ..models.application_member import ApplicationMember
@@ -44,11 +46,12 @@ MAX_FILE_SIZE = 100 * 1024 * 1024
 # ============================================================================
 
 
-def check_task_attachment_permission(
+async def check_task_attachment_permission(
     task_id: UUID,
     current_user: User,
-    db: Session,
-) -> bool:
+    db: AsyncSession,
+    check_done: bool = False,
+) -> tuple[bool, str | None]:
     """
     Check if user has permission to manage attachments on a task.
 
@@ -58,56 +61,72 @@ def check_task_attachment_permission(
     - Project Admin: Always allowed
     - Project Member: Always allowed
     - Others: Not allowed
+    - Done tasks: Not allowed (if check_done=True)
 
     Args:
         task_id: The task ID to check access for
         current_user: The authenticated user
         db: Database session
+        check_done: If True, also check if task is done and block
 
     Returns:
-        bool: True if user has permission
+        tuple[bool, str | None]: (has_permission, error_reason)
     """
     # Get task with project and application
-    task = db.query(Task).options(
-        joinedload(Task.project).joinedload(Project.application)
-    ).filter(Task.id == task_id).first()
+    result = await db.execute(
+        select(Task)
+        .options(selectinload(Task.project).selectinload(Project.application))
+        .where(Task.id == task_id)
+    )
+    task = result.scalar_one_or_none()
 
     if not task:
-        return False
+        return False, "Task not found"
+
+    # Check if task is done - block attachment modifications
+    if check_done and task.status == "done":
+        return False, "Cannot modify attachments on a completed task. Reopen the task first."
 
     application_id = task.project.application_id
 
     # Check if user is the application owner
     if task.project.application.owner_id == current_user.id:
-        return True
+        return True, None
 
     # Check if user is an application member (owner, editor, or viewer)
     # All application members can upload attachments (e.g., for comments)
-    app_member = db.query(ApplicationMember).filter(
-        ApplicationMember.application_id == application_id,
-        ApplicationMember.user_id == current_user.id,
-    ).first()
+    result = await db.execute(
+        select(ApplicationMember).where(
+            ApplicationMember.application_id == application_id,
+            ApplicationMember.user_id == current_user.id,
+        )
+    )
+    app_member = result.scalar_one_or_none()
 
     if app_member:
-        return True
+        return True, None
 
     # Check if user is a project member (admin or member)
-    project_member = db.query(ProjectMember).filter(
-        ProjectMember.project_id == task.project_id,
-        ProjectMember.user_id == current_user.id,
-    ).first()
+    result = await db.execute(
+        select(ProjectMember).where(
+            ProjectMember.project_id == task.project_id,
+            ProjectMember.user_id == current_user.id,
+        )
+    )
+    project_member = result.scalar_one_or_none()
 
     if project_member:
-        return True
+        return True, None
 
-    return False
+    return False, "Access denied. You must be the application owner or a project member to manage attachments."
 
 
-def verify_task_attachment_access(
+async def verify_task_attachment_access(
     task_id: UUID,
     current_user: User,
-    db: Session,
+    db: AsyncSession,
     action: str = "manage",
+    check_done: bool = False,
 ) -> None:
     """
     Verify that the user has permission to manage attachments on a task.
@@ -118,14 +137,25 @@ def verify_task_attachment_access(
         current_user: The authenticated user
         db: Database session
         action: Description of the action for error message
+        check_done: If True, also check if task is done and block
 
     Raises:
         HTTPException: If user doesn't have permission
     """
-    if not check_task_attachment_permission(task_id, current_user, db):
+    has_permission, error_reason = await check_task_attachment_permission(
+        task_id, current_user, db, check_done=check_done
+    )
+
+    if not has_permission:
+        # Determine appropriate status code based on error
+        if error_reason and "completed task" in error_reason:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=error_reason,
+            )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Access denied. You must be the application owner or a project member to {action} attachments.",
+            detail=error_reason or f"Access denied. You must be the application owner or a project member to {action} attachments.",
         )
 
 
@@ -144,7 +174,7 @@ def verify_task_attachment_access(
 )
 async def upload_file(
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     minio: MinIOService = Depends(get_minio_service),
     file: UploadFile = File(..., description="The file to upload"),
     entity_type: Optional[EntityType] = Query(
@@ -213,21 +243,27 @@ async def upload_file(
         resolved_entity_type = EntityType.TASK.value
         resolved_entity_id = task_id
         # Verify task exists
-        task = db.query(Task).filter(Task.id == task_id).first()
+        result = await db.execute(
+            select(Task).where(Task.id == task_id)
+        )
+        task = result.scalar_one_or_none()
         if not task:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Task with ID {task_id} not found",
             )
         # Check upload permission (app owner or project member)
-        verify_task_attachment_access(task_id, current_user, db, action="upload")
+        await verify_task_attachment_access(task_id, current_user, db, action="upload")
 
     # Handle note_id shortcut
     if note_id and not resolved_entity_type:
         resolved_entity_type = EntityType.NOTE.value
         resolved_entity_id = note_id
         # Verify note exists and user has access
-        note = db.query(Note).filter(Note.id == note_id).first()
+        result = await db.execute(
+            select(Note).where(Note.id == note_id)
+        )
+        note = result.scalar_one_or_none()
         if not note:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -239,7 +275,10 @@ async def upload_file(
         resolved_entity_type = EntityType.COMMENT.value
         resolved_entity_id = comment_id
         # Verify comment exists
-        comment = db.query(Comment).filter(Comment.id == comment_id).first()
+        result = await db.execute(
+            select(Comment).where(Comment.id == comment_id)
+        )
+        comment = result.scalar_one_or_none()
         if not comment:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -248,14 +287,17 @@ async def upload_file(
 
     # Handle explicit entity_type=task with entity_id
     if entity_type == EntityType.TASK and entity_id:
-        task = db.query(Task).filter(Task.id == entity_id).first()
+        result = await db.execute(
+            select(Task).where(Task.id == entity_id)
+        )
+        task = result.scalar_one_or_none()
         if not task:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Task with ID {entity_id} not found",
             )
         # Check upload permission (app owner or project member)
-        verify_task_attachment_access(entity_id, current_user, db, action="upload")
+        await verify_task_attachment_access(entity_id, current_user, db, action="upload")
 
     # Determine bucket based on content type
     bucket = minio.get_bucket_for_content_type(content_type)
@@ -299,8 +341,8 @@ async def upload_file(
     )
 
     db.add(attachment)
-    db.commit()
-    db.refresh(attachment)
+    await db.commit()
+    await db.refresh(attachment)
 
     # Broadcast attachment upload via WebSocket
     if resolved_entity_type and resolved_entity_id:
@@ -343,7 +385,7 @@ async def upload_file(
 )
 async def list_attachments(
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=500, description="Maximum number of records to return"),
     entity_type: Optional[EntityType] = Query(None, description="Filter by entity type"),
@@ -364,28 +406,31 @@ async def list_attachments(
     Returns attachments uploaded by the current user or attached to their entities.
     """
     # Build query
-    query = db.query(Attachment).filter(
+    query = select(Attachment).where(
         Attachment.uploaded_by == current_user.id,
     )
 
     # Apply filters
     if entity_type:
-        query = query.filter(Attachment.entity_type == entity_type.value)
+        query = query.where(Attachment.entity_type == entity_type.value)
 
     if entity_id:
-        query = query.filter(Attachment.entity_id == entity_id)
+        query = query.where(Attachment.entity_id == entity_id)
 
     if task_id:
-        query = query.filter(Attachment.task_id == task_id)
+        query = query.where(Attachment.task_id == task_id)
 
     if note_id:
-        query = query.filter(Attachment.note_id == note_id)
+        query = query.where(Attachment.note_id == note_id)
 
     # Order by most recently created
     query = query.order_by(Attachment.created_at.desc())
 
     # Apply pagination
-    attachments = query.offset(skip).limit(limit).all()
+    query = query.offset(skip).limit(limit)
+
+    result = await db.execute(query)
+    attachments = result.scalars().all()
 
     return attachments
 
@@ -429,7 +474,7 @@ async def test_endpoint(
 async def get_file(
     attachment_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     minio: MinIOService = Depends(get_minio_service),
 ) -> FileDownloadResponse:
     """
@@ -439,9 +484,10 @@ async def get_file(
     The download URL is valid for 1 hour.
     """
     # Get the attachment
-    attachment = db.query(Attachment).filter(
-        Attachment.id == attachment_id,
-    ).first()
+    result = await db.execute(
+        select(Attachment).where(Attachment.id == attachment_id)
+    )
+    attachment = result.scalar_one_or_none()
 
     if not attachment:
         raise HTTPException(
@@ -491,7 +537,7 @@ async def get_file(
 async def get_attachment_info(
     attachment_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> AttachmentResponse:
     """
     Get attachment metadata without generating a download URL.
@@ -499,9 +545,10 @@ async def get_attachment_info(
     Useful for checking attachment details without the overhead of generating a presigned URL.
     """
     # Get the attachment
-    attachment = db.query(Attachment).filter(
-        Attachment.id == attachment_id,
-    ).first()
+    result = await db.execute(
+        select(Attachment).where(Attachment.id == attachment_id)
+    )
+    attachment = result.scalar_one_or_none()
 
     if not attachment:
         raise HTTPException(
@@ -532,7 +579,7 @@ async def update_attachment(
     attachment_id: UUID,
     attachment_data: AttachmentUpdate,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> AttachmentResponse:
     """
     Update attachment metadata.
@@ -543,9 +590,10 @@ async def update_attachment(
     Note: This only updates metadata, not the actual file in storage.
     """
     # Get the attachment
-    attachment = db.query(Attachment).filter(
-        Attachment.id == attachment_id,
-    ).first()
+    result = await db.execute(
+        select(Attachment).where(Attachment.id == attachment_id)
+    )
+    attachment = result.scalar_one_or_none()
 
     if not attachment:
         raise HTTPException(
@@ -572,8 +620,8 @@ async def update_attachment(
         setattr(attachment, field, value)
 
     # Save changes
-    db.commit()
-    db.refresh(attachment)
+    await db.commit()
+    await db.refresh(attachment)
 
     return attachment
 
@@ -593,7 +641,7 @@ async def update_attachment(
 async def delete_file(
     attachment_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     minio: MinIOService = Depends(get_minio_service),
 ) -> None:
     """
@@ -610,9 +658,10 @@ async def delete_file(
     This action is irreversible.
     """
     # Get the attachment
-    attachment = db.query(Attachment).filter(
-        Attachment.id == attachment_id,
-    ).first()
+    result = await db.execute(
+        select(Attachment).where(Attachment.id == attachment_id)
+    )
+    attachment = result.scalar_one_or_none()
 
     if not attachment:
         raise HTTPException(
@@ -620,18 +669,32 @@ async def delete_file(
             detail=f"Attachment with ID {attachment_id} not found",
         )
 
-    # Check access - must be application owner or project member
+    # Check access - must be application owner, project member, or uploader
     can_delete = False
+    error_reason = None
 
     # For task attachments, use the task permission helper
     if attachment.task_id:
-        can_delete = check_task_attachment_permission(attachment.task_id, current_user, db)
+        can_delete, error_reason = await check_task_attachment_permission(
+            attachment.task_id, current_user, db, check_done=False
+        )
+
+    # For comment attachments, check if user is the uploader
+    # Note: Comment attachments typically also have task_id set, so task permission
+    # is already checked above. This check allows the uploader to delete their own
+    # attachments even if they don't have broader task permissions.
+    if not can_delete and attachment.comment_id:
+        if attachment.uploaded_by == current_user.id:
+            can_delete = True
 
     # For note attachments, check if user is the application owner
     if not can_delete and attachment.note_id:
-        note = db.query(Note).options(
-            joinedload(Note.application)
-        ).filter(Note.id == attachment.note_id).first()
+        result = await db.execute(
+            select(Note)
+            .options(selectinload(Note.application))
+            .where(Note.id == attachment.note_id)
+        )
+        note = result.scalar_one_or_none()
 
         if note and note.application.owner_id == current_user.id:
             can_delete = True
@@ -639,7 +702,7 @@ async def delete_file(
     if not can_delete:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. You must be the application owner or a project member to delete attachments.",
+            detail=error_reason or "Access denied. You must be the application owner or a project member to delete attachments.",
         )
 
     # Capture entity info for WebSocket broadcast before deletion
@@ -660,8 +723,8 @@ async def delete_file(
             pass
 
     # Delete the database record
-    db.delete(attachment)
-    db.commit()
+    await db.delete(attachment)
+    await db.commit()
 
     # Broadcast attachment deletion via WebSocket
     if entity_type and entity_id:
@@ -695,7 +758,7 @@ async def delete_file(
 async def get_download_url(
     attachment_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     minio: MinIOService = Depends(get_minio_service),
 ) -> dict:
     """
@@ -705,9 +768,10 @@ async def get_download_url(
     The new URL is valid for 1 hour.
     """
     # Get the attachment
-    attachment = db.query(Attachment).filter(
-        Attachment.id == attachment_id,
-    ).first()
+    result = await db.execute(
+        select(Attachment).where(Attachment.id == attachment_id)
+    )
+    attachment = result.scalar_one_or_none()
 
     if not attachment:
         raise HTTPException(
@@ -756,7 +820,7 @@ async def get_download_url(
 async def get_download_urls_batch(
     request: BatchDownloadUrlsRequest,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     minio: MinIOService = Depends(get_minio_service),
 ) -> dict[str, str]:
     """
@@ -771,11 +835,12 @@ async def get_download_urls_batch(
         return {}
 
     # Get all attachments in one query
-    attachments = db.query(Attachment).filter(
-        Attachment.id.in_(request.ids),
-    ).all()
+    result = await db.execute(
+        select(Attachment).where(Attachment.id.in_(request.ids))
+    )
+    attachments = result.scalars().all()
 
-    result: dict[str, str] = {}
+    result_dict: dict[str, str] = {}
     for attachment in attachments:
         if attachment.minio_bucket and attachment.minio_key:
             try:
@@ -783,12 +848,12 @@ async def get_download_urls_batch(
                     bucket=attachment.minio_bucket,
                     object_name=attachment.minio_key,
                 )
-                result[str(attachment.id)] = download_url
+                result_dict[str(attachment.id)] = download_url
             except MinIOServiceError:
                 # Skip attachments that fail to generate URLs
                 pass
 
-    return result
+    return result_dict
 
 
 @router.get(
@@ -805,7 +870,7 @@ async def get_entity_attachments(
     entity_type: EntityType,
     entity_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=500, description="Maximum number of records to return"),
 ) -> List[AttachmentResponse]:
@@ -820,15 +885,18 @@ async def get_entity_attachments(
     Returns attachments attached to the specified entity.
     """
     # Build query
-    query = db.query(Attachment).filter(
-        Attachment.entity_type == entity_type.value,
-        Attachment.entity_id == entity_id,
+    query = (
+        select(Attachment)
+        .where(
+            Attachment.entity_type == entity_type.value,
+            Attachment.entity_id == entity_id,
+        )
+        .order_by(Attachment.created_at.desc())
+        .offset(skip)
+        .limit(limit)
     )
 
-    # Order by most recently created
-    query = query.order_by(Attachment.created_at.desc())
-
-    # Apply pagination
-    attachments = query.offset(skip).limit(limit).all()
+    result = await db.execute(query)
+    attachments = result.scalars().all()
 
     return attachments

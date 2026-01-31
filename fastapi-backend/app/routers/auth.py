@@ -8,7 +8,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..models.user import User
@@ -37,7 +37,7 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 )
 async def register(
     user_data: UserCreate,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> UserResponse:
     """
     Register a new user.
@@ -49,7 +49,7 @@ async def register(
     Returns the created user data (excluding password).
     """
     # create_user handles duplicate email check and raises HTTPException
-    user = create_user(db, user_data)
+    user = await create_user(db, user_data)
     return user
 
 
@@ -65,7 +65,7 @@ async def register(
 )
 async def login(
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> Token:
     """
     Login with email and password.
@@ -76,7 +76,7 @@ async def login(
 
     Returns JWT access token for authenticating subsequent requests.
     """
-    user = authenticate_user(db, form_data.username, form_data.password)
+    user = await authenticate_user(db, form_data.username, form_data.password)
 
     if not user:
         raise HTTPException(

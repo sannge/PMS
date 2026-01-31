@@ -12,7 +12,9 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import select, update, delete
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from ..models.attachment import Attachment
 from ..models.comment import Comment
@@ -97,12 +99,6 @@ def extract_plain_text_from_tiptap(content_json: Dict[str, Any]) -> str:
             text_parts.append(f"@{label}")
             return
 
-        # Handle paragraph breaks
-        if node_type == "paragraph":
-            # Add newline before paragraph content (except first)
-            if text_parts and not text_parts[-1].endswith("\n"):
-                pass  # Don't add extra newlines
-
         # Traverse child content
         content = node.get("content", [])
         if isinstance(content, list):
@@ -122,8 +118,8 @@ def extract_plain_text_from_tiptap(content_json: Dict[str, Any]) -> str:
 # ============================================================================
 
 
-def create_comment(
-    db: Session,
+async def create_comment(
+    db: AsyncSession,
     task_id: UUID,
     author_id: UUID,
     comment_data: CommentCreate,
@@ -170,7 +166,7 @@ def create_comment(
         created_at=datetime.utcnow(),
     )
     db.add(comment)
-    db.flush()  # Get comment ID
+    await db.flush()  # Get comment ID
 
     # Create mention records
     for user_id in set(mentioned_user_ids):  # Deduplicate
@@ -185,24 +181,24 @@ def create_comment(
     # Only set comment_id - keep entity_type/entity_id unchanged so attachments
     # still appear in the task's attachment section
     if comment_data.attachment_ids:
-        db.query(Attachment).filter(
-            Attachment.id.in_(comment_data.attachment_ids)
-        ).update(
-            {"comment_id": comment.id},
-            synchronize_session=False,
+        await db.execute(
+            update(Attachment)
+            .where(Attachment.id.in_(comment_data.attachment_ids))
+            .values(comment_id=comment.id)
         )
-        db.flush()
+        await db.flush()
 
-    db.commit()
+    await db.commit()
 
-    # Expire the comment to force reload of relationships including attachments
-    db.expire(comment)
+    # Note: Don't expire the comment here - the caller will reload it with
+    # get_comment() to fetch relationships. Expiring causes MissingGreenlet
+    # errors when accessing comment.id in async context after commit.
 
     return comment, list(set(mentioned_user_ids))
 
 
-def update_comment(
-    db: Session,
+async def update_comment(
+    db: AsyncSession,
     comment_id: UUID,
     author_id: UUID,
     comment_data: CommentUpdate,
@@ -220,11 +216,16 @@ def update_comment(
         Tuple of (updated comment, new mention IDs, removed mention IDs)
         or None if comment not found or unauthorized
     """
-    comment = db.query(Comment).filter(
-        Comment.id == comment_id,
-        Comment.author_id == author_id,
-        Comment.is_deleted == False,
-    ).first()
+    result = await db.execute(
+        select(Comment)
+        .options(selectinload(Comment.mentions))
+        .where(
+            Comment.id == comment_id,
+            Comment.author_id == author_id,
+            Comment.is_deleted == False,
+        )
+    )
+    comment = result.scalar_one_or_none()
 
     if not comment:
         return None
@@ -260,10 +261,12 @@ def update_comment(
 
     # Remove old mentions
     if removed_mentions:
-        db.query(Mention).filter(
-            Mention.comment_id == comment_id,
-            Mention.user_id.in_(removed_mentions),
-        ).delete(synchronize_session=False)
+        await db.execute(
+            delete(Mention).where(
+                Mention.comment_id == comment_id,
+                Mention.user_id.in_(removed_mentions),
+            )
+        )
 
     # Add new mentions
     for user_id in added_mentions:
@@ -274,14 +277,14 @@ def update_comment(
         )
         db.add(mention)
 
-    db.commit()
-    db.refresh(comment)
+    await db.commit()
+    await db.refresh(comment)
 
     return comment, list(added_mentions), list(removed_mentions)
 
 
-def delete_comment(
-    db: Session,
+async def delete_comment(
+    db: AsyncSession,
     comment_id: UUID,
     author_id: UUID,
     soft_delete: bool = True,
@@ -298,11 +301,14 @@ def delete_comment(
     Returns:
         The deleted comment or None if not found/unauthorized
     """
-    comment = db.query(Comment).filter(
-        Comment.id == comment_id,
-        Comment.author_id == author_id,
-        Comment.is_deleted == False,
-    ).first()
+    result = await db.execute(
+        select(Comment).where(
+            Comment.id == comment_id,
+            Comment.author_id == author_id,
+            Comment.is_deleted == False,
+        )
+    )
+    comment = result.scalar_one_or_none()
 
     if not comment:
         return None
@@ -310,17 +316,17 @@ def delete_comment(
     if soft_delete:
         comment.is_deleted = True
         comment.updated_at = datetime.utcnow()
-        db.commit()
-        db.refresh(comment)
+        await db.commit()
+        await db.refresh(comment)
         return comment
     else:
-        db.delete(comment)
-        db.commit()
+        await db.delete(comment)
+        await db.commit()
         return comment
 
 
-def get_comment(
-    db: Session,
+async def get_comment(
+    db: AsyncSession,
     comment_id: UUID,
 ) -> Optional[Comment]:
     """
@@ -333,18 +339,23 @@ def get_comment(
     Returns:
         Comment or None if not found
     """
-    return db.query(Comment).options(
-        joinedload(Comment.author),
-        joinedload(Comment.mentions).joinedload(Mention.user),
-        joinedload(Comment.attachments),
-    ).filter(
-        Comment.id == comment_id,
-        Comment.is_deleted == False,
-    ).first()
+    result = await db.execute(
+        select(Comment)
+        .options(
+            selectinload(Comment.author),
+            selectinload(Comment.mentions).selectinload(Mention.user),
+            selectinload(Comment.attachments),
+        )
+        .where(
+            Comment.id == comment_id,
+            Comment.is_deleted == False,
+        )
+    )
+    return result.scalar_one_or_none()
 
 
-def get_comments_for_task(
-    db: Session,
+async def get_comments_for_task(
+    db: AsyncSession,
     task_id: UUID,
     cursor: Optional[datetime] = None,
     limit: int = 20,
@@ -361,22 +372,27 @@ def get_comments_for_task(
     Returns:
         Tuple of (list of comments, next cursor datetime)
     """
-    query = db.query(Comment).options(
-        joinedload(Comment.author),
-        joinedload(Comment.mentions).joinedload(Mention.user),
-        joinedload(Comment.attachments),
-    ).filter(
-        Comment.task_id == task_id,
-        Comment.is_deleted == False,
+    stmt = (
+        select(Comment)
+        .options(
+            selectinload(Comment.author),
+            selectinload(Comment.mentions).selectinload(Mention.user),
+            selectinload(Comment.attachments),
+        )
+        .where(
+            Comment.task_id == task_id,
+            Comment.is_deleted == False,
+        )
     )
 
     if cursor:
-        query = query.filter(Comment.created_at < cursor)
+        stmt = stmt.where(Comment.created_at < cursor)
 
     # Order by newest first
-    query = query.order_by(Comment.created_at.desc())
+    stmt = stmt.order_by(Comment.created_at.desc()).limit(limit + 1)
 
-    comments = query.limit(limit + 1).all()
+    result = await db.execute(stmt)
+    comments = list(result.scalars().all())
 
     # Determine next cursor
     next_cursor = None
@@ -387,7 +403,7 @@ def get_comments_for_task(
     return comments, next_cursor
 
 
-def count_comments_for_task(db: Session, task_id: UUID) -> int:
+async def count_comments_for_task(db: AsyncSession, task_id: UUID) -> int:
     """
     Count total comments for a task.
 
@@ -398,10 +414,17 @@ def count_comments_for_task(db: Session, task_id: UUID) -> int:
     Returns:
         Comment count
     """
-    return db.query(Comment).filter(
-        Comment.task_id == task_id,
-        Comment.is_deleted == False,
-    ).count()
+    from sqlalchemy import func
+
+    result = await db.execute(
+        select(func.count())
+        .select_from(Comment)
+        .where(
+            Comment.task_id == task_id,
+            Comment.is_deleted == False,
+        )
+    )
+    return result.scalar() or 0
 
 
 # ============================================================================

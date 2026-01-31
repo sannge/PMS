@@ -1,4 +1,11 @@
-"""WebSocket connection manager with room-based support."""
+"""WebSocket connection manager with room-based support and Redis pub/sub.
+
+This module provides WebSocket connection management with:
+- Room-based connection grouping for targeted broadcasts
+- Redis pub/sub for cross-worker message delivery
+- User tracking for direct messaging
+- Graceful disconnect handling
+"""
 
 import asyncio
 import logging
@@ -11,6 +18,7 @@ from uuid import UUID
 from fastapi import WebSocket, WebSocketDisconnect
 
 from ..config import settings
+from ..services.redis_service import redis_service
 
 logger = logging.getLogger(__name__)
 
@@ -122,15 +130,20 @@ class WebSocketConnection:
 
 class ConnectionManager:
     """
-    WebSocket connection manager with room-based support.
+    WebSocket connection manager with room-based support and Redis pub/sub.
 
     Features:
     - Room-based connection grouping for targeted broadcasts
+    - Redis pub/sub for cross-worker message delivery
     - User tracking per room
     - Graceful disconnect handling
     - Message type validation
     - Keepalive ping/pong support
     """
+
+    # Redis pub/sub channels
+    _BROADCAST_CHANNEL = "ws:broadcast"
+    _USER_CHANNEL = "ws:user"
 
     def __init__(self) -> None:
         """Initialize the connection manager."""
@@ -142,6 +155,68 @@ class ConnectionManager:
         self._user_connections: dict[UUID, set[WebSocketConnection]] = {}
         # Lock for thread-safe operations
         self._lock = asyncio.Lock()
+        # Redis initialization flag
+        self._redis_initialized = False
+
+    async def initialize_redis(self) -> None:
+        """Set up Redis pub/sub handlers for cross-worker messaging."""
+        if self._redis_initialized:
+            return
+
+        await redis_service.subscribe(
+            self._BROADCAST_CHANNEL,
+            self._handle_redis_broadcast
+        )
+        await redis_service.subscribe(
+            self._USER_CHANNEL,
+            self._handle_redis_user_message
+        )
+        self._redis_initialized = True
+        logger.info("ConnectionManager Redis pub/sub initialized")
+
+    async def _handle_redis_broadcast(self, data: dict) -> None:
+        """
+        Handle broadcast messages from Redis (from other workers).
+
+        Args:
+            data: Message containing room_id, message, and exclude_conn_id
+        """
+        room_id = data.get("room_id")
+        message = data.get("message")
+        exclude_conn_id = data.get("exclude_conn_id")
+
+        if not room_id or not message:
+            return
+
+        # Send to LOCAL connections only (Redis already distributed to all workers)
+        connections = self._rooms.get(room_id, set()).copy()
+        for conn in connections:
+            if exclude_conn_id and str(id(conn.websocket)) == exclude_conn_id:
+                continue
+            await self.send_personal(conn, message)
+
+    async def _handle_redis_user_message(self, data: dict) -> None:
+        """
+        Handle user-targeted messages from Redis (from other workers).
+
+        Args:
+            data: Message containing user_id and message
+        """
+        user_id_str = data.get("user_id")
+        message = data.get("message")
+
+        if not user_id_str or not message:
+            return
+
+        try:
+            user_id = UUID(user_id_str)
+        except ValueError:
+            return
+
+        # Send to LOCAL connections for this user
+        connections = self._user_connections.get(user_id, set()).copy()
+        for conn in connections:
+            await self.send_personal(conn, message)
 
     @property
     def total_connections(self) -> int:
@@ -387,7 +462,9 @@ class ConnectionManager:
         exclude: Optional[WebSocketConnection] = None,
     ) -> int:
         """
-        Broadcast a message to all connections in a room.
+        Broadcast a message to all connections in a room (across all workers).
+
+        Uses Redis pub/sub to ensure all workers receive the broadcast.
 
         Args:
             room_id: The room to broadcast to
@@ -395,8 +472,22 @@ class ConnectionManager:
             exclude: Optional connection to exclude from broadcast
 
         Returns:
-            int: Number of successful sends
+            int: Number of local successful sends
         """
+        # Publish to Redis for cross-worker delivery
+        if redis_service.is_connected:
+            await redis_service.publish(
+                self._BROADCAST_CHANNEL,
+                {
+                    "room_id": room_id,
+                    "message": message,
+                    "exclude_conn_id": str(id(exclude.websocket)) if exclude else None,
+                }
+            )
+            # Redis will deliver to all workers including this one via _handle_redis_broadcast
+            return len(self._rooms.get(room_id, []))
+
+        # Fallback to local-only broadcast if Redis is not connected
         connections = self._rooms.get(room_id, set()).copy()
 
         if exclude:
@@ -425,15 +516,30 @@ class ConnectionManager:
         message: dict[str, Any],
     ) -> int:
         """
-        Broadcast a message to all connections for a specific user.
+        Broadcast a message to all connections for a specific user (across all workers).
+
+        Uses Redis pub/sub to ensure all workers receive the message.
 
         Args:
             user_id: The user ID to broadcast to
             message: The message to send
 
         Returns:
-            int: Number of successful sends
+            int: Number of local connections for this user
         """
+        # Publish to Redis for cross-worker delivery
+        if redis_service.is_connected:
+            await redis_service.publish(
+                self._USER_CHANNEL,
+                {
+                    "user_id": str(user_id),
+                    "message": message,
+                }
+            )
+            # Redis will deliver to all workers including this one via _handle_redis_user_message
+            return len(self._user_connections.get(user_id, []))
+
+        # Fallback to local-only broadcast if Redis is not connected
         connections = self._user_connections.get(user_id, set()).copy()
 
         if not connections:

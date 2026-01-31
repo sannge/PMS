@@ -22,7 +22,9 @@ Assignment Rules:
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy.orm import Session
+from sqlalchemy import exists, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from ..models.application import Application
 from ..models.application_member import ApplicationMember
@@ -40,16 +42,16 @@ class PermissionService:
     gate for Editors.
     """
 
-    def __init__(self, db: Session):
+    def __init__(self, db: AsyncSession):
         """
         Initialize the PermissionService.
 
         Args:
-            db: SQLAlchemy database session
+            db: SQLAlchemy async database session
         """
         self.db = db
 
-    def get_user_application_role(
+    async def get_user_application_role(
         self,
         user_id: UUID,
         application_id: UUID,
@@ -68,9 +70,10 @@ class PermissionService:
         """
         # If application is provided, use it; otherwise fetch
         if application is None:
-            application = self.db.query(Application).filter(
-                Application.id == application_id
-            ).first()
+            result = await self.db.execute(
+                select(Application).where(Application.id == application_id)
+            )
+            application = result.scalar_one_or_none()
 
         if not application:
             return None
@@ -80,20 +83,66 @@ class PermissionService:
             return "owner"
 
         # Check ApplicationMembers table
-        member = self.db.query(ApplicationMember).filter(
-            ApplicationMember.application_id == application_id,
-            ApplicationMember.user_id == user_id,
-        ).first()
+        result = await self.db.execute(
+            select(ApplicationMember).where(
+                ApplicationMember.application_id == application_id,
+                ApplicationMember.user_id == user_id,
+            )
+        )
+        member = result.scalar_one_or_none()
 
         return member.role if member else None
 
-    def is_project_member(
+    async def is_application_member(
+        self,
+        user_id: UUID,
+        application_id: UUID,
+    ) -> bool:
+        """
+        Check if a user is a member of an application (any role).
+
+        Uses EXISTS pattern for optimal performance.
+
+        Args:
+            user_id: The user's ID
+            application_id: The application's ID
+
+        Returns:
+            True if user is an ApplicationMember or owner, False otherwise.
+        """
+        # Check if user is the owner first (fast path)
+        result = await self.db.execute(
+            select(
+                exists().where(
+                    Application.id == application_id,
+                    Application.owner_id == user_id,
+                )
+            )
+        )
+        if result.scalar():
+            return True
+
+        # Check ApplicationMembers table
+        result = await self.db.execute(
+            select(
+                exists().where(
+                    ApplicationMember.application_id == application_id,
+                    ApplicationMember.user_id == user_id,
+                )
+            )
+        )
+        return result.scalar() or False
+
+    async def is_project_member(
         self,
         user_id: UUID,
         project_id: UUID,
     ) -> bool:
         """
         Check if a user is a member of a project.
+
+        Uses EXISTS pattern for optimal performance - avoids loading
+        the entire record when we only need existence check.
 
         Args:
             user_id: The user's ID
@@ -102,14 +151,17 @@ class PermissionService:
         Returns:
             True if user is a ProjectMember, False otherwise.
         """
-        member = self.db.query(ProjectMember).filter(
-            ProjectMember.project_id == project_id,
-            ProjectMember.user_id == user_id,
-        ).first()
+        result = await self.db.execute(
+            select(
+                exists().where(
+                    ProjectMember.project_id == project_id,
+                    ProjectMember.user_id == user_id,
+                )
+            )
+        )
+        return result.scalar() or False
 
-        return member is not None
-
-    def get_project_member_role(
+    async def get_project_member_role(
         self,
         user_id: UUID,
         project_id: UUID,
@@ -124,14 +176,17 @@ class PermissionService:
         Returns:
             The role string ('admin', 'member') or None if not a project member.
         """
-        member = self.db.query(ProjectMember).filter(
-            ProjectMember.project_id == project_id,
-            ProjectMember.user_id == user_id,
-        ).first()
+        result = await self.db.execute(
+            select(ProjectMember).where(
+                ProjectMember.project_id == project_id,
+                ProjectMember.user_id == user_id,
+            )
+        )
+        member = result.scalar_one_or_none()
 
         return member.role if member else None
 
-    def get_project_with_application(
+    async def get_project_with_application(
         self,
         project_id: UUID,
     ) -> Optional[Project]:
@@ -144,15 +199,14 @@ class PermissionService:
         Returns:
             Project with application loaded, or None if not found.
         """
-        from sqlalchemy.orm import joinedload
+        result = await self.db.execute(
+            select(Project)
+            .options(selectinload(Project.application))
+            .where(Project.id == project_id)
+        )
+        return result.scalar_one_or_none()
 
-        return self.db.query(Project).options(
-            joinedload(Project.application)
-        ).filter(
-            Project.id == project_id,
-        ).first()
-
-    def check_can_manage_tasks(
+    async def check_can_manage_tasks(
         self,
         user: User,
         project_id: UUID,
@@ -176,7 +230,7 @@ class PermissionService:
         """
         # Get application_id from project if not provided
         if application_id is None:
-            project = self.get_project_with_application(project_id)
+            project = await self.get_project_with_application(project_id)
             if not project:
                 return False
             application_id = project.application_id
@@ -185,7 +239,7 @@ class PermissionService:
             application = None
 
         # Get user's application role
-        app_role = self.get_user_application_role(user.id, application_id, application)
+        app_role = await self.get_user_application_role(user.id, application_id, application)
 
         if not app_role:
             return False
@@ -199,10 +253,10 @@ class PermissionService:
             return False
 
         # Editors must be project member with admin or member role
-        project_role = self.get_project_member_role(user.id, project_id)
+        project_role = await self.get_project_member_role(user.id, project_id)
         return project_role in ("admin", "member")
 
-    def check_can_view_project(
+    async def check_can_view_project(
         self,
         user: User,
         project_id: UUID,
@@ -224,7 +278,7 @@ class PermissionService:
         """
         # Get application_id from project if not provided
         if application_id is None:
-            project = self.get_project_with_application(project_id)
+            project = await self.get_project_with_application(project_id)
             if not project:
                 return False
             application_id = project.application_id
@@ -233,12 +287,12 @@ class PermissionService:
             application = None
 
         # Get user's application role
-        role = self.get_user_application_role(user.id, application_id, application)
+        role = await self.get_user_application_role(user.id, application_id, application)
 
         # Any role means view access
         return role is not None
 
-    def check_can_be_assigned(
+    async def check_can_be_assigned(
         self,
         user_id: UUID,
         project_id: UUID,
@@ -262,7 +316,7 @@ class PermissionService:
         """
         # Get application_id from project if not provided
         if application_id is None:
-            project = self.get_project_with_application(project_id)
+            project = await self.get_project_with_application(project_id)
             if not project:
                 return False
             application_id = project.application_id
@@ -271,16 +325,16 @@ class PermissionService:
             application = None
 
         # Get user's application role
-        role = self.get_user_application_role(user_id, application_id, application)
+        role = await self.get_user_application_role(user_id, application_id, application)
 
         # Must have a role and not be a viewer
         if not role or role == "viewer":
             return False
 
         # Must be a ProjectMember
-        return self.is_project_member(user_id, project_id)
+        return await self.is_project_member(user_id, project_id)
 
-    def check_can_manage_project_members(
+    async def check_can_manage_project_members(
         self,
         user: User,
         project_id: UUID,
@@ -305,7 +359,7 @@ class PermissionService:
         """
         # Get application_id from project if not provided
         if application_id is None:
-            project = self.get_project_with_application(project_id)
+            project = await self.get_project_with_application(project_id)
             if not project:
                 return False
             application_id = project.application_id
@@ -314,7 +368,7 @@ class PermissionService:
             application = None
 
         # Get user's application role
-        app_role = self.get_user_application_role(user.id, application_id, application)
+        app_role = await self.get_user_application_role(user.id, application_id, application)
 
         if not app_role:
             return False
@@ -328,10 +382,10 @@ class PermissionService:
             return False
 
         # Editors must be project admin to manage members
-        project_role = self.get_project_member_role(user.id, project_id)
+        project_role = await self.get_project_member_role(user.id, project_id)
         return project_role == "admin"
 
-    def check_can_view_project_members(
+    async def check_can_view_project_members(
         self,
         user: User,
         project_id: UUID,
@@ -353,7 +407,7 @@ class PermissionService:
         """
         # Get application_id from project if not provided
         if application_id is None:
-            project = self.get_project_with_application(project_id)
+            project = await self.get_project_with_application(project_id)
             if not project:
                 return False
             application_id = project.application_id
@@ -362,12 +416,12 @@ class PermissionService:
             application = None
 
         # Get user's application role
-        app_role = self.get_user_application_role(user.id, application_id, application)
+        app_role = await self.get_user_application_role(user.id, application_id, application)
 
         # Any application member can view project members
         return app_role is not None
 
-    def check_can_override_project_status(
+    async def check_can_override_project_status(
         self,
         user: User,
         project_id: UUID,
@@ -389,9 +443,9 @@ class PermissionService:
             True if user can override project status, False otherwise.
         """
         # Same permission as managing project members - owner only
-        return self.check_can_manage_project_members(user, project_id, application_id)
+        return await self.check_can_manage_project_members(user, project_id, application_id)
 
-    def get_assignable_users_for_project(
+    async def get_assignable_users_for_project(
         self,
         project_id: UUID,
         application_id: Optional[UUID] = None,
@@ -412,16 +466,17 @@ class PermissionService:
         """
         # Get application_id from project if not provided
         if application_id is None:
-            project = self.get_project_with_application(project_id)
+            project = await self.get_project_with_application(project_id)
             if not project:
                 return []
             application_id = project.application_id
             application = project.application
         else:
             project = None
-            application = self.db.query(Application).filter(
-                Application.id == application_id
-            ).first()
+            result = await self.db.execute(
+                select(Application).where(Application.id == application_id)
+            )
+            application = result.scalar_one_or_none()
 
         if not application:
             return []
@@ -430,13 +485,16 @@ class PermissionService:
         seen_user_ids = set()
 
         # Get all project members (admin/member roles)
-        project_members = self.db.query(ProjectMember).filter(
-            ProjectMember.project_id == project_id,
-        ).all()
+        result = await self.db.execute(
+            select(ProjectMember)
+            .options(selectinload(ProjectMember.user))
+            .where(ProjectMember.project_id == project_id)
+        )
+        project_members = result.scalars().all()
 
         # Add project members who are owners/editors in the application
         for pm in project_members:
-            role = self.get_user_application_role(pm.user_id, application_id, application)
+            role = await self.get_user_application_role(pm.user_id, application_id, application)
             if role in ("owner", "editor"):
                 assignable_users.append(pm.user)
                 seen_user_ids.add(pm.user_id)
@@ -444,18 +502,24 @@ class PermissionService:
         # Also add all App Owners even if not project members
         # Include the original owner
         if application.owner_id not in seen_user_ids:
-            owner_user = self.db.query(User).filter(
-                User.id == application.owner_id
-            ).first()
+            result = await self.db.execute(
+                select(User).where(User.id == application.owner_id)
+            )
+            owner_user = result.scalar_one_or_none()
             if owner_user:
                 assignable_users.append(owner_user)
                 seen_user_ids.add(application.owner_id)
 
         # Include any other app members with owner role
-        app_owner_members = self.db.query(ApplicationMember).filter(
-            ApplicationMember.application_id == application_id,
-            ApplicationMember.role == "owner",
-        ).all()
+        result = await self.db.execute(
+            select(ApplicationMember)
+            .options(selectinload(ApplicationMember.user))
+            .where(
+                ApplicationMember.application_id == application_id,
+                ApplicationMember.role == "owner",
+            )
+        )
+        app_owner_members = result.scalars().all()
 
         for am in app_owner_members:
             if am.user_id not in seen_user_ids:
@@ -465,12 +529,12 @@ class PermissionService:
         return assignable_users
 
 
-def get_permission_service(db: Session) -> PermissionService:
+def get_permission_service(db: AsyncSession) -> PermissionService:
     """
     Factory function to create a PermissionService instance.
 
     Args:
-        db: SQLAlchemy database session
+        db: SQLAlchemy async database session
 
     Returns:
         PermissionService instance

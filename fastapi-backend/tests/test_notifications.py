@@ -12,35 +12,37 @@ Tests cover:
 from uuid import uuid4
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy.orm import Session
+from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Notification, User
 
 
+@pytest.mark.asyncio
 class TestListNotifications:
     """Tests for GET /api/notifications endpoint."""
 
-    def test_list_notifications_empty(
-        self, client: TestClient, auth_headers: dict
+    async def test_list_notifications_empty(
+        self, client: AsyncClient, auth_headers: dict
     ):
         """Test listing notifications when none exist."""
-        response = client.get("/api/notifications", headers=auth_headers)
+        response = await client.get("/api/notifications", headers=auth_headers)
         assert response.status_code == 200
         assert response.json() == []
 
-    def test_list_notifications_with_data(
-        self, client: TestClient, auth_headers: dict, test_notification: Notification
+    async def test_list_notifications_with_data(
+        self, client: AsyncClient, auth_headers: dict, test_notification: Notification
     ):
         """Test listing notifications with existing data."""
-        response = client.get("/api/notifications", headers=auth_headers)
+        response = await client.get("/api/notifications", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 1
         assert data[0]["title"] == "Task Assigned"
 
-    def test_list_notifications_pagination(
-        self, client: TestClient, auth_headers: dict, db_session: Session, test_user: User
+    async def test_list_notifications_pagination(
+        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession, test_user: User
     ):
         """Test notification pagination."""
         # Create 5 notifications
@@ -54,24 +56,24 @@ class TestListNotifications:
                 is_read=False,
             )
             db_session.add(notification)
-        db_session.commit()
+        await db_session.commit()
 
         # Get first 2
-        response = client.get(
+        response = await client.get(
             "/api/notifications", headers=auth_headers, params={"limit": 2}
         )
         assert response.status_code == 200
         assert len(response.json()) == 2
 
         # Get next 2
-        response = client.get(
+        response = await client.get(
             "/api/notifications", headers=auth_headers, params={"skip": 2, "limit": 2}
         )
         assert response.status_code == 200
         assert len(response.json()) == 2
 
-    def test_list_notifications_unread_only(
-        self, client: TestClient, auth_headers: dict, db_session: Session, test_user: User
+    async def test_list_notifications_unread_only(
+        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession, test_user: User
     ):
         """Test filtering by unread notifications."""
         # Create read and unread notifications
@@ -85,10 +87,10 @@ class TestListNotifications:
                 is_read=is_read,
             )
             db_session.add(notification)
-        db_session.commit()
+        await db_session.commit()
 
         # Get only unread
-        response = client.get(
+        response = await client.get(
             "/api/notifications", headers=auth_headers, params={"unread_only": True}
         )
         assert response.status_code == 200
@@ -96,8 +98,8 @@ class TestListNotifications:
         assert len(data) == 2
         assert all(not n["is_read"] for n in data)
 
-    def test_list_notifications_filter_by_type(
-        self, client: TestClient, auth_headers: dict, db_session: Session, test_user: User
+    async def test_list_notifications_filter_by_type(
+        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession, test_user: User
     ):
         """Test filtering by notification type."""
         # Create notifications of different types
@@ -111,33 +113,34 @@ class TestListNotifications:
                 is_read=False,
             )
             db_session.add(notification)
-        db_session.commit()
+        await db_session.commit()
 
         # Get all notifications to verify they were created
-        response = client.get("/api/notifications", headers=auth_headers)
+        response = await client.get("/api/notifications", headers=auth_headers)
         assert response.status_code == 200
         all_data = response.json()
         assert len(all_data) == 3  # Verify all notifications are created
 
-    def test_list_notifications_unauthorized(self, client: TestClient):
+    async def test_list_notifications_unauthorized(self, client: AsyncClient):
         """Test listing notifications without authentication."""
-        response = client.get("/api/notifications")
+        response = await client.get("/api/notifications")
         assert response.status_code == 401
 
 
+@pytest.mark.asyncio
 class TestGetNotificationCount:
     """Tests for GET /api/notifications/count endpoint."""
 
-    def test_get_count_empty(self, client: TestClient, auth_headers: dict):
+    async def test_get_count_empty(self, client: AsyncClient, auth_headers: dict):
         """Test count when no notifications exist."""
-        response = client.get("/api/notifications/count", headers=auth_headers)
+        response = await client.get("/api/notifications/count", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == 0
         assert data["unread"] == 0
 
-    def test_get_count_with_data(
-        self, client: TestClient, auth_headers: dict, db_session: Session, test_user: User
+    async def test_get_count_with_data(
+        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession, test_user: User
     ):
         """Test count with mixed read/unread notifications."""
         # Create read and unread notifications
@@ -151,28 +154,29 @@ class TestGetNotificationCount:
                 is_read=is_read,
             )
             db_session.add(notification)
-        db_session.commit()
+        await db_session.commit()
 
-        response = client.get("/api/notifications/count", headers=auth_headers)
+        response = await client.get("/api/notifications/count", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == 5
         assert data["unread"] == 3
 
-    def test_get_count_unauthorized(self, client: TestClient):
+    async def test_get_count_unauthorized(self, client: AsyncClient):
         """Test count without authentication."""
-        response = client.get("/api/notifications/count")
+        response = await client.get("/api/notifications/count")
         assert response.status_code == 401
 
 
+@pytest.mark.asyncio
 class TestGetNotification:
     """Tests for GET /api/notifications/{id} endpoint."""
 
-    def test_get_notification_success(
-        self, client: TestClient, auth_headers: dict, test_notification: Notification
+    async def test_get_notification_success(
+        self, client: AsyncClient, auth_headers: dict, test_notification: Notification
     ):
         """Test getting a notification by ID."""
-        response = client.get(
+        response = await client.get(
             f"/api/notifications/{test_notification.id}", headers=auth_headers
         )
         assert response.status_code == 200
@@ -180,47 +184,48 @@ class TestGetNotification:
         assert data["id"] == str(test_notification.id)
         assert data["title"] == "Task Assigned"
 
-    def test_get_notification_not_found(
-        self, client: TestClient, auth_headers: dict
+    async def test_get_notification_not_found(
+        self, client: AsyncClient, auth_headers: dict
     ):
         """Test getting a non-existent notification."""
         fake_id = uuid4()
-        response = client.get(
+        response = await client.get(
             f"/api/notifications/{fake_id}", headers=auth_headers
         )
         assert response.status_code == 404
 
-    def test_get_notification_wrong_user(
-        self, client: TestClient, auth_headers_2: dict, test_notification: Notification
+    async def test_get_notification_wrong_user(
+        self, client: AsyncClient, auth_headers_2: dict, test_notification: Notification
     ):
         """Test getting another user's notification."""
-        response = client.get(
+        response = await client.get(
             f"/api/notifications/{test_notification.id}", headers=auth_headers_2
         )
         assert response.status_code == 403  # Access denied for other user's notification
 
-    def test_get_notification_unauthorized(
-        self, client: TestClient, test_notification: Notification
+    async def test_get_notification_unauthorized(
+        self, client: AsyncClient, test_notification: Notification
     ):
         """Test getting notification without authentication."""
-        response = client.get(f"/api/notifications/{test_notification.id}")
+        response = await client.get(f"/api/notifications/{test_notification.id}")
         assert response.status_code == 401
 
 
+@pytest.mark.asyncio
 class TestMarkAsRead:
     """Tests for PUT /api/notifications/{id} endpoint (update notification)."""
 
-    def test_mark_as_read_success(
+    async def test_mark_as_read_success(
         self,
-        client: TestClient,
+        client: AsyncClient,
         auth_headers: dict,
-        db_session: Session,
+        db_session: AsyncSession,
         test_notification: Notification,
     ):
         """Test marking a notification as read via PUT."""
         assert not test_notification.is_read
 
-        response = client.put(
+        response = await client.put(
             f"/api/notifications/{test_notification.id}",
             headers=auth_headers,
             json={"is_read": True},
@@ -230,26 +235,26 @@ class TestMarkAsRead:
         assert data["is_read"] == True
 
         # Verify in database
-        db_session.refresh(test_notification)
+        await db_session.refresh(test_notification)
         assert test_notification.is_read
 
-    def test_mark_as_read_not_found(
-        self, client: TestClient, auth_headers: dict
+    async def test_mark_as_read_not_found(
+        self, client: AsyncClient, auth_headers: dict
     ):
         """Test updating non-existent notification."""
         fake_id = uuid4()
-        response = client.put(
+        response = await client.put(
             f"/api/notifications/{fake_id}",
             headers=auth_headers,
             json={"is_read": True},
         )
         assert response.status_code == 404
 
-    def test_mark_as_read_wrong_user(
-        self, client: TestClient, auth_headers_2: dict, test_notification: Notification
+    async def test_mark_as_read_wrong_user(
+        self, client: AsyncClient, auth_headers_2: dict, test_notification: Notification
     ):
         """Test updating another user's notification."""
-        response = client.put(
+        response = await client.put(
             f"/api/notifications/{test_notification.id}",
             headers=auth_headers_2,
             json={"is_read": True},
@@ -257,14 +262,15 @@ class TestMarkAsRead:
         assert response.status_code == 403
 
 
+@pytest.mark.asyncio
 class TestMarkAllAsRead:
     """Tests for POST /api/notifications/mark-all-read endpoint."""
 
-    def test_mark_all_as_read_success(
+    async def test_mark_all_as_read_success(
         self,
-        client: TestClient,
+        client: AsyncClient,
         auth_headers: dict,
-        db_session: Session,
+        db_session: AsyncSession,
         test_user: User,
     ):
         """Test marking all notifications as read."""
@@ -281,9 +287,9 @@ class TestMarkAllAsRead:
             )
             db_session.add(n)
             notifications.append(n)
-        db_session.commit()
+        await db_session.commit()
 
-        response = client.post(
+        response = await client.post(
             "/api/notifications/mark-all-read", headers=auth_headers
         )
         assert response.status_code == 200
@@ -292,14 +298,14 @@ class TestMarkAllAsRead:
 
         # Verify all are now read
         for n in notifications:
-            db_session.refresh(n)
+            await db_session.refresh(n)
             assert n.is_read
 
-    def test_mark_all_as_read_empty(
-        self, client: TestClient, auth_headers: dict
+    async def test_mark_all_as_read_empty(
+        self, client: AsyncClient, auth_headers: dict
     ):
         """Test marking all as read when no unread notifications."""
-        response = client.post(
+        response = await client.post(
             "/api/notifications/mark-all-read", headers=auth_headers
         )
         assert response.status_code == 200
@@ -307,59 +313,62 @@ class TestMarkAllAsRead:
         assert data["updated_count"] == 0
 
 
+@pytest.mark.asyncio
 class TestDeleteNotification:
     """Tests for DELETE /api/notifications/{id} endpoint."""
 
-    def test_delete_notification_success(
+    async def test_delete_notification_success(
         self,
-        client: TestClient,
+        client: AsyncClient,
         auth_headers: dict,
-        db_session: Session,
+        db_session: AsyncSession,
         test_notification: Notification,
     ):
         """Test deleting a notification."""
         notification_id = test_notification.id
 
-        response = client.delete(
+        response = await client.delete(
             f"/api/notifications/{notification_id}", headers=auth_headers
         )
         assert response.status_code == 204
 
         # Verify deleted
-        deleted = db_session.query(Notification).filter(
-            Notification.id == notification_id
-        ).first()
+        result = await db_session.execute(
+            select(Notification).filter(Notification.id == notification_id)
+        )
+        deleted = result.scalar_one_or_none()
         assert deleted is None
 
-    def test_delete_notification_not_found(
-        self, client: TestClient, auth_headers: dict
+    async def test_delete_notification_not_found(
+        self, client: AsyncClient, auth_headers: dict
     ):
         """Test deleting non-existent notification."""
         fake_id = uuid4()
-        response = client.delete(
+        response = await client.delete(
             f"/api/notifications/{fake_id}", headers=auth_headers
         )
         assert response.status_code == 404
 
-    def test_delete_notification_wrong_user(
-        self, client: TestClient, auth_headers_2: dict, test_notification: Notification
+    async def test_delete_notification_wrong_user(
+        self, client: AsyncClient, auth_headers_2: dict, test_notification: Notification
     ):
         """Test deleting another user's notification."""
-        response = client.delete(
+        response = await client.delete(
             f"/api/notifications/{test_notification.id}",
             headers=auth_headers_2,
         )
         assert response.status_code == 403
 
 
+@pytest.mark.asyncio
 class TestDeleteAllNotifications:
     """Tests for DELETE /api/notifications endpoint."""
 
-    def test_delete_all_notifications_success(
+    async def test_delete_all_notifications_success(
         self,
-        client: TestClient,
+        client: AsyncClient,
         auth_headers: dict,
-        db_session: Session,
+        db_session: AsyncSession,
         test_user: User,
     ):
         """Test deleting all notifications."""
@@ -374,22 +383,23 @@ class TestDeleteAllNotifications:
                 is_read=i % 2 == 0,
             )
             db_session.add(n)
-        db_session.commit()
+        await db_session.commit()
 
-        response = client.delete("/api/notifications", headers=auth_headers)
+        response = await client.delete("/api/notifications", headers=auth_headers)
         assert response.status_code == 204  # No content on success
 
         # Verify all deleted
-        count = db_session.query(Notification).filter(
-            Notification.user_id == test_user.id
-        ).count()
+        result = await db_session.execute(
+            select(Notification).filter(Notification.user_id == test_user.id)
+        )
+        count = len(result.scalars().all())
         assert count == 0
 
-    def test_delete_all_notifications_read_only(
+    async def test_delete_all_notifications_read_only(
         self,
-        client: TestClient,
+        client: AsyncClient,
         auth_headers: dict,
-        db_session: Session,
+        db_session: AsyncSession,
         test_user: User,
     ):
         """Test deleting only read notifications."""
@@ -404,9 +414,9 @@ class TestDeleteAllNotifications:
                 is_read=is_read,
             )
             db_session.add(n)
-        db_session.commit()
+        await db_session.commit()
 
-        response = client.delete(
+        response = await client.delete(
             "/api/notifications",
             headers=auth_headers,
             params={"read_only": True},
@@ -414,15 +424,16 @@ class TestDeleteAllNotifications:
         assert response.status_code == 204  # No content on success
 
         # Verify only unread remain
-        remaining = db_session.query(Notification).filter(
-            Notification.user_id == test_user.id
-        ).all()
+        result = await db_session.execute(
+            select(Notification).filter(Notification.user_id == test_user.id)
+        )
+        remaining = result.scalars().all()
         assert len(remaining) == 2
         assert all(not n.is_read for n in remaining)
 
-    def test_delete_all_notifications_empty(
-        self, client: TestClient, auth_headers: dict
+    async def test_delete_all_notifications_empty(
+        self, client: AsyncClient, auth_headers: dict
     ):
         """Test deleting when no notifications."""
-        response = client.delete("/api/notifications", headers=auth_headers)
+        response = await client.delete("/api/notifications", headers=auth_headers)
         assert response.status_code == 204  # No content even when empty
