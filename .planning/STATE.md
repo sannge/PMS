@@ -10,29 +10,29 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 2 of 10 (Notes Screen Shell & Folder Navigation)
-Plan: 1 of 3 in current phase
+Plan: 2 of 3 in current phase
 Status: In progress
-Last activity: 2026-01-31 -- Completed 02-01-PLAN.md (Notes Screen Foundation)
+Last activity: 2026-01-31 -- Completed 02-02-PLAN.md (Folder Tree & Context Menu)
 
-Progress: [█████░░░░░] ~13%
+Progress: [██████░░░░] ~17%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 5
-- Average duration: ~9 min
-- Total execution time: ~0.75 hours
+- Total plans completed: 6
+- Average duration: ~8 min
+- Total execution time: ~0.8 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01 | 4/4 | ~34 min | ~9 min |
-| 02 | 1/3 | ~11 min | ~11 min |
+| 02 | 2/3 | ~15 min | ~8 min |
 
 **Recent Trend:**
-- Last 5 plans: 01-02 (~8 min), 01-03 (~7 min), 01-04 (~7 min), 02-01 (~11 min)
-- Trend: stable at ~7-11 min
+- Last 5 plans: 01-03 (~7 min), 01-04 (~7 min), 02-01 (~11 min), 02-02 (~4 min)
+- Trend: stable at ~4-11 min
 
 *Updated after each plan completion*
 
@@ -58,6 +58,7 @@ Recent decisions affecting current work:
 - [02-01]: Backend folder endpoint uses PUT for rename+move combined -- hooks map to PUT not PATCH
 - [02-01]: Document mutations invalidate both document list and folder tree queries (folder document_count)
 - [02-01]: KnowledgeBaseContext is UI-only state (useReducer), data fetching via TanStack Query hooks
+- [02-02]: Document rename uses row_version=1 default; API 409 handles stale conflicts
 
 ### Pending Todos
 
@@ -74,5 +75,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-31
-Stopped at: Completed 02-01-PLAN.md (Notes Screen Foundation)
+Stopped at: Completed 02-02-PLAN.md (Folder Tree & Context Menu)
 Resume file: None
