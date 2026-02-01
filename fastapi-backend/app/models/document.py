@@ -28,6 +28,7 @@ from ..database import Base
 
 if TYPE_CHECKING:
     from .document_folder import DocumentFolder
+    from .document_tag import DocumentTagAssignment
     from .user import User
 
 
@@ -196,6 +197,13 @@ class Document(Base):
         "User",
         foreign_keys=[created_by],
         lazy="joined",
+    )
+
+    tags = relationship(
+        "DocumentTagAssignment",
+        back_populates="document",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
     )
 
     def __repr__(self) -> str:

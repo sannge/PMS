@@ -30,6 +30,8 @@ from app.models import (
     Document,
     DocumentFolder,
     DocumentSnapshot,
+    DocumentTag,
+    DocumentTagAssignment,
     Invitation,
     Mention,
 

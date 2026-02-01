@@ -9,6 +9,7 @@ from .comment import Comment
 from .document import Document
 from .document_folder import DocumentFolder
 from .document_snapshot import DocumentSnapshot
+from .document_tag import DocumentTag, DocumentTagAssignment
 from .invitation import Invitation
 from .mention import Mention
 
@@ -31,6 +32,8 @@ __all__ = [
     "Document",
     "DocumentFolder",
     "DocumentSnapshot",
+    "DocumentTag",
+    "DocumentTagAssignment",
     "Invitation",
     "Mention",
 
