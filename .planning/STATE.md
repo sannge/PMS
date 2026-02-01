@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-31)
 
 **Core value:** Teams can create, organize, and find internal documentation without leaving their project management tool.
-**Current focus:** Phase 4 in progress - Auto-Save & Content Pipeline.
+**Current focus:** Phase 4 in progress - Auto-Save & Content Pipeline (3/4 plans complete).
 
 ## Current Position
 
 Phase: 4 of 10 (Auto-Save & Content Pipeline)
-Plan: 2 of 4 in current phase
+Plan: 4 of 4 in current phase (04-03 pending parallel execution)
 Status: In progress
-Last activity: 2026-02-01 -- Completed 04-02-PLAN.md (IndexedDB draft persistence + useDraft hook)
+Last activity: 2026-02-01 -- Completed 04-04-PLAN.md (TipTap JSON content converter via TDD)
 
-Progress: [█████████████░] ~39%
+Progress: [██████████████░] ~43%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 12
-- Average duration: ~6 min
-- Total execution time: ~1.11 hours
+- Total plans completed: 14
+- Average duration: ~5 min
+- Total execution time: ~1.18 hours
 
 **By Phase:**
 
@@ -30,11 +30,11 @@ Progress: [█████████████░] ~39%
 | 01 | 4/4 | ~34 min | ~9 min |
 | 02 | 3/3 | ~19 min | ~6 min |
 | 03 | 4/4 | ~14 min | ~4 min |
-| 04 | 1/4 | ~2 min | ~2 min |
+| 04 | 3/4 | ~8 min | ~3 min |
 
 **Recent Trend:**
-- Last 5 plans: 03-02 (~2 min), 03-03 (~3 min), 03-04 (~3 min), 04-02 (~2 min)
-- Trend: stable at ~2-3 min
+- Last 5 plans: 03-04 (~3 min), 04-01 (~2 min), 04-02 (~2 min), 04-04 (~4 min)
+- Trend: stable at ~2-4 min
 
 *Updated after each plan completion*
 
@@ -77,6 +77,9 @@ Recent decisions affecting current work:
 - [04-01]: SaveStatus exported as discriminated union type for reuse by save indicator and save-on-navigate
 - [04-02]: Cleanup runs inside getDraftDB() with flag guard -- simpler than separate App.tsx useEffect
 - [04-02]: restoreDraft does NOT delete from IndexedDB -- draft persists until clearDraftAfterSave after successful server save
+- [04-04]: textStyle/highlight marks are presentation-only -- skipped in Markdown output
+- [04-04]: codeBlock with 'plaintext'/empty/null language renders bare ``` fences (no language annotation)
+- [04-04]: underline renders as <u>text</u> in Markdown (HTML is valid Markdown)
 
 ### Pending Todos
 
@@ -84,7 +87,7 @@ None yet.
 
 ### Blockers/Concerns
 
-- [Research]: TipTap JSON-to-Markdown conversion edge cases (nested lists, tables, code blocks) need testing in Phase 4
+- ~~[Research]: TipTap JSON-to-Markdown conversion edge cases (nested lists, tables, code blocks) need testing in Phase 4~~ RESOLVED in 04-04: 49 test cases covering all node types
 - [Research]: Electron-specific auto-save edge cases (force-quit, sleep/wake) need testing in Phase 4
 - [Research]: Permission cache invalidation latency (60s Redis TTL) may surprise users -- consider WebSocket push
 - ~~[Revision]: Zustand store migration scope -- auth-store and notification-ui-store are used across the app (not just knowledge base), so migration must not break existing features~~ RESOLVED in 01-02: all 27 files updated, zero store references remain
@@ -93,5 +96,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-01
-Stopped at: Completed 04-02-PLAN.md (draft persistence)
+Stopped at: Completed 04-04-PLAN.md (content converter)
 Resume file: None
