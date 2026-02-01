@@ -203,7 +203,7 @@ Plans:
 Plans:
 - [ ] 09-01-PLAN.md — PostgreSQL full-text search with tsvector/GIN index migration, search endpoint, and search results UI in sidebar
 - [ ] 09-02-PLAN.md — DocumentTemplate model, built-in template seeding, template CRUD endpoints, template picker dialog, and save-as-template flow
-- [ ] 09-03-PLAN.md — Markdown export endpoint and download button in editor toolbar
+- [ ] 09-03-PLAN.md — Electron IPC fs:writeFile handler and ExportButton component for Markdown .md file export
 
 ### Phase 10: Embedded Docs & @ Mentions
 **Goal**: Users can access and edit documents directly within Application and Project detail pages, and link to entities with @ mentions
