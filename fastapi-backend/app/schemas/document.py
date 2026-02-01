@@ -69,6 +69,20 @@ class DocumentUpdate(BaseModel):
     )
 
 
+class DocumentContentUpdate(BaseModel):
+    """Schema for auto-save content update with optimistic concurrency."""
+
+    content_json: str = Field(
+        ...,
+        description="TipTap JSON content string",
+    )
+    row_version: int = Field(
+        ...,
+        ge=1,
+        description="Current row_version for optimistic concurrency check",
+    )
+
+
 class DocumentResponse(BaseModel):
     """Schema for full document response (includes content)."""
 

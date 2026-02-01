@@ -19,6 +19,7 @@ from ..models.document import Document
 from ..models.document_tag import DocumentTag, DocumentTagAssignment
 from ..models.user import User
 from ..schemas.document import (
+    DocumentContentUpdate,
     DocumentCreate,
     DocumentListItem,
     DocumentListResponse,
@@ -31,6 +32,7 @@ from ..services.document_service import (
     decode_cursor,
     encode_cursor,
     get_scope_filter,
+    save_document_content,
     set_scope_fks,
     validate_scope,
     validate_tag_scope,
@@ -278,6 +280,32 @@ async def update_document(
 
     await db.flush()
     await db.refresh(document)
+
+    return DocumentResponse.model_validate(document)
+
+
+@router.put("/{document_id}/content", response_model=DocumentResponse)
+async def save_content(
+    document_id: UUID,
+    body: DocumentContentUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> DocumentResponse:
+    """
+    Auto-save document content with optimistic concurrency control.
+
+    The client must send the current row_version. If it does not match
+    the database value, a 409 Conflict is returned indicating the document
+    was modified by another user/session. On success, content is updated
+    and row_version is incremented.
+    """
+    document = await save_document_content(
+        document_id=document_id,
+        content_json=body.content_json,
+        row_version=body.row_version,
+        user_id=current_user.id,
+        db=db,
+    )
 
     return DocumentResponse.model_validate(document)
 

@@ -254,6 +254,68 @@ def convert_tiptap_to_markdown(content_json: Optional[str]) -> str:
     return ""
 
 
+async def save_document_content(
+    document_id: UUID,
+    content_json: str,
+    row_version: int,
+    user_id: UUID,
+    db: AsyncSession,
+) -> Document:
+    """
+    Save document content with optimistic concurrency control.
+
+    Checks row_version matches the current database value before updating.
+    Increments row_version on success. Does NOT set updated_at manually
+    because the Document model uses SQLAlchemy's onupdate parameter.
+
+    Args:
+        document_id: UUID of the document to update
+        content_json: TipTap JSON content string
+        row_version: Expected current row_version (for optimistic concurrency)
+        user_id: UUID of the user performing the save
+        db: Database session
+
+    Returns:
+        The updated Document instance
+
+    Raises:
+        HTTPException: 404 if document not found, 409 if row_version mismatch
+    """
+    result = await db.execute(
+        select(Document)
+        .where(Document.id == document_id)
+        .where(Document.deleted_at.is_(None))
+    )
+    document = result.scalar_one_or_none()
+
+    if document is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document {document_id} not found",
+        )
+
+    # Optimistic concurrency check
+    if document.row_version != row_version:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Document was modified. Refresh to get latest version.",
+        )
+
+    # Update content fields
+    document.content_json = content_json
+    # Placeholder for Phase 4 Plan 04 converter
+    document.content_markdown = ""
+    document.content_plain = ""
+
+    # Increment version
+    document.row_version += 1
+
+    await db.flush()
+    await db.refresh(document)
+
+    return document
+
+
 async def validate_tag_scope(
     db: AsyncSession,
     document: Document,
