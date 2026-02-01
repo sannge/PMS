@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-31)
 
 **Core value:** Teams can create, organize, and find internal documentation without leaving their project management tool.
-**Current focus:** Phase 4 in progress - Auto-Save & Content Pipeline (3/4 plans complete).
+**Current focus:** Phase 4 complete - Auto-Save & Content Pipeline (4/4 plans done). Ready for Phase 5.
 
 ## Current Position
 
 Phase: 4 of 10 (Auto-Save & Content Pipeline)
-Plan: 4 of 4 in current phase (04-03 pending parallel execution)
-Status: In progress
-Last activity: 2026-02-01 -- Completed 04-04-PLAN.md (TipTap JSON content converter via TDD)
+Plan: 4 of 4 in current phase
+Status: Phase complete
+Last activity: 2026-02-01 -- Completed 04-03-PLAN.md (save triggers & status indicator)
 
-Progress: [██████████████░] ~43%
+Progress: [███████████████░] ~47%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 14
+- Total plans completed: 15
 - Average duration: ~5 min
-- Total execution time: ~1.18 hours
+- Total execution time: ~1.25 hours
 
 **By Phase:**
 
@@ -30,10 +30,10 @@ Progress: [██████████████░] ~43%
 | 01 | 4/4 | ~34 min | ~9 min |
 | 02 | 3/3 | ~19 min | ~6 min |
 | 03 | 4/4 | ~14 min | ~4 min |
-| 04 | 3/4 | ~8 min | ~3 min |
+| 04 | 4/4 | ~12 min | ~3 min |
 
 **Recent Trend:**
-- Last 5 plans: 03-04 (~3 min), 04-01 (~2 min), 04-02 (~2 min), 04-04 (~4 min)
+- Last 5 plans: 04-01 (~2 min), 04-02 (~2 min), 04-04 (~4 min), 04-03 (~4 min)
 - Trend: stable at ~2-4 min
 
 *Updated after each plan completion*
@@ -80,6 +80,9 @@ Recent decisions affecting current work:
 - [04-04]: textStyle/highlight marks are presentation-only -- skipped in Markdown output
 - [04-04]: codeBlock with 'plaintext'/empty/null language renders bare ``` fences (no language annotation)
 - [04-04]: underline renders as <u>text</u> in Markdown (HTML is valid Markdown)
+- [04-03]: useSaveOnUnmount uses ref to capture latest saveNow -- avoids stale closure
+- [04-03]: useSaveOnQuit calls confirmQuitSave in .finally() -- ensures quit proceeds even if save throws
+- [04-03]: SaveStatus uses setTick counter state to force re-render every second for live time display
 
 ### Pending Todos
 
@@ -96,5 +99,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-01
-Stopped at: Completed 04-04-PLAN.md (content converter)
+Stopped at: Completed 04-03-PLAN.md (save triggers & status indicator) -- Phase 4 complete
 Resume file: None
