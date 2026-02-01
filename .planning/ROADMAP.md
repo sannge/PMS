@@ -125,12 +125,12 @@ Plans:
   3. Document title is displayed at the top and is editable by clicking on it
   4. Metadata bar shows tags (add/remove), scope, and "last edited by" with timestamp
   5. Bottom bar shows word count and last saved timestamp
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 06-01: Tab bar component with open, close, switch, and unsaved indicator
-- [ ] 06-02: Document title editing, metadata bar, and bottom status bar
-- [ ] 06-03: Integration of editor, tabs, and sidebar into cohesive Notes screen layout
+- [ ] 06-01-PLAN.md — Extend KnowledgeBaseContext with tab state + build DocumentTabBar and DocumentTabItem components
+- [ ] 06-02-PLAN.md — Document title editing, metadata bar with tag management, and status bar with word count
+- [ ] 06-03-PLAN.md — DocumentPanel integration, Notes page layout wiring, sidebar tab-opening behavior
 
 ### Phase 7: Images in Editor
 **Goal**: Users can add and resize images in documents via paste, upload, or drag-and-drop with images stored in MinIO
