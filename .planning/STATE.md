@@ -10,28 +10,28 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 2 of 10 (Notes Screen Shell & Folder Navigation)
-Plan: 2 of 3 in current phase
-Status: In progress
-Last activity: 2026-01-31 -- Completed 02-02-PLAN.md (Folder Tree & Context Menu)
+Plan: 3 of 3 in current phase
+Status: Phase complete
+Last activity: 2026-01-31 -- Completed 02-03-PLAN.md (Scope Filter & Tag Filter)
 
-Progress: [██████░░░░] ~17%
+Progress: [███████░░░] ~20%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 6
-- Average duration: ~8 min
-- Total execution time: ~0.8 hours
+- Total plans completed: 7
+- Average duration: ~7 min
+- Total execution time: ~0.85 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01 | 4/4 | ~34 min | ~9 min |
-| 02 | 2/3 | ~15 min | ~8 min |
+| 02 | 3/3 | ~19 min | ~6 min |
 
 **Recent Trend:**
-- Last 5 plans: 01-03 (~7 min), 01-04 (~7 min), 02-01 (~11 min), 02-02 (~4 min)
+- Last 5 plans: 01-04 (~7 min), 02-01 (~11 min), 02-02 (~4 min), 02-03 (~4 min)
 - Trend: stable at ~4-11 min
 
 *Updated after each plan completion*
@@ -59,6 +59,8 @@ Recent decisions affecting current work:
 - [02-01]: Document mutations invalidate both document list and folder tree queries (folder document_count)
 - [02-01]: KnowledgeBaseContext is UI-only state (useReducer), data fetching via TanStack Query hooks
 - [02-02]: Document rename uses row_version=1 default; API 409 handles stale conflicts
+- [02-03]: Composite string encoding (application:id, project:id) for Radix Select single-value constraint
+- [02-03]: Per-application ProjectItems components for lazy project fetching in scope dropdown
 
 ### Pending Todos
 
@@ -75,5 +77,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-31
-Stopped at: Completed 02-02-PLAN.md (Folder Tree & Context Menu)
+Stopped at: Completed 02-03-PLAN.md (Scope Filter & Tag Filter) -- Phase 2 complete
 Resume file: None
