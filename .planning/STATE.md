@@ -10,27 +10,27 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 1 of 10 (Migration & Data Foundation)
-Plan: 2 of 4 in current phase
+Plan: 3 of 4 in current phase
 Status: In progress
-Last activity: 2026-01-31 -- Completed 01-02-PLAN.md (Remove Store Shims)
+Last activity: 2026-01-31 -- Completed 01-03-PLAN.md (Knowledge Base Data Model & CRUD API)
 
-Progress: [██░░░░░░░░] ~5%
+Progress: [███░░░░░░░] ~8%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 2
-- Average duration: ~10 min
-- Total execution time: ~0.3 hours
+- Total plans completed: 3
+- Average duration: ~9 min
+- Total execution time: ~0.5 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 01 | 2/4 | ~20 min | ~10 min |
+| 01 | 3/4 | ~27 min | ~9 min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (~12 min), 01-02 (~8 min)
+- Last 5 plans: 01-01 (~12 min), 01-02 (~8 min), 01-03 (~7 min)
 - Trend: improving
 
 *Updated after each plan completion*
@@ -49,6 +49,9 @@ Recent decisions affecting current work:
 - [Revision]: Remove Zustand entirely -- all state management via React Context + TanStack Query (auth-store, notes-store, notification-ui-store migrated in Phase 1)
 - [Revision]: IndexedDB for knowledge base caching -- draft persistence (Phase 4), document content and folder tree caching (Phase 2) via existing per-query-persister infrastructure
 - [01-02]: useRef pattern for auth state in WebSocket callbacks replaces Zustand getState()
+- [01-03]: Materialized path pattern for folder tree queries (no recursive CTEs)
+- [01-03]: Cursor pagination with base64-encoded JSON cursor (created_at + id)
+- [01-03]: DocumentSnapshot table as empty placeholder for Phase 4+ version history
 
 ### Pending Todos
 
@@ -64,5 +67,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-31
-Stopped at: Completed 01-02-PLAN.md (Remove Store Shims)
+Stopped at: Completed 01-03-PLAN.md (Knowledge Base Data Model & CRUD API)
 Resume file: None
