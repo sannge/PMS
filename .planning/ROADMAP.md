@@ -55,12 +55,12 @@ Plans:
   4. Scope filter works: user can switch between All docs, My Notes, by Application, and by Project
   5. Folder tree renders immediately from IndexedDB cache on screen open, then refreshes from server in background (no loading spinner on repeat visits)
   6. Recently opened documents load instantly from IndexedDB cache via TanStack Query persistence (per-query-persister integration for document queries)
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 02-01: Notes screen layout, React Context for knowledge base UI state, and TanStack Query hooks with IndexedDB persistence for documents and folders
-- [ ] 02-02: Folder tree component with context menu actions and IndexedDB cache integration
-- [ ] 02-03: Scope filter and tag list sidebar sections
+- [ ] 02-01-PLAN.md — Notes screen layout, KnowledgeBaseContext for UI state, TanStack Query hooks with IndexedDB persistence for documents/folders/tags
+- [ ] 02-02-PLAN.md — Folder tree component with expand/collapse, right-click context menu, CRUD actions, and IndexedDB cache integration
+- [ ] 02-03-PLAN.md — Scope filter dropdown and tag filter list sidebar sections
 
 ### Phase 3: Rich Text Editor Core
 **Goal**: Users can create and edit documents with a full-featured rich text editor covering all standard formatting
@@ -205,7 +205,7 @@ Note: Phases 5, 6, 7, 9 all depend on Phase 4 and can potentially be parallelize
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Migration & Data Foundation | 0/4 | Planned | - |
-| 2. Notes Screen Shell & Folder Navigation | 0/3 | Not started | - |
+| 2. Notes Screen Shell & Folder Navigation | 0/3 | Planned | - |
 | 3. Rich Text Editor Core | 0/4 | Planned | - |
 | 4. Auto-Save & Content Pipeline | 0/4 | Planned | - |
 | 5. Document Locking | 0/2 | Planned | - |
