@@ -168,8 +168,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 07-01-PLAN.md — Backend image upload endpoint (MinIO) and TipTap image extension with paste/drop/upload toolbar button
-- [ ] 07-02-PLAN.md — Image resize handles (React NodeView) and loading placeholder animation
+- [ ] 07-01-PLAN.md — Backend EntityType + content converter image handlers, ResizableImage extension + NodeView, useImageUpload hook
+- [ ] 07-02-PLAN.md — Wire paste/drop/upload handlers into DocumentEditor, toolbar image button, skeleton loading CSS
 
 ### Phase 8: Permissions
 **Goal**: Document access is enforced by role -- owners manage everything, editors create and edit, viewers read, personal notes are private
