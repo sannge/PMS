@@ -21,7 +21,6 @@
       "@/components/*": ["src/renderer/components/*"],
       "@/lib/*": ["src/renderer/lib/*"],
       "@/hooks/*": ["src/renderer/hooks/*"],
-      "@/stores/*": ["src/renderer/stores/*"],
       "@/pages/*": ["src/renderer/pages/*"]
     }
   },
