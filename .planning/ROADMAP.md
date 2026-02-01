@@ -94,10 +94,10 @@ Plans:
 **Plans**: 4 plans
 
 Plans:
-- [ ] 04-01-PLAN.md -- Auto-save PUT endpoint with optimistic concurrency and useAutoSave hook with 10s debounce and dirty tracking
-- [ ] 04-02-PLAN.md -- IndexedDB draft persistence (draft-db store, useDraft hook with 2s auto-buffer, restore prompt on reopen)
-- [ ] 04-03-PLAN.md -- Save on navigate away, Electron before-quit IPC coordination, and SaveStatus indicator component
-- [ ] 04-04-PLAN.md -- TDD: Custom Python TipTap JSON to Markdown and plain text converter
+- [ ] 04-01-PLAN.md — Auto-save PUT endpoint with optimistic concurrency and useAutoSave hook with 10s debounce and dirty tracking
+- [ ] 04-02-PLAN.md — IndexedDB draft persistence (draft-db store, useDraft hook with 2s auto-buffer, restore prompt on reopen)
+- [ ] 04-03-PLAN.md — Save on navigate away, Electron before-quit IPC coordination, and SaveStatus indicator component
+- [ ] 04-04-PLAN.md — TDD: Custom Python TipTap JSON to Markdown and plain text converter
 
 ### Phase 5: Document Locking
 **Goal**: Only one user can edit a document at a time, with reliable lock management that prevents stuck locks
