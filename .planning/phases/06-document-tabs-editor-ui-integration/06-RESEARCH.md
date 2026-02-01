@@ -217,6 +217,8 @@ function EditableTitle({ documentId, title, rowVersion }: Props) {
 }
 ```
 
+**Note on `useRenameDocument` signature:** `useRenameDocument(scope: string, scopeId: string)` requires a non-null `scopeId`. The DocumentHeader must resolve the document's scope and scopeId from the Document object before calling this hook. Scope is derived from which FK is set: `project_id` -> 'project', `application_id` -> 'application', `user_id` -> 'personal'.
+
 **Confidence:** HIGH -- standard inline-edit pattern, uses existing `useRenameDocument` hook.
 
 ### Pattern 4: Metadata Bar Layout
@@ -335,6 +337,8 @@ function DocumentStatusBar({ editor, saveStatus }: Props) {
 
 **Note:** Phase 3 builds the word count extension (CharacterCount). Phase 4 builds the save status state machine. Phase 6 just displays both in the status bar. The status bar component receives these as props or accesses them via hooks.
 
+**IMPORTANT: Existing EditorStatusBar duplication.** The current `document-editor.tsx` already renders an internal `EditorStatusBar` at the bottom of the editor that shows word and character counts. When Phase 6 adds a separate `DocumentStatusBar` component to the `DocumentPanel`, the editor's internal status bar MUST be removed (or the DocumentEditor refactored to accept an `showStatusBar?: boolean` prop) to avoid displaying two status bars. The Phase 6 `DocumentStatusBar` supersedes the internal one because it also shows "last saved" timestamp.
+
 **Confidence:** HIGH -- uses existing infrastructure from Phases 3 and 4.
 
 ### Pattern 7: Notes Page Layout Composition
@@ -449,11 +453,18 @@ function NotesPage({ applicationId }: NotesPageProps) {
 **How to avoid:** Phase 6 depends on Phase 4. The auto-save endpoint (Phase 4, plan 04-01) should add `updated_by` to the Document model and DocumentResponse schema. If this field is not present at Phase 6 execution time, fall back to `created_by` with a "Created by" label instead of "Last edited by".
 **Warning signs:** Metadata bar shows "Last edited by: Unknown" for all documents.
 
-### Pitfall 8: Tag Add/Remove Requires Backend Integration
+### Pitfall 8: Sidebar Document Click Needs Title for Tab Opening
+
+**What goes wrong:** Clicking a document in the folder tree should open a tab, but the `handleSelectDocument` callback in `folder-tree.tsx` only has `documentId` (from `DocumentListItem`), and `openTab` needs both `documentId` and `title`.
+**Why it happens:** The current `handleSelectDocument` callback passes only `documentId` via `selectDocument(documentId)`. It does not call `openTab`.
+**How to avoid:** The `FolderTree` component has access to `DocumentListItem` objects which include `title`. The `renderDocumentItem` callback receives the full `doc: DocumentListItem` object. Update `handleSelectDocument` to accept both `documentId` and `title`, or change the `onSelect` callback in `renderDocumentItem` to call `openTab(doc.id, doc.title)` instead of `selectDocument(doc.id)`. The `handleNewDocument` callback (line 174) also calls `selectDocument(data.id)` after creating a new document -- this should also call `openTab(data.id, data.title)`.
+**Warning signs:** Documents open in the editor but no tab appears in the tab bar.
+
+### Pitfall 9: Tag Add/Remove Requires Backend Integration
 
 **What goes wrong:** Metadata bar has tag add/remove UI but no mutation hooks exist for tag assignment.
 **Why it happens:** Phase 1 created the tag assignment API endpoints but the frontend hooks (`use-document-tags.ts`) only have a read hook (`useDocumentTags`), not mutation hooks for assigning/unassigning tags to documents.
-**How to avoid:** Phase 6 plan 06-02 must create `useAddDocumentTag` and `useRemoveDocumentTag` mutation hooks. Check the backend API: Phase 1 plan 01-04 created tag assignment endpoints (POST/DELETE `/api/documents/{id}/tags/{tag_id}`).
+**How to avoid:** Phase 6 plan 06-02 must create `useAssignDocumentTag` and `useUnassignDocumentTag` mutation hooks. The backend API endpoints are: POST `/api/documents/{document_id}/tags` with body `{ tag_id: UUID }` (returns 201 with TagAssignmentResponse) and DELETE `/api/documents/{document_id}/tags/{tag_id}` (returns 204 no content).
 **Warning signs:** Tag add/remove buttons do nothing or error.
 
 ## Code Examples
@@ -688,9 +699,9 @@ function DocumentStatusBar({ editor, saveStatus, lastSavedAt }: DocumentStatusBa
    - Recommendation: Phase 4 should add both `updated_by: UUID` and `updated_by_name: str | null` to `DocumentResponse`. If unavailable at Phase 6 execution, fall back to `created_by` with "Created by" label. Flag this as a cross-phase dependency.
 
 2. **Tag assignment mutation hooks**
-   - What we know: Phase 1 created backend endpoints for tag assignment (POST/DELETE on document tag relationships). The frontend `use-document-tags.ts` only has `useDocumentTags` (read hook).
+   - What we know: Phase 1 created backend endpoints for tag assignment: POST `/api/documents/{document_id}/tags` with `{ tag_id }` body (returns 201) and DELETE `/api/documents/{document_id}/tags/{tag_id}` (returns 204). The frontend `use-document-tags.ts` only has `useDocumentTags` (read hook), no mutation hooks.
    - What's unclear: Whether tag add/remove should happen inline in the metadata bar (small popover) or in a dialog.
-   - Recommendation: Inline popover is the modern standard (GitHub labels, Notion tags, Linear labels). Build `useAddDocumentTag` and `useRemoveDocumentTag` mutation hooks in Phase 6 and a compact tag picker popover.
+   - Recommendation: Inline popover is the modern standard (GitHub labels, Notion tags, Linear labels). Build `useAssignDocumentTag` and `useUnassignDocumentTag` mutation hooks in Phase 6 and a compact tag picker popover.
 
 3. **Tab close behavior for dirty documents**
    - What we know: Phase 4 auto-saves every 10 seconds of inactivity. IndexedDB drafts persist every 2 seconds.
