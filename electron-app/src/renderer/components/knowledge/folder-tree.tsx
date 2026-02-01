@@ -11,7 +11,9 @@
 
 import { useState, useCallback } from 'react'
 import { FilePlus, Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/contexts/auth-context'
 import { useKnowledgeBase } from '@/contexts/knowledge-base-context'
 import {
   useFolderTree,
@@ -29,6 +31,7 @@ import {
 } from '@/hooks/use-documents'
 import { FolderTreeItem } from './folder-tree-item'
 import { FolderContextMenu } from './folder-context-menu'
+import { ScopePickerDialog } from './scope-picker-dialog'
 
 // ============================================================================
 // Types
@@ -83,6 +86,13 @@ export function FolderTree(): JSX.Element {
     selectDocument,
     selectFolder,
   } = useKnowledgeBase()
+
+  // Auth state for personal scope resolution
+  const userId = useAuthStore((s) => s.user?.id ?? null)
+
+  // Scope picker state (for "All Documents" create)
+  const [scopePickerOpen, setScopePickerOpen] = useState(false)
+  const [pendingFolderId, setPendingFolderId] = useState<string | null>(null)
 
   // Data queries
   const {
@@ -161,7 +171,12 @@ export function FolderTree(): JSX.Element {
   const handleNewDocument = useCallback(
     (folderId: string) => {
       handleCloseContextMenu()
-      const resolvedScopeId = scopeId ?? ''
+      if (scope === 'all') {
+        setPendingFolderId(folderId)
+        setScopePickerOpen(true)
+        return
+      }
+      const resolvedScopeId = scope === 'personal' ? (userId ?? '') : (scopeId ?? '')
       createDocument.mutate(
         {
           title: 'Untitled',
@@ -177,10 +192,13 @@ export function FolderTree(): JSX.Element {
             setRenamingItemId(data.id)
             setRenamingItemType('document')
           },
+          onError: (error) => {
+            toast.error(error.message)
+          },
         }
       )
     },
-    [scope, scopeId, createDocument, expandFolder, selectDocument, selectFolder, handleCloseContextMenu]
+    [scope, scopeId, userId, createDocument, expandFolder, selectDocument, selectFolder, handleCloseContextMenu]
   )
 
   const handleRename = useCallback(
@@ -262,7 +280,12 @@ export function FolderTree(): JSX.Element {
   // ========================================================================
 
   const handleCreateFirstDocument = useCallback(() => {
-    const resolvedScopeId = scopeId ?? ''
+    if (scope === 'all') {
+      setPendingFolderId(null)
+      setScopePickerOpen(true)
+      return
+    }
+    const resolvedScopeId = scope === 'personal' ? (userId ?? '') : (scopeId ?? '')
     createDocument.mutate(
       {
         title: 'Untitled',
@@ -275,9 +298,43 @@ export function FolderTree(): JSX.Element {
           setRenamingItemId(data.id)
           setRenamingItemType('document')
         },
+        onError: (error) => {
+          toast.error(error.message)
+        },
       }
     )
-  }, [scope, scopeId, createDocument, selectDocument])
+  }, [scope, scopeId, userId, createDocument, selectDocument])
+
+  // ========================================================================
+  // Scope picker confirm handler
+  // ========================================================================
+
+  const handleScopePickerConfirm = useCallback(
+    (chosenScope: string, chosenScopeId: string) => {
+      createDocument.mutate(
+        {
+          title: 'Untitled',
+          scope: chosenScope,
+          scope_id: chosenScopeId,
+          folder_id: pendingFolderId,
+        },
+        {
+          onSuccess: (data) => {
+            setScopePickerOpen(false)
+            selectDocument(data.id)
+            selectFolder(null)
+            if (pendingFolderId) expandFolder(pendingFolderId)
+            setRenamingItemId(data.id)
+            setRenamingItemType('document')
+          },
+          onError: (error) => {
+            toast.error(error.message)
+          },
+        }
+      )
+    },
+    [createDocument, pendingFolderId, selectDocument, selectFolder, expandFolder]
+  )
 
   // ========================================================================
   // Recursive folder renderer
@@ -367,14 +424,20 @@ export function FolderTree(): JSX.Element {
         <p className="text-sm text-muted-foreground mb-3">No documents yet</p>
         <button
           onClick={handleCreateFirstDocument}
+          disabled={createDocument.isPending}
           className={cn(
             'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md',
             'bg-primary text-primary-foreground hover:bg-primary/90',
-            'transition-colors'
+            'transition-colors',
+            'disabled:pointer-events-none disabled:opacity-50'
           )}
         >
-          <FilePlus className="h-4 w-4" />
-          Create your first document
+          {createDocument.isPending ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <FilePlus className="h-4 w-4" />
+          )}
+          {createDocument.isPending ? 'Creating...' : 'Create your first document'}
         </button>
       </div>
     )
@@ -424,6 +487,13 @@ export function FolderTree(): JSX.Element {
           onDelete={handleDelete}
         />
       )}
+
+      {/* Scope picker for "All Documents" create */}
+      <ScopePickerDialog
+        open={scopePickerOpen}
+        onOpenChange={setScopePickerOpen}
+        onConfirm={handleScopePickerConfirm}
+      />
     </div>
   )
 }
