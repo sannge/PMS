@@ -4,7 +4,7 @@
  * Main sidebar container that composes all sidebar sections:
  * - Search bar
  * - Scope filter (placeholder for Plan 03)
- * - Folder tree (placeholder for Plan 02)
+ * - Folder tree (FolderTree component)
  * - Tag filter (placeholder for Plan 03)
  *
  * Supports collapsed/expanded modes with smooth transitions.
@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useKnowledgeBase } from '@/contexts/knowledge-base-context'
 import { SearchBar } from './search-bar'
+import { FolderTree } from './folder-tree'
 
 export function KnowledgeSidebar(): JSX.Element {
   const { isSidebarCollapsed, toggleSidebar } = useKnowledgeBase()
@@ -65,11 +66,9 @@ export function KnowledgeSidebar(): JSX.Element {
             <div className="text-xs text-muted-foreground">All Documents</div>
           </div>
 
-          {/* Folder tree section -- PLACEHOLDER for Plan 02 */}
+          {/* Folder tree section */}
           <ScrollArea className="flex-1">
-            <div className="p-2 text-sm text-muted-foreground">
-              Folder tree loading...
-            </div>
+            <FolderTree />
           </ScrollArea>
 
           {/* Tag filter section -- PLACEHOLDER for Plan 03 */}
