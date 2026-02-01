@@ -16,7 +16,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: Notes Screen Shell & Folder Navigation** - Sidebar with folder tree (cached via IndexedDB), search bar, tag list, scope filtering, and document content caching (completed 2026-01-31)
 - [x] **Phase 3: Rich Text Editor Core** - Full-featured TipTap editor with text formatting, headings, lists, tables, code blocks, and links (completed 2026-01-31)
 - [x] **Phase 4: Auto-Save & Content Pipeline** - Debounced auto-save with three-format storage (JSON, Markdown, plain text) and IndexedDB draft persistence for crash recovery (completed 2026-02-01)
-- [ ] **Phase 5: Document Locking** - Lock-based concurrent editing with heartbeat, auto-expiry, and owner override
+- [ ] **Phase 4.1: Document Creation Bug Fixes** (INSERTED) - Fix document creation flow bugs across all scopes: duplicate icons, 422/500 errors, scope picker dialog, error feedback
+- [x] **Phase 5: Document Locking** - Lock-based concurrent editing with heartbeat, auto-expiry, and owner override (completed 2026-02-01)
 - [ ] **Phase 6: Document Tabs & Editor UI Integration** - Browser-style document tabs, metadata bar, title editing, and editor layout
 - [ ] **Phase 7: Images in Editor** - Image paste, upload, drag-and-drop, resizing, loading placeholders, and MinIO storage
 - [ ] **Phase 8: Permissions** - Role-based access control for documents across all three scopes
@@ -99,6 +100,28 @@ Plans:
 - [x] 04-03-PLAN.md — Save on navigate away, Electron before-quit IPC coordination, and SaveStatus indicator component
 - [x] 04-04-PLAN.md — TDD: Custom Python TipTap JSON to Markdown and plain text converter
 
+### Phase 4.1: Document Creation Bug Fixes (INSERTED)
+**Goal**: All document creation flows work correctly across every scope (All Documents, My Notes, Application, Project) with proper error handling and no UI glitches
+**Depends on**: Phase 4
+**Success Criteria** (what must be TRUE):
+  1. Scope filter shows a single icon per scope option (no duplicate globe icons)
+  2. Creating a document from "All Documents" view opens a scope picker dialog, then creates in the chosen scope
+  3. Creating a document from "My Notes" correctly resolves the user's ID as scope_id (no 422)
+  4. Creating a document from Application/Project scope succeeds without 500 (tags relationship loads correctly)
+  5. Create button is disabled while mutation is pending (no rapid-fire duplicate requests)
+  6. Failed document creation shows an error toast to the user
+**Plans**: 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 4.1 to break down)
+
+**Bugs addressed:**
+- Duplicate globe icons in scope-filter.tsx (ScopeTriggerContent renders icon + SelectValue re-renders selected item icon)
+- "All Documents" sends scope="all" / scope_id="" → 422 (needs scope picker dialog)
+- "My Notes" sends scope_id="" instead of user UUID → 422 (scope resolution bug in folder-tree.tsx:265)
+- Application/Project → 500 (Document model tags relationship uses lazy="dynamic", incompatible with async SQLAlchemy)
+- No loading state or error feedback on create button
+
 ### Phase 5: Document Locking
 **Goal**: Only one user can edit a document at a time, with reliable lock management that prevents stuck locks
 **Depends on**: Phase 4
@@ -112,8 +135,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 05-01-PLAN.md — Backend lock service (Redis atomic ops + Lua scripts), Pydantic schemas, REST endpoints, WebSocket message types and broadcast handler
-- [ ] 05-02-PLAN.md — Frontend useDocumentLock hook (heartbeat, inactivity timer, WebSocket listener), LockBanner component, editor integration
+- [x] 05-01-PLAN.md — Backend lock service (Redis atomic ops + Lua scripts), Pydantic schemas, REST endpoints, WebSocket message types and broadcast handler
+- [x] 05-02-PLAN.md — Frontend useDocumentLock hook (heartbeat, inactivity timer, WebSocket listener), LockBanner component, editor integration
 
 ### Phase 6: Document Tabs & Editor UI Integration
 **Goal**: Users can work with multiple documents simultaneously using browser-style tabs with full metadata visibility
@@ -199,8 +222,8 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
-Note: Phases 5, 6, 7, 9 all depend on Phase 4 and can potentially be parallelized after Phase 4 completes. Phase 8 depends only on Phase 1. Phase 10 depends on Phase 6 and Phase 8.
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 4.1 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
+Note: Phases 5, 6, 7, 9 all depend on Phase 4 and can potentially be parallelized after Phase 4 completes. Phase 8 depends only on Phase 1. Phase 10 depends on Phase 6 and Phase 8. Phase 4.1 is an urgent bug-fix insertion that should complete before or alongside Phase 5.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -208,7 +231,8 @@ Note: Phases 5, 6, 7, 9 all depend on Phase 4 and can potentially be parallelize
 | 2. Notes Screen Shell & Folder Navigation | 3/3 | Complete | 2026-01-31 |
 | 3. Rich Text Editor Core | 4/4 | Complete | 2026-02-01 |
 | 4. Auto-Save & Content Pipeline | 4/4 | Complete | 2026-02-01 |
-| 5. Document Locking | 0/2 | Planned | - |
+| 4.1. Document Creation Bug Fixes | 0/? | Not started | - |
+| 5. Document Locking | 2/2 | Complete | 2026-02-01 |
 | 6. Document Tabs & Editor UI Integration | 0/3 | Planned | - |
 | 7. Images in Editor | 0/2 | Not started | - |
 | 8. Permissions | 0/3 | Not started | - |

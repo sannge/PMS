@@ -56,13 +56,13 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Document Locking
 
-- [ ] **LOCK-01**: When user starts editing, document is locked to them
-- [ ] **LOCK-02**: Other users opening a locked document see "Being edited by [name]" and can only read
-- [ ] **LOCK-03**: Lock auto-releases after 30 seconds of inactivity (saves first)
-- [ ] **LOCK-04**: User can manually stop editing to release lock
-- [ ] **LOCK-05**: Server-side lock expiry (Redis TTL) for crashed/disconnected clients
-- [ ] **LOCK-06**: Application owners can force-take lock (saves previous editor's work first)
-- [ ] **LOCK-07**: Lock heartbeat -- client sends periodic heartbeat to extend lock TTL while actively editing
+- [x] **LOCK-01**: When user starts editing, document is locked to them
+- [x] **LOCK-02**: Other users opening a locked document see "Being edited by [name]" and can only read
+- [x] **LOCK-03**: Lock auto-releases after 30 seconds of inactivity (saves first)
+- [x] **LOCK-04**: User can manually stop editing to release lock
+- [x] **LOCK-05**: Server-side lock expiry (Redis TTL) for crashed/disconnected clients
+- [x] **LOCK-06**: Application owners can force-take lock (saves previous editor's work first)
+- [x] **LOCK-07**: Lock heartbeat -- client sends periodic heartbeat to extend lock TTL while actively editing
 
 ### Notes Screen UI
 
@@ -201,13 +201,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CACHE-01 | Phase 4 | Complete |
 | CACHE-02 | Phase 2 | Pending |
 | CACHE-03 | Phase 2 | Pending |
-| LOCK-01 | Phase 5 | Pending |
-| LOCK-02 | Phase 5 | Pending |
-| LOCK-03 | Phase 5 | Pending |
-| LOCK-04 | Phase 5 | Pending |
-| LOCK-05 | Phase 5 | Pending |
-| LOCK-06 | Phase 5 | Pending |
-| LOCK-07 | Phase 5 | Pending |
+| LOCK-01 | Phase 5 | Complete |
+| LOCK-02 | Phase 5 | Complete |
+| LOCK-03 | Phase 5 | Complete |
+| LOCK-04 | Phase 5 | Complete |
+| LOCK-05 | Phase 5 | Complete |
+| LOCK-06 | Phase 5 | Complete |
+| LOCK-07 | Phase 5 | Complete |
 | UI-01 | Phase 2 | Pending |
 | UI-02 | Phase 2 | Pending |
 | UI-03 | Phase 2 | Pending |
