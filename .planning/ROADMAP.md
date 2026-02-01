@@ -174,12 +174,12 @@ Plans:
   3. User can create a new document from built-in templates (Meeting Notes, Design Doc, Decision Record, Project Brief, Sprint Retrospective)
   4. User can save any document as a custom template and create new documents from custom templates
   5. User can export any document as a Markdown .md file download
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 09-01: PostgreSQL full-text search endpoint and search results UI
-- [ ] 09-02: Built-in templates, custom template save, and "new from template" flow
-- [ ] 09-03: Markdown export endpoint and download button
+- [ ] 09-01-PLAN.md — PostgreSQL full-text search with tsvector/GIN index migration, search endpoint, and search results UI in sidebar
+- [ ] 09-02-PLAN.md — DocumentTemplate model, built-in template seeding, template CRUD endpoints, template picker dialog, and save-as-template flow
+- [ ] 09-03-PLAN.md — Markdown export endpoint and download button in editor toolbar
 
 ### Phase 10: Embedded Docs & @ Mentions
 **Goal**: Users can access and edit documents directly within Application and Project detail pages, and link to entities with @ mentions
@@ -212,5 +212,5 @@ Note: Phases 5, 6, 7, 9 all depend on Phase 4 and can potentially be parallelize
 | 6. Document Tabs & Editor UI Integration | 0/3 | Not started | - |
 | 7. Images in Editor | 0/2 | Not started | - |
 | 8. Permissions | 0/3 | Not started | - |
-| 9. Search, Templates & Export | 0/3 | Not started | - |
+| 9. Search, Templates & Export | 0/3 | Planned | - |
 | 10. Embedded Docs & @ Mentions | 0/2 | Not started | - |
