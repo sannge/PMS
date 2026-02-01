@@ -18,6 +18,7 @@ import { ApplicationsPage } from '@/pages/applications/index'
 import { ApplicationDetailPage } from '@/pages/applications/[id]'
 import { ProjectsPage } from '@/pages/projects/index'
 import { ProjectDetailPage } from '@/pages/projects/[id]'
+import { NotesPage } from '@/pages/notes/index'
 import { MyTasksPanel } from '@/components/tasks/MyTasksPanel'
 import { MyProjectsPanel } from '@/components/dashboard/MyProjectsPanel'
 import { DashboardTasksList } from '@/components/dashboard/DashboardTasksList'
@@ -738,6 +739,10 @@ export function DashboardPage({
             </div>
           </div>
         )
+      case 'notes':
+        return (
+          <NotesPage applicationId={selectedApplicationId} />
+        )
       case 'settings':
         return (
           <div className="flex flex-1 items-center justify-center">
@@ -770,7 +775,7 @@ export function DashboardPage({
         />
 
         {/* Main Content Area - reduced padding for space efficiency */}
-        <main className={cn("flex-1 overflow-auto p-4 lg:p-5", activeItem === 'tasks' && "relative")}>
+        <main className={cn("flex-1 overflow-auto p-4 lg:p-5", activeItem === 'tasks' && "relative", activeItem === 'notes' && "p-0 overflow-hidden")}>
           {renderContent()}
         </main>
       </div>

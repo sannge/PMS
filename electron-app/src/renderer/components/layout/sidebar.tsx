@@ -17,6 +17,7 @@ import {
   LayoutDashboard,
   FolderKanban,
   ListTodo,
+  FileText,
   ChevronLeft,
   Settings,
   Bell,
@@ -27,7 +28,7 @@ import {
 // Types
 // ============================================================================
 
-type NavItem = 'dashboard' | 'applications' | 'projects' | 'tasks' | 'settings'
+type NavItem = 'dashboard' | 'applications' | 'projects' | 'tasks' | 'notes' | 'settings'
 
 export interface SidebarProps {
   activeItem?: NavItem
@@ -143,6 +144,7 @@ export function Sidebar({
     { id: 'dashboard' as NavItem, icon: <LayoutDashboard className="h-4 w-4" />, label: 'Dashboard' },
     { id: 'applications' as NavItem, icon: <FolderKanban className="h-4 w-4" />, label: 'Applications' },
     { id: 'tasks' as NavItem, icon: <ListTodo className="h-4 w-4" />, label: 'Tasks' },
+    { id: 'notes' as NavItem, icon: <FileText className="h-4 w-4" />, label: 'Notes' },
   ]
 
   return (
