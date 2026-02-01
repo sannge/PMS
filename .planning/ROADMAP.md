@@ -110,10 +110,11 @@ Plans:
   4. Creating a document from Application/Project scope succeeds without 500 (tags relationship loads correctly)
   5. Create button is disabled while mutation is pending (no rapid-fire duplicate requests)
   6. Failed document creation shows an error toast to the user
-**Plans**: 0 plans
+**Plans**: 2 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 4.1 to break down)
+- [ ] 04.1-01-PLAN.md — Fix backend tags relationship (lazy=selectin), scope filter duplicate icons, install sonner toast
+- [ ] 04.1-02-PLAN.md — Scope picker dialog, personal scope resolution, create button loading/error states
 
 **Bugs addressed:**
 - Duplicate globe icons in scope-filter.tsx (ScopeTriggerContent renders icon + SelectValue re-renders selected item icon)
@@ -231,7 +232,7 @@ Note: Phases 5, 6, 7, 9 all depend on Phase 4 and can potentially be parallelize
 | 2. Notes Screen Shell & Folder Navigation | 3/3 | Complete | 2026-01-31 |
 | 3. Rich Text Editor Core | 4/4 | Complete | 2026-02-01 |
 | 4. Auto-Save & Content Pipeline | 4/4 | Complete | 2026-02-01 |
-| 4.1. Document Creation Bug Fixes | 0/? | Not started | - |
+| 4.1. Document Creation Bug Fixes | 0/2 | Not started | - |
 | 5. Document Locking | 2/2 | Complete | 2026-02-01 |
 | 6. Document Tabs & Editor UI Integration | 0/3 | Planned | - |
 | 7. Images in Editor | 0/2 | Not started | - |
