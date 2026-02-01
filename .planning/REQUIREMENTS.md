@@ -51,8 +51,8 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Local Caching (IndexedDB)
 
 - [ ] **CACHE-01**: Local draft persistence -- unsaved editor content auto-saved to IndexedDB so content survives crashes, navigation, and app restarts
-- [ ] **CACHE-02**: Document content caching -- recently opened documents load instantly from IndexedDB via TanStack Query persistence layer (per-query-persister)
-- [ ] **CACHE-03**: Folder tree caching -- sidebar folder tree renders immediately from IndexedDB cache, then refreshes from server in background
+- [x] **CACHE-02**: Document content caching -- recently opened documents load instantly from IndexedDB via TanStack Query persistence layer (per-query-persister)
+- [x] **CACHE-03**: Folder tree caching -- sidebar folder tree renders immediately from IndexedDB cache, then refreshes from server in background
 
 ### Document Locking
 
@@ -66,16 +66,16 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Notes Screen UI
 
-- [ ] **UI-01**: Left sidebar: search bar at top
-- [ ] **UI-02**: Left sidebar: folder tree below search (expand/collapse, right-click context menu for new folder, new document, rename, move, delete)
-- [ ] **UI-03**: Left sidebar: tag list at bottom (click to filter documents by tag)
+- [x] **UI-01**: Left sidebar: search bar at top
+- [x] **UI-02**: Left sidebar: folder tree below search (expand/collapse, right-click context menu for new folder, new document, rename, move, delete)
+- [x] **UI-03**: Left sidebar: tag list at bottom (click to filter documents by tag)
 - [ ] **UI-04**: Top bar: browser-style tabs for open documents (unsaved changes dot indicator)
 - [ ] **UI-05**: Top bar: multiple documents open simultaneously, switch between tabs
 - [ ] **UI-06**: Main area: document title at top (click to rename)
 - [ ] **UI-07**: Main area: metadata bar (tags add/remove, scope, last edited by and when)
 - [ ] **UI-08**: Main area: full rich text editor with toolbar
 - [ ] **UI-09**: Bottom: word count and last saved timestamp
-- [ ] **UI-10**: Scope filter: show All docs / My Notes / filter by Application / filter by Project
+- [x] **UI-10**: Scope filter: show All docs / My Notes / filter by Application / filter by Project
 
 ### Embedded Docs
 
