@@ -72,6 +72,9 @@ Recent decisions affecting current work:
 - [03-03]: Toggle header row included as contextual table control
 - [03-04]: Link popover uses Popover component (consistent with heading/font dropdowns)
 - [03-04]: useEditorState reads characterCount storage for reactive status bar updates
+- [04-01]: Content markdown/plain set to empty placeholders during auto-save -- real conversion deferred to Plan 04-04
+- [04-01]: useAutoSave uses refs (not state) for lastSaved, timer, saving mutex, rowVersion to avoid re-renders
+- [04-01]: SaveStatus exported as discriminated union type for reuse by save indicator and save-on-navigate
 - [04-02]: Cleanup runs inside getDraftDB() with flag guard -- simpler than separate App.tsx useEffect
 - [04-02]: restoreDraft does NOT delete from IndexedDB -- draft persists until clearDraftAfterSave after successful server save
 
