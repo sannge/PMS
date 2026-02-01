@@ -24,6 +24,12 @@ import {
   Code2,
   IndentIncrease,
   IndentDecrease,
+  Table2,
+  Columns3,
+  Rows3,
+  Plus,
+  Minus,
+  Trash2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
@@ -294,7 +300,81 @@ export function EditorToolbar({ editor }: EditorToolbarProps) {
         <IndentDecrease className="h-4 w-4" />
       </ToolbarButton>
 
-      {/* Table controls - Plan 03-03 */}
+      <ToolbarSeparator />
+
+      {/* Table Insert */}
+      <ToolbarButton
+        onClick={() =>
+          editor
+            .chain()
+            .focus()
+            .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
+            .run()
+        }
+        title="Insert table (3x3)"
+      >
+        <Table2 className="h-4 w-4" />
+      </ToolbarButton>
+
+      {/* Contextual Table Controls -- only visible when cursor is inside a table */}
+      {editor.isActive('table') && (
+        <>
+          <ToolbarSeparator />
+
+          <ToolbarButton
+            onClick={() => editor.chain().focus().addColumnAfter().run()}
+            title="Add column after"
+          >
+            <span className="relative inline-flex items-center">
+              <Columns3 className="h-4 w-4" />
+              <Plus className="h-2.5 w-2.5 absolute -right-1 -top-1" />
+            </span>
+          </ToolbarButton>
+          <ToolbarButton
+            onClick={() => editor.chain().focus().deleteColumn().run()}
+            title="Delete column"
+          >
+            <span className="relative inline-flex items-center">
+              <Columns3 className="h-4 w-4" />
+              <Minus className="h-2.5 w-2.5 absolute -right-1 -top-1" />
+            </span>
+          </ToolbarButton>
+          <ToolbarButton
+            onClick={() => editor.chain().focus().addRowAfter().run()}
+            title="Add row after"
+          >
+            <span className="relative inline-flex items-center">
+              <Rows3 className="h-4 w-4" />
+              <Plus className="h-2.5 w-2.5 absolute -right-1 -top-1" />
+            </span>
+          </ToolbarButton>
+          <ToolbarButton
+            onClick={() => editor.chain().focus().deleteRow().run()}
+            title="Delete row"
+          >
+            <span className="relative inline-flex items-center">
+              <Rows3 className="h-4 w-4" />
+              <Minus className="h-2.5 w-2.5 absolute -right-1 -top-1" />
+            </span>
+          </ToolbarButton>
+          <ToolbarButton
+            onClick={() => editor.chain().focus().toggleHeaderRow().run()}
+            title="Toggle header row"
+          >
+            <span className="relative inline-flex items-center">
+              <Table2 className="h-4 w-4" />
+              <Heading className="h-2.5 w-2.5 absolute -right-1 -top-1" />
+            </span>
+          </ToolbarButton>
+          <ToolbarButton
+            onClick={() => editor.chain().focus().deleteTable().run()}
+            title="Delete table"
+          >
+            <Trash2 className="h-4 w-4" />
+          </ToolbarButton>
+        </>
+      )}
+
       {/* Link, Font, Color controls - Plan 03-04 */}
     </div>
   )
