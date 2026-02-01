@@ -12,6 +12,8 @@ import { useCallback, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { createDocumentExtensions } from './editor-extensions'
 import { EditorToolbar } from './editor-toolbar'
+import { LockBanner } from './LockBanner'
+import { useDocumentLock } from '@/hooks/use-document-lock'
 import type { DocumentEditorProps } from './editor-types'
 import './editor-styles.css'
 
@@ -46,9 +48,26 @@ export function DocumentEditor({
   editable = true,
   placeholder,
   className,
+  documentId,
+  userId,
+  userName,
+  userRole,
+  onSaveNow,
 }: DocumentEditorProps) {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const onChangeRef = useRef(onChange)
+
+  // Document lock integration (only active when documentId is provided)
+  const lock = useDocumentLock({
+    documentId: documentId ?? null,
+    userId: userId ?? '',
+    userName: userName ?? '',
+    userRole: userRole ?? null,
+    onBeforeRelease: onSaveNow,
+  })
+
+  // Effective editable state: editable from props AND not locked by someone else
+  const effectiveEditable = editable && !lock.isLockedByOther
 
   // Keep onChange ref current to avoid re-creating editor on every render
   useEffect(() => {
@@ -68,7 +87,7 @@ export function DocumentEditor({
   const editor = useEditor({
     extensions: createDocumentExtensions({ placeholder }),
     content: content || undefined,
-    editable,
+    editable: effectiveEditable,
     onUpdate: handleUpdate,
   })
 
@@ -81,12 +100,12 @@ export function DocumentEditor({
     }
   }, [])
 
-  // Sync editable prop
+  // Sync editable state (includes lock-based read-only)
   useEffect(() => {
     if (editor) {
-      editor.setEditable(editable)
+      editor.setEditable(effectiveEditable)
     }
-  }, [editor, editable])
+  }, [editor, effectiveEditable])
 
   // Sync content prop (only when editor is not focused, to avoid overwriting user typing)
   useEffect(() => {
@@ -101,7 +120,16 @@ export function DocumentEditor({
 
   return (
     <div className={cn('border rounded-lg overflow-hidden bg-background', className)}>
-      {editable && <EditorToolbar editor={editor} />}
+      {effectiveEditable && <EditorToolbar editor={editor} />}
+      {documentId && (
+        <LockBanner
+          lockHolder={lock.lockHolder}
+          isLockedByMe={lock.isLockedByMe}
+          canForceTake={lock.canForceTake}
+          onStopEditing={() => void lock.releaseLock()}
+          onForceTake={() => void lock.forceTakeLock()}
+        />
+      )}
       <EditorContent editor={editor} className="prose prose-sm max-w-none" />
       <EditorStatusBar editor={editor} />
     </div>
