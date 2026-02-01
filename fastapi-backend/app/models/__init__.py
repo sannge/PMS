@@ -6,6 +6,9 @@ from .attachment import Attachment
 from .checklist import Checklist
 from .checklist_item import ChecklistItem
 from .comment import Comment
+from .document import Document
+from .document_folder import DocumentFolder
+from .document_snapshot import DocumentSnapshot
 from .invitation import Invitation
 from .mention import Mention
 
@@ -25,6 +28,9 @@ __all__ = [
     "Checklist",
     "ChecklistItem",
     "Comment",
+    "Document",
+    "DocumentFolder",
+    "DocumentSnapshot",
     "Invitation",
     "Mention",
 

@@ -27,6 +27,9 @@ from app.models import (
     Checklist,
     ChecklistItem,
     Comment,
+    Document,
+    DocumentFolder,
+    DocumentSnapshot,
     Invitation,
     Mention,
 
