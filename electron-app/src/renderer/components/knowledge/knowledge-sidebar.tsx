@@ -3,9 +3,9 @@
  *
  * Main sidebar container that composes all sidebar sections:
  * - Search bar
- * - Scope filter (placeholder for Plan 03)
+ * - Scope filter (ScopeFilter dropdown)
  * - Folder tree (FolderTree component)
- * - Tag filter (placeholder for Plan 03)
+ * - Tag filter (TagFilterList with click-to-filter)
  *
  * Supports collapsed/expanded modes with smooth transitions.
  */
@@ -15,7 +15,9 @@ import { cn } from '@/lib/utils'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useKnowledgeBase } from '@/contexts/knowledge-base-context'
 import { SearchBar } from './search-bar'
+import { ScopeFilter } from './scope-filter'
 import { FolderTree } from './folder-tree'
+import { TagFilterList } from './tag-filter-list'
 
 export function KnowledgeSidebar(): JSX.Element {
   const { isSidebarCollapsed, toggleSidebar } = useKnowledgeBase()
@@ -61,9 +63,9 @@ export function KnowledgeSidebar(): JSX.Element {
             <SearchBar />
           </div>
 
-          {/* Scope filter section -- PLACEHOLDER for Plan 03 */}
+          {/* Scope filter section */}
           <div className="px-2 py-1.5 border-b border-border">
-            <div className="text-xs text-muted-foreground">All Documents</div>
+            <ScopeFilter />
           </div>
 
           {/* Folder tree section */}
@@ -71,9 +73,9 @@ export function KnowledgeSidebar(): JSX.Element {
             <FolderTree />
           </ScrollArea>
 
-          {/* Tag filter section -- PLACEHOLDER for Plan 03 */}
+          {/* Tag filter section */}
           <div className="border-t border-border p-2">
-            <div className="text-xs text-muted-foreground">Tags</div>
+            <TagFilterList />
           </div>
         </>
       )}
