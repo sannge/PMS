@@ -91,13 +91,13 @@ Plans:
   4. Redundant saves are skipped when content has not changed (client-side dirty check)
   5. Server generates Markdown and plain text from TipTap JSON on each save (verifiable via API)
   6. If the app crashes or the user force-quits mid-edit, reopening the document recovers the unsaved draft from IndexedDB with a prompt to restore or discard
-**Plans**: TBD
+**Plans**: 4 plans
 
 Plans:
-- [ ] 04-01: Auto-save endpoint and debounced save hook with dirty tracking
-- [ ] 04-02: IndexedDB draft persistence -- auto-buffer unsaved content locally, restore prompt on reopen
-- [ ] 04-03: Save on navigate away, app close, and save status indicator
-- [ ] 04-04: Server-side TipTap JSON to Markdown and plain text conversion pipeline
+- [ ] 04-01-PLAN.md -- Auto-save PUT endpoint with optimistic concurrency and useAutoSave hook with 10s debounce and dirty tracking
+- [ ] 04-02-PLAN.md -- IndexedDB draft persistence (draft-db store, useDraft hook with 2s auto-buffer, restore prompt on reopen)
+- [ ] 04-03-PLAN.md -- Save on navigate away, Electron before-quit IPC coordination, and SaveStatus indicator component
+- [ ] 04-04-PLAN.md -- TDD: Custom Python TipTap JSON to Markdown and plain text converter
 
 ### Phase 5: Document Locking
 **Goal**: Only one user can edit a document at a time, with reliable lock management that prevents stuck locks
@@ -208,7 +208,7 @@ Note: Phases 5, 6, 7, 9 all depend on Phase 4 and can potentially be parallelize
 | 1. Migration & Data Foundation | 0/4 | Planned | - |
 | 2. Notes Screen Shell & Folder Navigation | 0/3 | Not started | - |
 | 3. Rich Text Editor Core | 0/4 | Planned | - |
-| 4. Auto-Save & Content Pipeline | 0/4 | Not started | - |
+| 4. Auto-Save & Content Pipeline | 0/4 | Planned | - |
 | 5. Document Locking | 0/3 | Not started | - |
 | 6. Document Tabs & Editor UI Integration | 0/3 | Not started | - |
 | 7. Images in Editor | 0/2 | Not started | - |
