@@ -32,3 +32,10 @@ export {
   type UseTaskViewersOptions,
   type UseTaskViewersReturn,
 } from './use-task-viewers'
+
+export {
+  useDocumentLock,
+  type LockHolder,
+  type UseDocumentLockOptions,
+  type UseDocumentLockReturn,
+} from './use-document-lock'

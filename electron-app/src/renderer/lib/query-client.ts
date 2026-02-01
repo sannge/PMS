@@ -128,6 +128,9 @@ export const queryKeys = {
 
   // Document Tags
   documentTags: (scope: string, scopeId: string) => ['documentTags', scope, scopeId] as const,
+
+  // Document Locks
+  documentLock: (documentId: string) => ['documentLock', documentId] as const,
 }
 
 // ============================================================================

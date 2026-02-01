@@ -108,6 +108,11 @@ export enum MessageType {
   COMMENT_UPDATED = 'comment_updated',
   COMMENT_DELETED = 'comment_deleted',
 
+  // Document lock events
+  DOCUMENT_LOCKED = 'document_locked',
+  DOCUMENT_UNLOCKED = 'document_unlocked',
+  DOCUMENT_FORCE_TAKEN = 'document_force_taken',
+
   // Keepalive
   PING = 'ping',
   PONG = 'pong',
