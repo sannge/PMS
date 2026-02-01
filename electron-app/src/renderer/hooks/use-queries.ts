@@ -30,10 +30,22 @@ export type ApplicationRole = 'owner' | 'editor' | 'viewer'
 export type ProjectType = 'kanban' | 'scrum'
 export type ProjectDerivedStatus = 'Todo' | 'In Progress' | 'Issue' | 'Done'
 
-// Task-related types (matching backend API and old stores)
-export type TaskStatusValue = 'todo' | 'in_progress' | 'in_review' | 'issue' | 'done'
+// Task-related types (matching backend API)
 export type TaskPriority = 'lowest' | 'low' | 'medium' | 'high' | 'highest'
 export type TaskType = 'story' | 'bug' | 'epic' | 'subtask' | 'task'
+
+/** Check if a task is in Done status using task_status */
+export function isTaskDone(task: { task_status: TaskStatusInfo }): boolean {
+  return task.task_status.category === 'Done'
+}
+
+/** Nested task status info returned from the API */
+export interface TaskStatusInfo {
+  id: string
+  name: string
+  category: string
+  rank: number
+}
 
 export interface TaskUserInfo {
   id: string
@@ -121,7 +133,6 @@ export interface Task {
   title: string
   description: string | null
   task_type: TaskType
-  status: TaskStatusValue
   priority: TaskPriority
   assignee_id: string | null
   reporter_id: string | null
@@ -137,7 +148,8 @@ export interface Task {
   archived_at: string | null
   subtasks_count?: number
   // Kanban board fields
-  task_status_id: string | null
+  task_status_id: string
+  task_status: TaskStatusInfo
   task_rank: string | null
   // Optimistic concurrency control
   row_version: number
@@ -161,7 +173,6 @@ export interface TaskCreate {
   title: string
   description?: string | null
   task_type?: TaskType
-  status?: TaskStatusValue
   priority?: TaskPriority
   assignee_id?: string | null
   reporter_id?: string | null
@@ -177,7 +188,6 @@ export interface TaskUpdate {
   title?: string
   description?: string | null
   task_type?: TaskType
-  status?: TaskStatusValue
   priority?: TaskPriority
   assignee_id?: string | null
   reporter_id?: string | null
@@ -192,8 +202,10 @@ export interface TaskUpdate {
 
 export interface TaskMovePayload {
   taskId: string
-  /** Target status name: 'todo', 'in_progress', 'in_review', 'issue', 'done' */
-  targetStatus: TaskStatusValue
+  /** Target task_status_id (UUID from TaskStatuses table) */
+  targetStatusId: string
+  /** Target status name for optimistic updates */
+  targetStatusName?: string
   /** Direct rank string (optional, auto-calculated if not provided) */
   targetRank?: string
   /** Task ID to position before (optional) */
@@ -212,12 +224,9 @@ export interface TaskStatus {
   id: string
   project_id: string
   name: string
-  description: string | null
-  color: string
-  position: number
-  is_done: boolean
+  category: string
+  rank: number
   created_at: string
-  updated_at: string
 }
 
 // ============================================================================
@@ -789,7 +798,7 @@ export function useUpdateTask(
 
       // Update in list too
       queryClient.setQueryData<Task[]>(queryKeys.tasks(projectId), (old) =>
-        old?.map((t) => (t.id === taskId ? { ...t, ...newData } : t))
+        old?.map((t) => (t.id === taskId ? { ...t, ...newData } as Task : t))
       )
 
       return { previous }
@@ -891,14 +900,14 @@ export function useMoveTask(
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ taskId, targetStatus, targetRank, beforeTaskId, afterTaskId }: TaskMovePayload) => {
+    mutationFn: async ({ taskId, targetStatusId, targetRank, beforeTaskId, afterTaskId }: TaskMovePayload) => {
       if (!window.electronAPI) {
         throw new Error('Electron API not available')
       }
 
       // Build request body matching backend API
       const body: Record<string, unknown> = {
-        target_status: targetStatus,
+        target_status_id: targetStatusId,
       }
       if (targetRank !== undefined) {
         body.target_rank = targetRank
@@ -923,7 +932,7 @@ export function useMoveTask(
       return response.data
     },
     // Optimistic update for instant drag-drop feedback
-    onMutate: async ({ taskId, targetStatus }) => {
+    onMutate: async ({ taskId, targetStatusName }) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.tasks(projectId) })
 
       const previous = queryClient.getQueryData<Task[]>(queryKeys.tasks(projectId))
@@ -933,11 +942,13 @@ export function useMoveTask(
       queryClient.setQueryData<Task[]>(queryKeys.tasks(projectId), (old) =>
         old?.map((t) => {
           if (t.id !== taskId) return t
+          const isDone = targetStatusName === 'Done'
+          const wasDone = t.task_status.category === 'Done'
           // Set completed_at when moving to done, clear when moving away
-          const completed_at = targetStatus === 'done'
+          const completed_at = isDone
             ? (t.completed_at || now)
-            : (t.status === 'done' ? null : t.completed_at)
-          return { ...t, status: targetStatus, completed_at }
+            : (wasDone ? null : t.completed_at)
+          return { ...t, completed_at }
         })
       )
 

@@ -26,7 +26,6 @@ import {
   type TaskCreate,
   type TaskUpdate,
   type TaskStatus as TaskStatusObject,
-  type TaskStatusValue as TaskStatus,
 } from '@/hooks/use-queries'
 import { useProjectMembers, type ProjectMember } from '@/hooks/use-members'
 import { ProjectForm } from '@/components/projects/project-form'
@@ -519,7 +518,7 @@ export function ProjectDetailPage({
   const [showTeamPanel, setShowTeamPanel] = useState(false)
   const [showStatusPanel, setShowStatusPanel] = useState(false)
   const [showTaskForm, setShowTaskForm] = useState(false)
-  const [initialTaskStatus, setInitialTaskStatus] = useState<TaskStatus | undefined>(undefined)
+  const [initialTaskStatus, setInitialTaskStatus] = useState<string | undefined>(undefined)
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
 
   // Fetch initial task for auto-open
@@ -607,7 +606,7 @@ export function ProjectDetailPage({
   }, [])
 
   // Handle add task
-  const handleAddTask = useCallback((status?: TaskStatus) => {
+  const handleAddTask = useCallback((status?: string) => {
     setMutationError(null)
     setInitialTaskStatus(status)
     setShowTaskForm(true)

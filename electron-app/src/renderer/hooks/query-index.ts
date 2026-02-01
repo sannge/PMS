@@ -35,6 +35,7 @@ export {
   useDeleteTask,
   useMoveTask,
   useTaskStatuses,
+  isTaskDone,
 } from './use-queries'
 
 // Comment queries
@@ -94,6 +95,7 @@ export type {
   TaskUpdate,
   TaskMovePayload,
   TaskStatus,
+  TaskStatusInfo,
   ApiError,
 } from './use-queries'
 

@@ -8,7 +8,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { useAuthStore, getAuthHeaders } from '@/contexts/auth-context'
-import { useMoveTask, type Task, type TaskStatusValue as TaskStatus } from '@/hooks/use-queries'
+import { useMoveTask, type Task } from '@/hooks/use-queries'
 import {
   DndContext,
   DragOverlay,
@@ -46,7 +46,7 @@ import { TaskCard } from './task-card'
 // ============================================================================
 
 interface BoardColumn {
-  id: TaskStatus
+  id: string
   title: string
   icon: JSX.Element
   color: string
@@ -57,8 +57,8 @@ export interface TaskKanbanBoardProps {
   projectId: string
   projectKey: string
   onTaskClick?: (task: Task) => void
-  onAddTask?: (status?: TaskStatus) => void
-  onTaskStatusChange?: (task: Task, newStatus: TaskStatus) => void
+  onAddTask?: (status?: string) => void
+  onTaskStatusChange?: (task: Task, newStatus: string) => void
   className?: string
   enableRealtime?: boolean
 }
@@ -68,41 +68,11 @@ export interface TaskKanbanBoardProps {
 // ============================================================================
 
 const BOARD_COLUMNS: BoardColumn[] = [
-  {
-    id: 'todo',
-    title: 'To Do',
-    icon: <Circle className="h-4 w-4" />,
-    color: 'bg-slate-500',
-    bgColor: 'bg-slate-500/10',
-  },
-  {
-    id: 'in_progress',
-    title: 'In Progress',
-    icon: <Timer className="h-4 w-4" />,
-    color: 'bg-blue-500',
-    bgColor: 'bg-blue-500/10',
-  },
-  {
-    id: 'in_review',
-    title: 'In Review',
-    icon: <Eye className="h-4 w-4" />,
-    color: 'bg-purple-500',
-    bgColor: 'bg-purple-500/10',
-  },
-  {
-    id: 'issue',
-    title: 'Issue',
-    icon: <XCircle className="h-4 w-4" />,
-    color: 'bg-red-500',
-    bgColor: 'bg-red-500/10',
-  },
-  {
-    id: 'done',
-    title: 'Done',
-    icon: <CheckCircle2 className="h-4 w-4" />,
-    color: 'bg-green-500',
-    bgColor: 'bg-green-500/10',
-  },
+  { id: 'Todo', title: 'To Do', icon: <Circle className="h-4 w-4" />, color: 'bg-slate-500', bgColor: 'bg-slate-500/10' },
+  { id: 'In Progress', title: 'In Progress', icon: <Timer className="h-4 w-4" />, color: 'bg-blue-500', bgColor: 'bg-blue-500/10' },
+  { id: 'In Review', title: 'In Review', icon: <Eye className="h-4 w-4" />, color: 'bg-purple-500', bgColor: 'bg-purple-500/10' },
+  { id: 'Issue', title: 'Issue', icon: <XCircle className="h-4 w-4" />, color: 'bg-red-500', bgColor: 'bg-red-500/10' },
+  { id: 'Done', title: 'Done', icon: <CheckCircle2 className="h-4 w-4" />, color: 'bg-green-500', bgColor: 'bg-green-500/10' },
 ]
 
 // ============================================================================
@@ -167,7 +137,7 @@ interface DroppableColumnProps {
   column: BoardColumn
   tasks: Task[]
   onTaskClick?: (task: Task) => void
-  onAddTask?: (status: TaskStatus) => void
+  onAddTask?: (status: string) => void
   isLoading?: boolean
 }
 
@@ -421,7 +391,7 @@ export function TaskKanbanBoard({
     return BOARD_COLUMNS.reduce(
       (acc, column) => {
         acc[column.id] = tasks
-          .filter((t) => t.status === column.id)
+          .filter((t) => t.task_status?.name === column.id)
           .sort((a, b) => {
             if (!a.task_rank && !b.task_rank) return 0
             if (!a.task_rank) return 1
@@ -430,7 +400,7 @@ export function TaskKanbanBoard({
           })
         return acc
       },
-      {} as Record<TaskStatus, Task[]>
+      {} as Record<string, Task[]>
     )
   }, [tasks])
 
@@ -459,15 +429,16 @@ export function TaskKanbanBoard({
       if (!task) return
 
       // Get target status from drop zone
-      const targetStatus = over.id as TaskStatus
+      const targetStatus = over.id as string
 
       // Skip if dropping on same column
-      if (task.status === targetStatus) return
+      if (task.task_status?.name === targetStatus) return
 
-      // Optimistic update
+      // Optimistic update - save original for revert
+      const originalTask = { ...task }
       setTasks((currentTasks) =>
         currentTasks.map((t) =>
-          t.id === taskId ? { ...t, status: targetStatus } : t
+          t.id === taskId ? { ...t } : t
         )
       )
 
@@ -480,13 +451,14 @@ export function TaskKanbanBoard({
         // API call using TanStack Query mutation
         await moveTaskMutation.mutateAsync({
           taskId,
-          targetStatus,
+          targetStatusId: task.task_status_id,
+          targetStatusName: targetStatus,
         })
       } catch {
         // Revert on failure
         setTasks((currentTasks) =>
           currentTasks.map((t) =>
-            t.id === taskId ? { ...t, status: task.status } : t
+            t.id === taskId ? originalTask : t
           )
         )
       }

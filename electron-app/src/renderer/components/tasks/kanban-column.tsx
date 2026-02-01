@@ -24,7 +24,7 @@ import {
   XCircle,
   GripVertical,
 } from 'lucide-react'
-import type { Task, TaskStatusValue as TaskStatus } from '@/hooks/use-queries'
+import type { Task } from '@/hooks/use-queries'
 import { TaskCard } from './task-card'
 import { SkeletonTaskCard } from '@/components/ui/skeleton'
 
@@ -36,7 +36,7 @@ import { SkeletonTaskCard } from '@/components/ui/skeleton'
  * Column configuration for Kanban board
  */
 export interface KanbanColumnConfig {
-  id: TaskStatus
+  id: string
   title: string
   icon: JSX.Element
   color: string
@@ -59,7 +59,7 @@ export interface KanbanColumnProps {
   /**
    * Callback when add task button is clicked
    */
-  onAddTask?: (status: TaskStatus) => void
+  onAddTask?: (status: string) => void
   /**
    * Callback when task drag starts
    */
@@ -79,7 +79,7 @@ export interface KanbanColumnProps {
   /**
    * Callback when a task is dropped on this column
    */
-  onDrop?: (e: React.DragEvent, status: TaskStatus) => void
+  onDrop?: (e: React.DragEvent, status: string) => void
   /**
    * ID of the currently dragging task (if any)
    */
@@ -154,7 +154,7 @@ export const DEFAULT_COLUMNS: KanbanColumnConfig[] = [
 /**
  * Get column configuration by status ID
  */
-export function getColumnConfig(status: TaskStatus): KanbanColumnConfig {
+export function getColumnConfig(status: string): KanbanColumnConfig {
   const config = DEFAULT_COLUMNS.find((col) => col.id === status)
   if (config) return config
   // Fallback for unknown status
@@ -202,7 +202,7 @@ function DraggableTaskCard({
       e.dataTransfer.setData('text/plain', task.id)
       e.dataTransfer.setData('application/json', JSON.stringify({
         taskId: task.id,
-        sourceStatus: task.status,
+        sourceStatus: task.task_status?.name || 'Todo',
         sourceRank: task.task_rank,
       }))
       onDragStart?.(e, task)
@@ -283,7 +283,7 @@ function DraggableTaskCard({
 interface ColumnHeaderProps {
   column: KanbanColumnConfig
   taskCount: number
-  onAddTask?: (status: TaskStatus) => void
+  onAddTask?: (status: string) => void
   showAddButton?: boolean
   disabled?: boolean
 }

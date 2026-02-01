@@ -32,7 +32,7 @@ import {
   TouchSensor,
 } from '@dnd-kit/core'
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable'
-import type { Task, TaskStatusValue as TaskStatus } from '@/hooks/use-queries'
+import type { Task } from '@/hooks/use-queries'
 
 // ============================================================================
 // Types
@@ -52,7 +52,7 @@ export interface UseDragAndDropOptions {
    */
   onTaskMove: (
     taskId: string,
-    targetStatus: TaskStatus,
+    targetStatus: string,
     beforeTaskId: string | null,
     afterTaskId: string | null
   ) => Promise<boolean>
@@ -78,7 +78,7 @@ export interface UseDragAndDropReturn {
   /**
    * Column ID being hovered during drag
    */
-  overColumnId: TaskStatus | null
+  overColumnId: string | null
   /**
    * Handler for drag start
    */
@@ -109,17 +109,22 @@ export interface UseDragAndDropReturn {
  * Extract status from a sortable ID
  * IDs are formatted as "task-{taskId}" for tasks and "{status}" for columns
  */
-export function getStatusFromId(id: UniqueIdentifier): TaskStatus | null {
+export function getStatusFromId(id: UniqueIdentifier): string | null {
   const strId = String(id)
-  const validStatuses: TaskStatus[] = [
+  const validStatuses = [
     'todo',
     'in_progress',
     'in_review',
     'issue',
     'done',
+    'Todo',
+    'In Progress',
+    'In Review',
+    'Issue',
+    'Done',
   ]
-  if (validStatuses.includes(strId as TaskStatus)) {
-    return strId as TaskStatus
+  if (validStatuses.includes(strId)) {
+    return strId
   }
   return null
 }
@@ -163,12 +168,12 @@ export function findTaskBySortableId(
 export function findNeighboringTasks(
   tasks: Task[],
   taskId: string,
-  targetStatus: TaskStatus,
+  targetStatus: string,
   overIndex: number
 ): { beforeTaskId: string | null; afterTaskId: string | null } {
   // Get tasks in the target column, sorted by rank
   const columnTasks = tasks
-    .filter((t) => t.status === targetStatus && t.id !== taskId)
+    .filter((t) => t.task_status.name === targetStatus && t.id !== taskId)
     .sort((a, b) => {
       if (!a.task_rank && !b.task_rank) return 0
       if (!a.task_rank) return 1
@@ -210,7 +215,7 @@ export function useDragAndDrop({
 }: UseDragAndDropOptions): UseDragAndDropReturn {
   // Active drag state
   const [activeId, setActiveId] = useState<UniqueIdentifier | null>(null)
-  const [overColumnId, setOverColumnId] = useState<TaskStatus | null>(null)
+  const [overColumnId, setOverColumnId] = useState<string | null>(null)
 
   // Configure sensors for different input methods
   const sensors = useSensors(
@@ -245,7 +250,7 @@ export function useDragAndDrop({
       // Set initial over column to current task's status
       const task = findTaskBySortableId(tasks, active.id)
       if (task) {
-        setOverColumnId(task.status)
+        setOverColumnId(task.task_status.name)
       }
     },
     [disabled, tasks]
@@ -272,7 +277,7 @@ export function useDragAndDrop({
       // Check if hovering over a task (get its column)
       const overTask = findTaskBySortableId(tasks, over.id)
       if (overTask) {
-        setOverColumnId(overTask.status)
+        setOverColumnId(overTask.task_status.name)
       }
     },
     [disabled, tasks]
@@ -302,13 +307,13 @@ export function useDragAndDrop({
       }
 
       // Determine target status
-      let targetStatus: TaskStatus | null = getStatusFromId(over.id)
+      let targetStatus: string | null = getStatusFromId(over.id)
 
       // If dropped on a task, get that task's status
       if (!targetStatus) {
         const overTask = findTaskBySortableId(tasks, over.id)
         if (overTask) {
-          targetStatus = overTask.status
+          targetStatus = overTask.task_status.name
         }
       }
 
@@ -316,7 +321,7 @@ export function useDragAndDrop({
 
       // Find the position within the column
       const columnTasks = tasks
-        .filter((t) => t.status === targetStatus && t.id !== taskId)
+        .filter((t) => t.task_status.name === targetStatus && t.id !== taskId)
         .sort((a, b) => {
           if (!a.task_rank && !b.task_rank) return 0
           if (!a.task_rank) return 1
@@ -345,7 +350,7 @@ export function useDragAndDrop({
 
       // Skip if no change
       if (
-        task.status === targetStatus &&
+        task.task_status.name === targetStatus &&
         beforeTaskId === null &&
         afterTaskId === columnTasks[0]?.id
       ) {

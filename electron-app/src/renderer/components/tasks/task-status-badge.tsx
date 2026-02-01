@@ -21,7 +21,8 @@ import {
   XCircle,
   ChevronDown,
 } from 'lucide-react'
-import type { TaskStatusValue as TaskStatus } from '@/hooks/use-queries'
+// Legacy TaskStatus type - kept for internal badge use until full migration
+type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'issue' | 'done'
 
 // ============================================================================
 // Types

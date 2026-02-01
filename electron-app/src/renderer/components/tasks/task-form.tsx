@@ -33,7 +33,6 @@ import type {
   TaskCreate,
   TaskUpdate,
   TaskType,
-  TaskStatusValue as TaskStatus,
   TaskPriority,
 } from '@/hooks/use-queries'
 import { getStatusOptions } from './task-status-badge'
@@ -62,7 +61,7 @@ export interface TaskFormProps {
   /**
    * Initial status when creating a task
    */
-  initialStatus?: TaskStatus
+  initialStatus?: string
   /**
    * Available assignees (project members)
    */
@@ -89,7 +88,7 @@ interface FormData {
   title: string
   description: string
   task_type: TaskType
-  status: TaskStatus
+  status: string
   priority: TaskPriority
   story_points: string
   due_date: string
@@ -174,7 +173,7 @@ function formatDateForInput(dateString: string | null): string {
 
 export function TaskForm({
   task,
-  initialStatus = 'todo',
+  initialStatus = 'Todo',
   assignees = [],
   isSubmitting = false,
   error,
@@ -188,7 +187,7 @@ export function TaskForm({
     title: task?.title || '',
     description: task?.description || '',
     task_type: task?.task_type || 'task',
-    status: task?.status ?? initialStatus ?? 'todo',
+    status: task?.task_status?.name ?? initialStatus ?? 'Todo',
     priority: task?.priority || 'medium',
     story_points: task?.story_points?.toString() || '',
     due_date: formatDateForInput(task?.due_date || null),
@@ -262,8 +261,8 @@ export function TaskForm({
         if (formData.task_type !== task?.task_type) {
           updateData.task_type = formData.task_type
         }
-        if (formData.status !== task?.status) {
-          updateData.status = formData.status
+        if (formData.status !== task?.task_status?.name) {
+          // Status change handled via task_status_id, not status string
         }
         if (formData.priority !== task?.priority) {
           updateData.priority = formData.priority
@@ -284,7 +283,6 @@ export function TaskForm({
           title: formData.title.trim(),
           description: formData.description.trim() || undefined,
           task_type: formData.task_type,
-          status: formData.status,
           priority: formData.priority,
           story_points: storyPoints,
           due_date: formData.due_date || undefined,

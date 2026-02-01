@@ -57,11 +57,6 @@ import { Virtuoso } from 'react-virtuoso'
 // ============================================================================
 
 /**
- * Task status enumeration
- */
-export type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'issue' | 'done'
-
-/**
  * Task priority enumeration
  */
 export type TaskPriority = 'lowest' | 'low' | 'medium' | 'high' | 'highest'
@@ -81,7 +76,6 @@ export interface Task {
   title: string
   description: string | null
   task_type: TaskType
-  status: TaskStatus
   priority: TaskPriority
   assignee_id: string | null
   reporter_id: string | null
@@ -92,13 +86,15 @@ export interface Task {
   created_at: string
   updated_at: string
   subtasks_count?: number
+  task_status_id: string
+  task_status: { id: string; name: string; category: string; rank: number }
 }
 
 /**
  * Board column definition
  */
 interface BoardColumn {
-  id: TaskStatus
+  id: string
   title: string
   icon: JSX.Element
   color: string
@@ -124,7 +120,7 @@ export interface ProjectBoardProps {
   /**
    * Callback when add task is clicked
    */
-  onAddTask?: (status?: TaskStatus) => void
+  onAddTask?: (status?: string) => void
   /**
    * Function to get viewers for a specific task
    */
@@ -151,36 +147,11 @@ export interface ProjectBoardProps {
 const VIRTUALIZATION_THRESHOLD = 50
 
 const BOARD_COLUMNS: BoardColumn[] = [
-  {
-    id: 'todo',
-    title: 'To Do',
-    icon: <Circle className="h-4 w-4" />,
-    color: 'bg-slate-500',
-  },
-  {
-    id: 'in_progress',
-    title: 'In Progress',
-    icon: <Timer className="h-4 w-4" />,
-    color: 'bg-blue-500',
-  },
-  {
-    id: 'in_review',
-    title: 'In Review',
-    icon: <Eye className="h-4 w-4" />,
-    color: 'bg-purple-500',
-  },
-  {
-    id: 'issue',
-    title: 'Issue',
-    icon: <AlertTriangle className="h-4 w-4" />,
-    color: 'bg-red-500',
-  },
-  {
-    id: 'done',
-    title: 'Done',
-    icon: <CheckCircle2 className="h-4 w-4" />,
-    color: 'bg-green-500',
-  },
+  { id: 'Todo', title: 'To Do', icon: <Circle className="h-4 w-4" />, color: 'bg-slate-500' },
+  { id: 'In Progress', title: 'In Progress', icon: <Timer className="h-4 w-4" />, color: 'bg-blue-500' },
+  { id: 'In Review', title: 'In Review', icon: <Eye className="h-4 w-4" />, color: 'bg-purple-500' },
+  { id: 'Issue', title: 'Issue', icon: <AlertTriangle className="h-4 w-4" />, color: 'bg-red-500' },
+  { id: 'Done', title: 'Done', icon: <CheckCircle2 className="h-4 w-4" />, color: 'bg-green-500' },
 ]
 
 // ============================================================================
@@ -332,7 +303,7 @@ interface BoardColumnProps {
   column: BoardColumn
   tasks: Task[]
   onTaskClick?: (task: Task) => void
-  onAddTask?: (status: TaskStatus) => void
+  onAddTask?: (status: string) => void
   getTaskViewers?: (taskId: string) => TaskViewer[]
   isLoading?: boolean
 }
@@ -497,11 +468,11 @@ interface ListViewProps {
 }
 
 function ListView({ tasks, onTaskClick, getTaskViewers, isLoading }: ListViewProps): JSX.Element {
-  const [expandedStatuses, setExpandedStatuses] = useState<Set<TaskStatus>>(
-    new Set(['todo', 'in_progress', 'in_review', 'issue'])
+  const [expandedStatuses, setExpandedStatuses] = useState<Set<string>>(
+    new Set(['Todo', 'In Progress', 'In Review', 'Issue'])
   )
 
-  const toggleStatus = (status: TaskStatus) => {
+  const toggleStatus = (status: string) => {
     setExpandedStatuses((prev) => {
       const next = new Set(prev)
       if (next.has(status)) {
@@ -520,7 +491,7 @@ function ListView({ tasks, onTaskClick, getTaskViewers, isLoading }: ListViewPro
   return (
     <div className="space-y-4">
       {BOARD_COLUMNS.map((column) => {
-        const columnTasks = tasks.filter((t) => t.status === column.id)
+        const columnTasks = tasks.filter((t) => t.task_status?.name === column.id)
         const isExpanded = expandedStatuses.has(column.id)
         const useVirtualization = columnTasks.length > VIRTUALIZATION_THRESHOLD
 
@@ -720,10 +691,10 @@ export function ProjectBoard({
   // Group tasks by status for board view
   const tasksByStatus = BOARD_COLUMNS.reduce(
     (acc, column) => {
-      acc[column.id] = tasks.filter((t) => t.status === column.id)
+      acc[column.id] = tasks.filter((t) => t.task_status?.name === column.id)
       return acc
     },
-    {} as Record<TaskStatus, Task[]>
+    {} as Record<string, Task[]>
   )
 
   // Render error state

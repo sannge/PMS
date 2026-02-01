@@ -46,14 +46,19 @@ const TASK_STATUS_OPTIONS = [
 function getStatusConfig(status: string) {
   switch (status) {
     case 'todo':
+    case 'Todo':
       return { label: 'Todo', className: 'bg-slate-500/10 text-slate-600 dark:text-slate-400' }
     case 'in_progress':
+    case 'In Progress':
       return { label: 'In Progress', className: 'bg-blue-500/10 text-blue-600 dark:text-blue-400' }
     case 'in_review':
+    case 'In Review':
       return { label: 'In Review', className: 'bg-violet-500/10 text-violet-600 dark:text-violet-400' }
     case 'issue':
+    case 'Issue':
       return { label: 'Issue', className: 'bg-red-500/10 text-red-600 dark:text-red-400' }
     case 'done':
+    case 'Done':
       return { label: 'Done', className: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' }
     default:
       return { label: status, className: 'bg-slate-500/10 text-slate-500' }
@@ -337,7 +342,7 @@ export function DashboardTasksList({
         ) : (
           <div className="rounded-xl border border-border/50 bg-card/40 overflow-hidden divide-y divide-border/30">
             {tasks.map((task) => {
-              const statusConfig = getStatusConfig(task.status)
+              const statusConfig = getStatusConfig(task.task_status?.name || 'Todo')
               const priorityDot = getPriorityDot(task.priority)
               const dueDateInfo = task.due_date ? getDueDateInfo(task.due_date) : null
 

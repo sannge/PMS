@@ -47,7 +47,7 @@ import {
   Save,
   RotateCcw,
 } from 'lucide-react'
-import type { Task, TaskStatusValue as TaskStatus, TaskUpdate, TaskPriority, TaskType } from '@/hooks/use-queries'
+import { isTaskDone, type Task, type TaskUpdate, type TaskPriority, type TaskType } from '@/hooks/use-queries'
 import { useProjectMembers, useAppMembers } from '@/hooks/use-members'
 import { useAuthStore } from '@/contexts/auth-context'
 import { TaskStatusBadge } from './task-status-badge'
@@ -487,7 +487,7 @@ export function TaskDetail({
   // Clear assignee error when task changes or status becomes todo
   useEffect(() => {
     setAssigneeError(null)
-  }, [task.id, task.status])
+  }, [task.id, task.task_status?.name])
 
   // Auto-dismiss editor error after 5 seconds
   useEffect(() => {
@@ -498,7 +498,7 @@ export function TaskDetail({
   }, [editorError])
 
   // Check if task is done or archived (locked for editing except status change)
-  const isDone = task.status === 'done'
+  const isDone = isTaskDone(task)
   const isArchived = task.archived_at !== null
   const isReadOnly = isDone || isArchived
 
@@ -626,9 +626,9 @@ export function TaskDetail({
 
   // Handle status change
   const handleStatusChange = useCallback(
-    (status: TaskStatus) => {
+    (status: string) => {
       if (onUpdate) {
-        onUpdate({ status })
+        onUpdate({ task_status_id: status })
       }
     },
     [onUpdate]
@@ -673,7 +673,7 @@ export function TaskDetail({
       if (onUpdate) {
         const value = e.target.value || null
         // Prevent unassigning if task is not in todo status
-        if (!value && task.status !== 'todo') {
+        if (!value && task.task_status?.name !== 'Todo') {
           setAssigneeError("Cannot unassign a task that is not in 'Todo' status. Move the task back to 'Todo' first.")
           return
         }
@@ -681,7 +681,7 @@ export function TaskDetail({
         onUpdate({ assignee_id: value })
       }
     },
-    [onUpdate, task.status]
+    [onUpdate, task.task_status?.name]
   )
 
   // Handle delete confirmation
@@ -833,7 +833,7 @@ export function TaskDetail({
               {/* Status Badge - Prominent (disabled for archived tasks) */}
               <div className="flex items-center gap-3">
                 <TaskStatusBadge
-                  status={task.status}
+                  status={task.task_status?.name as any}
                   onStatusChange={onUpdate && !isArchived ? handleStatusChange : undefined}
                   disabled={isUpdating || isArchived}
                   size="lg"

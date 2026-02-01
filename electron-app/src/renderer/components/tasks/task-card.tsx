@@ -30,7 +30,7 @@ import {
   CheckSquare,
   History,
 } from 'lucide-react'
-import type { Task, TaskType, TaskPriority, TaskStatusValue as TaskStatus } from '@/hooks/use-queries'
+import { isTaskDone, type Task, type TaskType, type TaskPriority } from '@/hooks/use-queries'
 import { TaskViewerDots } from './TaskViewerDots'
 import type { TaskViewer } from '@/hooks/use-task-viewers'
 
@@ -43,7 +43,7 @@ export interface TaskCardProps {
   onClick?: (task: Task) => void
   onEdit?: (task: Task) => void
   onDelete?: (task: Task) => void
-  onStatusChange?: (task: Task, status: TaskStatus) => void
+  onStatusChange?: (task: Task, status: string) => void
   viewers?: TaskViewer[]
   disabled?: boolean
   showDragHandle?: boolean
@@ -356,7 +356,7 @@ export function TaskCard({
   )
 
   const priorityConfig = PRIORITY_CONFIG[task.priority]
-  const isDone = task.status === 'done'
+  const isDone = isTaskDone(task)
   // For done tasks, show completed date instead of due date
   const dueInfo = isDone ? null : (task.due_date ? formatDueDate(task.due_date) : null)
   const completedInfo = isDone && task.completed_at ? formatCompletedDate(task.completed_at) : null

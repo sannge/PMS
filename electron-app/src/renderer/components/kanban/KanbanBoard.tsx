@@ -24,7 +24,7 @@ import {
 } from '@dnd-kit/core'
 import { cn } from '@/lib/utils'
 import { useAuthStore, getAuthHeaders } from '@/contexts/auth-context'
-import { useMoveTask, useArchivedTasksCount, type Task, type TaskStatusValue as TaskStatus } from '@/hooks/use-queries'
+import { useMoveTask, useArchivedTasksCount, type Task } from '@/hooks/use-queries'
 import {
   LayoutGrid,
   Plus,
@@ -68,11 +68,11 @@ export interface KanbanBoardProps {
   /**
    * Callback when add task is clicked
    */
-  onAddTask?: (status?: TaskStatus) => void
+  onAddTask?: (status?: string) => void
   /**
    * Callback when task status changes via drag-drop
    */
-  onTaskStatusChange?: (task: Task, newStatus: TaskStatus) => void
+  onTaskStatusChange?: (task: Task, newStatus: string) => void
   /**
    * Additional CSS classes
    */
@@ -107,7 +107,7 @@ const customCollisionDetection: CollisionDetection = (args) => {
   const columnCollision = pointerCollisions.find(
     (c) =>
       typeof c.id === 'string' &&
-      ['todo', 'in_progress', 'in_review', 'issue', 'done'].includes(c.id)
+      ['todo', 'in_progress', 'in_review', 'issue', 'done', 'Todo', 'In Progress', 'In Review', 'Issue', 'Done'].includes(c.id)
   )
 
   if (columnCollision) {
@@ -172,7 +172,7 @@ export function KanbanBoard({
   const handleTaskMove = useCallback(
     async (
       taskId: string,
-      targetStatus: TaskStatus,
+      targetStatus: string,
       beforeTaskId: string | null,
       afterTaskId: string | null
     ): Promise<boolean> => {
@@ -184,7 +184,7 @@ export function KanbanBoard({
       }
 
       // Skip if already at target status and no reordering needed
-      if (task.status === targetStatus && !beforeTaskId && !afterTaskId) {
+      if (task.task_status?.name === targetStatus && !beforeTaskId && !afterTaskId) {
         return true
       }
 
@@ -195,15 +195,17 @@ export function KanbanBoard({
         prevTasks.map((t) => {
           if (t.id !== taskId) return t
           // Set completed_at when moving to done, clear when moving away
-          const completed_at = targetStatus === 'done'
-            ? (t.completed_at || now) // Keep existing or set new
-            : (t.status === 'done' ? null : t.completed_at) // Clear if was done
-          return { ...t, status: targetStatus, completed_at }
+          const isDone = targetStatus === 'Done'
+          const wasDone = t.task_status?.category === 'Done'
+          const completed_at = isDone
+            ? (t.completed_at || now)
+            : (wasDone ? null : t.completed_at)
+          return { ...t, completed_at }
         })
       )
 
       // Notify callback
-      if (onTaskStatusChange && task.status !== targetStatus) {
+      if (onTaskStatusChange && task.task_status?.name !== targetStatus) {
         onTaskStatusChange(task, targetStatus)
       }
 
@@ -211,7 +213,8 @@ export function KanbanBoard({
         // Make API call using TanStack Query mutation
         const result = await moveTaskMutation.mutateAsync({
           taskId,
-          targetStatus,
+          targetStatusId: task.task_status_id,
+          targetStatusName: targetStatus,
           beforeTaskId: beforeTaskId || undefined,
           afterTaskId: afterTaskId || undefined,
         })
@@ -340,15 +343,13 @@ export function KanbanBoard({
         const newTasks = [...currentTasks]
         const existingTask = newTasks[taskIndex]
 
-        // Determine the new status from the task data or status_id
-        let newStatus = existingTask.status
-        if (data.task && (data.task as unknown as Task).status) {
-          newStatus = (data.task as unknown as Task).status
-        }
+        // Update from the task data if available
+        const updatedTask = data.task ? (data.task as unknown as Task) : existingTask
 
         newTasks[taskIndex] = {
           ...existingTask,
-          status: newStatus,
+          task_status: updatedTask.task_status || existingTask.task_status,
+          task_status_id: updatedTask.task_status_id || existingTask.task_status_id,
           task_rank: data.new_rank,
           updated_at: data.timestamp,
         }
@@ -414,7 +415,7 @@ export function KanbanBoard({
     return DEFAULT_COLUMNS.reduce(
       (acc, column) => {
         acc[column.id] = tasks
-          .filter((t) => t.status === column.id)
+          .filter((t) => t.task_status?.name === column.id)
           .sort((a, b) => {
             if (!a.task_rank && !b.task_rank) return 0
             if (!a.task_rank) return 1
@@ -423,7 +424,7 @@ export function KanbanBoard({
           })
         return acc
       },
-      {} as Record<TaskStatus, Task[]>
+      {} as Record<string, Task[]>
     )
   }, [tasks])
 

@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils'
 import { Plus, Circle, Timer, Eye, CheckCircle2, XCircle } from 'lucide-react'
 import { DraggableTaskCard } from './DraggableTaskCard'
 import { SkeletonTaskCard } from '@/components/ui/skeleton'
-import type { Task, TaskStatusValue as TaskStatus } from '@/hooks/use-queries'
+import type { Task } from '@/hooks/use-queries'
 import { createSortableId } from '@/hooks/use-drag-and-drop'
 
 // ============================================================================
@@ -22,7 +22,7 @@ import { createSortableId } from '@/hooks/use-drag-and-drop'
 // ============================================================================
 
 export interface ColumnConfig {
-  id: TaskStatus
+  id: string
   title: string
   icon: JSX.Element
   color: string
@@ -53,7 +53,7 @@ export interface DroppableColumnProps {
   /**
    * Callback when add task button is clicked
    */
-  onAddTask?: (status: TaskStatus) => void
+  onAddTask?: (status: string) => void
   /**
    * Additional class names
    */
@@ -64,7 +64,7 @@ export interface DroppableColumnProps {
 // Constants
 // ============================================================================
 
-const COLUMN_ICONS: Record<TaskStatus, JSX.Element> = {
+const COLUMN_ICONS: Record<string, JSX.Element> = {
   todo: <Circle className="h-4 w-4" />,
   in_progress: <Timer className="h-4 w-4" />,
   in_review: <Eye className="h-4 w-4" />,
@@ -116,7 +116,7 @@ export const DEFAULT_COLUMNS: ColumnConfig[] = [
 /**
  * Get column config by status
  */
-export function getColumnConfig(status: TaskStatus): ColumnConfig | undefined {
+export function getColumnConfig(status: string): ColumnConfig | undefined {
   return DEFAULT_COLUMNS.find((c) => c.id === status)
 }
 
