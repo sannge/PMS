@@ -22,6 +22,19 @@ from .comment import (
     CommentUpdate,
     MentionResponse,
 )
+from .document import (
+    DocumentCreate,
+    DocumentListItem,
+    DocumentListResponse,
+    DocumentResponse,
+    DocumentUpdate,
+)
+from .document_folder import (
+    FolderCreate,
+    FolderResponse,
+    FolderTreeNode,
+    FolderUpdate,
+)
 from .project import (
     ProjectCreate,
     ProjectResponse,
@@ -72,6 +85,17 @@ __all__ = [
     "CommentResponse",
     "CommentUpdate",
     "MentionResponse",
+    # Document schemas
+    "DocumentCreate",
+    "DocumentListItem",
+    "DocumentListResponse",
+    "DocumentResponse",
+    "DocumentUpdate",
+    # Document folder schemas
+    "FolderCreate",
+    "FolderResponse",
+    "FolderTreeNode",
+    "FolderUpdate",
     # Project schemas
     "ProjectCreate",
     "ProjectResponse",
