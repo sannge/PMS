@@ -72,13 +72,13 @@ Plans:
   3. User can insert and edit tables with resizable columns and add/remove rows and columns
   4. User can insert code blocks with syntax highlighting and clickable links
   5. Word count displays at the bottom of the editor
-**Plans**: TBD
+**Plans**: 4 plans
 
 Plans:
-- [ ] 03-01: TipTap editor setup with basic text formatting extensions
-- [ ] 03-02: Headings, lists, checklists, and code block extensions
-- [ ] 03-03: Table extension with resizable columns
-- [ ] 03-04: Links, font family, font size, text color, and word count
+- [ ] 03-01-PLAN.md — Install packages, create extension factory, types, CSS, and DocumentEditor with basic text formatting toolbar
+- [ ] 03-02-PLAN.md — Add heading dropdown (H1-H6), lists, checklists, code block button, and indent controls to toolbar
+- [ ] 03-03-PLAN.md — Add table insert button and contextual table controls to toolbar
+- [ ] 03-04-PLAN.md — Add link dialog, font family/size dropdowns, and word count status bar
 
 ### Phase 4: Auto-Save & Content Pipeline
 **Goal**: Documents auto-save reliably, content is stored in three formats for editor, AI, and search consumption, and unsaved drafts persist locally in IndexedDB to survive crashes and navigation
@@ -207,7 +207,7 @@ Note: Phases 5, 6, 7, 9 all depend on Phase 4 and can potentially be parallelize
 |-------|----------------|--------|-----------|
 | 1. Migration & Data Foundation | 0/4 | Planned | - |
 | 2. Notes Screen Shell & Folder Navigation | 0/3 | Not started | - |
-| 3. Rich Text Editor Core | 0/4 | Not started | - |
+| 3. Rich Text Editor Core | 0/4 | Planned | - |
 | 4. Auto-Save & Content Pipeline | 0/4 | Not started | - |
 | 5. Document Locking | 0/3 | Not started | - |
 | 6. Document Tabs & Editor UI Integration | 0/3 | Not started | - |
