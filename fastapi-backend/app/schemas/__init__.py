@@ -29,6 +29,10 @@ from .document import (
     DocumentResponse,
     DocumentUpdate,
 )
+from .document_lock import (
+    DocumentLockResponse,
+    LockHolder,
+)
 from .document_tag import (
     TagAssignment,
     TagAssignmentResponse,
@@ -104,6 +108,9 @@ __all__ = [
     "TagCreate",
     "TagResponse",
     "TagUpdate",
+    # Document lock schemas
+    "DocumentLockResponse",
+    "LockHolder",
     # Document folder schemas
     "FolderCreate",
     "FolderResponse",
