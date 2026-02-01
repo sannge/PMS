@@ -1,6 +1,6 @@
 # Phase 4: Auto-Save & Content Pipeline - Research
 
-**Researched:** 2026-01-31
+**Researched:** 2026-01-31 (re-verified 2026-01-31)
 **Domain:** Auto-save, content format conversion, IndexedDB draft persistence, Electron lifecycle
 **Confidence:** HIGH (codebase patterns well-established, standard browser/Electron APIs)
 
@@ -14,21 +14,41 @@ The Electron save-on-close pattern requires IPC coordination between the main pr
 
 **Primary recommendation:** Build a custom Python TipTap JSON serializer (JSON-to-Markdown + JSON-to-plain-text) in `fastapi-backend/app/services/content_converter.py` with comprehensive test suite. Use the existing `idb` library to create a separate `pm-drafts-db` IndexedDB store for draft persistence. Use Electron's `BrowserWindow.close` event + IPC pattern for save-on-close, and React effect cleanup for save-on-navigate.
 
+## Re-Research Corrections
+
+Key corrections from re-verification against the current codebase:
+
+1. **Extension list was based on wrong file.** The original research referenced `RichTextEditor.tsx` (task editor). The knowledge base editor uses `editor-extensions.ts` (`createDocumentExtensions()`) which has different extensions:
+   - TaskList + TaskItem ARE present (not in old RichTextEditor but added to knowledge base editor)
+   - Headings support levels 1-6 (not just 1-3)
+   - CodeBlockLowlight replaces StarterKit's codeBlock (with `defaultLanguage: 'plaintext'`)
+   - CharacterCount extension is present
+   - NO Image or ResizableImage extension in the knowledge base editor
+   - TextAlign configured for `['heading', 'paragraph']`
+
+2. **Document model has NO `updated_by` column.** The auto-save endpoint code example incorrectly set `doc.updated_by = current_user.id`. The model only has `created_by`. Remove this line from endpoint implementation.
+
+3. **Existing `document-editor.tsx` has a 300ms debounce** (not 500ms as noted in anti-patterns). The `handleUpdate` callback debounces `onChangeRef.current?.(ed.getJSON())` at 300ms. The auto-save hook should use its own independent 10-second debounce on the `editor.on('update')` event, NOT chain off the existing 300ms debounce.
+
+4. **Preload IPC pattern uses callback Sets, not ipcRenderer.on.** The existing preload pattern (see `onWebSocketMessage`, `onMaximizedChange`) uses a `Set<callback>` in module scope with `ipcRenderer.on` registered ONCE at load time, and the exposed API adds/removes from the Set. The `onBeforeQuit` pattern MUST follow this same approach -- not register a new `ipcRenderer.on` per callback.
+
+5. **`window:close` IPC handler exists** in `ipc/handlers.ts` (line 388) and simply calls `window?.close()`. The before-quit interception must happen on `mainWindow.on('close')` in `index.ts`, which fires BEFORE the window actually closes, allowing `event.preventDefault()`.
+
 ## Standard Stack
 
 ### Core
 
 | Library | Version | Purpose | Why Standard |
 |---------|---------|---------|--------------|
-| `idb` | 8.0.1 | IndexedDB wrapper for draft store | Already in project (`package.json`), typed, promise-based |
-| `@tanstack/react-query` | 5.90+ | Mutation for auto-save API calls | Already in project, handles retry/dedup |
-| `@tiptap/react` | 2.6+ | Editor instance access (getJSON, getText) | Already in project |
+| `idb` | ^8.0.1 | IndexedDB wrapper for draft store | Already in project (`package.json`), typed, promise-based |
+| `@tanstack/react-query` | ^5.90.20 | Mutation for auto-save API calls | Already in project, handles retry/dedup |
+| `@tiptap/react` | ^2.6.0 | Editor instance access (getJSON, getText) | Already in project |
 
 ### Supporting
 
 | Library | Version | Purpose | When to Use |
 |---------|---------|---------|-------------|
-| `lz-string` | 1.5+ | Draft compression in IndexedDB | Already in project, used by `per-query-persister` |
+| `lz-string` | ^1.5.0 | Draft compression in IndexedDB | Already in project, used by `per-query-persister` |
 
 ### Alternatives Considered
 
@@ -38,7 +58,7 @@ The Electron save-on-close pattern requires IPC coordination between the main pr
 | Custom Python JSON serializer | TipTap Conversion REST API | Requires paid TipTap Cloud subscription; adds external dependency and latency to every save |
 | Custom Python JSON serializer | `html-to-markdown` Python package (1.3.1) | Better typed than `markdownify` but still requires HTML intermediate step; doesn't solve the fundamental TipTap-specific edge cases |
 | Custom Python JSON serializer | Node.js subprocess from Python (`@tiptap/static-renderer`) | Adds Node.js runtime dependency to backend; process spawn overhead on every save unacceptable for auto-save |
-| Separate IndexedDB `drafts` store | localStorage | 5MB limit insufficient for documents with images; no structured queries; no index for cleanup |
+| Separate IndexedDB `drafts` store | localStorage | 5MB limit insufficient for documents with embedded content; no structured queries; no index for cleanup |
 | Separate IndexedDB `drafts` store | Reuse existing `pm-query-cache-db` | Draft lifecycle differs from query cache -- drafts are sacred user data with different eviction rules; query cache is disposable and LRU-evicted |
 
 **Installation:**
@@ -47,7 +67,7 @@ The Electron save-on-close pattern requires IPC coordination between the main pr
 # No new packages needed -- custom serializer uses only stdlib + existing Pydantic
 
 # Frontend (already installed)
-# idb 8.0.1, lz-string 1.5.0, @tanstack/react-query 5.90+ all present in package.json
+# idb ^8.0.1, lz-string ^1.5.0, @tanstack/react-query ^5.90.20 all present in package.json
 ```
 
 ## Architecture Patterns
@@ -55,28 +75,28 @@ The Electron save-on-close pattern requires IPC coordination between the main pr
 ### Recommended Project Structure
 ```
 fastapi-backend/app/
-├── services/
-│   ├── content_converter.py     # TipTap JSON -> Markdown + plain text
-│   └── document_service.py      # (created in Phase 1) -- add auto-save logic
-├── routers/
-│   └── documents.py             # (created in Phase 1) -- add PUT content endpoint
-└── tests/
-    └── test_content_converter.py # TDD: test suite with fixtures for all node types
+ services/
+    content_converter.py     # TipTap JSON -> Markdown + plain text
+    document_service.py      # (created in Phase 1) -- add auto-save logic
+ routers/
+    documents.py             # (created in Phase 1) -- add PUT content endpoint
+ tests/
+    test_content_converter.py # TDD: test suite with fixtures for all node types
 
 electron-app/src/
-├── renderer/
-│   ├── hooks/
-│   │   ├── use-auto-save.ts     # Debounced save hook with dirty tracking
-│   │   └── use-draft.ts         # IndexedDB draft persistence hook
-│   ├── lib/
-│   │   └── draft-db.ts          # IndexedDB store for document drafts
-│   └── components/
-│       └── knowledge/
-│           └── SaveStatus.tsx    # "Saving..." / "Saved Xs ago" / "Save failed" indicator
-├── main/
-│   └── index.ts                 # Add before-quit IPC coordination
-└── preload/
-    └── index.ts                 # Add onBeforeQuit IPC channel
+ renderer/
+    hooks/
+       use-auto-save.ts     # Debounced save hook with dirty tracking
+       use-draft.ts         # IndexedDB draft persistence hook
+    lib/
+       draft-db.ts          # IndexedDB store for document drafts
+    components/
+       knowledge/
+           SaveStatus.tsx    # "Saving..." / "Saved Xs ago" / "Save failed" indicator
+ main/
+    index.ts                 # Add before-quit IPC coordination
+ preload/
+    index.ts                 # Add onBeforeQuit IPC channel
 ```
 
 ### Pattern 1: Debounced Auto-Save with Dirty Tracking
@@ -89,14 +109,16 @@ electron-app/src/
 - Use `editor.getJSON()` + `JSON.stringify()` for comparison -- 5-10x faster than `getHTML()` for large documents. `getHTML()` has a known performance issue in Chrome where `Cmd+F` find dialog causes severe slowdown (TipTap issue #2447).
 - Single save function with coordination flag to prevent race conditions between auto-save and manual/navigate-away saves.
 - Store `lastSavedJson` as a ref (not state) to avoid re-renders on every content change.
+- The auto-save hook listens to `editor.on('update')` DIRECTLY -- it does NOT chain off the existing 300ms debounce in `document-editor.tsx`. Two independent systems: the existing 300ms debounce feeds the parent component's `onChange` for state updates; the 10s auto-save debounce triggers network saves.
 
 **Example:**
 ```typescript
 // Pattern: useAutoSave hook
-function useAutoSave(documentId: string, editor: Editor | null) {
+function useAutoSave(documentId: string, editor: Editor | null, rowVersion: number) {
   const lastSavedRef = useRef<string>('')
   const timerRef = useRef<ReturnType<typeof setTimeout>>()
   const savingRef = useRef(false)                // Mutex to prevent concurrent saves
+  const rowVersionRef = useRef(rowVersion)
   const [saveStatus, setSaveStatus] = useState<SaveStatus>({ state: 'idle' })
   const saveMutation = useSaveDocumentContent()
 
@@ -116,12 +138,13 @@ function useAutoSave(documentId: string, editor: Editor | null) {
     setSaveStatus({ state: 'saving' })
 
     try {
-      await saveMutation.mutateAsync({
+      const response = await saveMutation.mutateAsync({
         documentId,
         content_json: jsonStr,
-        row_version: currentRowVersion,
+        row_version: rowVersionRef.current,
       })
       lastSavedRef.current = jsonStr
+      rowVersionRef.current = response.row_version  // Update from server response
       setSaveStatus({ state: 'saved', at: Date.now() })
     } catch (error) {
       setSaveStatus({ state: 'error', message: 'Save failed' })
@@ -146,7 +169,7 @@ function useAutoSave(documentId: string, editor: Editor | null) {
     }
   }, [editor, saveNow])
 
-  return { isDirty, saveNow, saveStatus }
+  return { isDirty, saveNow, saveStatus, setSaveStatus }
 }
 ```
 
@@ -211,12 +234,15 @@ function getDraftDB(): Promise<IDBPDatabase<DraftDBSchema>> {
 
 **Critical Electron details from codebase analysis:**
 - The app has `sandbox: true` and `contextIsolation: true` (see `electron-app/src/main/index.ts`). This means renderer cannot access Node.js APIs directly -- all main process communication must go through preload IPC bridge (`electron-app/src/preload/index.ts`).
-- The preload already exposes `onWebSocketMessage` and `onMaximizedChange` as event subscription patterns. A new `onBeforeQuit` channel follows the same pattern.
+- The preload uses a **callback Set pattern** (NOT direct `ipcRenderer.on` per consumer). See `webSocketCallbacks`, `maximizedCallbacks` -- a module-level `Set<callback>` is populated by the exposed API, and a single `ipcRenderer.on` listener iterates the set. A new `beforeQuitCallbacks` Set must follow this same pattern.
 - `navigator.sendBeacon` is unreliable in Electron sandbox mode and has a 64KB body limit. Do NOT use it as primary save mechanism.
+- The existing `window:close` IPC handler in `ipc/handlers.ts` simply calls `window?.close()`. The before-quit interception must happen in `mainWindow.on('close')` in `index.ts`, which fires BEFORE the window actually closes.
 
 **Implementation approach for Electron before-quit:**
 ```typescript
 // In electron-app/src/main/index.ts:
+import { ipcMain } from 'electron'  // add ipcMain to existing import
+
 let isQuitting = false
 
 mainWindow.on('close', (event) => {
@@ -240,11 +266,19 @@ ipcMain.on('quit-save-complete', () => {
 ```
 
 ```typescript
-// In preload, add:
+// In preload/index.ts, add callback Set (matching existing pattern):
+const beforeQuitCallbacks = new Set<() => void>()
+
+ipcRenderer.on('before-quit-save', () => {
+  beforeQuitCallbacks.forEach((callback) => callback())
+})
+
+// In the exposed API object:
 onBeforeQuit: (callback: () => void) => {
-  const handler = () => callback()
-  ipcRenderer.on('before-quit-save', handler)
-  return () => ipcRenderer.removeListener('before-quit-save', handler)
+  beforeQuitCallbacks.add(callback)
+  return () => {
+    beforeQuitCallbacks.delete(callback)
+  }
 },
 confirmQuitSave: () => {
   ipcRenderer.send('quit-save-complete')
@@ -259,17 +293,22 @@ confirmQuitSave: () => {
 
 **TipTap JSON structure (ProseMirror):** The document is a recursive tree. Each node has `type`, optional `attrs`, optional `content` (array of child nodes), and optional `marks` (array of inline formatting). Text nodes have `type: "text"` and a `text` field.
 
-**Node types from the existing RichTextEditor.tsx extensions:**
-- Block: `doc`, `paragraph`, `heading` (levels 1-3), `bulletList`, `orderedList`, `listItem`, `taskList`, `taskItem`, `codeBlock`, `blockquote`, `table`, `tableRow`, `tableCell`, `tableHeader`, `horizontalRule`, `image`
+**Node types from the knowledge base editor (`editor-extensions.ts`):**
+- Block: `doc`, `paragraph`, `heading` (levels 1-6), `bulletList`, `orderedList`, `listItem`, `taskList`, `taskItem`, `codeBlock` (with `language` attr, default `'plaintext'`), `blockquote`, `table`, `tableRow`, `tableCell`, `tableHeader`, `horizontalRule`
 - Inline: `text`, `hardBreak`
 - Marks: `bold`, `italic`, `underline`, `strike`, `code`, `link` (with `href` attr), `textStyle` (with `fontSize`, `fontFamily`, `color` attrs), `highlight` (with `color` attr)
+- Custom attributes (via global attributes, NOT separate node types):
+  - `indent` attr on `paragraph` and `heading` nodes (integer 0-8, represents indentation level)
+  - `textAlign` attr on `paragraph` and `heading` nodes (string: `'left'`, `'center'`, `'right'`, `'justify'`)
+
+**NOTE:** The knowledge base editor does NOT have Image/ResizableImage extensions. If images are added later, the converter should handle them gracefully via the unknown-node fallback.
 
 **Example:**
 ```python
 # fastapi-backend/app/services/content_converter.py
 from typing import Any
 
-# ── Markdown Conversion ──────────────────────────────────────────────
+# -- Markdown Conversion -------------------------------------------------------
 
 _MARK_WRAPPERS = {
     "bold": "**",
@@ -289,7 +328,9 @@ def _md_nodes(nodes: list[dict[str, Any]], list_indent: int = 0) -> str:
     for node in nodes:
         t = node.get("type", "")
         if t == "paragraph":
-            parts.append(_md_inline(node.get("content", [])) + "\n\n")
+            text = _md_inline(node.get("content", []))
+            # Indent attr is presentation-only; skip in Markdown
+            parts.append(text + "\n\n")
         elif t == "heading":
             level = node.get("attrs", {}).get("level", 1)
             parts.append("#" * level + " " + _md_inline(node.get("content", [])) + "\n\n")
@@ -312,6 +353,9 @@ def _md_nodes(nodes: list[dict[str, Any]], list_indent: int = 0) -> str:
             parts.append("\n")
         elif t == "codeBlock":
             lang = node.get("attrs", {}).get("language", "")
+            # Skip "plaintext" default language -- render as bare ```
+            if lang == "plaintext":
+                lang = ""
             code = _extract_text_from_nodes(node.get("content", []))
             parts.append(f"```{lang}\n{code}\n```\n\n")
         elif t == "blockquote":
@@ -323,11 +367,12 @@ def _md_nodes(nodes: list[dict[str, Any]], list_indent: int = 0) -> str:
         elif t == "horizontalRule":
             parts.append("---\n\n")
         elif t == "image":
+            # Not currently in knowledge base editor, but handle gracefully
             src = node.get("attrs", {}).get("src", "")
             alt = node.get("attrs", {}).get("alt", "")
             parts.append(f"![{alt}]({src})\n\n")
         else:
-            # Unknown node -- render children if any, log warning
+            # Unknown node -- render children if any
             if "content" in node:
                 parts.append(_md_nodes(node["content"], list_indent))
     return "".join(parts)
@@ -406,7 +451,7 @@ def _md_table(node: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-# ── Plain Text Extraction ────────────────────────────────────────────
+# -- Plain Text Extraction -----------------------------------------------------
 
 def tiptap_json_to_plain_text(doc: dict[str, Any]) -> str:
     """Extract plain text from TipTap JSON document."""
@@ -431,13 +476,15 @@ def _extract_text_from_nodes(nodes: list[dict[str, Any]]) -> str:
 
 ### Anti-Patterns to Avoid
 
-- **Saving on every keystroke:** Even debounced at 500ms (as the existing `RichTextEditor.tsx` does for `onChange`), this creates excessive API calls. The auto-save hook must use its own 10-second inactivity debounce, independent of the existing 500ms UI debounce.
+- **Saving on every keystroke:** The existing `document-editor.tsx` has a 300ms debounce for its `onChange` callback. The auto-save hook must use its own INDEPENDENT 10-second inactivity debounce on `editor.on('update')`, not chain off the existing 300ms debounce.
 - **Using `getHTML()` for dirty comparison:** `getHTML()` is slow for large documents and has Chrome-specific performance bugs (TipTap issue #2447). Use `getJSON()` + `JSON.stringify()` for comparison.
 - **Blocking the UI on save:** Save mutations must be fire-and-forget with status indicator. Never block editor input during save.
 - **Single IndexedDB store for drafts AND query cache:** Different lifecycles and eviction rules. Drafts are sacred user data; query cache is disposable with LRU eviction.
 - **Relying only on `beforeunload` for crash recovery:** `beforeunload` does NOT fire on force-quit, process crash, or OS kill. IndexedDB drafts (written every ~2s) are the actual crash recovery mechanism.
 - **Two-step `tiptapy` + `markdownify` for production Markdown:** Fragile for tables, task lists, code blocks with language annotations, and underline marks. Custom serializer is more reliable and maintainable.
 - **Using `navigator.sendBeacon` as primary save-on-close:** Has 64KB body limit per spec, and is unreliable in Electron's sandbox mode. Use IndexedDB + Electron IPC instead.
+- **Registering per-consumer `ipcRenderer.on` in preload:** The codebase uses a callback Set pattern (`webSocketCallbacks`, `maximizedCallbacks`). Do NOT create a new `ipcRenderer.on('before-quit-save', ...)` per subscriber. Use a `beforeQuitCallbacks` Set.
+- **Setting `doc.updated_by` in the save endpoint:** The Document model does NOT have an `updated_by` column. Only `created_by` exists. The `updated_at` column auto-updates via SQLAlchemy's `onupdate`.
 
 ## Don't Hand-Roll
 
@@ -450,7 +497,7 @@ Problems that look simple but have existing solutions:
 | LZ compression for drafts | Custom compression | `lz-string` (already installed, v1.5.0) | Battle-tested, fast, ~60-80% compression for JSON text. Already used by `per-query-persister.ts` |
 | Debounce timer | Separate `use-debounce` npm package | Simple ref-based `setTimeout` (no library needed) | A `useRef` + `setTimeout` is ~10 LOC; no dependency needed for a single debounce timer |
 | Relative time ("Saved 3s ago") | Moment.js or date-fns | Simple `useEffect` with 1s interval + `Date.now() - lastSaved` math | No library needed; existing codebase has `lib/time-utils.ts` |
-| Electron IPC event bridge | Custom event system | Follow existing `onMaximizedChange` preload pattern | `preload/index.ts` already has the callback registration pattern for bidirectional IPC |
+| Electron IPC event bridge | Custom event system | Follow existing callback Set + `ipcRenderer.on` preload pattern | `preload/index.ts` already has the callback registration pattern for bidirectional IPC |
 
 **Key insight:** The project already has all required infrastructure libraries installed. Phase 4 is primarily application logic on top of existing infrastructure, not new library integration.
 
@@ -470,7 +517,7 @@ Problems that look simple but have existing solutions:
 
 ### Pitfall 3: Draft Restore Prompt Shows for Already-Saved Content
 **What goes wrong:** User sees "Restore unsaved draft?" but the draft content matches what the server already has.
-**Why it happens:** Draft was written to IndexedDB, then save mutation succeeded but draft cleanup failed (race condition) or the save confirmation IPC arrived after the draft was written.
+**Why it happens:** Draft was written to IndexedDB, then save mutation succeeded but draft cleanup failed (race condition) or the save confirmation arrived after the draft was written.
 **How to avoid:** When checking for drafts on document open, compare draft's `draftedAt` timestamp against the document's `updated_at` from server. Also compare actual content -- if draft JSON matches server JSON, silently delete the draft. Only show restore prompt if draft is newer AND content differs.
 **Warning signs:** Users reporting false restore prompts on every document open.
 
@@ -488,7 +535,7 @@ Problems that look simple but have existing solutions:
 
 ### Pitfall 6: TipTap JSON Schema Varies by Extension Configuration
 **What goes wrong:** The Python Markdown converter encounters node types or mark types it doesn't handle, producing incomplete output.
-**Why it happens:** The converter is tightly coupled to the specific TipTap extensions used. The existing `RichTextEditor.tsx` uses StarterKit (paragraph, heading 1-3, bulletList, orderedList, codeBlock, blockquote, horizontalRule, hardBreak), Underline, TextStyle, FontFamily, custom FontSize, custom Indent, Color, Highlight, TextAlign, Link, ResizableImage, Table/TableRow/TableCell/TableHeader, and Placeholder.
+**Why it happens:** The converter is tightly coupled to the specific TipTap extensions used. The knowledge base editor (`editor-extensions.ts`) uses: StarterKit (paragraph, heading 1-6, bulletList, orderedList, listItem, codeBlock replaced by CodeBlockLowlight, blockquote, horizontalRule, hardBreak, bold, italic, strike, code marks), Underline, TextStyle, FontFamily, custom FontSize, custom Indent, Color, Highlight, TextAlign, Link, Table/TableRow/TableCell/TableHeader, TaskList/TaskItem, CodeBlockLowlight, CharacterCount, and Placeholder.
 **How to avoid:** Write the converter with explicit handlers for every node/mark type from the extensions list above. Add a catch-all fallback that renders children of unknown nodes (recursive descent) and logs a warning. Write backend tests with JSON fixtures for each node type.
 **Warning signs:** Markdown output missing sections or containing raw JSON fragments.
 
@@ -497,6 +544,12 @@ Problems that look simple but have existing solutions:
 **Why it happens:** OS-level process kill cannot be intercepted.
 **How to avoid:** Write IndexedDB drafts frequently (every ~2 seconds of editor inactivity). This limits data loss to at most 2 seconds of typing. This is the only reliable crash recovery mechanism.
 **Warning signs:** Users reporting lost edits after crashes, despite auto-save being "enabled."
+
+### Pitfall 8: Content Converter Ignores Custom Attributes (indent, textAlign)
+**What goes wrong:** The Markdown output loses indentation context from the custom Indent extension.
+**Why it happens:** The `indent` and `textAlign` attributes are added via global attributes on paragraph/heading nodes. The converter doesn't check `node.attrs.indent`.
+**How to avoid:** For Markdown, treat `indent` and `textAlign` as presentation-only -- skip them (Markdown doesn't support arbitrary indentation or alignment). For plain text, also skip. This is the correct behavior since these are visual-only attributes. Document this design decision so future maintainers understand.
+**Warning signs:** None -- this is expected behavior, not a bug.
 
 ## Code Examples
 
@@ -509,7 +562,7 @@ class DocumentContentUpdate(BaseModel):
     content_json: str
     row_version: int
 
-@router.put("/api/documents/{document_id}/content")
+@router.put("/documents/{document_id}/content")
 async def save_document_content(
     document_id: UUID,
     body: DocumentContentUpdate,
@@ -534,8 +587,8 @@ async def save_document_content(
     doc.content_markdown = tiptap_json_to_markdown(content_dict)
     doc.content_plain = tiptap_json_to_plain_text(content_dict)
     doc.row_version += 1
-    doc.updated_at = datetime.utcnow()
-    doc.updated_by = current_user.id
+    # NOTE: updated_at auto-updates via SQLAlchemy onupdate
+    # NOTE: Document model has NO updated_by column
 
     await db.commit()
     await db.refresh(doc)
@@ -606,21 +659,21 @@ function useDraft(documentId: string, serverUpdatedAt: number) {
 |--------------|------------------|--------------|--------|
 | `getHTML()` for dirty check | `getJSON()` + `JSON.stringify()` | TipTap 2.x best practice | 5-10x faster comparison for large documents |
 | localStorage for drafts | IndexedDB with `idb` | 2023+ | No 5MB limit, structured data, index-based cleanup |
-| Full Zustand store for save state | TanStack Query mutation state + React Context | Project decision (STATE.md) | Zustand being removed in Phase 1; mutation `isPending`/`isError` covers save state |
+| Full Zustand store for save state | TanStack Query mutation state + React Context | Project decision (STATE.md) | Zustand removed in Phase 1; mutation `isPending`/`isError` covers save state |
 | `tiptapy` (0.21) + `markdownify` (1.2.2) pipeline | Custom Python JSON walker | 2025+ community consensus | No external dependencies, handles edge cases (tables, task lists, code lang, underline) |
 | `navigator.sendBeacon` for save-on-close | IndexedDB draft as primary + Electron IPC | Electron-specific | `sendBeacon` has 64KB limit; Electron IPC is more reliable for coordinated shutdown |
 | Single-blob cache persistence | Per-query persistence (`per-query-persister.ts`) | Existing codebase | Already implemented; draft DB follows same `idb` patterns |
 
 **Deprecated/outdated:**
 - `tiptap-markdown` npm package: Maintainer no longer active; TipTap v2 has native Markdown support but it is editor-side only (JavaScript), not useful for server-side Python conversion
-- Zustand stores: Being removed in Phase 1 per project decision. Note: existing `RichTextEditor.tsx` imports `useAuthStore` from `@/stores/auth-store` -- this will be migrated to React Context in Phase 1 before Phase 4 begins
+- Zustand stores: Removed in Phase 1 per project decision. Auth and notification state migrated to React Context.
 - `markdownify` (Python): Version 1.2.2 (Nov 2025) is mature but only does HTML-to-Markdown, not TipTap JSON-to-Markdown. Would require an intermediate HTML step that loses semantic information
 
 ## Open Questions
 
 1. **Markdown conversion fidelity for complex table structures**
-   - What we know: TipTap tables (using `@tiptap/extension-table`) can have header rows and custom column widths. Markdown tables only support simple column-per-cell with optional alignment. The existing editor configures `resizable: true` on tables.
-   - What's unclear: Whether merged cells will be used. The extension supports them but the toolbar in `RichTextEditor.tsx` doesn't expose merge controls.
+   - What we know: TipTap tables (using `@tiptap/extension-table`) can have header rows and custom column widths. Markdown tables only support simple column-per-cell with optional alignment. The knowledge base editor configures `resizable: true` on tables.
+   - What's unclear: Whether merged cells will be used. The extension supports them but the editor toolbar doesn't expose merge controls.
    - Recommendation: Implement basic table rendering (header row + data rows, no merge support). If a table cell contains nested block content (paragraphs, lists), render as inline text within the cell. Log a warning for unexpected table structures.
 
 2. **Electron `before-quit` IPC timing on Windows**
@@ -638,49 +691,54 @@ function useDraft(documentId: string, serverUpdatedAt: number) {
    - What's unclear: Whether AI/LLM consumers of the Markdown output will handle `<u>` HTML tags.
    - Recommendation: Render underline as `<u>text</u>` in Markdown (HTML is valid in Markdown). For plain text, strip it entirely.
 
+5. **CodeBlockLowlight `defaultLanguage: 'plaintext'` handling in Markdown**
+   - What we know: The knowledge base editor sets `defaultLanguage: 'plaintext'` on CodeBlockLowlight. This means even user-created code blocks without a specified language will have `language: 'plaintext'` in the JSON attrs.
+   - What's unclear: Whether AI consumers prefer bare ``` or ```plaintext for unlabeled code blocks.
+   - Recommendation: Skip the language annotation when it equals `'plaintext'` -- render as bare ```. This produces cleaner Markdown and is the conventional approach.
+
 ## Sources
 
 ### Primary (HIGH confidence)
-- Codebase: `electron-app/src/renderer/components/editor/RichTextEditor.tsx` -- TipTap v2 editor with full extension list (StarterKit, Underline, TextStyle, FontFamily, FontSize, Indent, Color, Highlight, TextAlign, Link, ResizableImage, Table, Placeholder)
-- Codebase: `electron-app/src/renderer/lib/query-cache-db.ts` -- Existing `idb` v8.0.1 patterns for IndexedDB (openDB, object stores, indexes, cursor-based operations)
-- Codebase: `electron-app/src/renderer/lib/cache-config.ts` -- Existing cache configuration (db name, version, eviction rules)
+- Codebase: `electron-app/src/renderer/components/knowledge/editor-extensions.ts` -- Knowledge base editor factory with full extension list (StarterKit, Underline, TextStyle, FontFamily, FontSize, Indent, Color, Highlight, TextAlign, Link, Table/TableRow/TableCell/TableHeader, TaskList/TaskItem, CodeBlockLowlight, CharacterCount, Placeholder)
+- Codebase: `electron-app/src/renderer/components/knowledge/document-editor.tsx` -- DocumentEditor component with 300ms debounce, getJSON() output, EditorStatusBar
+- Codebase: `electron-app/src/renderer/lib/query-cache-db.ts` -- Existing `idb` v8.0.1 patterns for IndexedDB (openDB, object stores, indexes, cursor-based operations, singleton dbPromise)
 - Codebase: `electron-app/src/renderer/lib/per-query-persister.ts` -- Existing per-query persistence with LZ-string compression
-- Codebase: `electron-app/src/renderer/lib/query-client.ts` -- TanStack Query setup, persistence initialization, cache management
 - Codebase: `electron-app/src/renderer/hooks/use-queries.ts` -- TanStack Query mutation patterns (useMutation with optimistic updates)
-- Codebase: `electron-app/src/main/index.ts` -- Electron main process lifecycle (no `before-quit` handler yet; security config with sandbox/contextIsolation)
-- Codebase: `electron-app/src/preload/index.ts` -- IPC bridge patterns (callback sets for event subscriptions, `contextBridge.exposeInMainWorld`)
-- Codebase: `electron-app/src/main/ipc/handlers.ts` -- IPC handler registration patterns
-- Codebase: `electron-app/package.json` -- Confirmed installed: `idb` 8.0.1, `idb-keyval` 6.2.2, `lz-string` 1.5.0, `@tanstack/react-query` 5.90+, `@tiptap/react` 2.6+
-- Codebase: `fastapi-backend/app/database.py` -- Async SQLAlchemy patterns (AsyncSession, get_db dependency)
-- Codebase: `fastapi-backend/app/models/task.py` -- Model patterns (UUID PK, row_version for optimistic concurrency, timestamps)
-- [Electron app lifecycle docs](https://www.electronjs.org/docs/latest/api/app) -- `before-quit`, `will-quit` events
-- [Electron BrowserWindow docs](https://www.electronjs.org/docs/latest/api/browser-window) -- `close` event, `webContents.send()`
+- Codebase: `electron-app/src/main/index.ts` -- Electron main process lifecycle (no `before-quit` handler yet; security config with sandbox/contextIsolation; existing `mainWindow.on('closed')` cleanup; `ipcMain` NOT imported yet)
+- Codebase: `electron-app/src/preload/index.ts` -- IPC bridge patterns (callback Sets for `webSocketCallbacks`, `maximizedCallbacks`, `notificationCallbacks`; `contextBridge.exposeInMainWorld`; `ElectronAPI` interface)
+- Codebase: `electron-app/src/main/ipc/handlers.ts` -- Existing `window:close` handler at line 388 (calls `window?.close()`)
+- Codebase: `electron-app/package.json` -- Confirmed installed: `idb` ^8.0.1, `idb-keyval` ^6.2.2, `lz-string` ^1.5.0, `@tanstack/react-query` ^5.90.20, `@tiptap/react` ^2.6.0, `electron` ^30.1.2
+- Codebase: `fastapi-backend/app/models/document.py` -- Document model: `content_json`, `content_markdown`, `content_plain` (all Text, nullable), `row_version` (Integer, default=1), `created_by` FK, NO `updated_by` column, `updated_at` with onupdate
+- Codebase: `fastapi-backend/app/routers/documents.py` -- Existing CRUD endpoints, no PUT content endpoint yet
+- Codebase: `fastapi-backend/app/services/document_service.py` -- Existing service helpers (validate_scope, cursor pagination, folder management)
 
 ### Secondary (MEDIUM confidence)
 - [TipTap GitHub Discussion #5847](https://github.com/ueberdosis/tiptap/discussions/5847) -- JSON to Markdown conversion approaches; community consensus: custom serializer or HTML intermediate
-- [TipTap GitHub Discussion #3114](https://github.com/ueberdosis/tiptap/discussions/3114) -- JSON to plain text; `editor.getText()` pattern
 - [TipTap GitHub Issue #2447](https://github.com/ueberdosis/tiptap/issues/2447) -- Performance issue with `getHTML()` in Chrome; recommends `getJSON()` for comparisons
-- [TipTap Persistence docs](https://tiptap.dev/docs/editor/core-concepts/persistence) -- `getJSON()`/`setContent()` for persistence patterns
-- [TipTap Export JSON/HTML docs](https://tiptap.dev/docs/guides/output-json-html) -- `editor.getJSON()` and `editor.getHTML()` API
-- [markdownify on PyPI](https://pypi.org/project/markdownify/) -- v1.2.2 (Nov 2025), HTML-to-Markdown, depends on BeautifulSoup4
-- [python-markdownify GitHub](https://github.com/matthewwithanm/python-markdownify) -- Subclassing for custom tag handling
-- [tiptapy on PyPI](https://pypi.org/project/tiptapy/) -- v0.21, Python TipTap JSON to HTML (limited node support, not Markdown)
+- [Electron BrowserWindow docs](https://www.electronjs.org/docs/latest/api/browser-window) -- `close` event, `webContents.send()`
 - [idb GitHub](https://github.com/jakearchibald/idb) -- Promise-based IndexedDB wrapper, ~1.19kB brotli'd
-- [Two ways to react on Electron close event](https://www.matthiassommer.it/programming/frontend/two-ways-to-react-on-the-electron-close-event/) -- IPC coordination pattern for save-on-close
-- [MDN: Using IndexedDB](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API/Using_IndexedDB) -- IndexedDB API reference
 
 ### Tertiary (LOW confidence)
-- [Electron IPC Tutorial (Official)](https://www.electronjs.org/docs/latest/tutorial/ipc) -- General IPC patterns (verified HIGH)
-- ProseMirror JSON schema structure -- Based on training data, verified against `RichTextEditor.tsx` extension configuration
+- ProseMirror JSON schema structure -- Based on training data, verified against `editor-extensions.ts` extension configuration and TipTap docs
 
 ## Metadata
 
 **Confidence breakdown:**
-- Standard stack: HIGH -- all libraries already installed in codebase; no new dependencies needed
-- Architecture: HIGH -- patterns directly derived from existing codebase infrastructure (`per-query-persister`, `query-cache-db`, TanStack Query mutations, Electron IPC)
-- Content converter: HIGH -- custom Python serializer approach verified against actual TipTap extension list in `RichTextEditor.tsx`; node types fully enumerated from codebase
+- Standard stack: HIGH -- all libraries already installed in codebase; no new dependencies needed; versions verified in package.json
+- Architecture: HIGH -- patterns directly derived from existing codebase infrastructure (`per-query-persister`, `query-cache-db`, TanStack Query mutations, Electron IPC callback Set pattern)
+- Content converter: HIGH -- custom Python serializer approach verified against actual TipTap extension list in `editor-extensions.ts` (NOT `RichTextEditor.tsx`); node types fully enumerated from knowledge base editor
 - Electron lifecycle: MEDIUM -- `BrowserWindow.close` IPC pattern is well-documented but Windows-specific timing guarantees are not fully documented; 3-second timeout is a pragmatic choice
 - Pitfalls: HIGH -- well-documented in Electron and IndexedDB ecosystems; codebase already handles similar patterns in query cache
+
+**Re-research corrections applied:**
+- Extension list corrected from `RichTextEditor.tsx` to `editor-extensions.ts`
+- TaskList/TaskItem confirmed present in knowledge base editor
+- Heading levels corrected from 1-3 to 1-6
+- Image/ResizableImage confirmed NOT present in knowledge base editor
+- `updated_by` bug identified and documented (column does not exist on Document model)
+- Preload IPC pattern corrected to use callback Set (not per-consumer ipcRenderer.on)
+- Existing debounce in document-editor.tsx corrected from 500ms to 300ms
+- CodeBlockLowlight `defaultLanguage: 'plaintext'` handling added
 
 **Research date:** 2026-01-31
 **Valid until:** 2026-03-02 (stable domain, 30 days)
