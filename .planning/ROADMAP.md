@@ -190,11 +190,11 @@ Plans:
   2. Project detail page has a "Docs" tab with folder tree and full editor experience
   3. User can type @ in the editor to get a search-as-you-type popup listing Applications and Projects
   4. Selecting an @ mention inserts a navigable link that takes the user to the referenced Application or Project
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 10-01: Embedded docs tab component for Application and Project detail pages
-- [ ] 10-02: @ mention TipTap extension with suggestion popup and navigable links
+- [ ] 10-01-PLAN.md — EmbeddedDocsTab component with fixedScope KnowledgeBaseProvider, Docs tab in Application and Project detail pages
+- [ ] 10-02-PLAN.md — TipTap @ mention extension with suggestion popup, client-side search, and click-to-navigate handler
 
 ## Progress
 
