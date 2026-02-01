@@ -17,7 +17,6 @@ from ..database import get_db
 from ..models.application_member import ApplicationMember
 from ..models.attachment import Attachment
 from ..models.comment import Comment
-from ..models.note import Note
 from ..models.project import Project
 from ..models.project_member import ProjectMember
 from ..models.task import Task
@@ -189,10 +188,6 @@ async def upload_file(
         None,
         description="ID of the task to attach the file to (shortcut for entity_type=task)",
     ),
-    note_id: Optional[UUID] = Query(
-        None,
-        description="ID of the note to attach the file to (shortcut for entity_type=note)",
-    ),
     comment_id: Optional[UUID] = Query(
         None,
         description="ID of the comment to attach the file to (shortcut for entity_type=comment)",
@@ -202,10 +197,9 @@ async def upload_file(
     Upload a file to MinIO storage.
 
     - **file**: The file to upload (multipart form data)
-    - **entity_type**: Type of entity to attach to (task, note, comment)
+    - **entity_type**: Type of entity to attach to (task, comment)
     - **entity_id**: ID of the entity to attach to
     - **task_id**: Shortcut for attaching to a task
-    - **note_id**: Shortcut for attaching to a note
 
     Files are stored in MinIO with appropriate bucket selection based on content type:
     - Images go to 'pm-images' bucket
@@ -254,21 +248,6 @@ async def upload_file(
             )
         # Check upload permission (app owner or project member)
         await verify_task_attachment_access(task_id, current_user, db, action="upload")
-
-    # Handle note_id shortcut
-    if note_id and not resolved_entity_type:
-        resolved_entity_type = EntityType.NOTE.value
-        resolved_entity_id = note_id
-        # Verify note exists and user has access
-        result = await db.execute(
-            select(Note).where(Note.id == note_id)
-        )
-        note = result.scalar_one_or_none()
-        if not note:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Note with ID {note_id} not found",
-            )
 
     # Handle comment_id shortcut
     if comment_id and not resolved_entity_type:
@@ -336,7 +315,6 @@ async def upload_file(
         entity_type=resolved_entity_type,
         entity_id=resolved_entity_id,
         task_id=task_id,
-        note_id=note_id,
         comment_id=comment_id,
     )
 
@@ -360,7 +338,6 @@ async def upload_file(
                         "entity_type": attachment.entity_type,
                         "entity_id": str(attachment.entity_id) if attachment.entity_id else None,
                         "task_id": str(attachment.task_id) if attachment.task_id else None,
-                        "note_id": str(attachment.note_id) if attachment.note_id else None,
                         "uploaded_by": str(attachment.uploaded_by),
                         "created_at": attachment.created_at.isoformat() if attachment.created_at else None,
                     },
@@ -391,17 +368,15 @@ async def list_attachments(
     entity_type: Optional[EntityType] = Query(None, description="Filter by entity type"),
     entity_id: Optional[UUID] = Query(None, description="Filter by entity ID"),
     task_id: Optional[UUID] = Query(None, description="Filter by task ID"),
-    note_id: Optional[UUID] = Query(None, description="Filter by note ID"),
 ) -> List[AttachmentResponse]:
     """
     List attachments with optional filtering.
 
     - **skip**: Number of records to skip for pagination
     - **limit**: Maximum number of records to return (1-500)
-    - **entity_type**: Filter by entity type (task, note, comment)
+    - **entity_type**: Filter by entity type (task, comment)
     - **entity_id**: Filter by entity ID
     - **task_id**: Filter by task ID
-    - **note_id**: Filter by note ID
 
     Returns attachments uploaded by the current user or attached to their entities.
     """
@@ -419,9 +394,6 @@ async def list_attachments(
 
     if task_id:
         query = query.where(Attachment.task_id == task_id)
-
-    if note_id:
-        query = query.where(Attachment.note_id == note_id)
 
     # Order by most recently created
     query = query.order_by(Attachment.created_at.desc())
@@ -685,18 +657,6 @@ async def delete_file(
     # attachments even if they don't have broader task permissions.
     if not can_delete and attachment.comment_id:
         if attachment.uploaded_by == current_user.id:
-            can_delete = True
-
-    # For note attachments, check if user is the application owner
-    if not can_delete and attachment.note_id:
-        result = await db.execute(
-            select(Note)
-            .options(selectinload(Note.application))
-            .where(Note.id == attachment.note_id)
-        )
-        note = result.scalar_one_or_none()
-
-        if note and note.application.owner_id == current_user.id:
             can_delete = True
 
     if not can_delete:

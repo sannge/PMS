@@ -8,7 +8,7 @@ from .checklist_item import ChecklistItem
 from .comment import Comment
 from .invitation import Invitation
 from .mention import Mention
-from .note import Note
+
 from .notification import Notification
 from .project import Project
 from .project_assignment import ProjectAssignment
@@ -27,7 +27,7 @@ __all__ = [
     "Comment",
     "Invitation",
     "Mention",
-    "Note",
+
     "Notification",
     "Project",
     "ProjectAssignment",

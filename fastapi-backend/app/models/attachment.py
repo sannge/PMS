@@ -11,7 +11,6 @@ from sqlalchemy.orm import relationship
 from ..database import Base
 
 if TYPE_CHECKING:
-    from .note import Note
     from .task import Task
     from .user import User
 
@@ -21,7 +20,7 @@ class Attachment(Base):
     Attachment model representing files stored in MinIO object storage.
 
     Attachments use a polymorphic association pattern to link to different
-    entity types (tasks, notes, comments). Files are stored in MinIO and
+    entity types (tasks, comments). Files are stored in MinIO and
     referenced by bucket and key.
 
     Attributes:
@@ -32,10 +31,9 @@ class Attachment(Base):
         minio_bucket: MinIO bucket name
         minio_key: MinIO object key (path within bucket)
         uploaded_by: FK to user who uploaded the file
-        entity_type: Type of entity this is attached to ('task', 'note', 'comment')
+        entity_type: Type of entity this is attached to ('task', 'comment')
         entity_id: ID of the entity this is attached to
         task_id: Direct FK to task (when entity_type is 'task')
-        note_id: Direct FK to note (when entity_type is 'note')
         created_at: Timestamp when attachment was created
     """
 
@@ -93,12 +91,6 @@ class Attachment(Base):
         nullable=True,
         index=True,
     )
-    note_id = Column(
-        UUID(as_uuid=True),
-        ForeignKey("Notes.id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-    )
     comment_id = Column(
         UUID(as_uuid=True),
         ForeignKey("Comments.id", ondelete="CASCADE"),
@@ -124,12 +116,6 @@ class Attachment(Base):
         "Task",
         back_populates="attachments",
         lazy="joined",
-    )
-    note = relationship(
-        "Note",
-        back_populates="attachments",
-        lazy="joined",
-        foreign_keys=[note_id],
     )
     comment = relationship(
         "Comment",

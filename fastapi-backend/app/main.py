@@ -27,7 +27,7 @@ print("=" * 60 + "\n", flush=True)
 from contextlib import asynccontextmanager
 
 from .database import warmup_connection_pool
-from .routers import application_members_router, applications_router, auth_router, checklists_router, comments_router, files_router, invitations_router, notes_router, notifications_router, project_assignments_router, project_members_router, projects_router, tasks_router, users_router
+from .routers import application_members_router, applications_router, auth_router, checklists_router, comments_router, files_router, invitations_router, notifications_router, project_assignments_router, project_members_router, projects_router, tasks_router, users_router
 from .websocket import manager, route_incoming_message, check_room_access
 from .websocket.presence import presence_manager
 from .services.auth_service import decode_access_token
@@ -90,7 +90,7 @@ async def lifespan(app: FastAPI):
 # Create FastAPI application
 app = FastAPI(
     title="PM API",
-    description="Project Management API with Jira-like features and OneNote-style notes",
+    description="Project Management API with Jira-like features and knowledge base",
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
@@ -145,7 +145,7 @@ app.include_router(projects_router)
 app.include_router(project_assignments_router)
 app.include_router(project_members_router)
 app.include_router(tasks_router)
-app.include_router(notes_router)
+
 app.include_router(files_router)
 app.include_router(notifications_router)
 app.include_router(invitations_router)

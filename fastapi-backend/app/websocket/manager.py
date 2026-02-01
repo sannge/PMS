@@ -68,11 +68,6 @@ class MessageType(str, Enum):
     PRESENCE_UPDATE = "presence_update"
     TASK_VIEWERS = "task_viewers"
 
-    NOTE_CREATED = "note_created"
-    NOTE_UPDATED = "note_updated"
-    NOTE_DELETED = "note_deleted"
-    NOTE_CONTENT_CHANGED = "note_content_changed"
-
     PROJECT_CREATED = "project_created"
     PROJECT_UPDATED = "project_updated"
     PROJECT_DELETED = "project_deleted"

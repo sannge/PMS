@@ -12,7 +12,6 @@ class EntityType(str, Enum):
     """Entity type enumeration for polymorphic attachments."""
 
     TASK = "task"
-    NOTE = "note"
     COMMENT = "comment"
 
 
@@ -68,10 +67,6 @@ class AttachmentCreate(AttachmentBase):
         None,
         description="ID of the task (when attaching to a task)",
     )
-    note_id: Optional[UUID] = Field(
-        None,
-        description="ID of the note (when attaching to a note)",
-    )
     comment_id: Optional[UUID] = Field(
         None,
         description="ID of the comment (when attaching to a comment)",
@@ -117,10 +112,6 @@ class AttachmentResponse(AttachmentBase):
     task_id: Optional[UUID] = Field(
         None,
         description="ID of the associated task",
-    )
-    note_id: Optional[UUID] = Field(
-        None,
-        description="ID of the associated note",
     )
     comment_id: Optional[UUID] = Field(
         None,

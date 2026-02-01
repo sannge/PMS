@@ -23,7 +23,6 @@ from ..models.application_member import ApplicationMember
 from ..models.project import Project
 from ..models.project_member import ProjectMember
 from ..models.task import Task
-from ..models.note import Note
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +92,6 @@ async def check_room_access(user_id: UUID, room_id: str) -> bool:
     - application:{uuid} - Application room (requires membership)
     - project:{uuid} - Project room (requires membership in parent application)
     - task:{uuid} - Task room (requires access to parent project)
-    - note:{uuid} - Note room (requires access to parent application)
     - user:{uuid} - User-specific room (only for own user)
 
     Args:
@@ -145,8 +143,6 @@ async def _check_room_access_async(user_id: UUID, room_type: str, resource_id: U
             return await _check_project_access(db, user_id, resource_id)
         elif room_type == "task":
             return await _check_task_access(db, user_id, resource_id)
-        elif room_type == "note":
-            return await _check_note_access(db, user_id, resource_id)
         else:
             logger.warning(f"[Room Auth] DENIED - unknown room type: {room_type}")
             return False
@@ -209,12 +205,3 @@ async def _check_task_access(db: AsyncSession, user_id: UUID, task_id: UUID) -> 
     return await _check_project_access(db, user_id, task.project_id)
 
 
-async def _check_note_access(db: AsyncSession, user_id: UUID, note_id: UUID) -> bool:
-    """Check if user has access to the note via application membership."""
-    result = await db.execute(
-        select(Note).where(Note.id == note_id)
-    )
-    note = result.scalar_one_or_none()
-    if not note:
-        return False
-    return await _check_application_access(db, user_id, note.application_id)

@@ -119,19 +119,6 @@ def get_task_room(task_id: UUID | str) -> str:
     return f"task:{task_id}"
 
 
-def get_note_room(note_id: UUID | str) -> str:
-    """
-    Get the room ID for a note (for collaborative editing).
-
-    Args:
-        note_id: The note's UUID
-
-    Returns:
-        str: Room ID in format 'note:{uuid}'
-    """
-    return f"note:{note_id}"
-
-
 async def handle_task_update(
     project_id: UUID | str,
     task_id: UUID | str,
@@ -200,81 +187,6 @@ async def handle_task_update(
     logger.info(
         f"Task {action.value}: task_id={task_id}, "
         f"project_room={room_id}, recipients={recipients}"
-    )
-
-    return BroadcastResult(
-        room_id=room_id,
-        recipients=recipients,
-        message_type=message_type.value,
-        success=True,
-    )
-
-
-async def handle_note_update(
-    application_id: UUID | str,
-    note_id: UUID | str,
-    action: UpdateAction,
-    note_data: dict[str, Any],
-    user_id: Optional[UUID | str] = None,
-    content_delta: Optional[dict[str, Any]] = None,
-    connection_manager: Optional[ConnectionManager] = None,
-) -> BroadcastResult:
-    """
-    Handle note update events and broadcast to application room.
-
-    Args:
-        application_id: The application's UUID
-        note_id: The note's UUID
-        action: The type of update (created, updated, deleted, content_changed)
-        note_data: The note data to broadcast
-        user_id: The user who made the change
-        content_delta: Optional delta changes for collaborative editing
-        connection_manager: Optional custom manager (defaults to global)
-
-    Returns:
-        BroadcastResult: Result of the broadcast operation
-    """
-    mgr = connection_manager or manager
-    room_id = get_application_room(application_id)
-
-    # Determine message type
-    message_type_map = {
-        UpdateAction.CREATED: MessageType.NOTE_CREATED,
-        UpdateAction.UPDATED: MessageType.NOTE_UPDATED,
-        UpdateAction.DELETED: MessageType.NOTE_DELETED,
-        UpdateAction.CONTENT_CHANGED: MessageType.NOTE_CONTENT_CHANGED,
-    }
-    message_type = message_type_map.get(action, MessageType.NOTE_UPDATED)
-
-    # Build the message payload
-    payload: dict[str, Any] = {
-        "note_id": str(note_id),
-        "application_id": str(application_id),
-        "action": action.value,
-        "note": note_data,
-        "timestamp": datetime.utcnow().isoformat(),
-    }
-
-    if user_id:
-        payload["changed_by"] = str(user_id)
-
-    if action == UpdateAction.CONTENT_CHANGED and content_delta:
-        payload["content_delta"] = content_delta
-
-    message = {
-        "type": message_type.value,
-        "data": payload,
-    }
-
-    recipients = await mgr.broadcast_to_room(room_id, message)
-
-    # Also broadcast to note-specific room for collaborative editors
-    note_room_id = get_note_room(note_id)
-    await mgr.broadcast_to_room(note_room_id, message)
-
-    logger.info(
-        f"Note {action.value}: note_id={note_id}, "
-        f"application_room={room_id}, recipients={recipients}"
     )
 
     return BroadcastResult(
@@ -692,28 +604,6 @@ async def route_incoming_message(
             except ValueError:
                 logger.warning(f"Invalid action: {action_str}")
 
-    elif message_type == "note_update_request":
-        # Client requesting to broadcast a note update
-        application_id = data.get("data", {}).get("application_id")
-        note_id = data.get("data", {}).get("note_id")
-        note_data = data.get("data", {}).get("note")
-        action_str = data.get("data", {}).get("action", "updated")
-        content_delta = data.get("data", {}).get("content_delta")
-
-        if application_id and note_id and note_data:
-            try:
-                action = UpdateAction(action_str)
-                await handle_note_update(
-                    application_id=application_id,
-                    note_id=note_id,
-                    action=action,
-                    note_data=note_data,
-                    user_id=connection.user_id,
-                    content_delta=content_delta,
-                    connection_manager=mgr,
-                )
-            except ValueError:
-                logger.warning(f"Invalid action: {action_str}")
 
 
 async def handle_invitation_notification(
@@ -2139,10 +2029,8 @@ __all__ = [
     "get_project_room",
     "get_application_room",
     "get_task_room",
-    "get_note_room",
     "handle_task_update",
     "handle_task_moved",
-    "handle_note_update",
     "handle_project_update",
     "handle_project_status_changed",
     "handle_application_update",

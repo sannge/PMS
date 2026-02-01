@@ -29,7 +29,7 @@ from app.models import (
     Comment,
     Invitation,
     Mention,
-    Note,
+
     Notification,
     Project,
     ProjectAssignment,
