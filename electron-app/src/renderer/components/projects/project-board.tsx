@@ -17,8 +17,8 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
-import { useAuthStore } from '@/stores/auth-store'
-import { getAuthHeaders } from '@/stores/auth-store'
+import { useAuthStore } from '@/contexts/auth-context'
+import { getAuthHeaders } from '@/contexts/auth-context'
 import {
   Plus,
   AlertCircle,

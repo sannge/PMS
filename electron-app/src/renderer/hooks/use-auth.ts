@@ -29,7 +29,7 @@ import {
   type LoginCredentials,
   type RegisterData,
   type AuthError,
-} from '@/stores/auth-store'
+} from '@/contexts/auth-context'
 
 // ============================================================================
 // Types
@@ -266,6 +266,6 @@ export type {
   LoginCredentials,
   RegisterData,
   AuthError,
-} from '@/stores/auth-store'
+} from '@/contexts/auth-context'
 
 export default useAuth

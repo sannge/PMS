@@ -17,7 +17,7 @@ import {
   UseInfiniteQueryResult,
   InfiniteData,
 } from '@tanstack/react-query'
-import { useAuthStore } from '@/stores/auth-store'
+import { useAuthStore } from '@/contexts/auth-context'
 import { queryKeys, queryClient } from '@/lib/query-client'
 
 // ============================================================================

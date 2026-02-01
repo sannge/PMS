@@ -22,7 +22,7 @@ import {
   Calendar,
   Info,
 } from 'lucide-react'
-import { useAuthStore, getAuthHeaders } from '@/stores/auth-store'
+import { useAuthStore, getAuthHeaders } from '@/contexts/auth-context'
 
 // ============================================================================
 // Types

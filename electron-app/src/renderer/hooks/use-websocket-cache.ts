@@ -16,7 +16,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { wsClient, MessageType, type Unsubscribe } from '@/lib/websocket'
 import { queryKeys } from '@/lib/query-client'
 import { showBrowserNotification } from '@/lib/notifications'
-import { useAuthStore } from '@/stores/auth-store'
+import { useAuthStore } from '@/contexts/auth-context'
 
 // ============================================================================
 // Types for WebSocket Event Data
@@ -110,11 +110,17 @@ export interface WebSocketCacheOptions {
 export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {}): void {
   const queryClient = useQueryClient()
   const optionsRef = useRef(options)
+  const currentUser = useAuthStore((state) => state.user)
+  const currentUserRef = useRef(currentUser)
 
-  // Keep options ref up to date
+  // Keep refs up to date
   useEffect(() => {
     optionsRef.current = options
   }, [options])
+
+  useEffect(() => {
+    currentUserRef.current = currentUser
+  }, [currentUser])
 
   useEffect(() => {
     console.log('[WebSocket-Cache] Hook mounted, setting up listeners')
@@ -356,7 +362,7 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
         console.log('[WebSocket-Cache] MEMBER_REMOVED received:', data)
 
         // Check if current user is the one being removed
-        const currentUserId = useAuthStore.getState().user?.id
+        const currentUserId = currentUserRef.current?.id
         const isCurrentUserRemoved = currentUserId === data.user_id
         console.log('[WebSocket-Cache] MEMBER_REMOVED check: currentUserId=', currentUserId, 'data.user_id=', data.user_id, 'isCurrentUserRemoved=', isCurrentUserRemoved)
 

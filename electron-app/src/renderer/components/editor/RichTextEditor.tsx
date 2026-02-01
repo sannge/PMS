@@ -268,7 +268,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover'
-import { useAuthStore } from '@/stores/auth-store'
+import { useAuthStore } from '@/contexts/auth-context'
 
 // ============================================================================
 // Types

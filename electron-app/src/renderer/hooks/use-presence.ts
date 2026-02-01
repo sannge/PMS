@@ -13,7 +13,7 @@
 
 import { useEffect, useCallback, useState, useRef } from 'react'
 import { useWebSocket } from './use-websocket'
-import { useAuthStore } from '@/stores/auth-store'
+import { useAuthStore } from '@/contexts/auth-context'
 
 // ============================================================================
 // Types

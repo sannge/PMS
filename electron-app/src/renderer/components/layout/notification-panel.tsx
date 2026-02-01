@@ -10,8 +10,8 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { cn } from '@/lib/utils'
-import { useAuthStore, getAuthHeaders } from '@/stores/auth-store'
-import { useNotificationUIStore } from '@/stores/notification-ui-store'
+import { useAuthStore, getAuthHeaders } from '@/contexts/auth-context'
+import { useNotificationUIStore } from '@/contexts/notification-ui-context'
 import {
   useNotifications,
   useMarkAsRead,

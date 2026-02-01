@@ -49,7 +49,7 @@ import {
 } from 'lucide-react'
 import type { Task, TaskStatusValue as TaskStatus, TaskUpdate, TaskPriority, TaskType } from '@/hooks/use-queries'
 import { useProjectMembers, useAppMembers } from '@/hooks/use-members'
-import { useAuthStore } from '@/stores/auth-store'
+import { useAuthStore } from '@/contexts/auth-context'
 import { TaskStatusBadge } from './task-status-badge'
 import { FileUpload } from '@/components/files/file-upload'
 import { AttachmentList } from '@/components/files/attachment-list'

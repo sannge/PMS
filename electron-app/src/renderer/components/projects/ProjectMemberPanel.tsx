@@ -38,7 +38,7 @@ import {
   type ApplicationMember,
   type ProjectRole as ProjectMemberRole,
 } from '@/hooks/use-members'
-import { useAuthStore } from '@/stores/auth-store'
+import { useAuthStore } from '@/contexts/auth-context'
 
 // ============================================================================
 // Types

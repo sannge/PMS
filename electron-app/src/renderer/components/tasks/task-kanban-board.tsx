@@ -7,7 +7,7 @@
 
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { cn } from '@/lib/utils'
-import { useAuthStore, getAuthHeaders } from '@/stores/auth-store'
+import { useAuthStore, getAuthHeaders } from '@/contexts/auth-context'
 import { useMoveTask, type Task, type TaskStatusValue as TaskStatus } from '@/hooks/use-queries'
 import {
   DndContext,

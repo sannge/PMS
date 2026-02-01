@@ -19,7 +19,7 @@ import * as Dialog from '@radix-ui/react-dialog'
 import * as Select from '@radix-ui/react-select'
 import { cn } from '@/lib/utils'
 import { X, UserPlus, ChevronDown, Check, Search, Loader2, AlertCircle } from 'lucide-react'
-import { useAuthStore } from '@/stores/auth-store'
+import { useAuthStore } from '@/contexts/auth-context'
 import { useSendInvitation, type ApplicationRole } from '@/hooks/use-invitations'
 
 // ============================================================================

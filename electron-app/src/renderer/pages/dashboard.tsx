@@ -24,7 +24,7 @@ import { DashboardTasksList } from '@/components/dashboard/DashboardTasksList'
 import { useInvitationNotifications, useWebSocket, useNotificationReadSync, useProjectDeletedSync, useNotifications } from '@/hooks/use-websocket'
 import { useWebSocketCacheInvalidation } from '@/hooks/use-websocket-cache'
 import { requestNotificationPermission } from '@/lib/notifications'
-import { useAuthStore } from '@/stores/auth-store'
+import { useAuthStore } from '@/contexts/auth-context'
 import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '@/lib/query-client'
 import { useApplications } from '@/hooks/use-queries'
@@ -416,6 +416,7 @@ export function DashboardPage({
 
   // Auth store
   const token = useAuthStore((state) => state.token)
+  const currentUser = useAuthStore((state) => state.user)
 
   // TanStack Query client for cache invalidation
   const queryClient = useQueryClient()
@@ -523,7 +524,7 @@ export function DashboardPage({
       console.log('[Dashboard] onMemberAdded triggered:', data)
 
       // Check if current user is the one who was added (just joined via invitation)
-      const currentUserId = useAuthStore.getState().user?.id
+      const currentUserId = currentUser?.id
       const isCurrentUserAdded = currentUserId === data.user_id
 
       // Invalidate notifications

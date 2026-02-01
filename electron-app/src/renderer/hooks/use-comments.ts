@@ -19,7 +19,7 @@ import {
   UseMutationResult,
   UseInfiniteQueryResult,
 } from '@tanstack/react-query'
-import { useAuthStore, User } from '@/stores/auth-store'
+import { useAuthStore, User } from '@/contexts/auth-context'
 import { queryKeys } from '@/lib/query-client'
 
 // ============================================================================

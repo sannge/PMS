@@ -11,7 +11,7 @@
 
 import { useCallback, ReactNode } from 'react'
 import { cn } from '@/lib/utils'
-import { useNotificationUIStore } from '@/stores/notification-ui-store'
+import { useNotificationUIStore } from '@/contexts/notification-ui-context'
 import { useUnreadCount } from '@/hooks/use-notifications'
 import {
   LayoutDashboard,

@@ -23,7 +23,7 @@ import {
   type CollisionDetection,
 } from '@dnd-kit/core'
 import { cn } from '@/lib/utils'
-import { useAuthStore, getAuthHeaders } from '@/stores/auth-store'
+import { useAuthStore, getAuthHeaders } from '@/contexts/auth-context'
 import { useMoveTask, useArchivedTasksCount, type Task, type TaskStatusValue as TaskStatus } from '@/hooks/use-queries'
 import {
   LayoutGrid,
