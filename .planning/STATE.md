@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-31)
 
 **Core value:** Teams can create, organize, and find internal documentation without leaving their project management tool.
-**Current focus:** Phase 5 complete (Document Locking). Ready for Phase 6.
+**Current focus:** Phase 4.1 in progress (Document Creation Bug Fixes). Plan 01 complete, Plan 02 next.
 
 ## Current Position
 
-Phase: 5 of 10 (Document Locking) -- COMPLETE
-Plan: All plans executed, verified 7/7 must-haves
-Status: Phase verified and complete
-Last activity: 2026-02-01 -- Phase 5 verified (7/7 must-haves passed)
+Phase: 4.1 of 10 (Document Creation Bug Fixes) -- IN PROGRESS
+Plan: 1 of 2 in phase 4.1
+Status: In progress
+Last activity: 2026-02-01 -- Completed 04.1-01-PLAN.md
 
-Progress: [██████████████████] ~56%
+Progress: [██████████████████░░] ~58%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 17
+- Total plans completed: 18
 - Average duration: ~5 min
-- Total execution time: ~1.4 hours
+- Total execution time: ~1.45 hours
 
 **By Phase:**
 
@@ -32,10 +32,11 @@ Progress: [██████████████████] ~56%
 | 03 | 4/4 | ~14 min | ~4 min |
 | 04 | 4/4 | ~12 min | ~3 min |
 | 05 | 2/2 | ~10 min | ~5 min |
+| 04.1 | 1/2 | ~3 min | ~3 min |
 
 **Recent Trend:**
-- Last 5 plans: 04-04 (~4 min), 04-03 (~4 min), 05-01 (~4 min), 05-02 (~6 min)
-- Trend: stable at ~4-6 min
+- Last 5 plans: 04-03 (~4 min), 05-01 (~4 min), 05-02 (~6 min), 04.1-01 (~3 min)
+- Trend: stable at ~3-6 min
 
 *Updated after each plan completion*
 
@@ -88,6 +89,7 @@ Recent decisions affecting current work:
 - [05-01]: 45s TTL with heartbeat extension; personal docs block force-take (no app context)
 - [05-02]: documentLock query key added to centralized queryKeys for cache management
 - [05-02]: Lock integration in DocumentEditor is gracefully optional (inactive without documentId)
+- [04.1-01]: Only Document.tags lazy changed to selectin; other models left as-is (only confirmed broken relationship)
 
 ### Roadmap Evolution
 
@@ -108,5 +110,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-01
-Stopped at: Phase 5 complete and verified (7/7 must-haves). Next: Phase 6 (Document Tabs & Editor UI Integration)
+Stopped at: Completed 04.1-01-PLAN.md. Next: 04.1-02 (scope validation, error toasts, empty state)
 Resume file: None
