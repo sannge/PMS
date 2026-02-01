@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-31)
 
 **Core value:** Teams can create, organize, and find internal documentation without leaving their project management tool.
-**Current focus:** Phase 4 complete and verified. Ready for Phase 5 (Document Locking).
+**Current focus:** Phase 5 in progress (Document Locking). Plan 05-01 complete, Plan 05-02 next.
 
 ## Current Position
 
-Phase: 4 of 10 (Auto-Save & Content Pipeline) -- COMPLETE
-Plan: All plans executed, verified 22/22 must-haves
-Status: Phase verified and complete
-Last activity: 2026-02-01 -- Phase 4 verified (22/22 must-haves passed)
+Phase: 5 of 10 (Document Locking) -- IN PROGRESS
+Plan: 1 of 2 in phase
+Status: In progress
+Last activity: 2026-02-01 -- Completed 05-01-PLAN.md (backend lock service)
 
-Progress: [███████████████░] ~47%
+Progress: [████████████████░] ~50%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 15
+- Total plans completed: 16
 - Average duration: ~5 min
-- Total execution time: ~1.25 hours
+- Total execution time: ~1.3 hours
 
 **By Phase:**
 
@@ -31,10 +31,11 @@ Progress: [███████████████░] ~47%
 | 02 | 3/3 | ~19 min | ~6 min |
 | 03 | 4/4 | ~14 min | ~4 min |
 | 04 | 4/4 | ~12 min | ~3 min |
+| 05 | 1/2 | ~4 min | ~4 min |
 
 **Recent Trend:**
-- Last 5 plans: 04-01 (~2 min), 04-02 (~2 min), 04-04 (~4 min), 04-03 (~4 min)
-- Trend: stable at ~2-4 min
+- Last 5 plans: 04-02 (~2 min), 04-04 (~4 min), 04-03 (~4 min), 05-01 (~4 min)
+- Trend: stable at ~3-4 min
 
 *Updated after each plan completion*
 
@@ -83,6 +84,8 @@ Recent decisions affecting current work:
 - [04-03]: useSaveOnUnmount uses ref to capture latest saveNow -- avoids stale closure
 - [04-03]: useSaveOnQuit calls confirmQuitSave in .finally() -- ensures quit proceeds even if save throws
 - [04-03]: SaveStatus uses setTick counter state to force re-render every second for live time display
+- [05-01]: Lua scripts for all ownership-checked lock operations (release, heartbeat, force-take)
+- [05-01]: 45s TTL with heartbeat extension; personal docs block force-take (no app context)
 
 ### Pending Todos
 
@@ -99,5 +102,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-01
-Stopped at: Phase 4 complete and verified (22/22 must-haves). Next: Phase 5 (Document Locking)
+Stopped at: Completed 05-01-PLAN.md (backend document lock service). Next: 05-02-PLAN.md (frontend lock UI)
 Resume file: None
