@@ -18,7 +18,6 @@
  * Remaining stores (now React Context):
  * - auth-store -> auth-context (AuthProvider, useAuthStore)
  * - notification-ui-store -> notification-ui-context (NotificationUIProvider, useNotificationUIStore)
- * - notes-store -> notes-context (NotesProvider, useNotesStore)
  */
 
 // Auth context - client-side auth state
@@ -41,22 +40,3 @@ export {
 // Notification UI context - panel open/close state
 export { NotificationUIProvider, useNotificationUIStore } from '../contexts/notification-ui-context'
 
-// Notes context - CRDT/Yjs note editing state
-export {
-  NotesProvider,
-  useNotesStore,
-  selectNotes,
-  selectNoteTree,
-  selectSelectedNote,
-  selectOpenTabs,
-  selectActiveTabId,
-  selectActiveTab,
-  selectIsLoading as selectNotesIsLoading,
-  selectError as selectNotesError,
-  type Note,
-  type NoteTree,
-  type NoteCreate,
-  type NoteUpdate,
-  type NoteTab,
-  type NoteError,
-} from '../contexts/notes-context'

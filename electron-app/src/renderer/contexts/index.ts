@@ -27,22 +27,3 @@ export {
   useNotificationUIStore,
 } from './notification-ui-context'
 
-// Notes context
-export {
-  NotesProvider,
-  useNotesStore,
-  selectNotes,
-  selectNoteTree,
-  selectSelectedNote,
-  selectOpenTabs,
-  selectActiveTabId,
-  selectActiveTab,
-  selectIsLoading as selectNotesIsLoading,
-  selectError as selectNotesError,
-  type Note,
-  type NoteTree,
-  type NoteCreate,
-  type NoteUpdate,
-  type NoteTab,
-  type NoteError,
-} from './notes-context'

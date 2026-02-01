@@ -18,7 +18,6 @@ import { ApplicationsPage } from '@/pages/applications/index'
 import { ApplicationDetailPage } from '@/pages/applications/[id]'
 import { ProjectsPage } from '@/pages/projects/index'
 import { ProjectDetailPage } from '@/pages/projects/[id]'
-import { NotesPage } from '@/pages/notes/index'
 import { MyTasksPanel } from '@/components/tasks/MyTasksPanel'
 import { MyProjectsPanel } from '@/components/dashboard/MyProjectsPanel'
 import { DashboardTasksList } from '@/components/dashboard/DashboardTasksList'
@@ -33,7 +32,6 @@ import type { Project, Application, Task } from '@/hooks/use-queries'
 import {
   FolderKanban,
   ListTodo,
-  StickyNote,
   LayoutDashboard,
   ArrowRight,
   CheckCircle2,
@@ -232,7 +230,6 @@ interface DashboardContentProps {
   applicationId?: string | null
   onNavigateToApplications?: () => void
   onNavigateToTasks?: () => void
-  onNavigateToNotes?: () => void
   onProjectClick?: (project: Project) => void
   onTaskClick?: (task: Task) => void
 }
@@ -241,7 +238,6 @@ function DashboardContent({
   applicationId,
   onNavigateToApplications,
   onNavigateToTasks,
-  onNavigateToNotes,
   onProjectClick,
   onTaskClick,
 }: DashboardContentProps): JSX.Element {
@@ -344,14 +340,6 @@ function DashboardContent({
             color="violet"
             onClick={onNavigateToTasks}
             index={1}
-          />
-          <QuickAction
-            icon={<StickyNote className="h-6 w-6" />}
-            label="New Note"
-            description="Start writing a new note"
-            color="emerald"
-            onClick={onNavigateToNotes}
-            index={2}
           />
         </div>
       </div>
@@ -622,7 +610,6 @@ export function DashboardPage({
             applicationId={selectedApplicationId}
             onNavigateToApplications={() => handleNavigate('applications')}
             onNavigateToTasks={() => handleNavigate('tasks')}
-            onNavigateToNotes={() => handleNavigate('notes')}
             onProjectClick={(project) => {
               setSelectedApplicationId(project.application_id)
               setSelectedProjectId(project.id)
@@ -749,12 +736,6 @@ export function DashboardPage({
               />
             </div>
           </div>
-        )
-      case 'notes':
-        return (
-          <NotesPage
-            applicationId={selectedApplicationId}
-          />
         )
       case 'settings':
         return (

@@ -18,7 +18,7 @@ import { RegisterPage } from '@/pages/register'
 import { DashboardPage } from '@/pages/dashboard'
 import { AuthGate } from '@/components/protected-route'
 import { queryClient, initializeQueryPersistence, clearQueryCache } from '@/lib/query-client'
-import { AuthProvider, useAuthStore, NotificationUIProvider, NotesProvider } from '@/contexts'
+import { AuthProvider, useAuthStore, NotificationUIProvider } from '@/contexts'
 
 // ============================================================================
 // Types
@@ -331,15 +331,13 @@ function App(): JSX.Element {
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <NotificationUIProvider>
-          <NotesProvider>
-            <ThemeProvider>
-              <ErrorBoundary>
-                <QueryClientInitializer>
-                  <AuthRouter />
-                </QueryClientInitializer>
-              </ErrorBoundary>
-            </ThemeProvider>
-          </NotesProvider>
+          <ThemeProvider>
+            <ErrorBoundary>
+              <QueryClientInitializer>
+                <AuthRouter />
+              </QueryClientInitializer>
+            </ErrorBoundary>
+          </ThemeProvider>
         </NotificationUIProvider>
       </AuthProvider>
       {/* React Query Devtools - only shown in development */}
