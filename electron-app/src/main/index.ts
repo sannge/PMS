@@ -13,7 +13,7 @@ import { config } from 'dotenv'
 import { resolve } from 'path'
 config({ path: resolve(__dirname, '../../.env') })
 
-import { app, BrowserWindow, shell, session, Menu, MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, shell, session, Menu, MenuItemConstructorOptions, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
@@ -28,6 +28,9 @@ if (process.env.ELECTRON_USER_DATA_DIR) {
 
 // Keep a global reference of the window object to prevent garbage collection
 let mainWindow: BrowserWindow | null = null
+
+// Tracks whether the app is in the process of quitting (after save completes or timeout)
+let isQuitting = false
 
 /**
  * Creates the main application window with secure configuration
@@ -109,6 +112,20 @@ function createWindow(): void {
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+
+  // Before-quit save coordination: intercept close, ask renderer to save, wait up to 3s
+  mainWindow.on('close', (event) => {
+    if (isQuitting) return // Allow close after save completes or timeout
+
+    event.preventDefault()
+    mainWindow?.webContents.send('before-quit-save')
+
+    // Timeout: quit anyway after 3 seconds (IndexedDB draft is the fallback)
+    setTimeout(() => {
+      isQuitting = true
+      mainWindow?.close()
+    }, 3000)
+  })
 
   // Clean up reference when window is closed
   mainWindow.on('closed', () => {
@@ -331,6 +348,12 @@ app.whenReady().then(() => {
 
   // Create the main window
   createWindow()
+
+  // Listen for renderer confirming save is complete before quit
+  ipcMain.on('quit-save-complete', () => {
+    isQuitting = true
+    mainWindow?.close()
+  })
 
   // macOS: Re-create window when dock icon is clicked
   app.on('activate', () => {

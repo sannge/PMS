@@ -161,12 +161,17 @@ export interface ElectronAPI {
   // Shell operations
   openExternal: (url: string) => Promise<void>
   openPath: (path: string) => Promise<string>
+
+  // Before-quit save coordination
+  onBeforeQuit: (callback: () => void) => () => void
+  confirmQuitSave: () => void
 }
 
 // Store for notification callbacks
 const notificationCallbacks = new Set<(notification: NotificationPayload) => void>()
 const webSocketCallbacks = new Set<(message: { type: string; payload: unknown }) => void>()
 const maximizedCallbacks = new Set<(isMaximized: boolean) => void>()
+const beforeQuitCallbacks = new Set<() => void>()
 
 // Setup IPC listeners
 ipcRenderer.on('notification', (_event: IpcRendererEvent, notification: NotificationPayload) => {
@@ -179,6 +184,10 @@ ipcRenderer.on('websocket-message', (_event: IpcRendererEvent, message: { type: 
 
 ipcRenderer.on('window-maximized-change', (_event: IpcRendererEvent, isMaximized: boolean) => {
   maximizedCallbacks.forEach((callback) => callback(isMaximized))
+})
+
+ipcRenderer.on('before-quit-save', () => {
+  beforeQuitCallbacks.forEach((callback) => callback())
 })
 
 // Expose protected APIs to renderer via contextBridge
@@ -339,5 +348,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Shell operations
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url) as Promise<void>,
-  openPath: (path: string) => ipcRenderer.invoke('shell:openPath', path) as Promise<string>
+  openPath: (path: string) => ipcRenderer.invoke('shell:openPath', path) as Promise<string>,
+
+  // Before-quit save coordination
+  onBeforeQuit: (callback: () => void) => {
+    beforeQuitCallbacks.add(callback)
+    return () => {
+      beforeQuitCallbacks.delete(callback)
+    }
+  },
+  confirmQuitSave: () => {
+    ipcRenderer.send('quit-save-complete')
+  }
 } satisfies ElectronAPI)

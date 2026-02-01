@@ -179,3 +179,57 @@ export function useAutoSave({
     setSaveStatus,
   }
 }
+
+// ============================================================================
+// Utility Hooks
+// ============================================================================
+
+/**
+ * Calls saveNow() when the component unmounts (user navigates away).
+ * Use in the editor component that owns the useAutoSave hook.
+ *
+ * @example
+ * ```tsx
+ * const { saveNow, saveStatus } = useAutoSave({ documentId, editor, rowVersion })
+ * useSaveOnUnmount(saveNow)
+ * ```
+ */
+export function useSaveOnUnmount(saveNow: () => Promise<void>): void {
+  const saveNowRef = useRef(saveNow)
+  saveNowRef.current = saveNow
+
+  useEffect(() => {
+    return () => {
+      void saveNowRef.current()
+    }
+  }, [])
+}
+
+/**
+ * Registers for Electron's before-quit IPC and saves before the app closes.
+ * After save completes, confirms quit so the main process can close the window.
+ * If save takes >3s, the main process closes anyway (IndexedDB draft is fallback).
+ *
+ * @example
+ * ```tsx
+ * const { saveNow, saveStatus } = useAutoSave({ documentId, editor, rowVersion })
+ * useSaveOnQuit(saveNow)
+ * ```
+ */
+export function useSaveOnQuit(saveNow: () => Promise<void>): void {
+  const saveNowRef = useRef(saveNow)
+  saveNowRef.current = saveNow
+
+  useEffect(() => {
+    // Guard: electronAPI may not exist in non-Electron environments (e.g., tests)
+    if (typeof window === 'undefined' || !window.electronAPI?.onBeforeQuit) return
+
+    const cleanup = window.electronAPI.onBeforeQuit(() => {
+      void saveNowRef.current().finally(() => {
+        window.electronAPI.confirmQuitSave()
+      })
+    })
+
+    return cleanup
+  }, [])
+}

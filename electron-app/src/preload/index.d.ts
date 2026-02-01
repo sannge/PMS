@@ -150,6 +150,10 @@ export interface ElectronAPI {
   // Shell operations
   openExternal: (url: string) => Promise<void>
   openPath: (path: string) => Promise<string>
+
+  // Before-quit save coordination
+  onBeforeQuit: (callback: () => void) => () => void
+  confirmQuitSave: () => void
 }
 
 declare global {
