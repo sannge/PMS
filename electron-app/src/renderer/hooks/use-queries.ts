@@ -1382,6 +1382,60 @@ export function useMyCompletedTasks(
   })
 }
 
+// ============================================================================
+// Document Content Mutations
+// ============================================================================
+
+/** Input type for saving document content */
+export interface SaveDocumentContentInput {
+  documentId: string
+  content_json: string
+  row_version: number
+}
+
+/** Response type for document content save (matches backend DocumentResponse) */
+export interface DocumentContentResponse {
+  id: string
+  content_json: string | null
+  content_markdown: string | null
+  content_plain: string | null
+  row_version: number
+  updated_at: string
+}
+
+/**
+ * Save document content with optimistic concurrency control.
+ * Sends PUT to /api/documents/{documentId}/content with content_json and row_version.
+ * Returns 409 on version conflict.
+ */
+export function useSaveDocumentContent(): UseMutationResult<
+  DocumentContentResponse,
+  Error,
+  SaveDocumentContentInput
+> {
+  const token = useAuthStore((s) => s.token)
+
+  return useMutation({
+    mutationFn: async ({ documentId, content_json, row_version }: SaveDocumentContentInput) => {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      const response = await window.electronAPI.put<DocumentContentResponse>(
+        `/api/documents/${documentId}/content`,
+        { content_json, row_version },
+        getAuthHeaders(token)
+      )
+
+      if (response.status !== 200) {
+        throw new Error(parseApiError(response.status, response.data).message)
+      }
+
+      return response.data
+    },
+  })
+}
+
 /**
  * Fetch archived tasks assigned to the current user.
  * Tasks that have been in Done status for 7+ days.
