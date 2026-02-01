@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-31)
 
 **Core value:** Teams can create, organize, and find internal documentation without leaving their project management tool.
-**Current focus:** Phase 2 complete. Ready for Phase 3 - Rich Text Editor Core.
+**Current focus:** Phase 3 in progress - Rich Text Editor Core.
 
 ## Current Position
 
-Phase: 2 of 10 (Notes Screen Shell & Folder Navigation) -- COMPLETE
-Plan: 3 of 3 in current phase
-Status: Phase complete, verified ✓
-Last activity: 2026-01-31 -- Phase 2 verified (6/6 must-haves passed)
+Phase: 3 of 10 (Rich Text Editor Core)
+Plan: 1 of 4 in current phase
+Status: In progress
+Last activity: 2026-02-01 -- Completed 03-01-PLAN.md (editor foundation + extension factory)
 
-Progress: [███████░░░] ~20%
+Progress: [████████░░] ~24%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 7
+- Total plans completed: 8
 - Average duration: ~7 min
-- Total execution time: ~0.85 hours
+- Total execution time: ~0.95 hours
 
 **By Phase:**
 
@@ -29,9 +29,10 @@ Progress: [███████░░░] ~20%
 |-------|-------|-------|----------|
 | 01 | 4/4 | ~34 min | ~9 min |
 | 02 | 3/3 | ~19 min | ~6 min |
+| 03 | 1/4 | ~6 min | ~6 min |
 
 **Recent Trend:**
-- Last 5 plans: 01-04 (~7 min), 02-01 (~11 min), 02-02 (~4 min), 02-03 (~4 min)
+- Last 5 plans: 02-01 (~11 min), 02-02 (~4 min), 02-03 (~4 min), 03-01 (~6 min)
 - Trend: stable at ~4-11 min
 
 *Updated after each plan completion*
@@ -61,6 +62,9 @@ Recent decisions affecting current work:
 - [02-02]: Document rename uses row_version=1 default; API 409 handles stale conflicts
 - [02-03]: Composite string encoding (application:id, project:id) for Radix Select single-value constraint
 - [02-03]: Per-application ProjectItems components for lazy project fetching in scope dropdown
+- [03-01]: Extension factory pattern -- all TipTap extensions configured in createDocumentExtensions(), toolbar plans only add UI
+- [03-01]: JSON content format -- editor emits getJSON() not getHTML() for three-format storage strategy
+- [03-01]: lowlight v3 syntax with createLowlight(common) for code block highlighting
 
 ### Pending Todos
 
@@ -76,6 +80,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-01-31
-Stopped at: Phase 2 complete and verified -- Ready for Phase 3
+Last session: 2026-02-01
+Stopped at: Completed 03-01-PLAN.md (editor foundation + extension factory)
 Resume file: None
