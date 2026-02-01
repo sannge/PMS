@@ -1,97 +1,84 @@
 # Phase 7: Images in Editor - Research
 
-**Researched:** 2026-01-31
-**Domain:** TipTap image handling (paste/drop/upload/resize) + MinIO object storage
+**Researched:** 2026-02-01
+**Domain:** TipTap v2 Image Extension, MinIO Object Storage, ProseMirror paste/drop handlers
 **Confidence:** HIGH
 
 ## Summary
 
-This phase adds image support to the TipTap-based document editor: users can paste, drag-drop, or upload images which are stored in MinIO and referenced by URL. Images must be resizable via drag handles and show skeleton/placeholder animations while loading.
+Phase 7 adds image support (paste, upload, drag-and-drop, resize, placeholder animation) to the knowledge base editor. The research reveals that **nearly all required infrastructure already exists in the codebase**, making this phase primarily a wiring and adaptation task rather than new development.
 
-The project already has significant infrastructure in place. The backend MinIO service (`minio_service.py`) handles uploads/downloads/presigned URLs with a dedicated `pm-images` bucket. The file upload router (`routers/files.py`) handles multipart upload with entity association. The frontend already has `@tiptap/extension-image` v2.27.2 installed. The key new work is: (1) a dedicated document-image upload endpoint, (2) integrating file-handler events into TipTap, and (3) building a custom resizable image NodeView since TipTap v2 lacks built-in resize.
+The existing `RichTextEditor.tsx` (task description editor) already implements a complete image pipeline: custom `ResizableImage` extension extending `@tiptap/extension-image` with `ReactNodeViewRenderer`, `editorProps.handlePaste`/`handleDrop` for clipboard and drag-and-drop, upload to MinIO via `POST /api/files/upload`, and presigned URL retrieval. The knowledge base editor (`DocumentEditor`) needs to adopt these same patterns within its extension factory architecture.
 
-**Primary recommendation:** Use `@tiptap/extension-file-handler` (free, MIT) for paste/drop events. Build a custom `ResizableImage` extension extending `@tiptap/extension-image` with a React NodeView for resize handles. Reuse the existing `MinIOService` and `pm-images` bucket via a new lightweight document-image upload endpoint.
+The content converter (`content_converter.py`) currently does not handle `image` nodes -- it silently renders children of unknown nodes (graceful degradation), but image nodes have no children. This needs an explicit handler for proper Markdown (`![alt](url)`) and plain text (alt text or empty string) output.
+
+**Primary recommendation:** Port the proven `ResizableImage` extension and upload flow from `RichTextEditor.tsx` into the knowledge editor's `createDocumentExtensions()` factory, adapting for the document-scoped context (document ID entity type, document-level auth). Add skeleton/placeholder loading animation as a CSS animation on a wrapper element while upload is in flight.
 
 ## Standard Stack
 
 ### Core
 | Library | Version | Purpose | Why Standard |
 |---------|---------|---------|--------------|
-| `@tiptap/extension-image` | ^2.27.2 | Base image node rendering | Already installed; official TipTap extension |
-| `@tiptap/extension-file-handler` | ^3.x (MIT) | Handle paste/drop file events | Official TipTap extension, open-sourced June 2025 under MIT |
-| `minio` (Python) | >=7.2.0 | Object storage for images | Already installed; existing MinIOService with pm-images bucket |
+| `@tiptap/extension-image` | ^2.6.0 | Base Image node type for ProseMirror schema | Already installed in package.json; official TipTap extension |
+| `@tiptap/react` (ReactNodeViewRenderer) | ^2.6.0 | React component rendering inside ProseMirror nodes | Already used project-wide; required for resize handles |
+| MinIO (via `minio` Python package) | existing | Object storage for image blobs | Already configured with `pm-images` bucket |
 
 ### Supporting
 | Library | Version | Purpose | When to Use |
 |---------|---------|---------|-------------|
-| `@tiptap/react` | ^2.6.0 | ReactNodeViewRenderer for custom NodeView | Already installed; needed for resizable image component |
-| `python-multipart` | >=0.0.17 | FastAPI file upload parsing | Already installed; needed for image upload endpoint |
+| `lucide-react` (ImageIcon) | ^0.400.0 | Toolbar icon for image upload button | Already installed; used throughout toolbar |
 
 ### Alternatives Considered
 | Instead of | Could Use | Tradeoff |
 |------------|-----------|----------|
-| Custom resize NodeView | `tiptap-extension-resize-image` (npm) | Third-party with 41K weekly downloads, but adds dependency for ~100 lines of code; custom gives full control over styling and behavior |
-| `@tiptap/extension-file-handler` | Custom ProseMirror `handlePaste`/`handleDrop` via `editorProps` | FileHandler is now MIT, battle-tested, and avoids the duplicate-image-on-paste pitfall |
-| Server-side upload | Presigned URL direct upload | Server-side is simpler for this use case since images are typically <10MB; presigned URLs add complexity for minimal gain in an Electron app |
+| Custom ResizableImage (extend Image) | `tiptap-extension-resize-image` npm package | Third-party dep adds maintenance risk; existing RichTextEditor already has a working custom implementation -- **use existing code** |
+| `editorProps.handlePaste`/`handleDrop` | `@tiptap/extension-file-handler` | FileHandler is Pro-only for TipTap v2 (free only in v3); **not compatible with our v2 stay-put decision** |
+| Custom placeholder component | `@tiptap/extension-placeholder` (for images) | Placeholder extension only handles empty-doc text; image upload placeholders need custom node or CSS approach |
 
-**Installation:**
-```bash
-cd electron-app
-npm install @tiptap/extension-file-handler
-```
-
-No new backend packages needed -- `minio` and `python-multipart` are already installed.
+### Installation
+No new packages needed. `@tiptap/extension-image` is already in `package.json`.
 
 ## Architecture Patterns
 
 ### Recommended Project Structure
 ```
-electron-app/src/renderer/
-├── components/knowledge/
-│   ├── editor/
-│   │   ├── extensions/
-│   │   │   └── resizable-image.ts       # Custom Image extension with resize
-│   │   ├── node-views/
-│   │   │   └── resizable-image-view.tsx  # React NodeView component
-│   │   └── image-upload.ts              # Upload helper (calls API, returns URL)
-│   └── ...existing editor components...
+electron-app/src/renderer/components/knowledge/
+├── editor-extensions.ts       # Add ResizableImage to createDocumentExtensions()
+├── editor-toolbar.tsx         # Add image upload button section
+├── document-editor.tsx        # Add editorProps for paste/drop, uploadImage callback
+├── editor-types.ts            # Add onImageUpload to DocumentEditorProps
+├── editor-styles.css          # Add image skeleton/placeholder CSS
+├── ResizableImageView.tsx     # NEW: extracted React NodeView component
+└── use-image-upload.ts        # NEW: hook encapsulating upload logic for documents
 
 fastapi-backend/app/
-├── routers/
-│   └── document_images.py               # Dedicated image upload endpoint
-├── services/
-│   └── minio_service.py                 # Already exists -- reuse
+├── services/content_converter.py  # Add image node handler
+└── tests/test_content_converter.py # Add image conversion tests
 ```
 
-### Pattern 1: Custom Resizable Image Extension
-**What:** Extend `@tiptap/extension-image` to add `width`/`height` attributes and a React NodeView with resize handles.
-**When to use:** TipTap v2 (v3 has built-in resize; v2 does not).
+### Pattern 1: ResizableImage Extension (Extend @tiptap/extension-image)
+**What:** Extend the official Image extension to add a `width` attribute and a custom React NodeView with drag handles for resizing.
+**When to use:** Always -- this is the v2 approach for image resizing since built-in `resize` config is v3-only.
 **Example:**
 ```typescript
-// Source: TipTap docs (React node views) + community patterns
+// Source: existing RichTextEditor.tsx lines 205-226
 import Image from '@tiptap/extension-image'
 import { ReactNodeViewRenderer } from '@tiptap/react'
-import { ResizableImageView } from './node-views/resizable-image-view'
 
-export const ResizableImage = Image.extend({
+const ResizableImage = Image.extend({
   addAttributes() {
     return {
       ...this.parent?.(),
       width: {
         default: null,
-        renderHTML: (attributes) => {
+        parseHTML: element => {
+          const width = element.getAttribute('width') || element.style.width
+          return width ? parseInt(String(width), 10) : null
+        },
+        renderHTML: attributes => {
           if (!attributes.width) return {}
-          return { width: attributes.width }
+          return { width: attributes.width, style: `width: ${attributes.width}px` }
         },
-        parseHTML: (element) => element.getAttribute('width'),
-      },
-      height: {
-        default: null,
-        renderHTML: (attributes) => {
-          if (!attributes.height) return {}
-          return { height: attributes.height }
-        },
-        parseHTML: (element) => element.getAttribute('height'),
       },
     }
   },
@@ -101,360 +88,402 @@ export const ResizableImage = Image.extend({
 })
 ```
 
-### Pattern 2: FileHandler for Paste/Drop/Upload
-**What:** Use `@tiptap/extension-file-handler` to intercept paste and drop events, upload to server, then insert image node with URL.
-**When to use:** For all three image insertion methods (paste, drag-drop, toolbar button).
+### Pattern 2: Image Upload via editorProps (handlePaste + handleDrop)
+**What:** Intercept paste and drop events via ProseMirror's `editorProps` to detect image files, upload them to MinIO, and insert the resulting URL.
+**When to use:** Always -- the FileHandler extension is Pro-only on v2.
 **Example:**
 ```typescript
-// Source: TipTap FileHandler docs
-import { FileHandler } from '@tiptap/extension-file-handler'
-
-FileHandler.configure({
-  allowedMimeTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
-  onPaste: (editor, files, htmlContent) => {
-    // If HTML content has images (paste from web), let default handle it
-    if (htmlContent) return false
-    files.forEach(file => {
-      uploadImageToServer(file).then(url => {
-        editor.chain().focus().setImage({ src: url }).run()
-      })
-    })
+// Source: existing RichTextEditor.tsx lines 1030-1078
+editorProps: {
+  handlePaste(view, event) {
+    const items = Array.from(event.clipboardData?.items || [])
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        event.preventDefault()
+        const file = item.getAsFile()
+        if (!file) continue
+        uploadImage(file).then((url) => {
+          if (url) {
+            const node = view.state.schema.nodes.image?.create({ src: url })
+            if (node) {
+              const tr = view.state.tr.replaceSelectionWith(node)
+              view.dispatch(tr)
+            }
+          }
+        })
+        return true
+      }
+    }
+    return false
   },
-  onDrop: (editor, files, pos) => {
-    files.forEach(file => {
-      uploadImageToServer(file).then(url => {
-        editor.chain().focus().setImage({ src: url }).run()
+  handleDrop(view, event) {
+    const files = Array.from(event.dataTransfer?.files || [])
+    const imageFile = files.find(f => f.type.startsWith('image/'))
+    if (imageFile) {
+      event.preventDefault()
+      uploadImage(imageFile).then((url) => {
+        if (url) {
+          const pos = view.posAtCoords({ left: event.clientX, top: event.clientY })
+          const node = view.state.schema.nodes.image?.create({ src: url })
+          if (node && pos) {
+            const tr = view.state.tr.insert(pos.pos, node)
+            view.dispatch(tr)
+          }
+        }
       })
-    })
+      return true
+    }
+    return false
   },
-})
-```
-
-### Pattern 3: Placeholder While Uploading
-**What:** Insert a placeholder node (or a temporary data-URL) while the image uploads, then swap to the real URL on completion.
-**When to use:** Every image insertion to show loading state.
-**Example:**
-```typescript
-// Insert placeholder with loading state
-const insertImageWithPlaceholder = async (editor: Editor, file: File, pos?: number) => {
-  // Create a temporary object URL for instant preview
-  const tempUrl = URL.createObjectURL(file)
-  const insertPos = pos ?? editor.state.selection.anchor
-
-  // Insert with a data attribute marking it as loading
-  editor.chain()
-    .focus()
-    .insertContentAt(insertPos, {
-      type: 'image',
-      attrs: { src: tempUrl, alt: file.name, 'data-loading': 'true' }
-    })
-    .run()
-
-  try {
-    const permanentUrl = await uploadImageToServer(file)
-    // Find and replace the temp image
-    // Use a transaction to swap src and remove loading state
-    // ...
-  } finally {
-    URL.revokeObjectURL(tempUrl)
-  }
 }
 ```
 
-### Pattern 4: Server-Side Upload via Existing Infrastructure
-**What:** Create a lightweight `/documents/images/upload` endpoint that reuses `MinIOService` and the existing `pm-images` bucket.
-**When to use:** For all document image uploads.
+### Pattern 3: Image Upload Flow (Frontend to MinIO via Backend)
+**What:** Upload image file to `POST /api/files/upload`, receive attachment ID, fetch presigned download URL, use as image `src`.
+**When to use:** For all image insertions (paste, drop, toolbar button).
+**Example:**
+```typescript
+// Source: existing RichTextEditor.tsx lines 901-953
+async function uploadImage(file: File): Promise<string | null> {
+  if (file.size > 5 * 1024 * 1024) return null  // 5MB limit
+
+  const formData = new FormData()
+  formData.append('file', file)
+
+  // Upload to MinIO via backend
+  const uploadResponse = await fetch(`${apiUrl}/api/files/upload`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  })
+  const attachment = await uploadResponse.json()
+
+  // Get presigned download URL
+  const downloadResponse = await fetch(`${apiUrl}/api/files/${attachment.id}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  const { download_url } = await downloadResponse.json()
+  return download_url
+}
+```
+
+### Pattern 4: Skeleton/Placeholder While Uploading
+**What:** Show a pulsing skeleton animation at the cursor position while the image uploads, then replace with the actual image.
+**When to use:** For all async image insertions to provide visual feedback.
+**Example approach:**
+```typescript
+// Insert a placeholder node with a temporary data URL or loading class
+// Option A: Insert image with placeholder src, replace when upload completes
+const placeholderId = crypto.randomUUID()
+const placeholderNode = view.state.schema.nodes.image?.create({
+  src: 'data:image/svg+xml,...', // small SVG skeleton
+  alt: 'Uploading...',
+  'data-uploading': placeholderId,
+})
+// Insert placeholder, then replace after upload:
+uploadImage(file).then(url => {
+  // Find the placeholder node by position or attribute and replace src
+})
+
+// Option B (simpler): Use CSS animation on the img element while src is loading
+// The `onload` event naturally ends the skeleton state
+```
+
+### Pattern 5: Content Converter - Image Node Handling
+**What:** Add handlers for `image` node type in the Markdown and plain text converters.
+**When to use:** When saving documents (content pipeline runs on every save).
 **Example:**
 ```python
-# Source: Existing patterns in routers/files.py
-@router.post("/images/upload")
-async def upload_document_image(
-    file: UploadFile = File(...),
-    document_id: UUID = Query(...),
-    current_user: User = Depends(get_current_user),
-    minio: MinIOService = Depends(get_minio_service),
-) -> dict:
-    # Validate image type
-    if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(400, "Only image files are allowed")
+# In _md_nodes():
+elif t == "image":
+    src = node.get("attrs", {}).get("src", "")
+    alt = node.get("attrs", {}).get("alt", "")
+    title = node.get("attrs", {}).get("title", "")
+    if title:
+        parts.append(f'![{alt}]({src} "{title}")\n\n')
+    else:
+        parts.append(f"![{alt}]({src})\n\n")
 
-    content = await file.read()
-    if len(content) > 10 * 1024 * 1024:  # 10MB limit for images
-        raise HTTPException(413, "Image too large")
-
-    object_name = minio.generate_object_name("document", str(document_id), file.filename)
-    minio.upload_bytes("pm-images", object_name, content, file.content_type)
-    url = minio.get_presigned_download_url("pm-images", object_name)
-
-    return {"url": url, "object_name": object_name}
+# In _extract_text_from_nodes():
+elif node.get("type") == "image":
+    alt = node.get("attrs", {}).get("alt", "")
+    if alt:
+        parts.append(alt)
 ```
 
 ### Anti-Patterns to Avoid
-- **Base64 in document JSON:** Never store base64-encoded images in the TipTap JSON content. This bloats the document, breaks search indexing, and makes the content_json column enormous. Always upload to MinIO and reference by URL.
-- **Presigned upload URLs for Electron app:** Presigned PUT URLs are useful for browser-to-S3 uploads to bypass backend bandwidth, but in an Electron app the backend and frontend are on the same network. Server-side upload is simpler and allows validation.
-- **Resizing via CSS only (no attribute persistence):** If you only apply width/height via CSS styles without updating node attributes, the size is lost on reload. Always persist dimensions as node attributes via `updateAttributes`.
+- **Storing base64 images in document JSON:** Bloats content_json column, causes slow saves, and breaks content conversion. Always upload to MinIO and store URL references.
+- **Using FileHandler extension on v2:** It's a Pro extension on TipTap v2; only free in v3. Use `editorProps.handlePaste`/`handleDrop` instead.
+- **Allowing arbitrary external image URLs:** External images can break or be used for tracking. Only allow images uploaded through the application's upload pipeline.
+- **Not handling presigned URL expiry:** MinIO presigned URLs expire (default 1 hour). The editor must handle expired URLs gracefully -- either refresh on load or use a proxy endpoint.
+- **Duplicating the ResizableImage code:** The existing `RichTextEditor.tsx` has a working implementation. Extract it to a shared location rather than copy-pasting.
 
 ## Don't Hand-Roll
 
 | Problem | Don't Build | Use Instead | Why |
 |---------|-------------|-------------|-----|
-| Paste/drop file interception | Custom ProseMirror plugin with handlePaste/handleDrop | `@tiptap/extension-file-handler` | Handles edge cases (duplicate image on paste from web, MIME type filtering, position tracking on drop) |
-| Image MIME type detection | Extension-based checking | `file.type` (browser API) + server-side `content_type` validation | Browser provides reliable MIME types for file inputs; double-check on server |
-| MinIO upload/bucket management | New storage service | Existing `MinIOService` singleton | Already handles bucket creation, object naming, presigned URLs |
-| Object URL cleanup | Manual tracking | `URL.createObjectURL` / `URL.revokeObjectURL` in a try/finally | Browser API handles cleanup; just ensure revokeObjectURL is called |
+| Image node in ProseMirror schema | Custom ProseMirror node spec | `@tiptap/extension-image` (already installed) | Handles parsing, serialization, and schema definition correctly |
+| File upload multipart handling | Custom fetch wrapper | Existing `POST /api/files/upload` endpoint | Already handles MinIO upload, attachment DB record, bucket routing |
+| Image resize math | Custom resize algorithm | Mouse delta calculation from RichTextEditor.tsx | Already handles min-width (50px), prevents negative sizes |
+| Presigned URL generation | Direct MinIO client calls from frontend | Backend `GET /api/files/{id}` endpoint | Keeps MinIO credentials server-side, handles auth |
 
-**Key insight:** The project already has 90% of the backend infrastructure (MinIOService, pm-images bucket, file upload patterns, presigned URL generation). The new work is primarily frontend: wiring TipTap events to the upload API and building the resize NodeView.
+**Key insight:** This phase is primarily a "port and adapt" task. The existing `RichTextEditor.tsx` already solves every technical challenge (resize, paste, drop, upload, presigned URLs). The work is extracting shared components, integrating into the knowledge editor's factory pattern, and adding skeleton loading.
 
 ## Common Pitfalls
 
-### Pitfall 1: Duplicate Images on Paste from Web
-**What goes wrong:** When a user copies an image from a webpage and pastes it, the clipboard contains both an HTML `<img>` tag and the raw image data. TipTap processes the HTML (inserting one image), and the FileHandler also processes the file data (inserting a second).
-**Why it happens:** The paste event has multiple clipboard items: `text/html` and `image/*`.
-**How to avoid:** In the `onPaste` handler, check if `htmlContent` is provided. If it contains an `<img>` tag, return `false` to let TipTap's default HTML paste handling take care of it.
-**Warning signs:** Two copies of the same image appearing after paste.
+### Pitfall 1: Presigned URL Expiration in Saved Documents
+**What goes wrong:** Images load fine initially but break after 1 hour when presigned URLs expire. Documents saved with presigned URLs have broken images on re-open.
+**Why it happens:** MinIO presigned URLs have a default 1-hour TTL. If the URL is stored as the image `src` in `content_json`, it expires.
+**How to avoid:** Two approaches:
+1. **Proxy endpoint** (recommended): Store the MinIO object key as a custom attribute on the image node, and use a backend proxy endpoint (e.g., `GET /api/images/{object_key}`) that generates fresh presigned URLs. The editor intercepts image loads and rewrites URLs.
+2. **URL refresh on load**: When a document is opened, scan all image nodes, extract attachment IDs, batch-refresh presigned URLs, and update the editor content before rendering.
+**Warning signs:** Images work in the editor session but appear broken when reopening the document later.
 
-### Pitfall 2: Presigned URL Expiration
-**What goes wrong:** Images stored in MinIO with presigned URLs stop loading after the URL expires (default 1 hour).
-**Why it happens:** The document JSON stores the presigned URL as `src`, which becomes stale.
-**How to avoid:** Two approaches: (A) Store the MinIO object path (not the presigned URL) in the document JSON, and resolve to a fresh presigned URL on document load. (B) Configure the MinIO bucket with a public read policy for the pm-images bucket. Option B is simpler for an internal app.
-**Warning signs:** Images that worked yesterday show broken icons today.
+### Pitfall 2: Duplicate Image on Paste from Web
+**What goes wrong:** Pasting an image from a web page inserts two images: one from the HTML content and one from the file item.
+**Why it happens:** The clipboard event contains both an HTML `<img>` tag and the raw image file as separate items.
+**How to avoid:** In `handlePaste`, check for file items first. If an image file is found, call `event.preventDefault()` to block the default HTML paste. Alternatively, use `transformPastedHTML` to strip `<img>` tags from pasted HTML.
+**Warning signs:** Pasting from a browser results in duplicate images.
 
-### Pitfall 3: Resize Handle Z-Index and Selection Conflicts
-**What goes wrong:** Resize handles overlap with editor selection UI or don't respond to mouse events because of CSS stacking.
-**Why it happens:** The TipTap editor, ProseMirror decorations, and custom NodeView all have competing z-index layers.
-**How to avoid:** Use a dedicated CSS class for the resize container with explicit `position: relative` and handle z-index. Set `draggable: false` on the NodeView wrapper during resize to prevent ProseMirror's drag behavior from interfering.
-**Warning signs:** Cannot grab resize handles; handles appear behind other elements.
+### Pitfall 3: Image Resize Not Persisted
+**What goes wrong:** User resizes an image, but the width is lost on save/reload.
+**Why it happens:** The custom `width` attribute is not included in the TipTap JSON serialization, or the content converter strips it.
+**How to avoid:** Ensure the `width` attribute is defined in `addAttributes()` with proper `parseHTML` and `renderHTML` methods. Verify that `editor.getJSON()` includes the width in the image node's `attrs`.
+**Warning signs:** Resized images revert to original size after page refresh.
 
 ### Pitfall 4: Large Image Upload Blocking the UI
-**What goes wrong:** Uploading a 10MB image blocks the editor while the upload completes.
-**Why it happens:** Synchronous upload flow -- insert image only after upload finishes.
-**How to avoid:** Insert a placeholder immediately (using `URL.createObjectURL` for instant preview), upload in the background, then swap the src to the permanent URL.
-**Warning signs:** Editor freezes for several seconds after pasting a large image.
+**What goes wrong:** Uploading a 5MB image freezes the editor for several seconds with no feedback.
+**Why it happens:** No visual feedback during the async upload operation.
+**How to avoid:** Insert a placeholder/skeleton immediately on paste/drop, then replace with the actual image when upload completes. Show error state if upload fails.
+**Warning signs:** Editor feels unresponsive when pasting large images.
 
-### Pitfall 5: Width/Height Attribute Loss on Content Conversion
-**What goes wrong:** Custom `width`/`height` attributes on the image node are lost when converting to Markdown or plain text.
-**Why it happens:** The three-format content storage (JSON + Markdown + plain text) only preserves attributes that the conversion logic knows about.
-**How to avoid:** Ensure the Markdown conversion for images includes width/height (e.g., `![alt](src =WIDTHxHEIGHT)` or just `![alt](src)` accepting dimension loss in Markdown). The JSON format will always preserve attributes.
-**Warning signs:** Images revert to original size after save/reload.
+### Pitfall 5: Content Converter Ignoring Image Nodes
+**What goes wrong:** Images in documents are silently dropped from Markdown and plain text output, breaking AI consumption and search indexing.
+**Why it happens:** The content converter's `_md_nodes()` function falls through to the "unknown node" handler, which renders children -- but image nodes have no children.
+**How to avoid:** Add explicit `image` node handlers to both `_md_nodes()` (for Markdown) and `_extract_text_from_nodes()` (for plain text). Add test cases covering image nodes.
+**Warning signs:** Documents with images have empty sections in their Markdown/plain text representations.
 
 ## Code Examples
 
 ### Complete ResizableImageView React Component
-```tsx
-// Source: TipTap React NodeView docs + community patterns
-import { NodeViewWrapper } from '@tiptap/react'
-import type { NodeViewProps } from '@tiptap/react'
+```typescript
+// Source: existing RichTextEditor.tsx lines 147-201
+// To be extracted to: components/knowledge/ResizableImageView.tsx
 import { useCallback, useRef, useState } from 'react'
+import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react'
+import { cn } from '@/lib/utils'
 
 export function ResizableImageView({ node, updateAttributes, selected }: NodeViewProps) {
-  const imgRef = useRef<HTMLImageElement>(null)
   const [isResizing, setIsResizing] = useState(false)
+  const imageRef = useRef<HTMLImageElement>(null)
+  const startXRef = useRef(0)
+  const startWidthRef = useRef(0)
 
-  const { src, alt, title, width, height } = node.attrs
-
-  const handleResizeStart = useCallback((e: React.MouseEvent, corner: string) => {
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
     setIsResizing(true)
+    startXRef.current = e.clientX
+    startWidthRef.current = imageRef.current?.offsetWidth || 0
 
-    const startX = e.clientX
-    const startY = e.clientY
-    const startWidth = imgRef.current?.offsetWidth ?? 200
-    const startHeight = imgRef.current?.offsetHeight ?? 200
-    const aspectRatio = startWidth / startHeight
-
-    const onMouseMove = (moveEvent: MouseEvent) => {
-      const dx = moveEvent.clientX - startX
-      let newWidth = Math.max(50, startWidth + dx)
-      let newHeight = Math.round(newWidth / aspectRatio)
-      if (imgRef.current) {
-        imgRef.current.style.width = `${newWidth}px`
-        imgRef.current.style.height = `${newHeight}px`
-      }
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const diff = moveEvent.clientX - startXRef.current
+      const newWidth = Math.max(50, startWidthRef.current + diff)
+      updateAttributes({ width: newWidth })
     }
 
-    const onMouseUp = () => {
+    const handleMouseUp = () => {
       setIsResizing(false)
-      document.removeEventListener('mousemove', onMouseMove)
-      document.removeEventListener('mouseup', onMouseUp)
-      if (imgRef.current) {
-        updateAttributes({
-          width: imgRef.current.offsetWidth,
-          height: imgRef.current.offsetHeight,
-        })
-      }
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
     }
 
-    document.addEventListener('mousemove', onMouseMove)
-    document.addEventListener('mouseup', onMouseUp)
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
   }, [updateAttributes])
 
-  const isLoading = node.attrs['data-loading'] === 'true'
-
   return (
-    <NodeViewWrapper className="relative inline-block" data-drag-handle>
-      {isLoading && (
-        <div className="absolute inset-0 bg-muted animate-pulse rounded" />
-      )}
-      <img
-        ref={imgRef}
-        src={src}
-        alt={alt}
-        title={title}
-        width={width}
-        height={height}
-        className={`max-w-full ${selected ? 'ring-2 ring-primary' : ''}`}
-        draggable={false}
-      />
-      {selected && !isLoading && (
-        <>
-          {['nw', 'ne', 'sw', 'se'].map(corner => (
-            <div
-              key={corner}
-              className={`absolute w-3 h-3 bg-primary rounded-full cursor-${
-                corner === 'nw' || corner === 'se' ? 'nwse' : 'nesw'
-              }-resize ${
-                corner.includes('n') ? 'top-0' : 'bottom-0'
-              } ${
-                corner.includes('w') ? 'left-0' : 'right-0'
-              } -translate-x-1/2 -translate-y-1/2`}
-              onMouseDown={(e) => handleResizeStart(e, corner)}
-            />
-          ))}
-        </>
-      )}
+    <NodeViewWrapper className="inline-block relative" data-drag-handle>
+      <div className={cn(
+        'inline-block relative group',
+        selected && 'ring-2 ring-primary/50 rounded'
+      )}>
+        <img
+          ref={imageRef}
+          src={node.attrs.src}
+          alt={node.attrs.alt || ''}
+          title={node.attrs.title || ''}
+          width={node.attrs.width || undefined}
+          className="max-w-full h-auto rounded-md block"
+          style={node.attrs.width ? { width: `${node.attrs.width}px` } : undefined}
+          draggable={false}
+        />
+        <div
+          onMouseDown={handleMouseDown}
+          className={cn(
+            'absolute bottom-0 right-0 w-4 h-4 cursor-se-resize',
+            'bg-primary/60 rounded-tl-sm opacity-0 group-hover:opacity-100 transition-opacity',
+            isResizing && 'opacity-100'
+          )}
+          title="Drag to resize"
+        />
+      </div>
     </NodeViewWrapper>
   )
 }
 ```
 
-### Image Upload Helper
-```typescript
-// Source: Project patterns from existing API calls
-const API_BASE = 'http://localhost:8001'
+### Skeleton/Placeholder CSS Animation
+```css
+/* editor-styles.css addition */
+.ProseMirror img[data-uploading="true"] {
+  min-height: 100px;
+  min-width: 200px;
+  background: linear-gradient(
+    90deg,
+    hsl(var(--muted)) 25%,
+    hsl(var(--muted-foreground) / 0.1) 50%,
+    hsl(var(--muted)) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-pulse 1.5s ease-in-out infinite;
+  border-radius: 0.375rem;
+}
 
-export async function uploadDocumentImage(
-  file: File,
-  documentId: string,
-  authToken: string,
-): Promise<{ url: string; objectName: string }> {
-  const formData = new FormData()
-  formData.append('file', file)
-
-  const response = await fetch(
-    `${API_BASE}/documents/images/upload?document_id=${documentId}`,
-    {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${authToken}` },
-      body: formData,
-    },
-  )
-
-  if (!response.ok) {
-    throw new Error(`Image upload failed: ${response.status}`)
-  }
-
-  return response.json()
+@keyframes skeleton-pulse {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }
 ```
 
-### Backend Document Image Upload Endpoint
+### Content Converter Image Handler (Python)
 ```python
-# Source: Existing patterns in routers/files.py + minio_service.py
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from uuid import UUID
-from ..services.minio_service import MinIOService, get_minio_service
-from ..services.auth_service import get_current_user
-from ..models.user import User
+# In _md_nodes(), add before the else clause:
+elif t == "image":
+    attrs = node.get("attrs", {})
+    src = attrs.get("src", "")
+    alt = attrs.get("alt", "")
+    title = attrs.get("title", "")
+    if title:
+        parts.append(f'![{alt}]({src} "{title}")\n\n')
+    else:
+        parts.append(f"![{alt}]({src})\n\n")
 
-router = APIRouter(prefix="/documents", tags=["document-images"])
+# In _extract_text_from_nodes(), add before the elif "content" in node:
+elif node.get("type") == "image":
+    alt = node.get("attrs", {}).get("alt", "")
+    if alt:
+        parts.append(f"[Image: {alt}]")
+```
 
-ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml"}
-MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB
+### Document Image Upload Hook
+```typescript
+// use-image-upload.ts -- encapsulates the upload flow for the knowledge editor
+import { useCallback } from 'react'
+import { useAuthStore } from '@/contexts/auth-context'
 
-@router.post("/images/upload")
-async def upload_document_image(
-    file: UploadFile = File(...),
-    document_id: UUID = Query(..., description="Document this image belongs to"),
-    current_user: User = Depends(get_current_user),
-    minio: MinIOService = Depends(get_minio_service),
-) -> dict:
-    if not file.content_type or file.content_type not in ALLOWED_IMAGE_TYPES:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only image files are allowed")
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024 // 10MB for documents (vs 5MB for task descriptions)
 
-    content = await file.read()
-    if len(content) > MAX_IMAGE_SIZE:
-        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "Image exceeds 10MB limit")
+export function useImageUpload(documentId: string | null) {
+  const token = useAuthStore((s) => s.token)
 
-    object_name = minio.generate_object_name("document", str(document_id), file.filename or "image.png")
-    minio.upload_bytes(MinIOService.IMAGES_BUCKET, object_name, content, file.content_type)
-    download_url = minio.get_presigned_download_url(MinIOService.IMAGES_BUCKET, object_name)
+  const uploadImage = useCallback(async (file: File): Promise<string | null> => {
+    if (file.size > MAX_IMAGE_SIZE) return null
+    if (!token) return null
 
-    return {
-        "url": download_url,
-        "object_name": object_name,
-        "file_name": file.filename,
-        "file_size": len(content),
-        "content_type": file.content_type,
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8001'
+    const formData = new FormData()
+    formData.append('file', file)
+
+    // Upload with entity_type=document scope
+    const params = new URLSearchParams()
+    if (documentId) {
+      params.set('entity_type', 'document')
+      params.set('entity_id', documentId)
     }
+
+    const uploadResponse = await fetch(
+      `${apiUrl}/api/files/upload?${params}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      }
+    )
+
+    if (!uploadResponse.ok) throw new Error('Upload failed')
+    const attachment = await uploadResponse.json()
+
+    const downloadResponse = await fetch(
+      `${apiUrl}/api/files/${attachment.id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }
+    )
+
+    if (!downloadResponse.ok) throw new Error('Failed to get URL')
+    const { download_url } = await downloadResponse.json()
+    return download_url
+  }, [token, documentId])
+
+  return { uploadImage }
+}
 ```
 
 ## State of the Art
 
 | Old Approach | Current Approach | When Changed | Impact |
 |--------------|------------------|--------------|--------|
-| `@tiptap-pro/extension-file-handler` (paid) | `@tiptap/extension-file-handler` (free MIT) | June 2025 | No Pro subscription needed |
-| Custom ProseMirror handlePaste/handleDrop | FileHandler extension | 2024-2025 | Simpler, fewer edge cases |
-| TipTap v3 `Image.configure({ resize })` | Custom NodeView in v2 | v3.10.0 (2025) | v2 projects must build custom resize |
-| Base64 inline images | MinIO URL references | Industry standard | Smaller documents, cacheable images |
+| Custom ProseMirror image node | `@tiptap/extension-image` with extend | TipTap v2 | Standard extension handles schema, parsing, serialization |
+| `@tiptap-pro/extension-file-handler` (paid, v2) | `editorProps.handlePaste` + `handleDrop` | TipTap v2 | Free, no external dependency, full control |
+| `Image.configure({ resize: {...} })` | Custom NodeView with ReactNodeViewRenderer | TipTap v2 (resize config is v3.10+ only) | Must use custom NodeView approach on v2 |
+| Base64 inline images | MinIO object storage with presigned URLs | Current architecture | Scalable, no document bloat |
 
 **Deprecated/outdated:**
-- `@tiptap-pro/extension-file-handler`: Replaced by `@tiptap/extension-file-handler` (MIT). The `@tiptap-pro/*` namespace is being phased out for these extensions.
-- ProseMirror `handleDOMEvents.paste` workaround: The FileHandler extension handles the duplicate-paste issue properly now.
+- `@tiptap-pro/extension-file-handler`: Pro-only on v2; free version available only in v3. Not usable with our v2 stay-put decision.
+- `Image.configure({ resize: {...} })`: Only available in TipTap v3.10+. On v2, must use `Image.extend()` with custom NodeView.
 
 ## Open Questions
 
-1. **Presigned URL expiration strategy**
-   - What we know: Presigned URLs expire (default 1h). Document JSON stores the image src.
-   - What's unclear: Whether to store permanent MinIO paths and resolve on load, or set bucket to public read.
-   - Recommendation: For Phase 7, store the MinIO object path (`document/{id}/{uuid}_{filename}`) as a `data-minio-key` attribute alongside the `src`. On document load, batch-resolve all image URLs via a single API call. This keeps images secure without public bucket access. Alternatively, for simplicity, generate presigned URLs with a very long expiry (7 days) and refresh them on document open.
+1. **Presigned URL strategy for persisted documents**
+   - What we know: The existing `RichTextEditor.tsx` stores presigned URLs directly as image `src` in JSON content. These expire after 1 hour.
+   - What's unclear: Whether a proxy endpoint, URL-refresh-on-load, or long-lived URLs (configurable expiry) is the right approach for knowledge base documents that persist long-term.
+   - Recommendation: Start with URL-refresh-on-load (scan image nodes when document opens, batch-refresh via `POST /api/files/download-urls`). This uses existing infrastructure. Consider a proxy endpoint in a future phase if refresh-on-load creates UX latency.
 
-2. **Image cleanup on document deletion**
-   - What we know: Documents can be soft-deleted and permanently deleted.
-   - What's unclear: Whether to clean up MinIO objects when a document is permanently deleted, or use a lifecycle policy.
-   - Recommendation: Defer cleanup to a background job. For Phase 7, images persist in MinIO even after document deletion. Add cleanup as a future enhancement.
+2. **Entity type for document image uploads**
+   - What we know: The existing upload endpoint supports `entity_type` (task, comment) and `entity_id`. Documents are not currently a supported entity type.
+   - What's unclear: Whether to add `document` as an entity type in the `EntityType` enum, or upload images without entity association.
+   - Recommendation: Add `document` to the `EntityType` enum and pass `entity_type=document&entity_id={documentId}` on upload. This enables future features like listing all images in a document, or cleaning up orphaned images on document delete.
 
-3. **Toolbar "upload image" button UX**
-   - What we know: Requirements mention upload button in addition to paste/drop.
-   - What's unclear: Whether this should be a file picker dialog or an inline popover.
-   - Recommendation: Simple file picker via `<input type="file" accept="image/*">` triggered by a toolbar button. Standard UX pattern.
+3. **Image size limit for knowledge documents**
+   - What we know: Task descriptions use 5MB limit. The backend upload endpoint has a 100MB max.
+   - What's unclear: What's the right limit for knowledge documents?
+   - Recommendation: Use 10MB for knowledge documents (more generous than task descriptions, but well within backend limit). Validate client-side before upload.
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- TipTap Image extension docs: https://tiptap.dev/docs/editor/extensions/nodes/image - configuration, commands, attributes
-- TipTap FileHandler extension docs: https://tiptap.dev/docs/editor/extensions/functionality/filehandler - onPaste, onDrop, allowedMimeTypes
-- TipTap ResizableNodeView docs: https://tiptap.dev/docs/editor/api/resizable-nodeviews - resize API, callbacks, directions
-- TipTap React NodeView docs: https://tiptap.dev/docs/editor/extensions/custom-extensions/node-views/react - ReactNodeViewRenderer, updateAttributes
-- Existing codebase: `fastapi-backend/app/services/minio_service.py` - full MinIO integration
-- Existing codebase: `fastapi-backend/app/routers/files.py` - file upload patterns
-- Existing codebase: `electron-app/package.json` - installed TipTap v2.6-2.27.2 extensions
+- Existing codebase: `electron-app/src/renderer/components/editor/RichTextEditor.tsx` -- complete working implementation of ResizableImage, paste, drop, upload
+- Existing codebase: `fastapi-backend/app/services/minio_service.py` -- MinIOService with pm-images bucket
+- Existing codebase: `fastapi-backend/app/routers/files.py` -- upload/download endpoints
+- Existing codebase: `electron-app/src/renderer/components/knowledge/editor-extensions.ts` -- extension factory
+- Existing codebase: `fastapi-backend/app/services/content_converter.py` -- content pipeline (no image handler yet)
+- [TipTap Image Extension Official Docs](https://tiptap.dev/docs/editor/extensions/nodes/image) -- configuration, commands, attributes
 
 ### Secondary (MEDIUM confidence)
-- TipTap open-sourcing announcement (June 2025): https://tiptap.dev/blog/release-notes/were-open-sourcing-more-of-tiptap - FileHandler moved to MIT
-- Community patterns for custom image resize: https://www.bigbinary.com/blog/building-custom-extensions-in-tiptap
-- Codemzy blog on paste/drop: https://www.codemzy.com/blog/tiptap-drag-drop-image, https://www.codemzy.com/blog/tiptap-pasting-images
+- [TipTap FileHandler Extension Docs](https://tiptap.dev/docs/editor/extensions/functionality/filehandler) -- confirmed v3/Pro-only for v2
+- [Codemzy Blog - Drag and Drop Image Uploads](https://www.codemzy.com/blog/tiptap-drag-drop-image) -- handleDrop pattern
+- [Codemzy Blog - Pasting Images](https://www.codemzy.com/blog/tiptap-pasting-images) -- handlePaste pattern, duplicate image fix
+- [@tiptap/extension-file-handler npm](https://www.npmjs.com/package/@tiptap/extension-file-handler) -- confirmed v3 only (3.14.0)
 
 ### Tertiary (LOW confidence)
-- `tiptap-extension-resize-image` npm package (41K downloads): https://www.npmjs.com/package/tiptap-extension-resize-image - alternative to custom, but custom preferred for control
-- Image resize config added in TipTap v3.10.0 (from search results, not verified in changelog)
+- [tiptap-extension-resize-image npm](https://www.npmjs.com/package/tiptap-extension-resize-image) -- alternative resize package (not recommended: existing code is better)
+- [GitHub Gist - Image Upload Extension](https://gist.github.com/slava-vishnyakov/16076dff1a77ddaca93c4bccd4ec4521) -- community patterns
 
 ## Metadata
 
 **Confidence breakdown:**
-- Standard stack: HIGH - Official TipTap extensions verified in docs; MinIO service verified in codebase
-- Architecture: HIGH - Patterns verified from TipTap docs and existing codebase patterns
-- Pitfalls: MEDIUM - Duplicate-paste and URL-expiration pitfalls verified; resize z-index from community reports
+- Standard stack: HIGH -- all libraries already installed and proven in codebase
+- Architecture: HIGH -- existing RichTextEditor.tsx provides a complete reference implementation
+- Pitfalls: HIGH -- presigned URL expiry and duplicate paste are well-documented; content converter gap identified by direct code inspection
 
-**Research date:** 2026-01-31
-**Valid until:** 2026-03-01 (stable; TipTap v2 is mature, MinIO SDK is stable)
+**Research date:** 2026-02-01
+**Valid until:** 2026-03-01 (stable -- TipTap v2 is not changing, MinIO is stable)
