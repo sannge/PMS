@@ -157,12 +157,12 @@ Plans:
   3. Viewers can read documents in their scope but cannot edit or create
   4. Personal notes are visible and editable only by their creator -- no other user can see them
   5. Document list API never returns documents the requesting user cannot access
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 08-01: Centralized permission check service for documents
-- [ ] 08-02: Permission enforcement on all document and folder API endpoints
-- [ ] 08-03: Frontend permission-aware UI (hide/disable edit controls based on role)
+- [ ] 08-01-PLAN.md — DocumentPermissionService with scope-aware permission methods (can_read, can_edit, can_delete, can_create_in_scope, can_force_unlock)
+- [ ] 08-02-PLAN.md — Permission enforcement on all document, folder, and tag API endpoints (403 guards)
+- [ ] 08-03-PLAN.md — Frontend useDocumentPermissions hook and permission-aware sidebar/context-menu UI
 
 ### Phase 9: Search, Templates & Export
 **Goal**: Users can find documents by searching content, create documents from templates, and export to Markdown
