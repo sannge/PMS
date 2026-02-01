@@ -12,7 +12,7 @@ This roadmap delivers a complete document and notes system inside PM Desktop, re
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Migration & Data Foundation** - Remove old notes system, migrate Zustand stores to React Context + TanStack Query, and build new document schema with folders, tags, scopes, and soft delete
+- [x] **Phase 1: Migration & Data Foundation** - Remove old notes system, migrate Zustand stores to React Context + TanStack Query, and build new document schema with folders, tags, scopes, and soft delete (completed 2026-01-31)
 - [ ] **Phase 2: Notes Screen Shell & Folder Navigation** - Sidebar with folder tree (cached via IndexedDB), search bar, tag list, scope filtering, and document content caching
 - [ ] **Phase 3: Rich Text Editor Core** - Full-featured TipTap editor with text formatting, headings, lists, tables, code blocks, and links
 - [ ] **Phase 4: Auto-Save & Content Pipeline** - Debounced auto-save with three-format storage (JSON, Markdown, plain text) and IndexedDB draft persistence for crash recovery

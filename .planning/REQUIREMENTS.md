@@ -9,19 +9,19 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Migration
 
-- [ ] **MIGR-01**: Existing notes system completely removed (old code, old database tables, old API endpoints)
-- [ ] **MIGR-02**: Clean slate -- no backward compatibility with old notes system
-- [ ] **MIGR-03**: All Zustand stores used by knowledge base replaced with React Context + TanStack Query (no new Zustand stores introduced; existing stores auth-store, notes-store, notification-ui-store migrated to Context)
+- [x] **MIGR-01**: Existing notes system completely removed (old code, old database tables, old API endpoints)
+- [x] **MIGR-02**: Clean slate -- no backward compatibility with old notes system
+- [x] **MIGR-03**: All Zustand stores used by knowledge base replaced with React Context + TanStack Query (no new Zustand stores introduced; existing stores auth-store, notes-store, notification-ui-store migrated to Context)
 
 ### Data Model
 
-- [ ] **DATA-01**: Documents support three scopes: personal (user-only), application-wide, and project-specific
-- [ ] **DATA-02**: Hierarchical folder structure with nested folders within each scope
-- [ ] **DATA-03**: Documents not in a folder appear in an "Unfiled" section
-- [ ] **DATA-04**: Tag system -- documents can have multiple tags, tags filterable in sidebar
-- [ ] **DATA-05**: Documents stored in three formats: TipTap JSON (editor), Markdown (AI), plain text (search)
-- [ ] **DATA-06**: Schema supports future version history (snapshot table in schema, not populated yet)
-- [ ] **DATA-07**: Soft delete -- deleted documents move to trash, recoverable for 30 days, auto-purged after
+- [x] **DATA-01**: Documents support three scopes: personal (user-only), application-wide, and project-specific
+- [x] **DATA-02**: Hierarchical folder structure with nested folders within each scope
+- [x] **DATA-03**: Documents not in a folder appear in an "Unfiled" section
+- [x] **DATA-04**: Tag system -- documents can have multiple tags, tags filterable in sidebar
+- [x] **DATA-05**: Documents stored in three formats: TipTap JSON (editor), Markdown (AI), plain text (search)
+- [x] **DATA-06**: Schema supports future version history (snapshot table in schema, not populated yet)
+- [x] **DATA-07**: Soft delete -- deleted documents move to trash, recoverable for 30 days, auto-purged after
 
 ### Rich Text Editor
 
