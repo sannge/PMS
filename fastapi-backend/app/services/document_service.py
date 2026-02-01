@@ -241,17 +241,20 @@ async def update_descendant_paths(
 def convert_tiptap_to_markdown(content_json: Optional[str]) -> str:
     """Convert TipTap JSON to Markdown format.
 
-    Stub for Phase 4 auto-save pipeline (SAVE-05). Will be implemented
-    with a proper TipTap JSON walker or library.
+    Delegates to the content_converter module which implements a full
+    recursive ProseMirror JSON tree walker.
 
     Args:
         content_json: TipTap JSON string or None
 
     Returns:
-        Markdown string (currently empty stub)
+        Markdown string
     """
-    # TODO(Phase-4): Implement TipTap JSON -> Markdown conversion
-    return ""
+    if not content_json:
+        return ""
+    from .content_converter import tiptap_json_to_markdown
+    content_dict = json.loads(content_json)
+    return tiptap_json_to_markdown(content_dict)
 
 
 async def save_document_content(
@@ -301,11 +304,13 @@ async def save_document_content(
             detail="Document was modified. Refresh to get latest version.",
         )
 
-    # Update content fields
+    # Update content fields -- run content pipeline
     document.content_json = content_json
-    # Placeholder for Phase 4 Plan 04 converter
-    document.content_markdown = ""
-    document.content_plain = ""
+    content_dict = json.loads(content_json)
+
+    from .content_converter import tiptap_json_to_markdown, tiptap_json_to_plain_text
+    document.content_markdown = tiptap_json_to_markdown(content_dict)
+    document.content_plain = tiptap_json_to_plain_text(content_dict)
 
     # Increment version
     document.row_version += 1
@@ -361,14 +366,17 @@ async def validate_tag_scope(
 def convert_tiptap_to_plain_text(content_json: Optional[str]) -> str:
     """Convert TipTap JSON to plain text for search indexing.
 
-    Stub for Phase 4 auto-save pipeline (SAVE-05). Will be implemented
-    to extract text nodes from TipTap JSON.
+    Delegates to the content_converter module which recursively extracts
+    text nodes and strips all formatting marks.
 
     Args:
         content_json: TipTap JSON string or None
 
     Returns:
-        Plain text string (currently empty stub)
+        Plain text string
     """
-    # TODO(Phase-4): Implement TipTap JSON -> plain text extraction
-    return ""
+    if not content_json:
+        return ""
+    from .content_converter import tiptap_json_to_plain_text
+    content_dict = json.loads(content_json)
+    return tiptap_json_to_plain_text(content_dict)
