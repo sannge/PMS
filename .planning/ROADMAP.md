@@ -109,12 +109,11 @@ Plans:
   3. User can manually click "stop editing" to release the lock
   4. If a client crashes or disconnects, the server-side Redis TTL expires the lock automatically
   5. Application owners can force-take the lock (previous editor's work is saved first)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 05-01: Redis lock service with acquire, release, heartbeat, and TTL expiry
-- [ ] 05-02: Lock REST endpoints and WebSocket broadcast for lock status
-- [ ] 05-03: Frontend lock UI (banner, manual release, owner override)
+- [ ] 05-01-PLAN.md — Backend lock service (Redis atomic ops + Lua scripts), Pydantic schemas, REST endpoints, WebSocket message types and broadcast handler
+- [ ] 05-02-PLAN.md — Frontend useDocumentLock hook (heartbeat, inactivity timer, WebSocket listener), LockBanner component, editor integration
 
 ### Phase 6: Document Tabs & Editor UI Integration
 **Goal**: Users can work with multiple documents simultaneously using browser-style tabs with full metadata visibility
@@ -209,7 +208,7 @@ Note: Phases 5, 6, 7, 9 all depend on Phase 4 and can potentially be parallelize
 | 2. Notes Screen Shell & Folder Navigation | 0/3 | Not started | - |
 | 3. Rich Text Editor Core | 0/4 | Planned | - |
 | 4. Auto-Save & Content Pipeline | 0/4 | Planned | - |
-| 5. Document Locking | 0/3 | Not started | - |
+| 5. Document Locking | 0/2 | Planned | - |
 | 6. Document Tabs & Editor UI Integration | 0/3 | Not started | - |
 | 7. Images in Editor | 0/2 | Not started | - |
 | 8. Permissions | 0/3 | Not started | - |
