@@ -29,6 +29,13 @@ from .document import (
     DocumentResponse,
     DocumentUpdate,
 )
+from .document_tag import (
+    TagAssignment,
+    TagAssignmentResponse,
+    TagCreate,
+    TagResponse,
+    TagUpdate,
+)
 from .document_folder import (
     FolderCreate,
     FolderResponse,
@@ -91,6 +98,12 @@ __all__ = [
     "DocumentListResponse",
     "DocumentResponse",
     "DocumentUpdate",
+    # Document tag schemas
+    "TagAssignment",
+    "TagAssignmentResponse",
+    "TagCreate",
+    "TagResponse",
+    "TagUpdate",
     # Document folder schemas
     "FolderCreate",
     "FolderResponse",

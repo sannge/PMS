@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .document_tag import TagResponse
+
 
 class DocumentCreate(BaseModel):
     """Schema for creating a new document."""
@@ -88,6 +90,7 @@ class DocumentResponse(BaseModel):
     deleted_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+    tags: list[TagResponse] = []
 
 
 class DocumentListItem(BaseModel):

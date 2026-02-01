@@ -8,8 +8,6 @@ model implements the many-to-many relationship between documents and tags.
 
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING
-
 from sqlalchemy import (
     CheckConstraint,
     Column,
@@ -23,9 +21,6 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
 from ..database import Base
-
-if TYPE_CHECKING:
-    from .document import Document
 
 
 class DocumentTag(Base):

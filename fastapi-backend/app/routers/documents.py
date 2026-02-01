@@ -2,7 +2,8 @@
 
 Provides endpoints for managing Documents within the knowledge base.
 Documents support three scopes: application, project, and personal.
-All endpoints require authentication.
+All endpoints require authentication. Includes trash/restore lifecycle
+and tag assignment with scope compatibility validation.
 """
 
 from datetime import datetime
@@ -10,11 +11,12 @@ from typing import Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select, func, or_, and_
+from sqlalchemy import select, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..models.document import Document
+from ..models.document_tag import DocumentTag, DocumentTagAssignment
 from ..models.user import User
 from ..schemas.document import (
     DocumentCreate,
@@ -23,6 +25,7 @@ from ..schemas.document import (
     DocumentResponse,
     DocumentUpdate,
 )
+from ..schemas.document_tag import TagAssignment, TagAssignmentResponse
 from ..services.auth_service import get_current_user
 from ..services.document_service import (
     decode_cursor,
@@ -30,12 +33,75 @@ from ..services.document_service import (
     get_scope_filter,
     set_scope_fks,
     validate_scope,
+    validate_tag_scope,
 )
 
 router = APIRouter(
     prefix="/documents",
     tags=["documents"],
 )
+
+
+# ============================================================================
+# Trash endpoint (MUST be before /{document_id} to avoid path matching)
+# ============================================================================
+
+
+@router.get("/trash", response_model=DocumentListResponse)
+async def list_trash(
+    cursor: Optional[str] = Query(None, description="Pagination cursor"),
+    limit: int = Query(30, ge=1, le=100, description="Page size"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> DocumentListResponse:
+    """
+    List soft-deleted documents for the current user (trash).
+
+    Returns documents where deleted_at IS NOT NULL and created_by matches
+    the current user. Ordered by deleted_at DESC for most-recently-trashed first.
+    """
+    query = (
+        select(Document)
+        .where(Document.deleted_at.isnot(None))
+        .where(Document.created_by == current_user.id)
+    )
+
+    # Cursor pagination (keyset: created_at DESC, id DESC)
+    if cursor:
+        cursor_created_at, cursor_id = decode_cursor(cursor)
+        query = query.where(
+            or_(
+                Document.created_at < cursor_created_at,
+                and_(
+                    Document.created_at == cursor_created_at,
+                    Document.id < cursor_id,
+                ),
+            )
+        )
+
+    query = query.order_by(Document.created_at.desc(), Document.id.desc())
+    query = query.limit(limit + 1)
+
+    result = await db.execute(query)
+    documents = result.scalars().all()
+
+    has_next = len(documents) > limit
+    if has_next:
+        documents = documents[:limit]
+
+    items = [DocumentListItem.model_validate(doc) for doc in documents]
+
+    next_cursor = None
+    if has_next and documents:
+        last = documents[-1]
+        next_cursor = encode_cursor(last.created_at, last.id)
+
+    return DocumentListResponse(items=items, next_cursor=next_cursor)
+
+
+# ============================================================================
+# Standard CRUD endpoints
+# ============================================================================
 
 
 @router.get("", response_model=DocumentListResponse)
@@ -225,8 +291,9 @@ async def delete_document(
     """
     Soft delete a document (move to trash).
 
-    Sets deleted_at to the current timestamp. The document can still be
-    queried via admin/trash endpoints (not yet implemented).
+    Sets deleted_at to the current timestamp. The document can be restored
+    via POST /documents/{id}/restore or permanently deleted via
+    DELETE /documents/{id}/permanent.
     """
     result = await db.execute(
         select(Document)
@@ -242,4 +309,185 @@ async def delete_document(
         )
 
     document.deleted_at = datetime.utcnow()
+    await db.flush()
+
+
+# ============================================================================
+# Restore and permanent delete endpoints
+# ============================================================================
+
+
+@router.post("/{document_id}/restore", response_model=DocumentResponse)
+async def restore_document(
+    document_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> DocumentResponse:
+    """
+    Restore a soft-deleted document from trash.
+
+    Sets deleted_at back to None. Returns 404 if the document does not
+    exist or is not in the trash.
+    """
+    result = await db.execute(
+        select(Document)
+        .where(Document.id == document_id)
+        .where(Document.deleted_at.isnot(None))
+    )
+    document = result.scalar_one_or_none()
+
+    if document is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document {document_id} not found in trash",
+        )
+
+    document.deleted_at = None
+    await db.flush()
+    await db.refresh(document)
+
+    return DocumentResponse.model_validate(document)
+
+
+@router.delete("/{document_id}/permanent", status_code=status.HTTP_204_NO_CONTENT)
+async def permanent_delete_document(
+    document_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """
+    Permanently delete a document (hard delete).
+
+    This action is irreversible. The document and all its tag assignments
+    are removed from the database.
+    """
+    result = await db.execute(
+        select(Document).where(Document.id == document_id)
+    )
+    document = result.scalar_one_or_none()
+
+    if document is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document {document_id} not found",
+        )
+
+    await db.delete(document)
+    await db.flush()
+
+
+# ============================================================================
+# Tag assignment endpoints
+# ============================================================================
+
+
+@router.post(
+    "/{document_id}/tags",
+    response_model=TagAssignmentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def assign_tag_to_document(
+    document_id: UUID,
+    body: TagAssignment,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TagAssignmentResponse:
+    """
+    Assign a tag to a document.
+
+    Validates that the tag's scope is compatible with the document's scope:
+    - Application-scoped documents can use application-scoped tags from the same application
+    - Project-scoped documents can use tags from their parent application
+    - Personal documents can only use personal tags from the same user
+
+    Returns 409 if the tag is already assigned.
+    """
+    # Fetch document
+    result = await db.execute(
+        select(Document)
+        .where(Document.id == document_id)
+        .where(Document.deleted_at.is_(None))
+    )
+    document = result.scalar_one_or_none()
+
+    if document is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document {document_id} not found",
+        )
+
+    # Fetch tag
+    result = await db.execute(
+        select(DocumentTag).where(DocumentTag.id == body.tag_id)
+    )
+    tag = result.scalar_one_or_none()
+
+    if tag is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Tag {body.tag_id} not found",
+        )
+
+    # Validate scope compatibility
+    is_compatible = await validate_tag_scope(db, document, tag)
+    if not is_compatible:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tag scope is not compatible with document scope",
+        )
+
+    # Check for duplicate assignment
+    result = await db.execute(
+        select(DocumentTagAssignment).where(
+            DocumentTagAssignment.document_id == document_id,
+            DocumentTagAssignment.tag_id == body.tag_id,
+        )
+    )
+    existing = result.scalar_one_or_none()
+
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Tag is already assigned to this document",
+        )
+
+    assignment = DocumentTagAssignment(
+        document_id=document_id,
+        tag_id=body.tag_id,
+    )
+    db.add(assignment)
+    await db.flush()
+    await db.refresh(assignment)
+
+    return TagAssignmentResponse.model_validate(assignment)
+
+
+@router.delete(
+    "/{document_id}/tags/{tag_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def remove_tag_from_document(
+    document_id: UUID,
+    tag_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """
+    Remove a tag assignment from a document.
+    """
+    result = await db.execute(
+        select(DocumentTagAssignment).where(
+            DocumentTagAssignment.document_id == document_id,
+            DocumentTagAssignment.tag_id == tag_id,
+        )
+    )
+    assignment = result.scalar_one_or_none()
+
+    if assignment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tag assignment not found",
+        )
+
+    await db.delete(assignment)
     await db.flush()

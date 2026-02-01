@@ -1,7 +1,8 @@
 """Document business logic service.
 
 Provides helpers for scope validation, cursor pagination, folder depth
-management, materialized path computation, and content conversion stubs.
+management, materialized path computation, tag scope validation, and
+content conversion stubs.
 """
 
 import base64
@@ -15,7 +16,9 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.application import Application
+from ..models.document import Document
 from ..models.document_folder import DocumentFolder
+from ..models.document_tag import DocumentTag
 from ..models.project import Project
 from ..models.user import User
 
@@ -249,6 +252,48 @@ def convert_tiptap_to_markdown(content_json: Optional[str]) -> str:
     """
     # TODO(Phase-4): Implement TipTap JSON -> Markdown conversion
     return ""
+
+
+async def validate_tag_scope(
+    db: AsyncSession,
+    document: Document,
+    tag: DocumentTag,
+) -> bool:
+    """
+    Check that a tag's scope is compatible with a document's scope.
+
+    Rules:
+    - Application-scoped document: tag must have the same application_id
+    - Project-scoped document: tag must belong to the project's parent application
+    - Personal document: tag must have the same user_id
+
+    Args:
+        db: Database session
+        document: The Document instance
+        tag: The DocumentTag instance
+
+    Returns:
+        True if the tag can be assigned to the document, False otherwise
+    """
+    if document.application_id is not None:
+        # Application-scoped document: tag must belong to same application
+        return tag.application_id == document.application_id
+
+    if document.project_id is not None:
+        # Project-scoped document: look up project's parent application_id
+        result = await db.execute(
+            select(Project.application_id).where(Project.id == document.project_id)
+        )
+        project_app_id = result.scalar_one_or_none()
+        if project_app_id is None:
+            return False
+        return tag.application_id == project_app_id
+
+    if document.user_id is not None:
+        # Personal document: tag must belong to same user
+        return tag.user_id == document.user_id
+
+    return False
 
 
 def convert_tiptap_to_plain_text(content_json: Optional[str]) -> str:

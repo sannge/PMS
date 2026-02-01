@@ -10,6 +10,7 @@ from .auth import router as auth_router
 from .checklists import router as checklists_router
 from .comments import router as comments_router
 from .document_folders import router as document_folders_router
+from .document_tags import router as document_tags_router
 from .documents import router as documents_router
 from .files import router as files_router
 from .invitations import router as invitations_router
@@ -28,6 +29,7 @@ __all__ = [
     "checklists_router",
     "comments_router",
     "document_folders_router",
+    "document_tags_router",
     "documents_router",
     "files_router",
     "invitations_router",
