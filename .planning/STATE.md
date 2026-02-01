@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 3 of 10 (Rich Text Editor Core)
-Plan: 1 of 4 in current phase
+Plan: 2 of 4 in current phase
 Status: In progress
-Last activity: 2026-02-01 -- Completed 03-01-PLAN.md (editor foundation + extension factory)
+Last activity: 2026-02-01 -- Completed 03-02-PLAN.md (heading/list/code/indent toolbar)
 
-Progress: [████████░░] ~24%
+Progress: [█████████░] ~27%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 8
-- Average duration: ~7 min
-- Total execution time: ~0.95 hours
+- Total plans completed: 9
+- Average duration: ~6 min
+- Total execution time: ~0.98 hours
 
 **By Phase:**
 
@@ -29,11 +29,11 @@ Progress: [████████░░] ~24%
 |-------|-------|-------|----------|
 | 01 | 4/4 | ~34 min | ~9 min |
 | 02 | 3/3 | ~19 min | ~6 min |
-| 03 | 1/4 | ~6 min | ~6 min |
+| 03 | 2/4 | ~8 min | ~4 min |
 
 **Recent Trend:**
-- Last 5 plans: 02-01 (~11 min), 02-02 (~4 min), 02-03 (~4 min), 03-01 (~6 min)
-- Trend: stable at ~4-11 min
+- Last 5 plans: 02-02 (~4 min), 02-03 (~4 min), 03-01 (~6 min), 03-02 (~2 min)
+- Trend: stable at ~2-6 min
 
 *Updated after each plan completion*
 
@@ -65,6 +65,8 @@ Recent decisions affecting current work:
 - [03-01]: Extension factory pattern -- all TipTap extensions configured in createDocumentExtensions(), toolbar plans only add UI
 - [03-01]: JSON content format -- editor emits getJSON() not getHTML() for three-format storage strategy
 - [03-01]: lowlight v3 syntax with createLowlight(common) for code block highlighting
+- [03-02]: Heading dropdown uses Radix Popover (not Select) for richer preview rendering
+- [03-02]: HeadingOption data-driven pattern with level + className for DRY heading list
 
 ### Pending Todos
 
@@ -81,5 +83,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-01
-Stopped at: Completed 03-01-PLAN.md (editor foundation + extension factory)
+Stopped at: Completed 03-02-PLAN.md (heading/list/code/indent toolbar)
 Resume file: None
