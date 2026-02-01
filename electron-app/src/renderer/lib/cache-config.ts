@@ -47,10 +47,10 @@ export const HYDRATION_PRIORITY = {
   critical: ['applications', 'projects', 'myProjects', 'myTasks'] as const,
 
   /** Deferred queries - loaded after 2 seconds */
-  deferred: ['notifications', 'appMembers', 'projectMembers'] as const,
+  deferred: ['notifications', 'appMembers', 'projectMembers', 'documentFolders'] as const,
 
   /** On-demand queries - loaded when view is opened */
-  onDemand: ['tasks', 'comments', 'checklists', 'attachments', 'invitations'] as const,
+  onDemand: ['tasks', 'comments', 'checklists', 'attachments', 'invitations', 'documents', 'documentTags'] as const,
 } as const
 
 /**

@@ -118,6 +118,16 @@ export const queryKeys = {
 
   // Statuses
   statuses: (projectId: string) => ['statuses', projectId] as const,
+
+  // Documents
+  documents: (scope: string, scopeId: string) => ['documents', scope, scopeId] as const,
+  document: (id: string) => ['document', id] as const,
+
+  // Document Folders
+  documentFolders: (scope: string, scopeId: string) => ['documentFolders', scope, scopeId] as const,
+
+  // Document Tags
+  documentTags: (scope: string, scopeId: string) => ['documentTags', scope, scopeId] as const,
 }
 
 // ============================================================================
