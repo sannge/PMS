@@ -6,13 +6,39 @@
  * Content is persisted as TipTap JSON (not HTML).
  */
 
-import { useEditor, EditorContent } from '@tiptap/react'
+import { useEditor, EditorContent, useEditorState } from '@tiptap/react'
+import type { Editor } from '@tiptap/core'
 import { useCallback, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { createDocumentExtensions } from './editor-extensions'
 import { EditorToolbar } from './editor-toolbar'
 import type { DocumentEditorProps } from './editor-types'
 import './editor-styles.css'
+
+// ============================================================================
+// EditorStatusBar -- reactive word + character count
+// ============================================================================
+
+function EditorStatusBar({ editor }: { editor: Editor }) {
+  const { wordCount, charCount } = useEditorState({
+    editor,
+    selector: (ctx) => ({
+      wordCount: ctx.editor?.storage.characterCount?.words() ?? 0,
+      charCount: ctx.editor?.storage.characterCount?.characters() ?? 0,
+    }),
+  }) ?? { wordCount: 0, charCount: 0 }
+
+  return (
+    <div className="flex items-center justify-between px-3 py-1.5 border-t text-xs text-muted-foreground">
+      <span>{wordCount} words</span>
+      <span>{charCount} characters</span>
+    </div>
+  )
+}
+
+// ============================================================================
+// DocumentEditor
+// ============================================================================
 
 export function DocumentEditor({
   content,
@@ -77,7 +103,7 @@ export function DocumentEditor({
     <div className={cn('border rounded-lg overflow-hidden bg-background', className)}>
       {editable && <EditorToolbar editor={editor} />}
       <EditorContent editor={editor} className="prose prose-sm max-w-none" />
-      {/* Status bar placeholder - word count added in Plan 03-04 */}
+      <EditorStatusBar editor={editor} />
     </div>
   )
 }
