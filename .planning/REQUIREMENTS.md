@@ -25,20 +25,20 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Rich Text Editor
 
-- [ ] **EDIT-01**: TipTap WYSIWYG editor with toolbar: bold, italic, underline, strikethrough
-- [ ] **EDIT-02**: Headings (H1-H6), paragraph styles
-- [ ] **EDIT-03**: Bullet lists, numbered lists, indentation controls
-- [ ] **EDIT-04**: Interactive checklists (toggleable checkboxes)
-- [ ] **EDIT-05**: Tables with resizable columns (add/remove rows and columns)
-- [ ] **EDIT-06**: Code blocks with syntax highlighting
-- [ ] **EDIT-07**: Links/URLs (insertable and clickable)
-- [ ] **EDIT-08**: Font family selection and font size controls
-- [ ] **EDIT-09**: Text coloring (foreground color)
+- [x] **EDIT-01**: TipTap WYSIWYG editor with toolbar: bold, italic, underline, strikethrough
+- [x] **EDIT-02**: Headings (H1-H6), paragraph styles
+- [x] **EDIT-03**: Bullet lists, numbered lists, indentation controls
+- [x] **EDIT-04**: Interactive checklists (toggleable checkboxes)
+- [x] **EDIT-05**: Tables with resizable columns (add/remove rows and columns)
+- [x] **EDIT-06**: Code blocks with syntax highlighting
+- [x] **EDIT-07**: Links/URLs (insertable and clickable)
+- [x] **EDIT-08**: Font family selection and font size controls
+- [x] **EDIT-09**: Text coloring (foreground color)
 - [ ] **EDIT-10**: Images: paste from clipboard, upload button (inserts at cursor position), drag-and-drop
 - [ ] **EDIT-11**: Image resizing within the editor (drag handles)
 - [ ] **EDIT-12**: Image skeleton/placeholder animation while images load
 - [ ] **EDIT-13**: Images stored in MinIO, referenced by URL in document content
-- [ ] **EDIT-14**: Word count displayed at bottom of editor
+- [x] **EDIT-14**: Word count displayed at bottom of editor
 
 ### Auto-Save
 
@@ -179,20 +179,20 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DATA-05 | Phase 1 | Pending |
 | DATA-06 | Phase 1 | Pending |
 | DATA-07 | Phase 1 | Pending |
-| EDIT-01 | Phase 3 | Pending |
-| EDIT-02 | Phase 3 | Pending |
-| EDIT-03 | Phase 3 | Pending |
-| EDIT-04 | Phase 3 | Pending |
-| EDIT-05 | Phase 3 | Pending |
-| EDIT-06 | Phase 3 | Pending |
-| EDIT-07 | Phase 3 | Pending |
-| EDIT-08 | Phase 3 | Pending |
-| EDIT-09 | Phase 3 | Pending |
+| EDIT-01 | Phase 3 | Complete |
+| EDIT-02 | Phase 3 | Complete |
+| EDIT-03 | Phase 3 | Complete |
+| EDIT-04 | Phase 3 | Complete |
+| EDIT-05 | Phase 3 | Complete |
+| EDIT-06 | Phase 3 | Complete |
+| EDIT-07 | Phase 3 | Complete |
+| EDIT-08 | Phase 3 | Complete |
+| EDIT-09 | Phase 3 | Complete |
 | EDIT-10 | Phase 7 | Pending |
 | EDIT-11 | Phase 7 | Pending |
 | EDIT-12 | Phase 7 | Pending |
 | EDIT-13 | Phase 7 | Pending |
-| EDIT-14 | Phase 3 | Pending |
+| EDIT-14 | Phase 3 | Complete |
 | SAVE-01 | Phase 4 | Pending |
 | SAVE-02 | Phase 4 | Pending |
 | SAVE-03 | Phase 4 | Pending |
