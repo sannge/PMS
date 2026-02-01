@@ -5,33 +5,33 @@
 See: .planning/PROJECT.md (updated 2026-01-31)
 
 **Core value:** Teams can create, organize, and find internal documentation without leaving their project management tool.
-**Current focus:** Phase 1 - Migration & Data Foundation
+**Current focus:** Phase 1 complete. Ready for Phase 2 - Knowledge Base UI Shell.
 
 ## Current Position
 
-Phase: 1 of 10 (Migration & Data Foundation)
-Plan: 3 of 4 in current phase
-Status: In progress
-Last activity: 2026-01-31 -- Completed 01-03-PLAN.md (Knowledge Base Data Model & CRUD API)
+Phase: 1 of 10 (Migration & Data Foundation) -- COMPLETE
+Plan: 4 of 4 in current phase
+Status: Phase complete
+Last activity: 2026-01-31 -- Completed 01-04-PLAN.md (Document Tags & Trash)
 
-Progress: [███░░░░░░░] ~8%
+Progress: [████░░░░░░] ~10%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 3
+- Total plans completed: 4
 - Average duration: ~9 min
-- Total execution time: ~0.5 hours
+- Total execution time: ~0.6 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 01 | 3/4 | ~27 min | ~9 min |
+| 01 | 4/4 | ~34 min | ~9 min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (~12 min), 01-02 (~8 min), 01-03 (~7 min)
-- Trend: improving
+- Last 5 plans: 01-01 (~12 min), 01-02 (~8 min), 01-03 (~7 min), 01-04 (~7 min)
+- Trend: stable at ~7-8 min
 
 *Updated after each plan completion*
 
@@ -52,6 +52,8 @@ Recent decisions affecting current work:
 - [01-03]: Materialized path pattern for folder tree queries (no recursive CTEs)
 - [01-03]: Cursor pagination with base64-encoded JSON cursor (created_at + id)
 - [01-03]: DocumentSnapshot table as empty placeholder for Phase 4+ version history
+- [01-04]: Tags scoped per application (shared across app + project docs) or per user (personal docs only)
+- [01-04]: Partial unique indexes for tag name uniqueness within scope
 
 ### Pending Todos
 
@@ -67,5 +69,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-31
-Stopped at: Completed 01-03-PLAN.md (Knowledge Base Data Model & CRUD API)
+Stopped at: Completed 01-04-PLAN.md (Document Tags & Trash) -- Phase 1 complete
 Resume file: None
