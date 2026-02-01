@@ -98,6 +98,11 @@ class MessageType(str, Enum):
     PROJECT_MEMBER_REMOVED = "project_member_removed"
     PROJECT_ROLE_CHANGED = "project_role_changed"
 
+    # Document lock events
+    DOCUMENT_LOCKED = "document_locked"
+    DOCUMENT_UNLOCKED = "document_unlocked"
+    DOCUMENT_FORCE_TAKEN = "document_force_taken"
+
     # Ping/pong for keepalive
     PING = "ping"
     PONG = "pong"

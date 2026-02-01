@@ -119,6 +119,79 @@ def get_task_room(task_id: UUID | str) -> str:
     return f"task:{task_id}"
 
 
+def get_document_room(document_id: UUID | str) -> str:
+    """
+    Get the room ID for a document.
+
+    Args:
+        document_id: The document's UUID
+
+    Returns:
+        str: Room ID in format 'document:{uuid}'
+    """
+    return f"document:{document_id}"
+
+
+async def handle_document_lock_change(
+    document_id: str,
+    lock_type: str,
+    lock_holder: dict[str, Any] | None,
+    triggered_by: str | None = None,
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Handle document lock state change and broadcast to document room.
+
+    Args:
+        document_id: The document's UUID string
+        lock_type: One of "locked", "unlocked", "force_taken"
+        lock_holder: Lock holder info dict (or None for unlocked)
+        triggered_by: UUID string of user who triggered the change
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_document_room(document_id)
+
+    # Map lock_type to MessageType
+    type_map = {
+        "locked": MessageType.DOCUMENT_LOCKED,
+        "unlocked": MessageType.DOCUMENT_UNLOCKED,
+        "force_taken": MessageType.DOCUMENT_FORCE_TAKEN,
+    }
+    message_type = type_map.get(lock_type, MessageType.DOCUMENT_LOCKED)
+
+    payload: dict[str, Any] = {
+        "document_id": document_id,
+        "lock_holder": lock_holder,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    if triggered_by:
+        payload["triggered_by"] = triggered_by
+
+    message = {
+        "type": message_type.value,
+        "data": payload,
+    }
+
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    logger.info(
+        f"Document lock {lock_type}: document_id={document_id}, "
+        f"room={room_id}, recipients={recipients}"
+    )
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=message_type.value,
+        success=True,
+    )
+
+
 async def handle_task_update(
     project_id: UUID | str,
     task_id: UUID | str,
@@ -2029,6 +2102,8 @@ __all__ = [
     "get_project_room",
     "get_application_room",
     "get_task_room",
+    "get_document_room",
+    "handle_document_lock_change",
     "handle_task_update",
     "handle_task_moved",
     "handle_project_update",

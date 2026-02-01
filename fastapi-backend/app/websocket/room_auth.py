@@ -22,6 +22,7 @@ from ..models.application import Application
 from ..models.application_member import ApplicationMember
 from ..models.project import Project
 from ..models.project_member import ProjectMember
+from ..models.document import Document
 from ..models.task import Task
 
 logger = logging.getLogger(__name__)
@@ -143,6 +144,8 @@ async def _check_room_access_async(user_id: UUID, room_type: str, resource_id: U
             return await _check_project_access(db, user_id, resource_id)
         elif room_type == "task":
             return await _check_task_access(db, user_id, resource_id)
+        elif room_type == "document":
+            return await _check_document_access(db, user_id, resource_id)
         else:
             logger.warning(f"[Room Auth] DENIED - unknown room type: {room_type}")
             return False
@@ -203,5 +206,29 @@ async def _check_task_access(db: AsyncSession, user_id: UUID, task_id: UUID) -> 
     if not task:
         return False
     return await _check_project_access(db, user_id, task.project_id)
+
+
+async def _check_document_access(db: AsyncSession, user_id: UUID, document_id: UUID) -> bool:
+    """Check if user has access to a document based on its scope."""
+    result = await db.execute(
+        select(Document).where(Document.id == document_id)
+    )
+    document = result.scalar_one_or_none()
+    if not document:
+        return False
+
+    # Personal document - only the owner has access
+    if document.user_id is not None and document.user_id == user_id:
+        return True
+
+    # Application-scoped document - check application membership
+    if document.application_id is not None:
+        return await _check_application_access(db, user_id, document.application_id)
+
+    # Project-scoped document - check project access (transitively checks app membership)
+    if document.project_id is not None:
+        return await _check_project_access(db, user_id, document.project_id)
+
+    return False
 
 
