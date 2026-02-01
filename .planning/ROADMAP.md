@@ -141,11 +141,11 @@ Plans:
   2. User can upload an image via button or drag-and-drop into the editor
   3. Images can be resized within the editor using drag handles
   4. Images show a skeleton/placeholder animation while loading and are stored in MinIO (referenced by URL)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 07-01: Image upload endpoint (MinIO) and TipTap image extension with paste/drop/upload
-- [ ] 07-02: Image resizing handles and loading placeholder animation
+- [ ] 07-01-PLAN.md — Backend image upload endpoint (MinIO) and TipTap image extension with paste/drop/upload toolbar button
+- [ ] 07-02-PLAN.md — Image resize handles (React NodeView) and loading placeholder animation
 
 ### Phase 8: Permissions
 **Goal**: Document access is enforced by role -- owners manage everything, editors create and edit, viewers read, personal notes are private
