@@ -184,7 +184,7 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 08-01-PLAN.md — DocumentPermissionService with scope-aware permission methods (can_read, can_edit, can_delete, can_create_in_scope, can_force_unlock)
+- [ ] 08-01-PLAN.md — DocumentPermissionService with scope-aware permission methods (can_read, can_edit, can_delete, can_create_in_scope)
 - [ ] 08-02-PLAN.md — Permission enforcement on all document, folder, and tag API endpoints (403 guards)
 - [ ] 08-03-PLAN.md — Frontend useDocumentPermissions hook and permission-aware sidebar/context-menu UI
 
@@ -236,6 +236,6 @@ Note: Phases 5, 6, 7, 9 all depend on Phase 4 and can potentially be parallelize
 | 5. Document Locking | 2/2 | Complete | 2026-02-01 |
 | 6. Document Tabs & Editor UI Integration | 0/3 | Planned | - |
 | 7. Images in Editor | 0/2 | Not started | - |
-| 8. Permissions | 0/3 | Not started | - |
+| 8. Permissions | 0/3 | Planned | - |
 | 9. Search, Templates & Export | 0/3 | Planned | - |
 | 10. Embedded Docs & @ Mentions | 0/2 | Not started | - |
