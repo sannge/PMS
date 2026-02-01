@@ -16,7 +16,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: Notes Screen Shell & Folder Navigation** - Sidebar with folder tree (cached via IndexedDB), search bar, tag list, scope filtering, and document content caching (completed 2026-01-31)
 - [x] **Phase 3: Rich Text Editor Core** - Full-featured TipTap editor with text formatting, headings, lists, tables, code blocks, and links (completed 2026-01-31)
 - [x] **Phase 4: Auto-Save & Content Pipeline** - Debounced auto-save with three-format storage (JSON, Markdown, plain text) and IndexedDB draft persistence for crash recovery (completed 2026-02-01)
-- [ ] **Phase 4.1: Document Creation Bug Fixes** (INSERTED) - Fix document creation flow bugs across all scopes: duplicate icons, 422/500 errors, scope picker dialog, error feedback
+- [x] **Phase 4.1: Document Creation Bug Fixes** (INSERTED) - Fix document creation flow bugs across all scopes: duplicate icons, 422/500 errors, scope picker dialog, error feedback (completed 2026-02-01)
 - [x] **Phase 5: Document Locking** - Lock-based concurrent editing with heartbeat, auto-expiry, and owner override (completed 2026-02-01)
 - [ ] **Phase 6: Document Tabs & Editor UI Integration** - Browser-style document tabs, metadata bar, title editing, and editor layout
 - [ ] **Phase 7: Images in Editor** - Image paste, upload, drag-and-drop, resizing, loading placeholders, and MinIO storage
@@ -113,8 +113,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 04.1-01-PLAN.md — Fix backend tags relationship (lazy=selectin), scope filter duplicate icons, install sonner toast
-- [ ] 04.1-02-PLAN.md — Scope picker dialog, personal scope resolution, create button loading/error states
+- [x] 04.1-01-PLAN.md — Fix backend tags relationship (lazy=selectin), scope filter duplicate icons, install sonner toast
+- [x] 04.1-02-PLAN.md — Scope picker dialog, personal scope resolution, create button loading/error states
 
 **Bugs addressed:**
 - Duplicate globe icons in scope-filter.tsx (ScopeTriggerContent renders icon + SelectValue re-renders selected item icon)
@@ -232,7 +232,7 @@ Note: Phases 5, 6, 7, 9 all depend on Phase 4 and can potentially be parallelize
 | 2. Notes Screen Shell & Folder Navigation | 3/3 | Complete | 2026-01-31 |
 | 3. Rich Text Editor Core | 4/4 | Complete | 2026-02-01 |
 | 4. Auto-Save & Content Pipeline | 4/4 | Complete | 2026-02-01 |
-| 4.1. Document Creation Bug Fixes | 0/2 | Not started | - |
+| 4.1. Document Creation Bug Fixes | 2/2 | Complete | 2026-02-01 |
 | 5. Document Locking | 2/2 | Complete | 2026-02-01 |
 | 6. Document Tabs & Editor UI Integration | 0/3 | Planned | - |
 | 7. Images in Editor | 0/2 | Not started | - |
