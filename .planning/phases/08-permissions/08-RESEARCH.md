@@ -1,6 +1,6 @@
 # Phase 8: Permissions - Research
 
-**Researched:** 2026-01-31
+**Researched:** 2026-02-01
 **Domain:** Role-based access control for document/folder CRUD, FastAPI dependency-based permission enforcement, frontend permission-aware UI
 **Confidence:** HIGH
 
@@ -10,9 +10,9 @@ Phase 8 adds document-level permission enforcement to an existing RBAC system. T
 
 The key insight from codebase analysis: **all the permission primitives already exist**. The `PermissionService` provides `get_user_application_role()`, `is_project_member()`, and `is_application_member()` methods. The tasks router already implements the exact `verify_project_access()` + `PermissionService.check_can_manage_tasks()` pattern this phase needs to replicate for documents. The work is primarily wiring existing permission checks into the currently-unprotected document/folder/tag endpoints, adding personal-scope isolation, and building a `DocumentPermissionService` that maps document scopes to permission checks.
 
-The current document, folder, and tag endpoints authenticate users (`get_current_user` dependency) but perform **zero authorization checks** -- any authenticated user can create, read, update, or delete any document regardless of scope. This is the gap Phase 8 closes.
+The current document, folder, and tag endpoints authenticate users (`get_current_user` dependency) but perform **zero authorization checks** -- any authenticated user can create, read, update, or delete any document regardless of scope. This is the gap Phase 8 closes. The one exception is the `document_locks.py` router, which already enforces owner-only access for force-take (PERM-02 is already partially implemented there).
 
-**Primary recommendation:** Create a `DocumentPermissionService` class in `app/services/document_permission_service.py` that wraps the existing `PermissionService` with document-scope-aware methods (`can_read_document`, `can_edit_document`, `can_delete_document`, `can_create_in_scope`). Apply these checks as FastAPI dependency-style guards on every document, folder, and tag endpoint. On the frontend, expose a `useDocumentPermissions` hook that derives `canEdit`/`canCreate`/`canDelete` from the already-fetched `user_role` on the application response.
+**Primary recommendation:** Create a `DocumentPermissionService` class in `app/services/document_permission_service.py` that wraps the existing `PermissionService` with document-scope-aware methods (`can_read_document`, `can_edit_document`, `can_delete_document`, `can_create_in_scope`). Apply these checks as inline guards on every document, folder, and tag endpoint. On the frontend, expose a `useDocumentPermissions` hook that derives `canEdit`/`canCreate`/`canDelete` from the already-fetched `user_role` on the application response.
 
 ## Standard Stack
 
@@ -56,7 +56,8 @@ fastapi-backend/app/
 ├── routers/
 │   ├── documents.py                       # MODIFY -- Add permission guards to all endpoints
 │   ├── document_folders.py                # MODIFY -- Add permission guards to all endpoints
-│   └── document_tags.py                   # MODIFY -- Add permission guards to all endpoints
+│   ├── document_tags.py                   # MODIFY -- Add permission guards to all endpoints
+│   └── document_locks.py                  # VERIFY -- force-take already has owner check (PERM-02)
 ├── schemas/
 │   └── document.py                        # MODIFY -- Add can_edit field to DocumentResponse
 
@@ -322,6 +323,7 @@ function useDocumentPermissions(
 | Project-to-application resolution | Manual join query | `PermissionService.get_project_with_application()` | Already uses `selectinload(Project.application)` for efficient eager loading |
 | Project membership check | EXISTS query | `PermissionService.is_project_member()` | Already uses optimized EXISTS pattern |
 | Scope-to-FK mapping | Manual if/elif chains | `document_service.get_scope_filter()` and `set_scope_fks()` | Already handles all three scopes consistently |
+| Force-take lock permission | New endpoint or logic | Existing `document_locks.py:force_take_lock()` | Already checks `role == "owner"` on line 207; PERM-02 is implemented there |
 
 **Key insight:** The permission infrastructure is 90% built. This phase wires it into the document endpoints, not builds it from scratch.
 
@@ -355,21 +357,47 @@ function useDocumentPermissions(
 **How to avoid:** Apply the same `can_create_in_scope()` and `can_edit_in_scope()` checks to folder and tag endpoints. Document, folder, and tag endpoints all have the same scope FK pattern.
 **Warning signs:** Viewers able to create folders; editors able to delete tags in applications they don't own.
 
-### Pitfall 5: Force-Unlock Without Locking Phase
+### Pitfall 5: Missing the Content Save Endpoint
 
-**What goes wrong:** Attempting to implement PERM-02 (force-unlock) before Phase 5 (Document Locking) is built.
-**Why it happens:** PERM-02 is in this phase's requirements, but the locking system it depends on is in Phase 5.
-**How to avoid:** If Phase 5 is not yet implemented when Phase 8 is built, stub the force-unlock permission check method. The method should exist in `DocumentPermissionService` (checking `role == "owner"`) but the actual force-unlock endpoint is in Phase 5. If Phase 5 IS already built, integrate the permission check into the existing lock force-take endpoint.
-**Warning signs:** Building a lock system inside the permissions phase; or skipping PERM-02 entirely.
+**What goes wrong:** The `PUT /documents/{document_id}/content` (auto-save) endpoint is left unguarded while the metadata update endpoint `PUT /documents/{document_id}` is guarded.
+**Why it happens:** Developers guard the explicit update endpoint but forget there is a separate content-save endpoint (`save_content` at line 287 of documents.py).
+**How to avoid:** Guard `save_content` with the same `can_edit_document` check used for `update_document`. Both are edit operations.
+**Warning signs:** A viewer or unauthorized user can overwrite document content through the auto-save endpoint.
 
 ### Pitfall 6: Project-Scoped Document Editor Gate Missing
 
 **What goes wrong:** For project-scoped documents, editors without ProjectMember status can edit documents even though they can't manage tasks in that project.
 **Why it happens:** The task permission model requires ProjectMember gate for editors, but the document model might skip this check since documents feel "read/write" not "manage."
-**How to avoid:** Decide explicitly whether the ProjectMember gate applies to documents. The existing `check_can_manage_tasks()` requires it for editors. The same pattern should apply to document editing in project scope for consistency. The research code examples above include this check.
+**How to avoid:** Apply the same ProjectMember gate for consistency. If an editor can't create tasks in a project, they shouldn't be able to manage documents either. The research code examples above include this check.
 **Warning signs:** An editor who can't create tasks in a project CAN edit documents in that project.
 
+### Pitfall 7: Lock Router Already Has PERM-02
+
+**What goes wrong:** A developer implements force-unlock permission checking a second time, either in the DocumentPermissionService or in a new endpoint, duplicating the check that already exists in `document_locks.py` lines 180-238.
+**Why it happens:** The lock router (`app/routers/document_locks.py`) was built during Phase 5 and already checks `PermissionService.get_user_application_role()` for force-take. It also correctly rejects force-take on personal documents.
+**How to avoid:** For PERM-02, verify the existing implementation in `document_locks.py` is correct rather than building a new one. The `DocumentPermissionService.can_force_unlock()` method should exist for consistency but the endpoint already works. If the service method is created, refactor the inline check in `document_locks.py` to use it.
+**Warning signs:** Two different code paths for force-unlock permission checks.
+
 ## Code Examples
+
+### Verified: Existing Force-Take Permission Check (PERM-02 already implemented)
+
+```python
+# Source: app/routers/document_locks.py lines 180-238
+@router.post("/{document_id}/lock/force-take", ...)
+async def force_take_lock(document_id, current_user, db, lock_service):
+    # Fetches document, rejects personal docs, checks owner role
+    document = ...  # fetched by ID
+    if document.application_id is None:
+        raise HTTPException(403, "Cannot force-take personal documents")
+    perm_service = PermissionService(db)
+    role = await perm_service.get_user_application_role(
+        current_user.id, document.application_id
+    )
+    if role != "owner":
+        raise HTTPException(403, "Only application owners can force-take locks")
+    # ... proceeds with force-take
+```
 
 ### Verified: Existing Permission Check Pattern (tasks.py)
 
@@ -415,6 +443,21 @@ async def verify_project_access(
     return project
 ```
 
+### Verified: Frontend Lock Hook Already Accepts userRole
+
+```typescript
+// Source: electron-app/src/renderer/hooks/use-document-lock.ts lines 40-46
+export interface UseDocumentLockOptions {
+  documentId: string | null
+  userId: string
+  userName: string
+  userRole: string | null // 'owner' | 'editor' | 'viewer' | null
+  onBeforeRelease?: () => Promise<void>
+}
+// Line 142: canForceTake derived from userRole
+const canForceTake = isLockedByOther && userRole === 'owner'
+```
+
 ### Verified: Application Role in Frontend (applications/[id].tsx)
 
 ```typescript
@@ -451,6 +494,51 @@ def get_scope_filter(model: Any, scope: str, scope_id: UUID) -> Any:
         return model.user_id == scope_id
 ```
 
+## Endpoints Requiring Permission Guards
+
+Complete list of all endpoints that need guards (for planner reference):
+
+### documents.py (10 endpoints)
+
+| Endpoint | Current Auth | Needed Guard | Method |
+|----------|-------------|--------------|--------|
+| `GET /documents/trash` | `get_current_user` | None -- already filters by `created_by == current_user.id` | N/A |
+| `GET /documents` | `get_current_user` | `get_scope_filter_for_list()` | PERM-06 |
+| `POST /documents` | `get_current_user` | `can_create_in_scope()` | PERM-01, PERM-03 |
+| `GET /documents/{id}` | `get_current_user` | `can_read_document()` | PERM-04, PERM-05 |
+| `PUT /documents/{id}` | `get_current_user` | `can_edit_document()` | PERM-01, PERM-03 |
+| `PUT /documents/{id}/content` | `get_current_user` | `can_edit_document()` | PERM-01, PERM-03 |
+| `DELETE /documents/{id}` | `get_current_user` | `can_delete_document()` | PERM-01 |
+| `POST /documents/{id}/restore` | `get_current_user` | `can_edit_document()` | PERM-01, PERM-03 |
+| `DELETE /documents/{id}/permanent` | `get_current_user` | `can_delete_document()` | PERM-01 |
+| `POST /documents/{id}/tags` | `get_current_user` | `can_edit_document()` | PERM-01, PERM-03 |
+| `DELETE /documents/{id}/tags/{tag_id}` | `get_current_user` | `can_edit_document()` | PERM-01, PERM-03 |
+
+### document_folders.py (4 endpoints)
+
+| Endpoint | Current Auth | Needed Guard | Method |
+|----------|-------------|--------------|--------|
+| `GET /document-folders/tree` | `get_current_user` | `get_scope_filter_for_list()` | PERM-06 |
+| `POST /document-folders` | `get_current_user` | `can_create_in_scope()` | PERM-01, PERM-03 |
+| `PUT /document-folders/{id}` | `get_current_user` | `can_create_in_scope()` (edit-level) | PERM-01, PERM-03 |
+| `DELETE /document-folders/{id}` | `get_current_user` | owner-only for app scope | PERM-01 |
+
+### document_tags.py (4 endpoints)
+
+| Endpoint | Current Auth | Needed Guard | Method |
+|----------|-------------|--------------|--------|
+| `GET /document-tags` | `get_current_user` | `get_scope_filter_for_list()` | PERM-06 |
+| `POST /document-tags` | `get_current_user` | `can_create_in_scope()` | PERM-01, PERM-03 |
+| `PUT /document-tags/{id}` | `get_current_user` | `can_create_in_scope()` | PERM-01, PERM-03 |
+| `DELETE /document-tags/{id}` | `get_current_user` | owner-only for app scope | PERM-01 |
+
+### document_locks.py (already guarded)
+
+| Endpoint | Current Auth | Status |
+|----------|-------------|--------|
+| `POST /{id}/lock/force-take` | `get_current_user` + owner check | DONE (PERM-02) |
+| Other lock endpoints | `get_current_user` | No additional guard needed -- lock acquire/release are self-scoped |
+
 ## State of the Art
 
 | Old Approach | Current Approach | When Changed | Impact |
@@ -474,38 +562,37 @@ def get_scope_filter(model: Any, scope: str, scope_id: UUID) -> Any:
    - What's unclear: Whether editors can delete their own documents or only owners can delete.
    - Recommendation: Only application owners can delete application-scoped documents (soft delete). Editors can create and edit but not delete. For personal documents, the creator (who is the sole owner) can delete. This matches the principle of least privilege and prevents data loss.
 
-3. **Should PERM-02 (force-unlock) be implemented now or deferred to Phase 5?**
-   - What we know: Phase 5 (Document Locking) may or may not be implemented when Phase 8 is built. PERM-02 requires a locking mechanism to exist.
-   - What's unclear: Build order -- will Phase 5 be complete before Phase 8?
-   - Recommendation: Create the `can_force_unlock()` permission check method (checks `role == "owner"`) in Phase 8. If the locking endpoint already exists (Phase 5 complete), wire it in. If not, the method exists ready for Phase 5 to consume. This satisfies PERM-02 from the permission side regardless of lock implementation status.
-
-4. **Should the trash endpoint (GET /documents/trash) show all trashed docs to owners?**
+3. **Should the trash endpoint (GET /documents/trash) show all trashed docs to owners?**
    - What we know: Currently trash shows only `created_by == current_user.id`. Owners should be able to manage all documents per PERM-01.
    - What's unclear: Whether owners need to see/restore other users' trashed documents.
    - Recommendation: Keep trash as personal (created_by filter). Owners can undelete via direct API if needed. The trash view is a personal convenience feature, not an admin tool.
+
+4. **Should lock acquire/release endpoints check document edit permissions?**
+   - What we know: Currently any authenticated user can acquire a lock on any document. The lock is a Redis key, not database-enforced.
+   - What's unclear: Whether acquiring a lock should require edit permission (it would be useless to lock a document you can't edit).
+   - Recommendation: Add `can_edit_document` check to the acquire-lock endpoint. This prevents viewers from locking documents. The force-take endpoint already has an owner check. The release and heartbeat endpoints are fine as-is (they're self-scoped to the lock holder).
 
 ## Sources
 
 ### Primary (HIGH confidence)
 - `app/services/permission_service.py` -- Full PermissionService implementation (530 lines, 10 methods)
 - `app/routers/tasks.py` -- Verified permission enforcement pattern (verify_project_access, lines 107-179)
-- `app/routers/documents.py` -- Current unprotected document endpoints (494 lines, 0 permission checks)
+- `app/routers/documents.py` -- Current unprotected document endpoints (522 lines, 0 permission checks on CRUD)
 - `app/routers/document_folders.py` -- Current unprotected folder endpoints (245 lines, 0 permission checks)
 - `app/routers/document_tags.py` -- Current unprotected tag endpoints (157 lines, 0 permission checks)
+- `app/routers/document_locks.py` -- Lock endpoints with existing force-take owner check (239 lines)
 - `app/models/document.py` -- Document model with scope FKs and CHECK constraint
 - `app/models/document_folder.py` -- Folder model with same scope FK pattern
 - `app/models/application_member.py` -- Role field: "owner", "editor", "viewer"
 - `app/models/project_member.py` -- Role field: "admin", "member"
-- `app/services/auth_service.py` -- `get_current_user` dependency pattern
 - `app/services/document_service.py` -- Scope validation and filter helpers
-- `app/websocket/room_auth.py` -- Room access pattern (application/project membership checks)
-- `electron-app/src/renderer/pages/applications/[id].tsx` -- Frontend role-based UI pattern
-- `electron-app/src/renderer/pages/projects/[id].tsx` -- Frontend ProjectMember gate pattern
+- `electron-app/src/renderer/hooks/use-document-lock.ts` -- Frontend lock hook with userRole and canForceTake
+- `electron-app/src/renderer/hooks/use-documents.ts` -- Frontend document CRUD hooks (no permission awareness yet)
+- `electron-app/src/renderer/contexts/knowledge-base-context.tsx` -- UI-only context with scope selection
 
 ### Secondary (MEDIUM confidence)
 - `.planning/STATE.md` -- Confirmed decisions: lock-based editing, no Zustand, materialized paths
 - `.planning/ROADMAP.md` -- Phase 8 requirements and plan structure (08-01, 08-02, 08-03)
-- `.planning/phases/05-document-locking/05-RESEARCH.md` -- Locking architecture for PERM-02 context
 
 ### Tertiary (LOW confidence)
 - None -- all findings are from direct codebase analysis
@@ -516,6 +603,7 @@ def get_scope_filter(model: Any, scope: str, scope_id: UUID) -> Any:
 - Standard stack: HIGH -- All libraries already in use; no new dependencies
 - Architecture: HIGH -- Pattern directly replicates existing PermissionService + tasks.py enforcement
 - Pitfalls: HIGH -- Derived from actual codebase analysis of scope model and existing permission gaps
+- Endpoint inventory: HIGH -- Every endpoint verified by reading the router source files
 
-**Research date:** 2026-01-31
+**Research date:** 2026-02-01
 **Valid until:** 2026-03-01 (stable -- no external dependencies, all findings from codebase)
