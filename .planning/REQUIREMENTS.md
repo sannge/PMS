@@ -42,15 +42,15 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Auto-Save
 
-- [ ] **SAVE-01**: Auto-save after 10 seconds of typing inactivity
-- [ ] **SAVE-02**: Save on navigate away or app close
-- [ ] **SAVE-03**: Status bar shows "Saving..." / "Saved Xs ago" / "Save failed" indicator
-- [ ] **SAVE-04**: Client-side dirty check -- skip save if content hasn't changed since last save
-- [ ] **SAVE-05**: Server generates Markdown and plain text from TipTap JSON on each save
+- [x] **SAVE-01**: Auto-save after 10 seconds of typing inactivity
+- [x] **SAVE-02**: Save on navigate away or app close
+- [x] **SAVE-03**: Status bar shows "Saving..." / "Saved Xs ago" / "Save failed" indicator
+- [x] **SAVE-04**: Client-side dirty check -- skip save if content hasn't changed since last save
+- [x] **SAVE-05**: Server generates Markdown and plain text from TipTap JSON on each save
 
 ### Local Caching (IndexedDB)
 
-- [ ] **CACHE-01**: Local draft persistence -- unsaved editor content auto-saved to IndexedDB so content survives crashes, navigation, and app restarts
+- [x] **CACHE-01**: Local draft persistence -- unsaved editor content auto-saved to IndexedDB so content survives crashes, navigation, and app restarts
 - [x] **CACHE-02**: Document content caching -- recently opened documents load instantly from IndexedDB via TanStack Query persistence layer (per-query-persister)
 - [x] **CACHE-03**: Folder tree caching -- sidebar folder tree renders immediately from IndexedDB cache, then refreshes from server in background
 
@@ -193,12 +193,12 @@ Which phases cover which requirements. Updated during roadmap creation.
 | EDIT-12 | Phase 7 | Pending |
 | EDIT-13 | Phase 7 | Pending |
 | EDIT-14 | Phase 3 | Complete |
-| SAVE-01 | Phase 4 | Pending |
-| SAVE-02 | Phase 4 | Pending |
-| SAVE-03 | Phase 4 | Pending |
-| SAVE-04 | Phase 4 | Pending |
-| SAVE-05 | Phase 4 | Pending |
-| CACHE-01 | Phase 4 | Pending |
+| SAVE-01 | Phase 4 | Complete |
+| SAVE-02 | Phase 4 | Complete |
+| SAVE-03 | Phase 4 | Complete |
+| SAVE-04 | Phase 4 | Complete |
+| SAVE-05 | Phase 4 | Complete |
+| CACHE-01 | Phase 4 | Complete |
 | CACHE-02 | Phase 2 | Pending |
 | CACHE-03 | Phase 2 | Pending |
 | LOCK-01 | Phase 5 | Pending |

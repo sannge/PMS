@@ -14,8 +14,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Migration & Data Foundation** - Remove old notes system, migrate Zustand stores to React Context + TanStack Query, and build new document schema with folders, tags, scopes, and soft delete (completed 2026-01-31)
 - [x] **Phase 2: Notes Screen Shell & Folder Navigation** - Sidebar with folder tree (cached via IndexedDB), search bar, tag list, scope filtering, and document content caching (completed 2026-01-31)
-- [ ] **Phase 3: Rich Text Editor Core** - Full-featured TipTap editor with text formatting, headings, lists, tables, code blocks, and links
-- [ ] **Phase 4: Auto-Save & Content Pipeline** - Debounced auto-save with three-format storage (JSON, Markdown, plain text) and IndexedDB draft persistence for crash recovery
+- [x] **Phase 3: Rich Text Editor Core** - Full-featured TipTap editor with text formatting, headings, lists, tables, code blocks, and links (completed 2026-01-31)
+- [x] **Phase 4: Auto-Save & Content Pipeline** - Debounced auto-save with three-format storage (JSON, Markdown, plain text) and IndexedDB draft persistence for crash recovery (completed 2026-02-01)
 - [ ] **Phase 5: Document Locking** - Lock-based concurrent editing with heartbeat, auto-expiry, and owner override
 - [ ] **Phase 6: Document Tabs & Editor UI Integration** - Browser-style document tabs, metadata bar, title editing, and editor layout
 - [ ] **Phase 7: Images in Editor** - Image paste, upload, drag-and-drop, resizing, loading placeholders, and MinIO storage
@@ -94,10 +94,10 @@ Plans:
 **Plans**: 4 plans
 
 Plans:
-- [ ] 04-01-PLAN.md — Auto-save PUT endpoint with optimistic concurrency and useAutoSave hook with 10s debounce and dirty tracking
-- [ ] 04-02-PLAN.md — IndexedDB draft persistence (draft-db store, useDraft hook with 2s auto-buffer, restore prompt on reopen)
-- [ ] 04-03-PLAN.md — Save on navigate away, Electron before-quit IPC coordination, and SaveStatus indicator component
-- [ ] 04-04-PLAN.md — TDD: Custom Python TipTap JSON to Markdown and plain text converter
+- [x] 04-01-PLAN.md — Auto-save PUT endpoint with optimistic concurrency and useAutoSave hook with 10s debounce and dirty tracking
+- [x] 04-02-PLAN.md — IndexedDB draft persistence (draft-db store, useDraft hook with 2s auto-buffer, restore prompt on reopen)
+- [x] 04-03-PLAN.md — Save on navigate away, Electron before-quit IPC coordination, and SaveStatus indicator component
+- [x] 04-04-PLAN.md — TDD: Custom Python TipTap JSON to Markdown and plain text converter
 
 ### Phase 5: Document Locking
 **Goal**: Only one user can edit a document at a time, with reliable lock management that prevents stuck locks
