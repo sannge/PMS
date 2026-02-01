@@ -227,11 +227,8 @@ class TestMarkdownMarks:
         result = tiptap_json_to_markdown(doc(paragraph(
             text("click me", [bold(), italic(), link("https://ex.com")]),
         )))
-        # Link wraps text, then bold wraps link, then italic wraps bold
-        # The order depends on mark processing; link applied first, then bold, then italic
-        assert "[click me](https://ex.com)" in result
-        assert "**" in result
-        assert "_" in result
+        # Marks applied in order: bold wraps text, italic wraps bold, link wraps all
+        assert result == "[_**click me**_](https://ex.com)\n\n"
 
 
 class TestMarkdownBulletList:
