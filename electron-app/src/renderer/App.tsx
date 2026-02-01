@@ -19,6 +19,7 @@ import { DashboardPage } from '@/pages/dashboard'
 import { AuthGate } from '@/components/protected-route'
 import { queryClient, initializeQueryPersistence, clearQueryCache } from '@/lib/query-client'
 import { AuthProvider, useAuthStore, NotificationUIProvider } from '@/contexts'
+import { Toaster } from 'sonner'
 
 // ============================================================================
 // Types
@@ -336,6 +337,7 @@ function App(): JSX.Element {
               <QueryClientInitializer>
                 <AuthRouter />
               </QueryClientInitializer>
+              <Toaster richColors />
             </ErrorBoundary>
           </ThemeProvider>
         </NotificationUIProvider>
