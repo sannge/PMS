@@ -4,10 +4,11 @@
  * Toolbar for the knowledge base DocumentEditor.
  * Plan 03-01: Basic text formatting (bold/italic/underline/strikethrough) + undo/redo
  * Plan 03-02: Heading dropdown, list buttons, code block, indent/outdent
- * Plans 03-03 through 03-04 add remaining toolbar sections.
+ * Plan 03-03: Table insert + contextual table controls
+ * Plan 03-04: Link dialog, font family/size dropdowns, text color/highlight pickers
  */
 
-import { useState } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import {
   Bold,
   Italic,
@@ -30,6 +31,10 @@ import {
   Plus,
   Minus,
   Trash2,
+  Link2,
+  Unlink,
+  Palette,
+  Highlighter,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
@@ -37,8 +42,16 @@ import {
   PopoverTrigger,
   PopoverContent,
 } from '@/components/ui/popover'
+import { Input } from '@/components/ui/input'
 import type { Editor } from '@tiptap/react'
 import type { EditorToolbarProps } from './editor-types'
+import {
+  FONT_FAMILIES,
+  FONT_SIZES,
+  COLORS,
+  HIGHLIGHT_COLORS,
+  DEFAULT_FONT_FAMILY,
+} from './editor-extensions'
 
 // ============================================================================
 // ToolbarButton Helper
@@ -183,6 +196,298 @@ function HeadingDropdown({ editor }: { editor: Editor }) {
             </button>
           )
         })}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+// ============================================================================
+// LinkPopover
+// ============================================================================
+
+function LinkPopover({ editor }: { editor: Editor }) {
+  const [open, setOpen] = useState(false)
+  const [url, setUrl] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const handleOpen = useCallback(
+    (isOpen: boolean) => {
+      if (isOpen) {
+        const currentHref = editor.getAttributes('link').href || ''
+        setUrl(currentHref)
+        setTimeout(() => inputRef.current?.focus(), 50)
+      }
+      setOpen(isOpen)
+    },
+    [editor]
+  )
+
+  const applyLink = useCallback(() => {
+    let href = url.trim()
+    if (href === '') {
+      editor.chain().focus().extendMarkRange('link').unsetLink().run()
+    } else {
+      if (!/^https?:\/\//i.test(href)) {
+        href = 'https://' + href
+      }
+      editor.chain().focus().extendMarkRange('link').setLink({ href }).run()
+    }
+    setOpen(false)
+    setUrl('')
+  }, [editor, url])
+
+  const removeLink = useCallback(() => {
+    editor.chain().focus().extendMarkRange('link').unsetLink().run()
+    setOpen(false)
+    setUrl('')
+  }, [editor])
+
+  return (
+    <Popover open={open} onOpenChange={handleOpen}>
+      <PopoverTrigger asChild>
+        <button
+          title="Insert/Edit link"
+          className={cn(
+            'p-1.5 rounded hover:bg-muted transition-colors',
+            editor.isActive('link') && 'bg-muted text-primary'
+          )}
+        >
+          <Link2 className="h-4 w-4" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-72 p-3">
+        <div className="flex flex-col gap-2">
+          <label className="text-xs font-medium text-muted-foreground">URL</label>
+          <Input
+            ref={inputRef}
+            type="url"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                applyLink()
+              } else if (e.key === 'Escape') {
+                setOpen(false)
+                setUrl('')
+              }
+            }}
+            placeholder="https://example.com"
+            className="text-sm"
+          />
+          <div className="flex items-center gap-2">
+            <button
+              onClick={applyLink}
+              className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+            >
+              Apply
+            </button>
+            {editor.isActive('link') && (
+              <button
+                onClick={removeLink}
+                className="flex items-center gap-1 rounded-md border border-input px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/10 transition-colors"
+              >
+                <Unlink className="h-3 w-3" />
+                Remove link
+              </button>
+            )}
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+// ============================================================================
+// FontFamilyDropdown
+// ============================================================================
+
+function FontFamilyDropdown({ editor }: { editor: Editor }) {
+  const [open, setOpen] = useState(false)
+
+  const currentFontFamily = editor.getAttributes('textStyle').fontFamily
+  const currentLabel = (() => {
+    const match = FONT_FAMILIES.find((f) => f.value === currentFontFamily)
+    return match ? match.label.replace(' (Default)', '') : 'Arial'
+  })()
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          title="Font family"
+          className="flex items-center gap-1 px-2 py-1.5 rounded hover:bg-muted transition-colors text-xs min-w-[55px]"
+        >
+          <span className="text-xs truncate">{currentLabel}</span>
+          <ChevronDown className="h-3 w-3 ml-auto opacity-60" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-auto p-2">
+        <div className="flex flex-col gap-1 max-h-48 overflow-y-auto">
+          {FONT_FAMILIES.map(({ label, value }) => {
+            const isActive =
+              currentFontFamily === value ||
+              (!currentFontFamily && value === DEFAULT_FONT_FAMILY)
+            return (
+              <button
+                key={value}
+                onClick={() => {
+                  editor.chain().focus().setFontFamily(value).run()
+                  setOpen(false)
+                }}
+                className={cn(
+                  'px-3 py-1.5 text-left rounded hover:bg-muted transition-colors',
+                  'text-sm whitespace-nowrap',
+                  isActive && 'bg-primary/10 text-primary font-medium'
+                )}
+                style={{ fontFamily: value }}
+              >
+                {label}
+              </button>
+            )
+          })}
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+// ============================================================================
+// FontSizeDropdown
+// ============================================================================
+
+function FontSizeDropdown({ editor }: { editor: Editor }) {
+  const [open, setOpen] = useState(false)
+
+  const currentFontSize = editor.getAttributes('textStyle').fontSize
+  const currentLabel = (() => {
+    const match = FONT_SIZES.find((f) => f.value === currentFontSize)
+    return match?.label || 'Normal'
+  })()
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          title="Font size"
+          className="flex items-center gap-1 px-2 py-1.5 rounded hover:bg-muted transition-colors text-xs min-w-[55px]"
+        >
+          <span className="text-xs truncate">{currentLabel}</span>
+          <ChevronDown className="h-3 w-3 ml-auto opacity-60" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-auto p-2">
+        <div className="flex flex-col gap-1">
+          {FONT_SIZES.map(({ label, value }) => {
+            const isActive =
+              currentFontSize === value ||
+              (!currentFontSize && value === '1rem')
+            return (
+              <button
+                key={value}
+                onClick={() => {
+                  editor.chain().focus().setMark('textStyle', { fontSize: value }).run()
+                  setOpen(false)
+                }}
+                className={cn(
+                  'px-3 py-1.5 text-left rounded hover:bg-muted transition-colors',
+                  'text-sm',
+                  isActive && 'bg-primary/10 text-primary font-medium'
+                )}
+                style={{ fontSize: value }}
+              >
+                {label}
+                {value === '1rem' && ' (Default)'}
+              </button>
+            )
+          })}
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+// ============================================================================
+// TextColorPicker
+// ============================================================================
+
+function TextColorPicker({ editor }: { editor: Editor }) {
+  const currentColor = editor.getAttributes('textStyle').color || '#000000'
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          className="flex flex-col items-center p-1.5 rounded hover:bg-muted transition-colors"
+          title="Text color"
+        >
+          <Palette className="h-4 w-4" />
+          <div
+            className="w-4 h-0.5 rounded-full mt-0.5"
+            style={{ backgroundColor: currentColor }}
+          />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto p-2">
+        <div className="grid grid-cols-6 gap-1">
+          {COLORS.map((color) => (
+            <button
+              key={color}
+              onClick={() => editor.chain().focus().setColor(color).run()}
+              className="w-6 h-6 rounded border border-border hover:scale-110 transition-transform"
+              style={{ backgroundColor: color }}
+              title={color}
+            />
+          ))}
+        </div>
+        <button
+          onClick={() => editor.chain().focus().unsetColor().run()}
+          className="mt-2 w-full text-xs text-center py-1 rounded hover:bg-muted text-muted-foreground transition-colors"
+        >
+          Reset color
+        </button>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+// ============================================================================
+// HighlightColorPicker
+// ============================================================================
+
+function HighlightColorPicker({ editor }: { editor: Editor }) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          className={cn(
+            'flex items-center p-1.5 rounded hover:bg-muted transition-colors',
+            editor.isActive('highlight') && 'bg-muted text-primary'
+          )}
+          title="Highlight color"
+        >
+          <Highlighter className="h-4 w-4" />
+          <ChevronDown className="h-3 w-3 opacity-60" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto p-2">
+        <div className="grid grid-cols-4 gap-1">
+          {HIGHLIGHT_COLORS.map((color) => (
+            <button
+              key={color}
+              onClick={() => editor.chain().focus().toggleHighlight({ color }).run()}
+              className="w-6 h-6 rounded border border-border hover:scale-110 transition-transform"
+              style={{ backgroundColor: color }}
+              title={color}
+            />
+          ))}
+        </div>
+        <button
+          onClick={() => editor.chain().focus().unsetHighlight().run()}
+          className="mt-2 w-full text-xs text-center py-1 rounded hover:bg-muted text-muted-foreground transition-colors"
+        >
+          Remove highlight
+        </button>
       </PopoverContent>
     </Popover>
   )
@@ -375,7 +680,26 @@ export function EditorToolbar({ editor }: EditorToolbarProps) {
         </>
       )}
 
-      {/* Link, Font, Color controls - Plan 03-04 */}
+      <ToolbarSeparator />
+
+      {/* Link Insert/Edit */}
+      <LinkPopover editor={editor} />
+
+      <ToolbarSeparator />
+
+      {/* Font Family Dropdown */}
+      <FontFamilyDropdown editor={editor} />
+
+      {/* Font Size Dropdown */}
+      <FontSizeDropdown editor={editor} />
+
+      <ToolbarSeparator />
+
+      {/* Text Color Picker */}
+      <TextColorPicker editor={editor} />
+
+      {/* Highlight Color Picker */}
+      <HighlightColorPicker editor={editor} />
     </div>
   )
 }
