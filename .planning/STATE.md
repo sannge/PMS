@@ -5,33 +5,34 @@
 See: .planning/PROJECT.md (updated 2026-01-31)
 
 **Core value:** Teams can create, organize, and find internal documentation without leaving their project management tool.
-**Current focus:** Phase 1 complete. Ready for Phase 2 - Knowledge Base UI Shell.
+**Current focus:** Phase 2 in progress - Notes Screen Shell & Folder Navigation.
 
 ## Current Position
 
-Phase: 1 of 10 (Migration & Data Foundation) -- COMPLETE
-Plan: 4 of 4 in current phase
-Status: Phase complete
-Last activity: 2026-01-31 -- Completed 01-04-PLAN.md (Document Tags & Trash)
+Phase: 2 of 10 (Notes Screen Shell & Folder Navigation)
+Plan: 1 of 3 in current phase
+Status: In progress
+Last activity: 2026-01-31 -- Completed 02-01-PLAN.md (Notes Screen Foundation)
 
-Progress: [████░░░░░░] ~10%
+Progress: [█████░░░░░] ~13%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 4
+- Total plans completed: 5
 - Average duration: ~9 min
-- Total execution time: ~0.6 hours
+- Total execution time: ~0.75 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01 | 4/4 | ~34 min | ~9 min |
+| 02 | 1/3 | ~11 min | ~11 min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (~12 min), 01-02 (~8 min), 01-03 (~7 min), 01-04 (~7 min)
-- Trend: stable at ~7-8 min
+- Last 5 plans: 01-02 (~8 min), 01-03 (~7 min), 01-04 (~7 min), 02-01 (~11 min)
+- Trend: stable at ~7-11 min
 
 *Updated after each plan completion*
 
@@ -54,6 +55,9 @@ Recent decisions affecting current work:
 - [01-03]: DocumentSnapshot table as empty placeholder for Phase 4+ version history
 - [01-04]: Tags scoped per application (shared across app + project docs) or per user (personal docs only)
 - [01-04]: Partial unique indexes for tag name uniqueness within scope
+- [02-01]: Backend folder endpoint uses PUT for rename+move combined -- hooks map to PUT not PATCH
+- [02-01]: Document mutations invalidate both document list and folder tree queries (folder document_count)
+- [02-01]: KnowledgeBaseContext is UI-only state (useReducer), data fetching via TanStack Query hooks
 
 ### Pending Todos
 
@@ -65,9 +69,10 @@ None yet.
 - [Research]: Electron-specific auto-save edge cases (force-quit, sleep/wake) need testing in Phase 4
 - [Research]: Permission cache invalidation latency (60s Redis TTL) may surprise users -- consider WebSocket push
 - ~~[Revision]: Zustand store migration scope -- auth-store and notification-ui-store are used across the app (not just knowledge base), so migration must not break existing features~~ RESOLVED in 01-02: all 27 files updated, zero store references remain
+- [02-01]: ESLint configuration missing for ESLint 9.x (pre-existing) -- lint script fails, typecheck used as primary verification
 
 ## Session Continuity
 
 Last session: 2026-01-31
-Stopped at: Completed 01-04-PLAN.md (Document Tags & Trash) -- Phase 1 complete
+Stopped at: Completed 02-01-PLAN.md (Notes Screen Foundation)
 Resume file: None
