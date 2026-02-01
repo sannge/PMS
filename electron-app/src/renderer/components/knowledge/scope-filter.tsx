@@ -20,7 +20,6 @@ import {
   SelectLabel,
   SelectSeparator,
   SelectTrigger,
-  SelectValue,
 } from '@/components/ui/select'
 import { useKnowledgeBase } from '@/contexts/knowledge-base-context'
 import { useApplications, useProjects, type Application } from '@/hooks/use-queries'
@@ -146,7 +145,7 @@ function ScopeTriggerContent({
     return (
       <span className="flex items-center gap-1.5">
         <User className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-        <SelectValue placeholder="My Notes" />
+        <span>My Notes</span>
       </span>
     )
   }
@@ -156,7 +155,7 @@ function ScopeTriggerContent({
     return (
       <span className="flex items-center gap-1.5">
         <Building2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-        <SelectValue placeholder={app?.name ?? 'Application'} />
+        <span>{app?.name ?? 'Application'}</span>
       </span>
     )
   }
@@ -165,7 +164,7 @@ function ScopeTriggerContent({
     return (
       <span className="flex items-center gap-1.5">
         <FolderKanban className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-        <SelectValue placeholder="Project" />
+        <span>Project</span>
       </span>
     )
   }
@@ -174,7 +173,7 @@ function ScopeTriggerContent({
   return (
     <span className="flex items-center gap-1.5">
       <Globe className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-      <SelectValue placeholder="All Documents" />
+      <span>All Documents</span>
     </span>
   )
 }

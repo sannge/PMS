@@ -203,7 +203,7 @@ class Document(Base):
         "DocumentTagAssignment",
         back_populates="document",
         cascade="all, delete-orphan",
-        lazy="dynamic",
+        lazy="selectin",
     )
 
     def __repr__(self) -> str:
