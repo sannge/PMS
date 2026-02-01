@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-31)
 
 **Core value:** Teams can create, organize, and find internal documentation without leaving their project management tool.
-**Current focus:** Phase 4.1 in progress (Document Creation Bug Fixes). Plan 01 complete, Plan 02 next.
+**Current focus:** Phase 4.1 complete (Document Creation Bug Fixes). Next: Phase 6.
 
 ## Current Position
 
-Phase: 4.1 of 10 (Document Creation Bug Fixes) -- IN PROGRESS
-Plan: 1 of 2 in phase 4.1
-Status: In progress
-Last activity: 2026-02-01 -- Completed 04.1-01-PLAN.md
+Phase: 4.1 of 10 (Document Creation Bug Fixes) -- COMPLETE
+Plan: 2 of 2 in phase 4.1
+Status: Phase complete
+Last activity: 2026-02-01 -- Completed 04.1-02-PLAN.md
 
-Progress: [██████████████████░░] ~58%
+Progress: [███████████████████░] ~61%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 18
+- Total plans completed: 19
 - Average duration: ~5 min
-- Total execution time: ~1.45 hours
+- Total execution time: ~1.5 hours
 
 **By Phase:**
 
@@ -32,10 +32,10 @@ Progress: [██████████████████░░] ~58%
 | 03 | 4/4 | ~14 min | ~4 min |
 | 04 | 4/4 | ~12 min | ~3 min |
 | 05 | 2/2 | ~10 min | ~5 min |
-| 04.1 | 1/2 | ~3 min | ~3 min |
+| 04.1 | 2/2 | ~6 min | ~3 min |
 
 **Recent Trend:**
-- Last 5 plans: 04-03 (~4 min), 05-01 (~4 min), 05-02 (~6 min), 04.1-01 (~3 min)
+- Last 5 plans: 05-01 (~4 min), 05-02 (~6 min), 04.1-01 (~3 min), 04.1-02 (~3 min)
 - Trend: stable at ~3-6 min
 
 *Updated after each plan completion*
@@ -90,6 +90,8 @@ Recent decisions affecting current work:
 - [05-02]: documentLock query key added to centralized queryKeys for cache management
 - [05-02]: Lock integration in DocumentEditor is gracefully optional (inactive without documentId)
 - [04.1-01]: Only Document.tags lazy changed to selectin; other models left as-is (only confirmed broken relationship)
+- [04.1-02]: ScopePickerDialog is pure selection UI -- returns scope to parent, does not call createDocument itself
+- [04.1-02]: ProjectItems in scope picker lazily loads projects per application (consistent with scope-filter pattern)
 
 ### Roadmap Evolution
 
@@ -110,5 +112,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-01
-Stopped at: Completed 04.1-01-PLAN.md. Next: 04.1-02 (scope validation, error toasts, empty state)
+Stopped at: Completed 04.1-02-PLAN.md. Phase 4.1 complete. Next: Phase 6.
 Resume file: None
