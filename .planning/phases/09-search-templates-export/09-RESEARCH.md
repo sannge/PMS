@@ -1,34 +1,20 @@
 # Phase 9: Search, Templates & Export - Research
 
-**Researched:** 2026-01-31
-**Domain:** PostgreSQL full-text search, document templates, Markdown export, SQLAlchemy FTS, Electron file I/O
+**Researched:** 2026-02-01
+**Domain:** PostgreSQL Full-Text Search, Document Templates, Markdown Export
 **Confidence:** HIGH
 
 ## Summary
 
-Phase 9 adds three capabilities to the knowledge base: full-text search across document titles and content, document templates (built-in and custom), and Markdown export. The codebase is well-positioned for all three features because Phase 4 already established the three-format content pipeline: `content_json` (editor), `content_markdown` (export-ready), and `content_plain` (search-ready plain text). This means search indexing and Markdown export already have their source data available on every document row.
+Phase 9 adds three capabilities: full-text search across documents, document templates (built-in + custom), and Markdown export. The codebase is well-prepared for all three features due to prior architectural decisions.
 
-**Critical finding: The project uses PostgreSQL (asyncpg), not MSSQL.** Despite CLAUDE.md listing "Microsoft SQL Server (via pyodbc)", the actual codebase uses `postgresql+asyncpg` connection strings, `sqlalchemy.dialects.postgresql.UUID`, and all Alembic migrations use PostgreSQL syntax (`gen_random_uuid()`, `now()`). The requirements.txt lists `asyncpg` and `psycopg2-binary`. The "PostgreSQL FTS" decision from the roadmap is therefore directly applicable -- use native `tsvector`/`tsquery` with GIN indexing.
+**Search (SRCH-01/02/03):** The Documents table already stores `content_plain` (populated by `content_converter.py` on every auto-save). PostgreSQL FTS via `tsvector`/`tsquery` is the decided approach (Meilisearch deferred). The implementation requires: (1) a new `search_vector` tsvector column on Documents with a GIN index, (2) a trigger to keep it updated from `title` + `content_plain`, and (3) a search endpoint using `websearch_to_tsquery` for user-friendly query parsing and `ts_headline` for result snippets.
 
-For templates, no external library is needed. Templates are TipTap JSON documents stored either as database rows (custom templates) or as static constants (built-in templates). The "new from template" flow clones `content_json` into a new document. For export, `content_markdown` is already populated by the content pipeline on every save, so the export endpoint simply returns the existing `content_markdown` field. The frontend uses the existing `showSaveDialog` IPC plus a new `writeFile` IPC handler.
+**Templates (TMPL-01/02/03):** Requires a new `DocumentTemplates` table storing TipTap JSON content. Built-in templates are seeded via migration. Custom templates are user-created from existing documents. The "new from template" flow inserts the template's `content_json` as the initial content of a new document. No new libraries needed.
 
-**Primary recommendation:** Add a `search_vector` generated `tsvector` column to the Documents table with a GIN index, create a `/documents/search` endpoint using `websearch_to_tsquery` + `ts_rank` + `ts_headline`, add a `DocumentTemplates` table for custom templates with static built-in template definitions, and expose `content_markdown` via a download endpoint that pairs with Electron's existing `showSaveDialog` IPC.
+**Export (EXPR-01):** The `content_markdown` field is already populated on every save by `content_converter.py`. The export endpoint simply returns this content. In Electron, the renderer calls `showSaveDialog` (already exposed) then writes via a new `fs:writeFile` IPC handler (needs to be added). No server-side streaming needed since content is already in the database.
 
-## Critical Database Clarification
-
-The project context (CLAUDE.md) states "Microsoft SQL Server (via pyodbc)" but the actual codebase uses PostgreSQL:
-
-| Evidence | Value |
-|----------|-------|
-| `fastapi-backend/app/config.py` database_url | `postgresql+asyncpg://...` |
-| `fastapi-backend/requirements.txt` | `asyncpg>=0.29.0`, `psycopg2-binary>=2.9.9` |
-| SQLAlchemy model UUID type | `sqlalchemy.dialects.postgresql.UUID` |
-| Alembic migrations | `gen_random_uuid()`, `now()` PostgreSQL functions |
-| `fastapi-backend/app/database.py` | `create_async_engine` with asyncpg |
-
-**Confidence: HIGH** -- All code artifacts consistently show PostgreSQL. The CLAUDE.md MSSQL reference is stale/incorrect.
-
-This means the roadmap decision "PostgreSQL FTS for v1 search" is directly implementable using native `tsvector`/`tsquery` -- no adapter needed.
+**Primary recommendation:** Use PostgreSQL trigger (not generated column) for the search vector so title can be weighted higher than body (`setweight('A')` for title, `setweight('B')` for content). Use `websearch_to_tsquery` for the search endpoint to handle user input gracefully. Export is entirely client-side after fetching the document.
 
 ## Standard Stack
 
@@ -36,139 +22,127 @@ This means the roadmap decision "PostgreSQL FTS for v1 search" is directly imple
 
 | Library | Version | Purpose | Why Standard |
 |---------|---------|---------|--------------|
-| PostgreSQL FTS | 16+ built-in | Full-text search (tsvector/tsquery/GIN) | Already the project's database; no external dependency |
-| SQLAlchemy `Computed` | 2.0+ | Generated tsvector column definition | Native SQLAlchemy pattern for PostgreSQL generated columns |
-| Alembic | 1.14+ | Migration for search_vector column and GIN index | Already in project for all schema changes |
-| Electron `dialog` | 30.x | Save dialog for Markdown export | Already in project, `showSaveDialog` IPC exists |
-| Node.js `fs/promises` | built-in | Write exported Markdown file to disk | No new dependency; used in main process IPC handler |
+| PostgreSQL FTS | Built-in (PG 14+) | tsvector/tsquery search | Decision locked: PG FTS for v1, Meilisearch deferred |
+| SQLAlchemy 2.0 | 2.x (existing) | ORM + FTS query construction | Already in stack; `func.to_tsvector`, `func.websearch_to_tsquery` |
+| Alembic | Existing | Migration for search vector column + trigger | Standard migration tool |
+| FastAPI Response | Built-in | StreamingResponse for export | Already available |
 
 ### Supporting
 
 | Library | Version | Purpose | When to Use |
 |---------|---------|---------|-------------|
-| `@tanstack/react-query` | ^5.90.20 | Search query hook with debounce | Already in project; search uses `useQuery` with `keepPreviousData` |
-| `lucide-react` | existing | Icons for search results, template picker, export button | Already in project |
-| `@radix-ui/react-dialog` | ^1.1.1 | Template picker dialog | Already in project |
+| `func` namespace (SQLAlchemy) | 2.x | `to_tsvector`, `websearch_to_tsquery`, `ts_headline`, `ts_rank` | All FTS queries |
+| Electron `dialog` | 30 (existing) | `showSaveDialog` for export file location | Export flow |
+| Electron `fs` (via IPC) | Node.js built-in | Write markdown file to disk | New IPC handler needed |
 
 ### Alternatives Considered
 
 | Instead of | Could Use | Tradeoff |
 |------------|-----------|----------|
-| PostgreSQL FTS | Meilisearch | Better fuzzy search & typo tolerance, but adds external service dependency; deferred to v1.x per roadmap |
-| PostgreSQL FTS | LIKE/ILIKE queries | Simpler but no stemming, ranking, or snippet generation; poor performance on large datasets |
-| Database templates | JSON files on disk | Simpler but no custom template persistence; can't share templates across users |
-| IPC writeFile | Backend download endpoint | Would work but adds unnecessary network round-trip; Markdown is already on the client (from document response) |
+| PG trigger for tsvector | Generated column | Generated columns cannot use `setweight()` for ranking title > body. Trigger is required for weighted search. |
+| `websearch_to_tsquery` | `plainto_tsquery` | `websearch_to_tsquery` handles quotes, OR, negation (user-friendly). `plainto_tsquery` converts all terms to AND. Use `websearch_to_tsquery`. |
+| Server-side export endpoint | Client-side export (read content_markdown, write to file) | Server endpoint is unnecessary: `content_markdown` is already in the document response. Client can use Electron's `showSaveDialog` + IPC `fs.writeFile` directly. Use **client-side approach**. |
+| Separate templates table | JSON file for built-in templates | Database table unifies built-in and custom templates with the same query pattern. Use **database table**. |
 
-**Installation:**
-```bash
-# Backend: No new packages needed
-# PostgreSQL FTS is built-in, SQLAlchemy Computed is built-in
+### Installation
 
-# Frontend: No new packages needed
-# fs/promises is Node.js built-in, dialog IPC already exists
-```
+No new npm packages or pip packages needed. All functionality uses existing stack.
 
 ## Architecture Patterns
 
 ### Recommended Project Structure
 
 ```
-fastapi-backend/app/
-  routers/
-    documents.py         # Add GET /documents/search endpoint
-    document_templates.py  # New: CRUD for templates
-  schemas/
-    document.py          # Add SearchResult, SearchResponse schemas
-    document_template.py # New: Template schemas
-  models/
-    document.py          # Add search_vector Computed column
-    document_template.py # New: DocumentTemplate model
-  services/
-    document_service.py  # Add search query builder
+fastapi-backend/
+├── app/
+│   ├── models/
+│   │   └── document_template.py       # NEW: DocumentTemplate model
+│   ├── schemas/
+│   │   ├── document.py                # MODIFY: add search result schema
+│   │   └── document_template.py       # NEW: template schemas
+│   ├── routers/
+│   │   ├── documents.py               # MODIFY: add search endpoint
+│   │   └── document_templates.py      # NEW: template CRUD router
+│   └── services/
+│       └── document_service.py        # MODIFY: add search query builder
+├── alembic/
+│   └── versions/
+│       ├── YYYYMMDD_add_search_vector.py       # NEW: tsvector + trigger + GIN
+│       └── YYYYMMDD_add_document_templates.py  # NEW: templates table + seed
 
-electron-app/src/
-  renderer/
-    hooks/
-      use-document-search.ts  # New: search query hook
-      use-documents.ts         # Add useExportDocument
-      use-document-templates.ts # New: template hooks
-    components/knowledge/
-      search-results.tsx        # New: search results panel
-      template-picker-dialog.tsx # New: template selection dialog
-      export-button.tsx         # New: export to Markdown button
-  main/ipc/
-    handlers.ts          # Add file:writeFile IPC handler
-  preload/
-    index.ts             # Add writeFile to ElectronAPI
+electron-app/
+├── src/
+│   ├── main/
+│   │   └── ipc/
+│   │       └── handlers.ts            # MODIFY: add fs:writeFile handler
+│   ├── preload/
+│   │   └── index.ts                   # MODIFY: expose writeFile API
+│   └── renderer/
+│       ├── components/knowledge/
+│       │   ├── search-bar.tsx          # MODIFY: connect to search API
+│       │   ├── search-results.tsx      # NEW: search results list
+│       │   ├── template-picker.tsx     # NEW: template selection dialog
+│       │   └── export-button.tsx       # NEW: export to markdown button
+│       └── hooks/
+│           ├── use-documents.ts        # MODIFY: add useSearchDocuments
+│           └── use-document-templates.ts # NEW: template query hooks
 ```
 
-### Pattern 1: PostgreSQL Full-Text Search with Generated Column
+### Pattern 1: PostgreSQL FTS with Weighted Trigger
 
-**What:** Store a precomputed `tsvector` as a generated column, indexed with GIN, and query using `websearch_to_tsquery` for user-friendly search input.
+**What:** A database trigger that maintains a `search_vector` tsvector column with weighted terms (title=A, content=B). A GIN index enables fast `@@` matching.
 
-**When to use:** When searching document titles and content with relevance ranking.
+**When to use:** When search needs to rank title matches higher than body matches.
 
-**Example (Alembic migration):**
-```python
-# Source: PostgreSQL docs + SQLAlchemy 2.0 docs
-from alembic import op
-import sqlalchemy as sa
+**Example:**
 
-def upgrade():
-    # Add generated tsvector column
-    op.add_column(
-        'Documents',
-        sa.Column(
-            'search_vector',
-            sa.Column('search_vector', sa.text("tsvector")),
-            sa.Computed(
-                "to_tsvector('english', coalesce(title, '') || ' ' || coalesce(content_plain, ''))",
-                persisted=True
-            ),
-        )
-    )
-    # Create GIN index for fast full-text search
-    op.create_index(
-        'ix_documents_search_vector',
-        'Documents',
-        ['search_vector'],
-        postgresql_using='gin',
-    )
+```sql
+-- Migration: Add search_vector column
+ALTER TABLE "Documents" ADD COLUMN search_vector tsvector;
+
+-- Migration: Create weighted trigger function
+CREATE OR REPLACE FUNCTION documents_search_vector_update() RETURNS trigger AS $$
+BEGIN
+  NEW.search_vector :=
+    setweight(to_tsvector('english', coalesce(NEW.title, '')), 'A') ||
+    setweight(to_tsvector('english', coalesce(NEW.content_plain, '')), 'B');
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER documents_search_vector_trigger
+  BEFORE INSERT OR UPDATE OF title, content_plain ON "Documents"
+  FOR EACH ROW
+  EXECUTE FUNCTION documents_search_vector_update();
+
+-- Migration: GIN index for fast search
+CREATE INDEX ix_documents_search_vector ON "Documents" USING GIN (search_vector);
+
+-- Migration: Backfill existing documents
+UPDATE "Documents" SET search_vector =
+  setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
+  setweight(to_tsvector('english', coalesce(content_plain, '')), 'B');
 ```
 
-**Example (SQLAlchemy model):**
+Source: [PostgreSQL FTS Documentation](https://www.postgresql.org/docs/current/textsearch-tables.html)
+
+### Pattern 2: Search Query with Ranking and Snippets
+
+**What:** A SQLAlchemy query that uses `websearch_to_tsquery` for parsing, `ts_rank` for relevance ordering, and `ts_headline` for snippets.
+
+**When to use:** The search endpoint.
+
+**Example:**
+
 ```python
-from sqlalchemy import Column, Computed, Index
-from sqlalchemy.dialects.postgresql import TSVECTOR
-
-class Document(Base):
-    # ... existing columns ...
-
-    search_vector = Column(
-        TSVECTOR,
-        Computed(
-            "to_tsvector('english', coalesce(title, '') || ' ' || coalesce(content_plain, ''))",
-            persisted=True,
-        ),
-        nullable=True,
-    )
-
-    __table_args__ = (
-        # ... existing args ...
-        Index('ix_documents_search_vector', 'search_vector', postgresql_using='gin'),
-    )
-```
-
-**Example (Search query):**
-```python
-from sqlalchemy import func, text
+from sqlalchemy import func, select, literal_column
 
 async def search_documents(
-    db: AsyncSession,
     query: str,
-    scope: str,
-    scope_id: UUID,
-    limit: int = 20,
+    scope: str | None,
+    scope_id: UUID | None,
+    limit: int,
+    db: AsyncSession,
 ) -> list[dict]:
     tsquery = func.websearch_to_tsquery('english', query)
 
@@ -185,32 +159,245 @@ async def search_documents(
                 'english',
                 Document.content_plain,
                 tsquery,
-                'MaxWords=35, MinWords=15, MaxFragments=2'
+                'StartSel=<mark>, StopSel=</mark>, MaxWords=40, MinWords=15'
             ).label('snippet'),
         )
         .where(Document.search_vector.op('@@')(tsquery))
         .where(Document.deleted_at.is_(None))
-        .where(get_scope_filter(Document, scope, scope_id))
-        .order_by(text('rank DESC'))
+        .order_by(literal_column('rank').desc())
         .limit(limit)
     )
 
+    # Optional scope filter
+    if scope and scope_id:
+        stmt = stmt.where(get_scope_filter(Document, scope, scope_id))
+
     result = await db.execute(stmt)
-    return result.mappings().all()
+    return [dict(row._mapping) for row in result.all()]
 ```
 
-### Pattern 2: Template Storage (Built-in + Custom)
+Source: [SQLAlchemy PostgreSQL Dialect](https://docs.sqlalchemy.org/en/20/dialects/postgresql.html), [PostgreSQL ts_headline](https://www.postgresql.org/docs/current/textsearch-controls.html)
 
-**What:** Built-in templates are static Python/TypeScript constants (TipTap JSON). Custom templates are stored in a `DocumentTemplates` table with the same scope model as documents.
+### Pattern 3: Template Data Model
 
-**When to use:** For "New from template" flow.
+**What:** A `DocumentTemplates` table that stores both built-in and custom templates with TipTap JSON content.
 
-**Example (Built-in template constant):**
+**When to use:** Template management.
+
+**Example:**
+
 ```python
-BUILT_IN_TEMPLATES = {
-    "meeting-notes": {
-        "name": "Meeting Notes",
-        "description": "Structured meeting notes with agenda, attendees, and action items",
+class DocumentTemplate(Base):
+    __tablename__ = "DocumentTemplates"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(255), nullable=False)
+    description = Column(String(500), nullable=True)
+    content_json = Column(Text, nullable=False)  # TipTap JSON
+    is_builtin = Column(Boolean, nullable=False, default=False)
+    # Scope: built-in templates have all NULLs; custom templates have owner scope
+    application_id = Column(UUID, ForeignKey("Applications.id", ondelete="CASCADE"), nullable=True)
+    user_id = Column(UUID, ForeignKey("Users.id", ondelete="CASCADE"), nullable=True)
+    created_by = Column(UUID, ForeignKey("Users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+```
+
+### Pattern 4: Client-Side Markdown Export (Electron)
+
+**What:** Export uses the already-available `content_markdown` field from the document response. The renderer shows a save dialog, then writes the file via a new IPC handler.
+
+**When to use:** EXPR-01 export flow.
+
+**Example (renderer):**
+
+```typescript
+async function exportAsMarkdown(document: Document): Promise<void> {
+  if (!document.content_markdown) return
+
+  const result = await window.electronAPI.showSaveDialog({
+    title: 'Export as Markdown',
+    defaultPath: `${sanitizeFilename(document.title)}.md`,
+    filters: [{ name: 'Markdown', extensions: ['md'] }],
+  })
+
+  if (result.canceled || !result.filePath) return
+
+  await window.electronAPI.writeFile(result.filePath, document.content_markdown)
+}
+```
+
+**Example (IPC handler in main process):**
+
+```typescript
+import { promises as fs } from 'fs'
+
+ipcMain.handle('fs:writeFile', async (_event, filePath: string, content: string) => {
+  await fs.writeFile(filePath, content, 'utf-8')
+  return { success: true }
+})
+```
+
+### Anti-Patterns to Avoid
+
+- **Calling `ts_headline` on all matching rows:** `ts_headline` is expensive. Always apply it only to the final paginated result set (LIMIT first, then headline). Use a subquery or CTE to first get matching IDs with rank, then join back for snippets.
+- **Using `to_tsquery` for user input:** `to_tsquery` requires strict syntax (AND, OR operators). User input will break it. Always use `websearch_to_tsquery` which handles natural language input.
+- **Generating markdown at export time:** The `content_markdown` field is already maintained on every save by `content_converter.py`. Never re-generate it at export time -- just read it.
+- **Server-side file download endpoint for Electron:** This is an Electron app, not a browser. The renderer can directly use `showSaveDialog` + `fs.writeFile` via IPC. No need for a server download endpoint.
+- **Separate search index table:** PostgreSQL's built-in tsvector column + GIN index on the Documents table is sufficient for v1 scale (tens of thousands of documents). A separate search index adds complexity with no benefit.
+
+## Don't Hand-Roll
+
+| Problem | Don't Build | Use Instead | Why |
+|---------|-------------|-------------|-----|
+| Full-text search ranking | Custom LIKE/ILIKE scoring | `ts_rank` + `ts_rank_cd` | Handles stemming, stop words, term proximity, weighted ranking |
+| Search query parsing | Custom query parser | `websearch_to_tsquery` | Handles quotes, OR, negation, AND automatically |
+| Search result snippets | String slicing around match | `ts_headline` | Handles multi-term highlighting, word-boundary-aware truncation |
+| Stemming/stop words | Custom word processing | PostgreSQL `english` config | Handles "running" -> "run", removes "the", "a", etc. |
+| File save dialog | Custom file path input | Electron `showSaveDialog` | Native OS file picker, handles permissions, existing file warnings |
+
+**Key insight:** PostgreSQL FTS is a complete search engine -- ranking, snippets, stemming, stop words, phrase matching are all built in. The only code to write is the SQL query and the API endpoint.
+
+## Common Pitfalls
+
+### Pitfall 1: Forgetting to Backfill Search Vectors
+
+**What goes wrong:** The trigger only fires on INSERT/UPDATE. Existing documents will have NULL search vectors and won't appear in search results.
+**Why it happens:** Developers add the trigger but forget the backfill step.
+**How to avoid:** Include a `UPDATE "Documents" SET search_vector = ...` in the Alembic migration, after creating the trigger.
+**Warning signs:** Search returns 0 results despite documents existing.
+
+### Pitfall 2: ts_headline Performance on Large Result Sets
+
+**What goes wrong:** `ts_headline` is called on every matching row, causing slow queries when many documents match.
+**Why it happens:** The headline function re-parses the document text for each row.
+**How to avoid:** Apply `ts_headline` only to the final paginated results. Use a CTE/subquery: first select IDs + rank with LIMIT, then join back for headline.
+**Warning signs:** Search queries taking >500ms.
+
+### Pitfall 3: Search Vector Not Updated on Auto-Save
+
+**What goes wrong:** The trigger fires on `UPDATE OF title, content_plain`, but `save_document_content()` in `document_service.py` updates `content_plain` via Python (SQLAlchemy attribute assignment). The trigger must detect the column change.
+**Why it happens:** The trigger uses `BEFORE UPDATE OF title, content_plain` which fires when those columns are included in the UPDATE SET clause -- SQLAlchemy's attribute assignment does generate these columns in the UPDATE statement.
+**How to avoid:** Verify the trigger fires by checking `search_vector` is populated after a save. The current `save_document_content()` sets `document.content_plain = tiptap_json_to_plain_text(content_dict)`, which will be included in the UPDATE statement and trigger the vector update.
+**Warning signs:** Search vectors stay stale after editing documents.
+
+### Pitfall 4: Template Content Becoming Stale
+
+**What goes wrong:** Built-in template content stored in migrations cannot be updated without a new migration.
+**Why it happens:** Templates are seeded in Alembic migrations which only run once.
+**How to avoid:** Seed built-in templates with a startup hook or use `INSERT ... ON CONFLICT (name, is_builtin) DO UPDATE` in the migration so re-running is idempotent. Alternatively, store built-in templates as Python constants and upsert on app startup.
+**Warning signs:** Built-in templates have outdated content after schema changes.
+
+### Pitfall 5: Missing writeFile IPC Handler for Electron Export
+
+**What goes wrong:** The renderer calls `window.electronAPI.writeFile()` but the IPC handler doesn't exist, causing an unhandled rejection.
+**Why it happens:** The preload already exposes `showSaveDialog` but there's no `fs:writeFile` handler registered.
+**How to avoid:** Add both the IPC handler in `handlers.ts` and the preload API exposure in `index.ts` before implementing the export UI.
+**Warning signs:** Export dialog opens but file is never written.
+
+## Code Examples
+
+### Search Endpoint (FastAPI)
+
+```python
+# Source: Verified pattern from PostgreSQL docs + SQLAlchemy dialect docs
+
+@router.get("/search", response_model=DocumentSearchResponse)
+async def search_documents(
+    q: str = Query(..., min_length=1, max_length=500, description="Search query"),
+    scope: Optional[Literal["application", "project", "personal"]] = Query(None),
+    scope_id: Optional[UUID] = Query(None),
+    limit: int = Query(20, ge=1, le=50),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> DocumentSearchResponse:
+    tsquery = func.websearch_to_tsquery('english', q)
+
+    # Subquery: find matching document IDs with rank (no ts_headline yet)
+    ranked = (
+        select(
+            Document.id,
+            func.ts_rank(Document.search_vector, tsquery).label('rank'),
+        )
+        .where(Document.search_vector.op('@@')(tsquery))
+        .where(Document.deleted_at.is_(None))
+    )
+
+    if scope and scope_id:
+        ranked = ranked.where(get_scope_filter(Document, scope, scope_id))
+
+    ranked = ranked.order_by(literal_column('rank').desc()).limit(limit)
+    ranked_cte = ranked.cte('ranked')
+
+    # Main query: join back for full fields + ts_headline (only on limited set)
+    stmt = (
+        select(
+            Document.id,
+            Document.title,
+            Document.application_id,
+            Document.project_id,
+            Document.user_id,
+            Document.updated_at,
+            ranked_cte.c.rank,
+            func.ts_headline(
+                'english',
+                func.coalesce(Document.content_plain, ''),
+                tsquery,
+                'StartSel=<mark>, StopSel=</mark>, MaxWords=40, MinWords=15'
+            ).label('snippet'),
+        )
+        .join(ranked_cte, Document.id == ranked_cte.c.id)
+        .order_by(ranked_cte.c.rank.desc())
+    )
+
+    result = await db.execute(stmt)
+    return DocumentSearchResponse(items=[...])
+```
+
+### Search Result Schema (Pydantic)
+
+```python
+class DocumentSearchResult(BaseModel):
+    id: UUID
+    title: str
+    application_id: Optional[UUID] = None
+    project_id: Optional[UUID] = None
+    user_id: Optional[UUID] = None
+    updated_at: datetime
+    rank: float
+    snippet: str  # HTML with <mark> tags
+
+class DocumentSearchResponse(BaseModel):
+    items: list[DocumentSearchResult]
+```
+
+### Template CRUD Schemas
+
+```python
+class DocumentTemplateCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = Field(None, max_length=500)
+    content_json: str  # TipTap JSON string
+
+class DocumentTemplateResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    name: str
+    description: Optional[str] = None
+    content_json: str
+    is_builtin: bool
+    application_id: Optional[UUID] = None
+    user_id: Optional[UUID] = None
+    created_by: Optional[UUID] = None
+    created_at: datetime
+```
+
+### Built-In Template Content Examples
+
+```python
+BUILTIN_TEMPLATES = {
+    "Meeting Notes": {
+        "description": "Structured meeting notes with attendees, agenda, and action items",
         "content_json": json.dumps({
             "type": "doc",
             "content": [
@@ -219,330 +406,108 @@ BUILT_IN_TEMPLATES = {
                 {"type": "paragraph", "content": [{"type": "text", "text": "[Date]"}]},
                 {"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": "Attendees"}]},
                 {"type": "bulletList", "content": [
-                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "[Name]"}]}]}
+                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "[Name]"}]}]},
                 ]},
                 {"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": "Agenda"}]},
-                {"type": "paragraph"},
+                {"type": "orderedList", "content": [
+                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "[Topic]"}]}]},
+                ]},
                 {"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": "Discussion"}]},
                 {"type": "paragraph"},
                 {"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": "Action Items"}]},
                 {"type": "taskList", "content": [
-                    {"type": "taskItem", "attrs": {"checked": False}, "content": [
-                        {"type": "paragraph", "content": [{"type": "text", "text": "[Action item]"}]}
-                    ]}
-                ]}
+                    {"type": "taskItem", "attrs": {"checked": False}, "content": [{"type": "paragraph", "content": [{"type": "text", "text": "[Action] - [Owner]"}]}]},
+                ]},
             ]
-        })
+        }),
     },
-    # ... other templates
+    # ... Design Doc, Decision Record, Project Brief, Sprint Retrospective
 }
 ```
 
-### Pattern 3: Markdown Export via Electron IPC
-
-**What:** The document's `content_markdown` field (populated by the content pipeline on every save) is written to disk via Electron's `dialog.showSaveDialog()` + `fs.writeFile()`.
-
-**When to use:** Export button in the editor toolbar or document context menu.
-
-**Example (Frontend):**
-```typescript
-async function exportAsMarkdown(document: Document) {
-  const result = await window.electronAPI.showSaveDialog({
-    title: 'Export as Markdown',
-    defaultPath: `${document.title.replace(/[<>:"/\\|?*]/g, '_')}.md`,
-    filters: [{ name: 'Markdown', extensions: ['md'] }],
-  })
-
-  if (result.canceled || !result.filePath) return
-
-  const markdown = document.content_markdown || ''
-  await window.electronAPI.writeFile(result.filePath, markdown)
-}
-```
-
-**Example (Main process IPC handler):**
-```typescript
-import { writeFile } from 'fs/promises'
-
-ipcMain.handle('file:writeFile', async (_event, filePath: string, content: string) => {
-  await writeFile(filePath, content, 'utf-8')
-})
-```
-
-### Anti-Patterns to Avoid
-
-- **Don't use LIKE '%query%' for search:** No stemming, no ranking, no snippets, O(n) table scan. Use `tsvector`/`tsquery` with GIN index.
-- **Don't call `to_tsvector()` in the WHERE clause without an index:** This forces a sequential scan. Use a stored generated column with a GIN index.
-- **Don't convert JSON to Markdown at export time:** The content pipeline already populates `content_markdown` on every save. Just read it.
-- **Don't store built-in templates in the database:** They should be static constants that ship with the app. Only custom templates go in the database.
-- **Don't use `to_tsquery()` for user input:** It will throw syntax errors on malformed input. Use `websearch_to_tsquery()` which never errors and supports intuitive web-search syntax.
-
-## Don't Hand-Roll
-
-| Problem | Don't Build | Use Instead | Why |
-|---------|-------------|-------------|-----|
-| Full-text search | Custom LIKE queries with string matching | PostgreSQL FTS (`tsvector`/`tsquery`/GIN) | Stemming, stop words, ranking, snippets, GIN index performance |
-| Search snippet generation | Custom string slicing around matched terms | `ts_headline()` | Handles word boundaries, multiple fragments, configurable length |
-| Query parsing | Custom tokenizer for user search input | `websearch_to_tsquery()` | Handles quotes, OR, negation, never throws syntax errors |
-| File save dialog | Custom modal with path input | `dialog.showSaveDialog()` | Native OS dialog, recent locations, file type filters |
-| Relevance ranking | Custom scoring algorithm | `ts_rank()` / `ts_rank_cd()` | Considers term frequency, word weights, document length normalization |
-
-**Key insight:** PostgreSQL FTS is a complete search engine with tokenization, stemming, ranking, and snippets. The only thing it lacks compared to Meilisearch is fuzzy/typo-tolerant matching, which is explicitly deferred to v1.x.
-
-## Common Pitfalls
-
-### Pitfall 1: tsvector Column Not Updating on content_plain Changes
-
-**What goes wrong:** The `search_vector` generated column depends on `title` and `content_plain`. If the content pipeline writes `content_plain` correctly but the generated column doesn't update, search returns stale results.
-**Why it happens:** PostgreSQL `GENERATED ALWAYS AS ... STORED` columns update automatically when their source columns change -- this is not actually an issue with generated columns. The real risk is if `content_plain` is empty/null because the content pipeline failed.
-**How to avoid:** Ensure the existing `save_document_content()` service always runs the content pipeline. Add a NOT NULL default of empty string for `content_plain` if needed.
-**Warning signs:** New documents appear in search but edits don't update search results.
-
-### Pitfall 2: GIN Index Not Used Due to Missing Configuration Name
-
-**What goes wrong:** Queries use `to_tsvector(text)` (1-argument) but the index was built with `to_tsvector('english', text)` (2-argument). PostgreSQL won't use the index.
-**Why it happens:** The 1-argument form uses `default_text_search_config` session variable, which may differ from the index.
-**How to avoid:** Always use the 2-argument form with explicit `'english'` configuration in both the generated column definition AND the query. Match them exactly.
-**Warning signs:** Search queries are slow despite GIN index existing.
-
-### Pitfall 3: Search on Empty/Short Queries
-
-**What goes wrong:** User types a single character or common stop word, `websearch_to_tsquery` returns empty result or matches everything.
-**Why it happens:** Stop words like "the", "a", "is" are removed by the text search configuration. Single characters are too short.
-**How to avoid:** Enforce minimum query length (2-3 characters) on the frontend. If `websearch_to_tsquery` returns an empty tsquery, fall back to a title ILIKE search or return empty results.
-**Warning signs:** Search returns 0 results for short common words.
-
-### Pitfall 4: Alembic Detecting False Changes on tsvector Index
-
-**What goes wrong:** Every `alembic revision --autogenerate` detects the GIN index as changed and tries to drop/recreate it.
-**Why it happens:** Known Alembic issue (#1390) with `to_tsvector()` expression indexes -- Alembic can't properly compare functional index expressions.
-**How to avoid:** Use a generated column + simple GIN index on the column (not an expression index). This avoids the autogenerate comparison issue.
-**Warning signs:** Alembic generates migration that drops and recreates the same index.
-
-### Pitfall 5: Export Filename Sanitization
-
-**What goes wrong:** Document title contains characters invalid for filenames (`< > : " / \ | ? *`), causing `writeFile` to fail.
-**Why it happens:** Users can name documents anything; filesystem has restrictions.
-**How to avoid:** Sanitize the title when generating the default filename: replace invalid chars with underscore.
-**Warning signs:** Export fails silently or throws OS-level error.
-
-### Pitfall 6: Template content_json Becomes Stale After Editor Schema Changes
-
-**What goes wrong:** Built-in templates use a specific TipTap JSON structure. If the editor extensions change (e.g., new required attributes), templates produce invalid content.
-**Why it happens:** Templates are static JSON snapshots, but the editor schema evolves.
-**How to avoid:** Keep templates simple (use basic nodes: headings, paragraphs, lists, task lists). Include `schema_version` with templates. Test that all templates render correctly in the editor.
-**Warning signs:** Creating a document from a template shows empty content or console errors.
-
-## Code Examples
-
-### Search Endpoint (FastAPI Router)
-
-```python
-# Source: PostgreSQL docs + project patterns
-@router.get("/search", response_model=SearchResponse)
-async def search_documents(
-    q: str = Query(..., min_length=2, max_length=200, description="Search query"),
-    scope: Literal["application", "project", "personal"] = Query(...),
-    scope_id: UUID = Query(...),
-    limit: int = Query(20, ge=1, le=50),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> SearchResponse:
-    tsquery = func.websearch_to_tsquery('english', q)
-
-    stmt = (
-        select(
-            Document.id,
-            Document.title,
-            Document.application_id,
-            Document.project_id,
-            Document.user_id,
-            Document.folder_id,
-            Document.updated_at,
-            func.ts_rank(Document.search_vector, tsquery).label('rank'),
-            func.ts_headline(
-                'english',
-                func.coalesce(Document.content_plain, ''),
-                tsquery,
-                'MaxWords=35, MinWords=15, MaxFragments=2, StartSel=<mark>, StopSel=</mark>'
-            ).label('snippet'),
-        )
-        .where(Document.search_vector.op('@@')(tsquery))
-        .where(Document.deleted_at.is_(None))
-        .where(get_scope_filter(Document, scope, scope_id))
-        .order_by(text('rank DESC'))
-        .limit(limit)
-    )
-
-    result = await db.execute(stmt)
-    rows = result.mappings().all()
-
-    return SearchResponse(
-        items=[SearchResultItem(**row) for row in rows],
-        query=q,
-        total=len(rows),
-    )
-```
-
-### Search Result Schema (Pydantic)
-
-```python
-class SearchResultItem(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: UUID
-    title: str
-    application_id: Optional[UUID] = None
-    project_id: Optional[UUID] = None
-    user_id: Optional[UUID] = None
-    folder_id: Optional[UUID] = None
-    updated_at: datetime
-    rank: float
-    snippet: str
-
-class SearchResponse(BaseModel):
-    items: list[SearchResultItem]
-    query: str
-    total: int
-```
-
-### DocumentTemplate Model
-
-```python
-class DocumentTemplate(Base):
-    __tablename__ = "DocumentTemplates"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(String(255), nullable=False)
-    description = Column(Text, nullable=True)
-    content_json = Column(Text, nullable=False)
-
-    # Scope (same pattern as Documents)
-    application_id = Column(UUID(as_uuid=True), ForeignKey("Applications.id", ondelete="CASCADE"), nullable=True)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("Users.id", ondelete="CASCADE"), nullable=True)
-
-    # Is this a built-in template? (built-ins are created on first access, not stored)
-    is_builtin = Column(Boolean, nullable=False, default=False)
-
-    created_by = Column(UUID(as_uuid=True), ForeignKey("Users.id", ondelete="SET NULL"), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-```
-
-### Frontend Search Hook
+### Electron Export Flow
 
 ```typescript
-// Source: project patterns (use-documents.ts)
-export function useDocumentSearch(
-  query: string,
-  scope: string,
-  scopeId: string | null,
-): UseQueryResult<SearchResponse, Error> {
-  const token = useAuthStore((s) => s.token)
-  const userId = useAuthStore((s) => s.user?.id ?? null)
+// Renderer: export-button.tsx
+import { useDocument } from '@/hooks/use-documents'
 
-  return useQuery({
-    queryKey: ['documentSearch', query, scope, scopeId],
-    queryFn: async () => {
-      const resolved = resolveScope(scope, scopeId, userId)
-      if (!resolved) return { items: [], query, total: 0 }
+function ExportButton({ documentId }: { documentId: string }) {
+  const { data: doc } = useDocument(documentId)
 
-      const params = new URLSearchParams({
-        q: query,
-        scope: resolved.apiScope,
-        scope_id: resolved.apiScopeId,
-      })
+  const handleExport = async () => {
+    if (!doc?.content_markdown) return
 
-      const response = await window.electronAPI.get<SearchResponse>(
-        `/api/documents/search?${params.toString()}`,
-        getAuthHeaders(token)
-      )
+    const result = await window.electronAPI.showSaveDialog({
+      title: 'Export as Markdown',
+      defaultPath: `${doc.title.replace(/[<>:"/\\|?*]/g, '_')}.md`,
+      filters: [{ name: 'Markdown', extensions: ['md'] }],
+    })
 
-      if (response.status !== 200) {
-        throw new Error(parseApiError(response.status, response.data))
-      }
-      return response.data
-    },
-    enabled: !!token && query.length >= 2 && (scope === 'personal' || !!scopeId),
-    staleTime: 10_000,
-    placeholderData: (prev) => prev, // keepPreviousData equivalent
-  })
-}
-```
-
-### Electron File Write IPC
-
-```typescript
-// Main process (handlers.ts)
-import { writeFile } from 'fs/promises'
-
-ipcMain.handle(
-  'file:writeFile',
-  async (_event, filePath: string, content: string) => {
-    await writeFile(filePath, content, 'utf-8')
+    if (!result.canceled && result.filePath) {
+      await window.electronAPI.writeFile(result.filePath, doc.content_markdown)
+    }
   }
-)
 
-// Preload (index.ts)
-writeFile: (filePath: string, content: string) =>
-  ipcRenderer.invoke('file:writeFile', filePath, content) as Promise<void>,
+  return <Button onClick={handleExport}>Export Markdown</Button>
+}
 ```
 
 ## State of the Art
 
 | Old Approach | Current Approach | When Changed | Impact |
 |--------------|------------------|--------------|--------|
-| LIKE '%query%' | PostgreSQL FTS (tsvector/tsquery) | PostgreSQL 8.3+ (2008) | Stemming, ranking, GIN index performance |
-| `to_tsquery()` for user input | `websearch_to_tsquery()` | PostgreSQL 11 (2018) | Never throws syntax errors, intuitive syntax |
-| Expression index on `to_tsvector()` | Generated `STORED` column + simple GIN index | PostgreSQL 12 (2019) | Avoids Alembic autogenerate false positives, cleaner model |
-| Manual tsvector trigger | `GENERATED ALWAYS AS ... STORED` | PostgreSQL 12 (2019) | No trigger maintenance, automatic updates |
+| LIKE/ILIKE queries | tsvector + GIN + `websearch_to_tsquery` | PostgreSQL 11+ (websearch_to_tsquery) | Order of magnitude faster; relevance ranking; stemming |
+| Expression index (`to_tsvector(title \|\| body)`) | Stored tsvector column + trigger | Always preferred for multi-column weighted search | Allows `setweight` for title > body ranking |
+| `to_tsquery` with manual parsing | `websearch_to_tsquery` | PostgreSQL 11 (2018) | Handles user input without syntax errors |
+| Server-side file download in Electron | Client-side IPC `showSaveDialog` + `fs.writeFile` | Electron best practice | Native OS file dialog, no temp files, no server round-trip |
 
 **Deprecated/outdated:**
-- `to_tsquery()` for raw user input: Use `websearch_to_tsquery()` instead (safer, more intuitive)
-- Trigger-based tsvector maintenance: Use generated columns instead (simpler, automatic)
-- GiST indexes for FTS: GIN is preferred for text search (faster reads, acceptable write overhead)
+- `plainto_tsquery`: Still works but `websearch_to_tsquery` is strictly better for user-facing search (supports quotes, negation).
+- Expression indexes for FTS: Still valid but stored columns are faster for queries (no re-computation at query time).
 
 ## Open Questions
 
-1. **Cross-scope search ("All" scope)**
-   - What we know: The search endpoint requires a scope filter. The sidebar has an "All" scope option.
-   - What's unclear: Should "All" scope search across all documents the user has access to? This requires permission-aware querying (user's applications + projects + personal).
-   - Recommendation: For v1, support "All" by running the search with a permission-based filter (user's application memberships + personal docs). This is a UNION or OR-based query that may need optimization later.
+1. **Search across all scopes vs. scoped search**
+   - What we know: The search bar in the sidebar currently sets `searchQuery` in KnowledgeBaseContext. The requirements say "search document titles and content" without specifying scope behavior.
+   - What's unclear: Should search respect the current scope filter, or search across all documents the user has access to?
+   - Recommendation: Support both via optional `scope`/`scope_id` query params on the search endpoint. If scope is provided, search within scope. If omitted, search all accessible documents. The UI can pass the current scope from KnowledgeBaseContext.
 
-2. **Search result highlighting in HTML**
-   - What we know: `ts_headline` returns text with `<mark>` tags for highlighting.
-   - What's unclear: Should the frontend render these as HTML (using `dangerouslySetInnerHTML`) or parse them into React elements?
-   - Recommendation: Use `dangerouslySetInnerHTML` since `ts_headline` output is server-controlled and not user-injectable. Alternatively, use custom delimiters (e.g., `||START||` / `||END||`) and split/render in React for safety.
+2. **Permission filtering on search results**
+   - What we know: Documents have scope-based permissions (application/project/personal). Users should only see documents they have access to.
+   - What's unclear: The current search bar is a client-side filter. The new server-side search needs permission filtering.
+   - Recommendation: For v1, the search endpoint filters by scope (the user already selected their scope). Personal docs filter by `user_id = current_user.id`. Application/project docs are accessible to all members (existing RBAC). The "all" scope case requires a UNION or OR across the user's accessible scopes -- this may need a list of the user's application/project memberships.
 
-3. **Template sharing scope**
+3. **Template scope: application-level or global?**
    - What we know: Built-in templates are global. Custom templates need a scope.
-   - What's unclear: Should custom templates be scoped per-application (shared with team) or per-user (private)?
-   - Recommendation: Scope custom templates per-application (team shared) with an optional user_id for private templates. This matches the document scope model.
+   - What's unclear: Should custom templates be per-application, per-user, or both?
+   - Recommendation: Custom templates are per-user (personal) or per-application. The `DocumentTemplates` table has optional `application_id` and `user_id` columns (same pattern as Documents). Built-in templates have all scope FKs null + `is_builtin=True`.
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- [PostgreSQL 18 FTS Documentation](https://www.postgresql.org/docs/current/textsearch-intro.html) - tsvector, tsquery, ts_rank, ts_headline, websearch_to_tsquery
-- [PostgreSQL 18 Tables and Indexes](https://www.postgresql.org/docs/current/textsearch-tables.html) - Generated columns, GIN indexes
-- [PostgreSQL 18 Text Search Controls](https://www.postgresql.org/docs/current/textsearch-controls.html) - ts_rank, ts_headline options, websearch_to_tsquery syntax
-- Codebase analysis - All Document model, router, schema, service, content_converter files verified
-- [SQLAlchemy 2.0 PostgreSQL dialect docs](https://docs.sqlalchemy.org/en/20/dialects/postgresql.html) - TSVECTOR type, match() operator, GIN index
+- [PostgreSQL 18 FTS Documentation](https://www.postgresql.org/docs/current/textsearch-tables.html) - tsvector columns, triggers, GIN indexes
+- [PostgreSQL ts_headline Documentation](https://www.postgresql.org/docs/current/textsearch-controls.html) - snippet generation, options
+- [PostgreSQL FTS Functions](https://www.postgresql.org/docs/current/functions-textsearch.html) - websearch_to_tsquery, ts_rank
+- [SQLAlchemy 2.0 PostgreSQL Dialect](https://docs.sqlalchemy.org/en/20/dialects/postgresql.html) - func namespace for FTS
+- [FastAPI Custom Responses](https://fastapi.tiangolo.com/advanced/custom-response/) - StreamingResponse
+- Codebase: `fastapi-backend/app/services/content_converter.py` - Existing JSON-to-Markdown and JSON-to-plain-text converters
+- Codebase: `fastapi-backend/app/services/document_service.py` - `save_document_content()` already populates `content_plain` and `content_markdown`
+- Codebase: `electron-app/src/preload/index.ts` - `showSaveDialog` already exposed, `writeFile` IPC handler needed
+- Codebase: `electron-app/src/main/ipc/handlers.ts` - IPC handler registration pattern
 
 ### Secondary (MEDIUM confidence)
-- [SQLAlchemy FTS with PostgreSQL (Amitosh)](https://amitosh.medium.com/full-text-search-fts-with-postgresql-and-sqlalchemy-edc436330a0c) - Computed column pattern, GIN index SQLAlchemy syntax
-- [Electron Dialog API](https://www.electronjs.org/docs/latest/api/dialog) - showSaveDialog options and return values
-- [Alembic GIN index issue #1390](https://github.com/sqlalchemy/alembic/issues/1390) - Known autogenerate false positive with expression indexes
+- [Optimizing FTS with tsvector columns and triggers](https://thoughtbot.com/blog/optimizing-full-text-search-with-postgres-tsvector-columns-and-triggers) - trigger vs generated column comparison
+- [Mastering FastAPI Responses](https://blog.amritpanta.com.np/2025/4/24/mastering-fastapi-responses-from-json-to-streaming-like-a-pro/) - StreamingResponse patterns
 
 ### Tertiary (LOW confidence)
-- None
+- None - all findings verified with official documentation or codebase inspection
 
 ## Metadata
 
 **Confidence breakdown:**
-- Standard stack: HIGH - PostgreSQL FTS is mature (15+ years), all libraries already in project
-- Architecture: HIGH - Patterns directly derived from PostgreSQL docs and verified against codebase
-- Pitfalls: HIGH - Well-documented PostgreSQL FTS gotchas confirmed with official docs
-- Templates: MEDIUM - Template data model is standard CRUD; built-in template JSON structure needs validation against actual editor
+- Standard stack: HIGH - PostgreSQL FTS is mature, well-documented, and the decision was locked
+- Architecture: HIGH - Patterns verified against official PostgreSQL docs and existing codebase patterns
+- Pitfalls: HIGH - Based on PostgreSQL documentation warnings and codebase inspection
 
-**Research date:** 2026-01-31
-**Valid until:** 2026-03-01 (stable domain, PostgreSQL FTS rarely changes)
+**Research date:** 2026-02-01
+**Valid until:** 2026-03-01 (stable technology, no fast-moving dependencies)
