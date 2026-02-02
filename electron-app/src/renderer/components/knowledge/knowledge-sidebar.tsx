@@ -21,6 +21,7 @@ import { useCreateFolder } from '@/hooks/use-document-folders'
 import { KnowledgeTabBar } from './knowledge-tab-bar'
 import { SearchBar } from './search-bar'
 import { FolderTree } from './folder-tree'
+import { ApplicationTree } from './application-tree'
 import { TagFilterList } from './tag-filter-list'
 
 export function KnowledgeSidebar(): JSX.Element {
@@ -128,7 +129,13 @@ export function KnowledgeSidebar(): JSX.Element {
 
           {/* Folder tree section */}
           <ScrollArea className="flex-1">
-            <FolderTree />
+            {activeTab === 'personal' ? (
+              <FolderTree />
+            ) : activeTab.startsWith('app:') ? (
+              <ApplicationTree applicationId={activeTab.slice(4)} />
+            ) : (
+              <FolderTree />
+            )}
           </ScrollArea>
 
           {/* Tag filter section */}
