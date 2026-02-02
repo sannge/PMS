@@ -20,6 +20,7 @@ import {
   useCreateTask,
   useUpdateTask,
   useDeleteTask,
+  useTaskStatuses,
   type Project,
   type ProjectUpdate,
   type Task,
@@ -47,6 +48,7 @@ import {
   Users,
   X,
   Shield,
+  FileText,
 } from 'lucide-react'
 import { SkeletonProjectDetail } from '@/components/ui/skeleton'
 import { ProjectMemberPanel } from '@/components/projects/ProjectMemberPanel'
@@ -54,6 +56,7 @@ import { ProjectStatusOverride } from '@/components/projects/ProjectStatusOverri
 import { PresenceAvatars } from '@/components/presence'
 import { usePresence, useTaskViewers } from '@/hooks'
 import { useProjectUpdatedSync, useProjectMemberSync } from '@/hooks/use-websocket'
+import { KnowledgePanel } from '@/components/knowledge/knowledge-panel'
 
 // ============================================================================
 // Types
@@ -437,6 +440,7 @@ export function ProjectDetailPage({
   } = useProject(projectId)
 
   const { data: application } = useApplication(applicationId)
+  const { data: taskStatuses = [] } = useTaskStatuses(projectId)
   const { data: projectMembers = [] } = useProjectMembers(projectId)
 
   // Mutation hooks
@@ -511,6 +515,9 @@ export function ProjectDetailPage({
   const clearError = useCallback(() => {
     setMutationError(null)
   }, [])
+
+  // View toggle state
+  const [activeView, setActiveView] = useState<'board' | 'knowledge'>('board')
 
   // Local state
   const [isEditing, setIsEditing] = useState(false)
@@ -854,20 +861,62 @@ export function ProjectDetailPage({
         </div>
       </div>
 
-      {/* Board / Tasks Section */}
+      {/* Board / Knowledge Tab Toggle */}
+      <div className="flex items-center gap-1 border-b border-border">
+        <button
+          onClick={() => setActiveView('board')}
+          className={cn(
+            'relative flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors',
+            activeView === 'board'
+              ? 'text-foreground'
+              : 'text-muted-foreground hover:text-foreground'
+          )}
+        >
+          <Columns className="h-3 w-3" />
+          Board
+          {activeView === 'board' && (
+            <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
+          )}
+        </button>
+        <button
+          onClick={() => setActiveView('knowledge')}
+          className={cn(
+            'relative flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors',
+            activeView === 'knowledge'
+              ? 'text-foreground'
+              : 'text-muted-foreground hover:text-foreground'
+          )}
+        >
+          <FileText className="h-3 w-3" />
+          Knowledge
+          {activeView === 'knowledge' && (
+            <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
+          )}
+        </button>
+      </div>
+
+      {/* Board / Knowledge Content */}
       <div className="flex-1 min-h-0">
-        <KanbanBoard
-          projectId={project.id}
-          projectKey={project.key}
-          onTaskClick={handleTaskClick}
-          onAddTask={canEditTasks ? handleAddTask : undefined}
-          canEdit={canEditTasks}
-          className="h-full"
-          enableRealtime
-          onRefresh={(refreshFn) => {
-            refreshBoardRef.current = refreshFn
-          }}
-        />
+        {activeView === 'board' ? (
+          <KanbanBoard
+            projectId={project.id}
+            projectKey={project.key}
+            onTaskClick={handleTaskClick}
+            onAddTask={canEditTasks ? handleAddTask : undefined}
+            canEdit={canEditTasks}
+            className="h-full"
+            enableRealtime
+            onRefresh={(refreshFn) => {
+              refreshBoardRef.current = refreshFn
+            }}
+          />
+        ) : (
+          <KnowledgePanel
+            scope="project"
+            scopeId={project.id}
+            className="h-full"
+          />
+        )}
       </div>
 
       {/* Edit Modal */}
@@ -962,7 +1011,7 @@ export function ProjectDetailPage({
                   override_by_user_id: project.override_by_user_id || null,
                   override_expires_at: project.override_expires_at || null,
                 }}
-                statuses={[]}
+                statuses={taskStatuses}
                 isOwner={userRole === 'owner'}
                 onOverrideSet={() => {
                   // Query will auto-refetch via cache invalidation
@@ -983,6 +1032,7 @@ export function ProjectDetailPage({
         <Modal onClose={handleCloseTaskForm}>
           <TaskForm
             initialStatus={initialTaskStatus}
+            taskStatuses={taskStatuses}
             assignees={assigneeOptions}
             isSubmitting={isCreatingTask}
             error={error || undefined}
