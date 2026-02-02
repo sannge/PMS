@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .document_tag import TagResponse
 
@@ -106,6 +106,14 @@ class DocumentResponse(BaseModel):
     updated_at: datetime
     tags: list[TagResponse] = []
 
+    @field_validator("tags", mode="before")
+    @classmethod
+    def extract_tags_from_assignments(cls, v: list) -> list:
+        """Map DocumentTagAssignment objects to their underlying DocumentTag."""
+        if v and hasattr(v[0], "tag"):
+            return [assignment.tag for assignment in v if assignment.tag is not None]
+        return v
+
 
 class DocumentListItem(BaseModel):
     """Schema for document list item (no content fields for performance)."""
@@ -133,3 +141,17 @@ class DocumentListResponse(BaseModel):
         None,
         description="Cursor for fetching the next page (null if no more items)",
     )
+
+
+class ApplicationWithDocs(BaseModel):
+    """An application that has at least one document."""
+
+    id: str
+    name: str
+
+
+class ScopesSummaryResponse(BaseModel):
+    """Summary of which scopes have documents for auto-managed tab visibility."""
+
+    has_personal_docs: bool
+    applications: list[ApplicationWithDocs]

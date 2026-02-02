@@ -11,12 +11,15 @@ from typing import Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select, or_, and_
+from sqlalchemy import select, or_, and_, exists, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
+from ..models.application import Application
+from ..models.application_member import ApplicationMember
 from ..models.document import Document
 from ..models.document_tag import DocumentTag, DocumentTagAssignment
+from ..models.project import Project
 from ..models.user import User
 from ..schemas.document import (
     DocumentContentUpdate,
@@ -25,6 +28,7 @@ from ..schemas.document import (
     DocumentListResponse,
     DocumentResponse,
     DocumentUpdate,
+    ScopesSummaryResponse,
 )
 from ..schemas.document_tag import TagAssignment, TagAssignmentResponse
 from ..services.auth_service import get_current_user
@@ -99,6 +103,59 @@ async def list_trash(
         next_cursor = encode_cursor(last.created_at, last.id)
 
     return DocumentListResponse(items=items, next_cursor=next_cursor)
+
+
+# ============================================================================
+# Scopes summary endpoint (MUST be before /{document_id})
+# ============================================================================
+
+
+@router.get("/scopes-summary", response_model=ScopesSummaryResponse)
+async def get_scopes_summary(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Return which scopes have documents for auto-managed tab visibility."""
+    # Personal docs exist?
+    personal_count = await db.scalar(
+        select(func.count(Document.id))
+        .where(Document.user_id == current_user.id)
+        .where(Document.deleted_at.is_(None))
+    )
+
+    # Applications with docs (app-scoped or project-scoped under app)
+    apps_with_docs = await db.execute(
+        select(Application.id, Application.name)
+        .join(ApplicationMember, ApplicationMember.application_id == Application.id)
+        .where(ApplicationMember.user_id == current_user.id)
+        .where(
+            exists(
+                select(Document.id)
+                .where(
+                    or_(
+                        and_(
+                            Document.application_id == Application.id,
+                            Document.project_id.is_(None),
+                        ),
+                        Document.project_id.in_(
+                            select(Project.id).where(
+                                Project.application_id == Application.id
+                            )
+                        ),
+                    )
+                )
+                .where(Document.deleted_at.is_(None))
+            )
+        )
+        .order_by(Application.created_at.asc())
+    )
+
+    return {
+        "has_personal_docs": (personal_count or 0) > 0,
+        "applications": [
+            {"id": str(r.id), "name": r.name} for r in apps_with_docs.all()
+        ],
+    }
 
 
 # ============================================================================
