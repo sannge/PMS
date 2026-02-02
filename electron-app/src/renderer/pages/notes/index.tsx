@@ -5,32 +5,17 @@
  * Wraps content in KnowledgeBaseProvider for shared UI state.
  *
  * Layout: sidebar on the left, main content area on the right.
- * The sidebar provides search, folder tree, scope filter, and tag filter.
+ * The sidebar provides tab bar, search, folder tree, and tag filter.
  * The content area will host the document editor (placeholder for now).
  */
 
 import { FileText } from 'lucide-react'
-import {
-  KnowledgeBaseProvider,
-  type ScopeType,
-} from '@/contexts/knowledge-base-context'
+import { KnowledgeBaseProvider } from '@/contexts/knowledge-base-context'
 import { KnowledgeSidebar } from '@/components/knowledge/knowledge-sidebar'
 
-interface NotesPageProps {
-  applicationId?: string | null
-}
-
-export function NotesPage({ applicationId }: NotesPageProps): JSX.Element {
-  const initialScope: ScopeType | undefined = applicationId
-    ? 'application'
-    : undefined
-  const initialScopeId = applicationId ?? undefined
-
+export function NotesPage(): JSX.Element {
   return (
-    <KnowledgeBaseProvider
-      initialScope={initialScope}
-      initialScopeId={initialScopeId}
-    >
+    <KnowledgeBaseProvider>
       <div className="flex h-full">
         <KnowledgeSidebar />
         <main className="flex-1 flex flex-col">

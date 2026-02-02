@@ -741,7 +741,7 @@ export function DashboardPage({
         )
       case 'notes':
         return (
-          <NotesPage applicationId={selectedApplicationId} />
+          <NotesPage />
         )
       case 'settings':
         return (
