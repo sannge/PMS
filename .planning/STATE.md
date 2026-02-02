@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-31)
 
 **Core value:** Teams can create, organize, and find internal documentation without leaving their project management tool.
-**Current focus:** Phase 4.1 complete (Document Creation Bug Fixes). Next: Phase 6.
+**Current focus:** Phase 02.1 in progress (OneNote-Style Knowledge Tree Redesign).
 
 ## Current Position
 
-Phase: 4.1 of 10 (Document Creation Bug Fixes) -- COMPLETE
-Plan: 2 of 2 in phase 4.1
-Status: Phase complete
-Last activity: 2026-02-01 -- Completed 04.1-02-PLAN.md
+Phase: 02.1 of 10 (OneNote-Style Knowledge Tree Redesign)
+Plan: 1 of 5 in phase 02.1
+Status: In progress
+Last activity: 2026-02-02 -- Completed 02.1-01-PLAN.md
 
-Progress: [███████████████████░] ~61%
+Progress: [████████████████████░] ~63%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 19
+- Total plans completed: 20
 - Average duration: ~5 min
-- Total execution time: ~1.5 hours
+- Total execution time: ~1.6 hours
 
 **By Phase:**
 
@@ -33,10 +33,11 @@ Progress: [███████████████████░] ~61%
 | 04 | 4/4 | ~12 min | ~3 min |
 | 05 | 2/2 | ~10 min | ~5 min |
 | 04.1 | 2/2 | ~6 min | ~3 min |
+| 02.1 | 1/5 | ~7 min | ~7 min |
 
 **Recent Trend:**
-- Last 5 plans: 05-01 (~4 min), 05-02 (~6 min), 04.1-01 (~3 min), 04.1-02 (~3 min)
-- Trend: stable at ~3-6 min
+- Last 5 plans: 05-02 (~6 min), 04.1-01 (~3 min), 04.1-02 (~3 min), 02.1-01 (~7 min)
+- Trend: stable at ~3-7 min
 
 *Updated after each plan completion*
 
@@ -92,6 +93,9 @@ Recent decisions affecting current work:
 - [04.1-01]: Only Document.tags lazy changed to selectin; other models left as-is (only confirmed broken relationship)
 - [04.1-02]: ScopePickerDialog is pure selection UI -- returns scope to parent, does not call createDocument itself
 - [04.1-02]: ProjectItems in scope picker lazily loads projects per application (consistent with scope-filter pattern)
+- [02.1-01]: Storage key prefix pattern (buildStorageKeys) for multi-instance KnowledgeBaseProvider isolation
+- [02.1-01]: Tab value encoding: 'personal' for personal scope, 'app:{id}' for application scope, derived via deriveFromTab()
+- [02.1-01]: Legacy 'all' scope removed from ScopeType; stored 'all' in localStorage migrates to 'personal'
 
 ### Roadmap Evolution
 
@@ -111,6 +115,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-02-01
-Stopped at: Completed 04.1-02-PLAN.md. Phase 4.1 complete. Next: Phase 6.
+Last session: 2026-02-02
+Stopped at: Completed 02.1-01-PLAN.md. Phase 02.1 in progress (1/5 plans). Next: 02.1-02-PLAN.md
 Resume file: None
