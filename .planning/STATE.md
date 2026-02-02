@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 02.1 of 10 (OneNote-Style Knowledge Tree Redesign)
-Plan: 3 of 5 in phase 02.1
+Plan: 4 of 5 in phase 02.1
 Status: In progress
-Last activity: 2026-02-02 -- Completed 02.1-03-PLAN.md
+Last activity: 2026-02-02 -- Completed 02.1-04-PLAN.md
 
-Progress: [██████████████████████░] ~69%
+Progress: [███████████████████████░] ~72%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 22
+- Total plans completed: 23
 - Average duration: ~5 min
-- Total execution time: ~1.7 hours
+- Total execution time: ~1.8 hours
 
 **By Phase:**
 
@@ -33,10 +33,10 @@ Progress: [██████████████████████░
 | 04 | 4/4 | ~12 min | ~3 min |
 | 05 | 2/2 | ~10 min | ~5 min |
 | 04.1 | 2/2 | ~6 min | ~3 min |
-| 02.1 | 3/5 | ~11 min | ~4 min |
+| 02.1 | 4/5 | ~15 min | ~4 min |
 
 **Recent Trend:**
-- Last 5 plans: 04.1-01 (~3 min), 04.1-02 (~3 min), 02.1-01 (~7 min), 02.1-03 (~2 min)
+- Last 5 plans: 04.1-02 (~3 min), 02.1-01 (~7 min), 02.1-03 (~2 min), 02.1-04 (~4 min)
 - Trend: stable at ~2-7 min
 
 *Updated after each plan completion*
@@ -99,6 +99,9 @@ Recent decisions affecting current work:
 - [02.1-02]: KnowledgeTabBar is controlled (value+onValueChange) with no TabsContent -- content managed by sidebar
 - [02.1-02]: Lock indicator uses span wrapper for tooltip (Lucide icons don't accept title prop)
 - [02.1-02]: Quick creation buttons resolve scope from activeTab encoding (personal or app:{id})
+- [02.1-04]: Project sections lazy-load by passing null scopeId when collapsed (useFolderTree disabled condition)
+- [02.1-04]: Rename/delete endpoints are ID-based, so app-scope mutations work for project items too
+- [02.1-04]: Global search toggle is local state with optional onGlobalToggle callback for parent
 
 ### Roadmap Evolution
 
@@ -119,5 +122,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-02
-Stopped at: Completed 02.1-03-PLAN.md. Phase 02.1 in progress (3/5 plans). Next: 02.1-04-PLAN.md
+Stopped at: Completed 02.1-04-PLAN.md. Phase 02.1 in progress (4/5 plans). Next: 02.1-05-PLAN.md
 Resume file: None
