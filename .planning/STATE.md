@@ -96,6 +96,9 @@ Recent decisions affecting current work:
 - [02.1-01]: Storage key prefix pattern (buildStorageKeys) for multi-instance KnowledgeBaseProvider isolation
 - [02.1-01]: Tab value encoding: 'personal' for personal scope, 'app:{id}' for application scope, derived via deriveFromTab()
 - [02.1-01]: Legacy 'all' scope removed from ScopeType; stored 'all' in localStorage migrates to 'personal'
+- [02.1-02]: KnowledgeTabBar is controlled (value+onValueChange) with no TabsContent -- content managed by sidebar
+- [02.1-02]: Lock indicator uses span wrapper for tooltip (Lucide icons don't accept title prop)
+- [02.1-02]: Quick creation buttons resolve scope from activeTab encoding (personal or app:{id})
 
 ### Roadmap Evolution
 
