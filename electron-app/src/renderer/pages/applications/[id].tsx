@@ -12,7 +12,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/contexts/auth-context'
-import { useWebSocket, MessageType, type MemberAddedEventData, type MemberRemovedEventData, type RoleUpdatedEventData, type WebSocketEventData } from '@/hooks/use-websocket'
+import { useWebSocket, MessageType, type MemberAddedEventData, type MemberRemovedEventData, type RoleUpdatedEventData } from '@/hooks/use-websocket'
 import { WebSocketClient } from '@/lib/websocket'
 import {
   useApplication,
@@ -37,7 +37,7 @@ import {
 } from '@/hooks/use-members'
 
 // Define the event data type for project status changed
-interface ProjectStatusChangedEventData extends WebSocketEventData {
+interface ProjectStatusChangedEventData {
   project_id?: string
   application_id?: string
   project?: Project
@@ -67,9 +67,11 @@ import {
   LayoutGrid,
   Columns,
   Archive,
+  FileText,
 } from 'lucide-react'
 import { ArchivedProjectsList } from '@/components/archive/ArchivedProjectsList'
 import { useArchivedProjectsCount } from '@/hooks/use-queries'
+import { KnowledgePanel } from '@/components/knowledge/knowledge-panel'
 
 // ============================================================================
 // Types
@@ -455,7 +457,7 @@ export function ApplicationDetailPage({
   const [deletingProject, setDeletingProject] = useState<Project | null>(null)
   const [projectSearchQuery, setProjectSearchQuery] = useState('')
   const [projectViewMode, setProjectViewMode] = useState<'kanban' | 'grid'>('kanban')
-  const [showArchive, setShowArchive] = useState(false)
+  const [activeView, setActiveView] = useState<'projects' | 'archive' | 'knowledge'>('projects')
 
   // Archived projects count for tab badge
   const { data: archivedProjectsCount = 0 } = useArchivedProjectsCount(applicationId)
@@ -858,27 +860,27 @@ export function ApplicationDetailPage({
 
       {/* Projects Section - Compact Header */}
       <div className="space-y-3 flex-1 flex flex-col min-h-0">
-        {/* Projects/Archive Tab Toggle */}
+        {/* Projects/Archive/Knowledge Tab Toggle */}
         <div className="flex items-center gap-1 border-b border-border">
           <button
-            onClick={() => setShowArchive(false)}
+            onClick={() => setActiveView('projects')}
             className={cn(
               'relative px-3 py-2 text-xs font-medium transition-colors',
-              !showArchive
+              activeView === 'projects'
                 ? 'text-foreground'
                 : 'text-muted-foreground hover:text-foreground'
             )}
           >
             Projects
-            {!showArchive && (
+            {activeView === 'projects' && (
               <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
             )}
           </button>
           <button
-            onClick={() => setShowArchive(true)}
+            onClick={() => setActiveView('archive')}
             className={cn(
               'relative flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors',
-              showArchive
+              activeView === 'archive'
                 ? 'text-foreground'
                 : 'text-muted-foreground hover:text-foreground'
             )}
@@ -890,14 +892,29 @@ export function ApplicationDetailPage({
                 {archivedProjectsCount > 99 ? '99+' : archivedProjectsCount}
               </span>
             )}
-            {showArchive && (
+            {activeView === 'archive' && (
+              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
+            )}
+          </button>
+          <button
+            onClick={() => setActiveView('knowledge')}
+            className={cn(
+              'relative flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors',
+              activeView === 'knowledge'
+                ? 'text-foreground'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            <FileText className="h-3 w-3" />
+            Knowledge
+            {activeView === 'knowledge' && (
               <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
             )}
           </button>
         </div>
 
-        {/* Active Projects Header and Content (only show when not in archive view) */}
-        {!showArchive ? (
+        {/* Active Projects Header and Content (only show when in projects view) */}
+        {activeView === 'projects' ? (
         <>
           <div className="flex items-center justify-between gap-3">
           {/* Search inline with title */}
@@ -1056,10 +1073,17 @@ export function ApplicationDetailPage({
           )
         )}
         </>
-        ) : (
+        ) : activeView === 'archive' ? (
           <ArchivedProjectsList
             applicationId={applicationId}
             onProjectClick={onSelectProject ? (project) => onSelectProject(project.id) : undefined}
+            className="flex-1"
+          />
+        ) : (
+          <KnowledgePanel
+            scope="application"
+            scopeId={applicationId}
+            showProjectFolders
             className="flex-1"
           />
         )}
