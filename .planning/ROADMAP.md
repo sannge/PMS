@@ -2,7 +2,7 @@
 
 ## Overview
 
-This roadmap delivers a complete document and notes system inside PM Desktop, replacing the existing notes system with a rich-text knowledge base organized by personal, application, and project scopes. The journey starts with migration (including Zustand removal) and data foundation, builds the editor and auto-save pipeline with IndexedDB draft persistence, layers on locking and permissions, then finishes with search, templates, embedded docs, and entity linking. Ten phases deliver 61 requirements with each phase completing a coherent, verifiable capability.
+This roadmap delivers a complete document and notes system inside PM Desktop, replacing the existing notes system with a rich-text knowledge base organized by personal, application, and project scopes. The journey starts with migration (including Zustand removal) and data foundation, builds the editor and auto-save pipeline with IndexedDB draft persistence, layers on locking and permissions, then finishes with search, templates, embedded docs, and entity linking. Eleven phases deliver 66 requirements with each phase completing a coherent, verifiable capability.
 
 ## Phases
 
@@ -14,6 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Migration & Data Foundation** - Remove old notes system, migrate Zustand stores to React Context + TanStack Query, and build new document schema with folders, tags, scopes, and soft delete (completed 2026-01-31)
 - [x] **Phase 2: Notes Screen Shell & Folder Navigation** - Sidebar with folder tree (cached via IndexedDB), search bar, tag list, scope filtering, and document content caching (completed 2026-01-31)
+- [ ] **Phase 2.1: OneNote-Style Knowledge Tree Redesign** (INSERTED) - Replace scope-filter dropdown with horizontal tabbed notebook interface, OneNote-style tree, embedded Knowledge tabs in App/Project detail pages
 - [x] **Phase 3: Rich Text Editor Core** - Full-featured TipTap editor with text formatting, headings, lists, tables, code blocks, and links (completed 2026-01-31)
 - [x] **Phase 4: Auto-Save & Content Pipeline** - Debounced auto-save with three-format storage (JSON, Markdown, plain text) and IndexedDB draft persistence for crash recovery (completed 2026-02-01)
 - [x] **Phase 4.1: Document Creation Bug Fixes** (INSERTED) - Fix document creation flow bugs across all scopes: duplicate icons, 422/500 errors, scope picker dialog, error feedback (completed 2026-02-01)
@@ -23,6 +24,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 8: Permissions** - Role-based access control for documents across all three scopes
 - [ ] **Phase 9: Search, Templates & Export** - Full-text search, built-in and custom templates, and Markdown export
 - [ ] **Phase 10: Embedded Docs & @ Mentions** - Docs tabs in Application/Project detail pages and entity linking via @ mentions
+- [ ] **Phase 11: File Attachments** - Upload and view-only rendering of PDF, Excel, Word, and Visio files in the knowledge tree with MinIO storage
 
 ## Phase Details
 
@@ -62,6 +64,27 @@ Plans:
 - [ ] 02-01-PLAN.md — Notes screen layout, KnowledgeBaseContext for UI state, TanStack Query hooks with IndexedDB persistence for documents/folders/tags
 - [ ] 02-02-PLAN.md — Folder tree component with expand/collapse, right-click context menu, CRUD actions, and IndexedDB cache integration
 - [ ] 02-03-PLAN.md — Scope filter dropdown and tag filter list sidebar sections
+
+### Phase 2.1: OneNote-Style Knowledge Tree Redesign (INSERTED)
+**Goal**: Notes screen uses horizontal tabs (My Notes + per-application), OneNote-style page-list tree, and Application/Project detail pages have embedded Knowledge tabs with inline editor
+**Depends on**: Phase 2, Phase 5 (lock indicators in tree)
+**Requirements**: UI-01, UI-02, UI-10, EMBED-01, EMBED-02
+**Success Criteria** (what must be TRUE):
+  1. Notes page shows horizontal tabs: My Notes first, then one tab per application with documents (auto-managed)
+  2. Selecting a tab changes the tree to show that scope's folders and documents
+  3. Tree items display OneNote-style (no chevron arrows, indentation only, click to expand)
+  4. Application tab shows app-level folders/docs + auto-generated project folder sections (visually distinct)
+  5. Application detail page has a Knowledge tab with full tree + inline editor (same as Notes app tab)
+  6. Project detail page has a Knowledge tab showing only that project's docs with inline editor
+  7. Scope-filter dropdown and scope-picker-dialog removed (no backward compatibility)
+**Plans**: 5 plans
+
+Plans:
+- [ ] 02.1-01-PLAN.md — Backend scopes-summary endpoint, shadcn/ui Tabs component, KnowledgeBaseContext refactor (remove 'all', add activeTab + storagePrefix), useApplicationsWithDocs hook
+- [ ] 02.1-02-PLAN.md — KnowledgeTabBar component, restructured sidebar, OneNote-style folder-tree-item (no chevrons, lock indicators)
+- [ ] 02.1-03-PLAN.md — FolderTree cleanup (remove ScopePickerDialog, remove 'all' scope), delete scope-filter.tsx and scope-picker-dialog.tsx
+- [ ] 02.1-04-PLAN.md — ApplicationTree mixed-scope component (app-level + project sections), search bar global toggle, wire into sidebar
+- [ ] 02.1-05-PLAN.md — KnowledgePanel reusable component, Knowledge tab in Application detail page, Knowledge tab in Project detail page
 
 ### Phase 3: Rich Text Editor Core
 **Goal**: Users can create and edit documents with a full-featured rich text editor covering all standard formatting
@@ -220,16 +243,33 @@ Plans:
 - [ ] 10-01-PLAN.md — EmbeddedDocsTab component with fixedScope KnowledgeBaseProvider, Docs tab in Application and Project detail pages
 - [ ] 10-02-PLAN.md — TipTap @ mention extension with suggestion popup, client-side search, and click-to-navigate handler
 
+### Phase 11: File Attachments
+**Goal**: Users can upload PDF, Excel, Word, and Visio files that appear as nodes in the knowledge tree with view-only rendering, leveraging the MinIO storage infrastructure from Phase 7
+**Depends on**: Phase 7
+**Requirements**: FILE-01, FILE-02, FILE-03, FILE-04, FILE-05
+**Success Criteria** (what must be TRUE):
+  1. User can upload PDF, Excel (.xlsx), Word (.docx), and Visio (.vsdx) files via the knowledge tree sidebar or drag-and-drop
+  2. Uploaded files appear as nodes in the folder/document tree alongside regular documents, with file-type icons
+  3. Clicking a file node opens a view-only renderer in the editor panel (PDF viewer, spreadsheet viewer, document viewer)
+  4. Files are stored in MinIO with proper content-type metadata and served via signed URLs
+  5. File size limits are enforced and upload progress is shown to the user
+**Plans**: 2 plans
+
+Plans:
+- [ ] 11-01-PLAN.md — Backend FileAttachment model, upload/download endpoints, MinIO storage integration, file-type validation and size limits
+- [ ] 11-02-PLAN.md — Frontend file upload UI, knowledge tree file nodes with type icons, view-only renderer panel with PDF/Office file viewers
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 4.1 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
-Note: Phases 5, 6, 7, 9 all depend on Phase 4 and can potentially be parallelized after Phase 4 completes. Phase 8 depends only on Phase 1. Phase 10 depends on Phase 6 and Phase 8. Phase 4.1 is an urgent bug-fix insertion that should complete before or alongside Phase 5.
+Phases execute in numeric order: 1 -> 2 -> 2.1 -> 3 -> 4 -> 4.1 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10 -> 11
+Note: Phase 2.1 is inserted after Phase 5 (needs lock indicators) and redesigns the Phase 2 sidebar UI. Phases 5, 6, 7, 9 all depend on Phase 4 and can potentially be parallelized after Phase 4 completes. Phase 8 depends only on Phase 1. Phase 10 depends on Phase 6 and Phase 8. Phase 11 depends on Phase 7 (shares MinIO storage infrastructure). Phase 4.1 is an urgent bug-fix insertion that should complete before or alongside Phase 5.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Migration & Data Foundation | 4/4 | Complete | 2026-01-31 |
 | 2. Notes Screen Shell & Folder Navigation | 3/3 | Complete | 2026-01-31 |
+| 2.1. OneNote-Style Knowledge Tree Redesign | 0/5 | Planned | - |
 | 3. Rich Text Editor Core | 4/4 | Complete | 2026-02-01 |
 | 4. Auto-Save & Content Pipeline | 4/4 | Complete | 2026-02-01 |
 | 4.1. Document Creation Bug Fixes | 2/2 | Complete | 2026-02-01 |
@@ -239,3 +279,4 @@ Note: Phases 5, 6, 7, 9 all depend on Phase 4 and can potentially be parallelize
 | 8. Permissions | 0/3 | Planned | - |
 | 9. Search, Templates & Export | 0/3 | Planned | - |
 | 10. Embedded Docs & @ Mentions | 0/2 | Not started | - |
+| 11. File Attachments | 0/2 | Not started | - |
