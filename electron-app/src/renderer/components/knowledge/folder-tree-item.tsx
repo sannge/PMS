@@ -2,15 +2,17 @@
  * Folder Tree Item
  *
  * Renders a single node in the folder tree -- either a folder or a document.
+ * OneNote page-list style: no chevron arrows, clean indentation only.
  * Handles expand/collapse, selection, right-click context menu, and inline rename.
+ * Shows lock indicator when a document is being edited by another user.
  */
 
 import { useRef, useEffect, useState, useCallback } from 'react'
 import {
-  ChevronRight,
   Folder,
   FolderOpen,
   FileText,
+  Lock,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { FolderTreeNode } from '@/hooks/use-document-folders'
@@ -23,6 +25,8 @@ export interface FolderTreeItemProps {
   isExpanded?: boolean
   isSelected: boolean
   isRenaming: boolean
+  isLocked?: boolean
+  lockHolderName?: string
   onToggleExpand?: () => void
   onSelect: () => void
   onContextMenu: (e: React.MouseEvent) => void
@@ -37,6 +41,8 @@ export function FolderTreeItem({
   isExpanded,
   isSelected,
   isRenaming,
+  isLocked,
+  lockHolderName,
   onToggleExpand,
   onSelect,
   onContextMenu,
@@ -46,10 +52,6 @@ export function FolderTreeItem({
   const displayName = type === 'folder'
     ? (node as FolderTreeNode).name
     : (node as DocumentListItem).title
-
-  const documentCount = type === 'folder'
-    ? (node as FolderTreeNode).document_count
-    : 0
 
   const [renameValue, setRenameValue] = useState(displayName)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -100,29 +102,17 @@ export function FolderTreeItem({
   return (
     <div
       className={cn(
-        'flex items-center gap-1 py-0.5 pr-2 cursor-pointer rounded-sm',
+        'flex items-center gap-1.5 py-1 pr-2 cursor-pointer rounded-sm',
         'hover:bg-accent/50 transition-colors',
         isSelected && 'bg-accent text-accent-foreground'
       )}
-      style={{ paddingLeft: depth * 16 + 8 }}
+      style={{ paddingLeft: depth * 20 + 12 }}
       onClick={handleClick}
       onContextMenu={onContextMenu}
       role="treeitem"
       aria-expanded={type === 'folder' ? isExpanded : undefined}
       aria-selected={isSelected}
     >
-      {/* Expand chevron for folders */}
-      {type === 'folder' ? (
-        <ChevronRight
-          className={cn(
-            'h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-200',
-            isExpanded && 'rotate-90'
-          )}
-        />
-      ) : (
-        <span className="w-3.5 shrink-0" />
-      )}
-
       {/* Icon */}
       {type === 'folder' ? (
         isExpanded ? (
@@ -153,10 +143,13 @@ export function FolderTreeItem({
         <span className="flex-1 min-w-0 text-sm truncate">{displayName}</span>
       )}
 
-      {/* Document count badge for folders */}
-      {type === 'folder' && documentCount > 0 && !isRenaming && (
-        <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
-          {documentCount}
+      {/* Lock indicator for documents being edited */}
+      {isLocked && !isRenaming && (
+        <span
+          className="shrink-0 text-muted-foreground"
+          title={lockHolderName ? `Editing: ${lockHolderName}` : 'Locked'}
+        >
+          <Lock className="h-3.5 w-3.5" />
         </span>
       )}
     </div>
