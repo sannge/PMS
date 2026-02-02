@@ -31,7 +31,6 @@ import {
 } from '@/hooks/use-documents'
 import { FolderTreeItem } from './folder-tree-item'
 import { FolderContextMenu } from './folder-context-menu'
-// ScopePickerDialog removed -- 'all' scope no longer exists
 
 // ============================================================================
 // Types
@@ -89,8 +88,6 @@ export function FolderTree(): JSX.Element {
 
   // Auth state for personal scope resolution
   const userId = useAuthStore((s) => s.user?.id ?? null)
-
-  // Scope picker state (for "All Documents" create)
 
   // Data queries
   const {
@@ -292,11 +289,6 @@ export function FolderTree(): JSX.Element {
       }
     )
   }, [scope, scopeId, userId, createDocument, selectDocument])
-
-  // ========================================================================
-  // Scope picker confirm handler
-  // ========================================================================
-
 
   // ========================================================================
   // Recursive folder renderer
