@@ -3,11 +3,14 @@
  *
  * React Context for managing UI-only state for the Notes screen.
  * Handles scope selection, sidebar state, folder expansion, document selection,
- * search query, and active tag filters.
+ * search query, active tab, and active tag filters.
  *
  * Data fetching is NOT handled here - it lives in TanStack Query hooks.
  * This context only manages ephemeral UI state with localStorage persistence
- * for sidebar collapsed state, expanded folders, and scope selection.
+ * for sidebar collapsed state, expanded folders, scope selection, and active tab.
+ *
+ * Supports storagePrefix prop to avoid localStorage conflicts when multiple
+ * KnowledgeBaseProvider instances are mounted simultaneously.
  */
 
 import {
@@ -16,6 +19,7 @@ import {
   useReducer,
   useCallback,
   useEffect,
+  useMemo,
   type ReactNode,
 } from 'react'
 
@@ -23,11 +27,12 @@ import {
 // Types
 // ============================================================================
 
-export type ScopeType = 'all' | 'personal' | 'application' | 'project'
+export type ScopeType = 'personal' | 'application' | 'project'
 
 interface KnowledgeBaseUIState {
   scope: ScopeType
   scopeId: string | null
+  activeTab: string
   isSidebarCollapsed: boolean
   expandedFolderIds: Set<string>
   selectedDocumentId: string | null
@@ -38,6 +43,7 @@ interface KnowledgeBaseUIState {
 
 interface KnowledgeBaseContextValue extends KnowledgeBaseUIState {
   setScope: (scope: ScopeType, scopeId: string | null) => void
+  setActiveTab: (tab: string) => void
   toggleSidebar: () => void
   toggleFolder: (folderId: string) => void
   expandFolder: (folderId: string) => void
@@ -51,13 +57,30 @@ interface KnowledgeBaseContextValue extends KnowledgeBaseUIState {
 }
 
 // ============================================================================
-// Constants
+// Storage Key Helper
 // ============================================================================
 
-const STORAGE_KEY_SIDEBAR = 'kb-sidebar-collapsed'
-const STORAGE_KEY_EXPANDED = 'kb-expanded-folders'
-const STORAGE_KEY_SCOPE = 'kb-scope'
-const STORAGE_KEY_SCOPE_ID = 'kb-scope-id'
+function getStorageKey(prefix: string, key: string): string {
+  return `${prefix}${key}`
+}
+
+interface StorageKeys {
+  sidebar: string
+  expanded: string
+  scope: string
+  scopeId: string
+  activeTab: string
+}
+
+function buildStorageKeys(prefix: string): StorageKeys {
+  return {
+    sidebar: getStorageKey(prefix, 'sidebar-collapsed'),
+    expanded: getStorageKey(prefix, 'expanded-folders'),
+    scope: getStorageKey(prefix, 'scope'),
+    scopeId: getStorageKey(prefix, 'scope-id'),
+    activeTab: getStorageKey(prefix, 'active-tab'),
+  }
+}
 
 // ============================================================================
 // Persistence Helpers
@@ -91,9 +114,9 @@ function loadStringOrNull(key: string): string | null {
   }
 }
 
-function loadExpandedFolders(): Set<string> {
+function loadExpandedFolders(key: string): Set<string> {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY_EXPANDED)
+    const stored = localStorage.getItem(key)
     if (stored) {
       const parsed = JSON.parse(stored)
       if (Array.isArray(parsed)) {
@@ -114,12 +137,32 @@ function persistValue(key: string, value: string): void {
   }
 }
 
-function persistExpandedFolders(ids: Set<string>): void {
+function persistExpandedFolders(key: string, ids: Set<string>): void {
   try {
-    localStorage.setItem(STORAGE_KEY_EXPANDED, JSON.stringify(Array.from(ids)))
+    localStorage.setItem(key, JSON.stringify(Array.from(ids)))
   } catch {
     // Ignore storage errors
   }
+}
+
+function removeValue(key: string): void {
+  try {
+    localStorage.removeItem(key)
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+/**
+ * Derive scope and scopeId from a tab value.
+ * - 'personal' -> scope='personal', scopeId=null
+ * - 'app:{id}' -> scope='application', scopeId=id
+ */
+function deriveFromTab(tab: string): { scope: ScopeType; scopeId: string | null } {
+  if (tab.startsWith('app:')) {
+    return { scope: 'application', scopeId: tab.slice(4) }
+  }
+  return { scope: 'personal', scopeId: null }
 }
 
 // ============================================================================
@@ -128,6 +171,7 @@ function persistExpandedFolders(ids: Set<string>): void {
 
 type KnowledgeBaseAction =
   | { type: 'SET_SCOPE'; scope: ScopeType; scopeId: string | null }
+  | { type: 'SET_ACTIVE_TAB'; tab: string }
   | { type: 'TOGGLE_SIDEBAR' }
   | { type: 'SET_SIDEBAR_COLLAPSED'; collapsed: boolean }
   | { type: 'TOGGLE_FOLDER'; folderId: string }
@@ -154,6 +198,19 @@ function knowledgeBaseReducer(
         selectedFolderId: null,
         activeTagIds: [],
       }
+
+    case 'SET_ACTIVE_TAB': {
+      const { scope, scopeId } = deriveFromTab(action.tab)
+      return {
+        ...state,
+        activeTab: action.tab,
+        scope,
+        scopeId,
+        selectedDocumentId: null,
+        selectedFolderId: null,
+        activeTagIds: [],
+      }
+    }
 
     case 'TOGGLE_SIDEBAR':
       return {
@@ -232,22 +289,34 @@ interface KnowledgeBaseProviderProps {
   children: ReactNode
   initialScope?: ScopeType
   initialScopeId?: string | null
+  storagePrefix?: string
 }
 
 export function KnowledgeBaseProvider({
   children,
   initialScope,
   initialScopeId,
+  storagePrefix,
 }: KnowledgeBaseProviderProps): JSX.Element {
-  const [state, dispatch] = useReducer(knowledgeBaseReducer, undefined, () => {
-    const storedScope = loadString(STORAGE_KEY_SCOPE, 'all') as ScopeType
-    const storedScopeId = loadStringOrNull(STORAGE_KEY_SCOPE_ID)
+  const prefix = storagePrefix ?? 'kb-'
+  const keys = useMemo(() => buildStorageKeys(prefix), [prefix])
+
+  const [state, dispatch] = useReducer(knowledgeBaseReducer, keys, (k) => {
+    const storedScope = loadString(k.scope, 'personal')
+    // Migrate from legacy 'all' scope
+    const validScope: ScopeType =
+      storedScope === 'personal' || storedScope === 'application' || storedScope === 'project'
+        ? storedScope
+        : 'personal'
+    const storedScopeId = loadStringOrNull(k.scopeId)
+    const storedActiveTab = loadString(k.activeTab, 'personal')
 
     return {
-      scope: initialScope ?? storedScope,
+      scope: initialScope ?? validScope,
       scopeId: initialScopeId !== undefined ? (initialScopeId ?? null) : storedScopeId,
-      isSidebarCollapsed: loadBoolean(STORAGE_KEY_SIDEBAR, false),
-      expandedFolderIds: loadExpandedFolders(),
+      activeTab: storedActiveTab,
+      isSidebarCollapsed: loadBoolean(k.sidebar, false),
+      expandedFolderIds: loadExpandedFolders(k.expanded),
       selectedDocumentId: null,
       selectedFolderId: null,
       searchQuery: '',
@@ -257,31 +326,36 @@ export function KnowledgeBaseProvider({
 
   // Persist sidebar collapsed state
   useEffect(() => {
-    persistValue(STORAGE_KEY_SIDEBAR, String(state.isSidebarCollapsed))
-  }, [state.isSidebarCollapsed])
+    persistValue(keys.sidebar, String(state.isSidebarCollapsed))
+  }, [keys.sidebar, state.isSidebarCollapsed])
 
   // Persist expanded folders
   useEffect(() => {
-    persistExpandedFolders(state.expandedFolderIds)
-  }, [state.expandedFolderIds])
+    persistExpandedFolders(keys.expanded, state.expandedFolderIds)
+  }, [keys.expanded, state.expandedFolderIds])
 
   // Persist scope
   useEffect(() => {
-    persistValue(STORAGE_KEY_SCOPE, state.scope)
+    persistValue(keys.scope, state.scope)
     if (state.scopeId) {
-      persistValue(STORAGE_KEY_SCOPE_ID, state.scopeId)
+      persistValue(keys.scopeId, state.scopeId)
     } else {
-      try {
-        localStorage.removeItem(STORAGE_KEY_SCOPE_ID)
-      } catch {
-        // Ignore
-      }
+      removeValue(keys.scopeId)
     }
-  }, [state.scope, state.scopeId])
+  }, [keys.scope, keys.scopeId, state.scope, state.scopeId])
+
+  // Persist active tab
+  useEffect(() => {
+    persistValue(keys.activeTab, state.activeTab)
+  }, [keys.activeTab, state.activeTab])
 
   // Action callbacks
   const setScope = useCallback((scope: ScopeType, scopeId: string | null) => {
     dispatch({ type: 'SET_SCOPE', scope, scopeId })
+  }, [])
+
+  const setActiveTab = useCallback((tab: string) => {
+    dispatch({ type: 'SET_ACTIVE_TAB', tab })
   }, [])
 
   const toggleSidebar = useCallback(() => {
@@ -327,6 +401,7 @@ export function KnowledgeBaseProvider({
   const value: KnowledgeBaseContextValue = {
     ...state,
     setScope,
+    setActiveTab,
     toggleSidebar,
     toggleFolder,
     expandFolder,

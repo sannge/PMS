@@ -31,7 +31,7 @@ import {
 } from '@/hooks/use-documents'
 import { FolderTreeItem } from './folder-tree-item'
 import { FolderContextMenu } from './folder-context-menu'
-import { ScopePickerDialog } from './scope-picker-dialog'
+// ScopePickerDialog removed -- 'all' scope no longer exists
 
 // ============================================================================
 // Types
@@ -91,8 +91,6 @@ export function FolderTree(): JSX.Element {
   const userId = useAuthStore((s) => s.user?.id ?? null)
 
   // Scope picker state (for "All Documents" create)
-  const [scopePickerOpen, setScopePickerOpen] = useState(false)
-  const [pendingFolderId, setPendingFolderId] = useState<string | null>(null)
 
   // Data queries
   const {
@@ -171,11 +169,6 @@ export function FolderTree(): JSX.Element {
   const handleNewDocument = useCallback(
     (folderId: string) => {
       handleCloseContextMenu()
-      if (scope === 'all') {
-        setPendingFolderId(folderId)
-        setScopePickerOpen(true)
-        return
-      }
       const resolvedScopeId = scope === 'personal' ? (userId ?? '') : (scopeId ?? '')
       createDocument.mutate(
         {
@@ -280,11 +273,6 @@ export function FolderTree(): JSX.Element {
   // ========================================================================
 
   const handleCreateFirstDocument = useCallback(() => {
-    if (scope === 'all') {
-      setPendingFolderId(null)
-      setScopePickerOpen(true)
-      return
-    }
     const resolvedScopeId = scope === 'personal' ? (userId ?? '') : (scopeId ?? '')
     createDocument.mutate(
       {
@@ -309,32 +297,6 @@ export function FolderTree(): JSX.Element {
   // Scope picker confirm handler
   // ========================================================================
 
-  const handleScopePickerConfirm = useCallback(
-    (chosenScope: string, chosenScopeId: string) => {
-      createDocument.mutate(
-        {
-          title: 'Untitled',
-          scope: chosenScope,
-          scope_id: chosenScopeId,
-          folder_id: pendingFolderId,
-        },
-        {
-          onSuccess: (data) => {
-            setScopePickerOpen(false)
-            selectDocument(data.id)
-            selectFolder(null)
-            if (pendingFolderId) expandFolder(pendingFolderId)
-            setRenamingItemId(data.id)
-            setRenamingItemType('document')
-          },
-          onError: (error) => {
-            toast.error(error.message)
-          },
-        }
-      )
-    },
-    [createDocument, pendingFolderId, selectDocument, selectFolder, expandFolder]
-  )
 
   // ========================================================================
   // Recursive folder renderer
@@ -488,12 +450,6 @@ export function FolderTree(): JSX.Element {
         />
       )}
 
-      {/* Scope picker for "All Documents" create */}
-      <ScopePickerDialog
-        open={scopePickerOpen}
-        onOpenChange={setScopePickerOpen}
-        onConfirm={handleScopePickerConfirm}
-      />
     </div>
   )
 }

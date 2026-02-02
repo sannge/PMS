@@ -273,6 +273,10 @@ export function useCreateDocument(): UseMutationResult<Document, Error, CreateDo
       queryClient.invalidateQueries({
         queryKey: queryKeys.documentFolders(params.scope, params.scope_id),
       })
+      // Invalidate scopes summary so tab visibility updates
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.scopesSummary(),
+      })
     },
   })
 }
@@ -386,6 +390,53 @@ export function useDeleteDocument(
       queryClient.invalidateQueries({
         queryKey: queryKeys.documentFolders(scope, scopeId),
       })
+      // Invalidate scopes summary so tab visibility updates
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.scopesSummary(),
+      })
     },
+  })
+}
+
+// ============================================================================
+// Scopes Summary Hook
+// ============================================================================
+
+export interface ApplicationWithDocs {
+  id: string
+  name: string
+}
+
+export interface ScopesSummaryResponse {
+  has_personal_docs: boolean
+  applications: ApplicationWithDocs[]
+}
+
+/**
+ * Fetch which scopes have documents for auto-managed tab visibility.
+ */
+export function useApplicationsWithDocs(): UseQueryResult<ScopesSummaryResponse, Error> {
+  const token = useAuthStore((s) => s.token)
+
+  return useQuery({
+    queryKey: queryKeys.scopesSummary(),
+    queryFn: async () => {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      const response = await window.electronAPI.get<ScopesSummaryResponse>(
+        '/api/documents/scopes-summary',
+        getAuthHeaders(token)
+      )
+
+      if (response.status !== 200) {
+        throw new Error(parseApiError(response.status, response.data))
+      }
+
+      return response.data
+    },
+    staleTime: 30_000,
+    enabled: !!token,
   })
 }
