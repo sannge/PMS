@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 02.1 of 10 (OneNote-Style Knowledge Tree Redesign)
-Plan: 13 of 15 in phase 02.1 (gap closure)
-Status: In progress
-Last activity: 2026-02-03 -- Completed 02.1-13-PLAN.md
+Plan: 15 of 15 in phase 02.1 (gap closure)
+Status: Phase complete
+Last activity: 2026-02-03 -- Completed 02.1-15-PLAN.md
 
-Progress: [██████████████████████████] ~87%
+Progress: [████████████████████████████] ~93%
 
 ## Performance Metrics
 
@@ -33,11 +33,11 @@ Progress: [███████████████████████
 | 04 | 4/4 | ~12 min | ~3 min |
 | 05 | 2/2 | ~10 min | ~5 min |
 | 04.1 | 2/2 | ~6 min | ~3 min |
-| 02.1 | 13/15 | ~68 min | ~5 min |
+| 02.1 | 15/15 | ~80 min | ~5 min |
 
 **Recent Trend:**
-- Last 5 plans: 02.1-10 (~4 min), 02.1-11 (~7 min), 02.1-12 (~9 min), 02.1-13 (~5 min)
-- Trend: stable at ~4-9 min
+- Last 5 plans: 02.1-11 (~7 min), 02.1-12 (~9 min), 02.1-13 (~5 min), 02.1-15 (~12 min)
+- Trend: stable at ~5-12 min
 
 *Updated after each plan completion*
 
@@ -125,6 +125,9 @@ Recent decisions affecting current work:
 - [02.1-12]: EditorSkeleton shows title + paragraph placeholders while document loads
 - [02.1-13]: Per-item lock query: Each tree item queries its own lock status (simpler than batch approach)
 - [02.1-13]: Scope room broadcasting: Lock events broadcast to both document room and scope room (application/project)
+- [02.1-15]: Used existing PUT endpoints with sort_order field instead of creating dedicated reorder endpoints
+- [02.1-15]: Scope-aware sortable IDs encode scope and type for drag validation (app-folder-{id}, project-{projId}-doc-{id})
+- [02.1-15]: Each ProjectSection has its own SortableContext for isolated project-level DnD
 
 ### Roadmap Evolution
 
@@ -145,5 +148,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 02.1-13-PLAN.md. Real-time lock indicators in folder tree with WebSocket updates.
+Stopped at: Completed 02.1-15-PLAN.md. Phase 02.1 complete - @dnd-kit drag-and-drop reorder for knowledge tree.
 Resume file: None
