@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 02.1 of 10 (OneNote-Style Knowledge Tree Redesign)
-Plan: 9 of 15 in phase 02.1 (gap closure)
+Plan: 11 of 15 in phase 02.1 (gap closure)
 Status: In progress
-Last activity: 2026-02-03 -- Completed 02.1-09-PLAN.md
+Last activity: 2026-02-03 -- Completed 02.1-11-PLAN.md
 
-Progress: [████████████████████████] ~79%
+Progress: [█████████████████████████] ~81%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 28
+- Total plans completed: 29
 - Average duration: ~5 min
-- Total execution time: ~2.3 hours
+- Total execution time: ~2.4 hours
 
 **By Phase:**
 
@@ -33,10 +33,10 @@ Progress: [███████████████████████
 | 04 | 4/4 | ~12 min | ~3 min |
 | 05 | 2/2 | ~10 min | ~5 min |
 | 04.1 | 2/2 | ~6 min | ~3 min |
-| 02.1 | 9/15 | ~43 min | ~5 min |
+| 02.1 | 10/15 | ~50 min | ~5 min |
 
 **Recent Trend:**
-- Last 5 plans: 02.1-06 (~8 min), 02.1-07 (~8 min), 02.1-08 (~4 min), 02.1-09 (~2 min)
+- Last 5 plans: 02.1-07 (~8 min), 02.1-08 (~4 min), 02.1-09 (~2 min), 02.1-11 (~7 min)
 - Trend: stable at ~2-8 min
 
 *Updated after each plan completion*
@@ -101,7 +101,6 @@ Recent decisions affecting current work:
 - [02.1-02]: Quick creation buttons resolve scope from activeTab encoding (personal or app:{id})
 - [02.1-04]: Project sections lazy-load by passing null scopeId when collapsed (useFolderTree disabled condition)
 - [02.1-04]: Rename/delete endpoints are ID-based, so app-scope mutations work for project items too
-- [02.1-04]: Global search toggle is local state with optional onGlobalToggle callback for parent
 - [02.1-05]: KnowledgePanel wraps in KnowledgeBaseProvider with scoped storagePrefix for localStorage isolation
 - [02.1-05]: Application detail replaces showArchive boolean with activeView union type (projects/archive/knowledge)
 - [02.1-05]: Content save in KnowledgePanel uses useSaveDocumentContent with 2s debounce (useAutoSave requires editor instance)
@@ -114,6 +113,10 @@ Recent decisions affecting current work:
 - [02.1-08]: DeleteDialog reuses AlertDialog from confirm-dialog.tsx
 - [02.1-08]: Quick create buttons use selectedFolderId from context for nested creation
 - [02.1-09]: Folder nesting verified working (fixed in 02.1-08) -- parent_id flows from context menu through state to mutation
+- [02.1-11]: Client-side filtering for both local and global search modes (backend full-text search deferred to Phase 9)
+- [02.1-11]: Recursive filter keeps folders visible if any descendant matches
+- [02.1-11]: matchesSearch() + filterFolderTree() pattern for hierarchical tree filtering
+- [02.1-11]: isGlobalSearch context state for future Phase 9 backend integration
 
 ### Roadmap Evolution
 
@@ -134,5 +137,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 02.1-09-PLAN.md. Folder nesting verification complete (code already correct from 02.1-08).
+Stopped at: Completed 02.1-11-PLAN.md. Search filtering wired to tree components, global toggle state in context.
 Resume file: None
