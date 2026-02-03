@@ -8,6 +8,8 @@
  *
  * Lock status is queried per-document using useDocumentLockStatus hook
  * with real-time WebSocket updates for instant feedback.
+ *
+ * Drag-and-drop: Uses @dnd-kit useSortable hook for drag feedback.
  */
 
 import { useRef, useEffect, useState, useCallback } from 'react'
@@ -17,6 +19,8 @@ import {
   FileText,
   Lock,
 } from 'lucide-react'
+import { useSortable } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { cn } from '@/lib/utils'
 import { useDocumentLockStatus } from '@/hooks/use-document-lock'
 import type { FolderTreeNode } from '@/hooks/use-document-folders'
@@ -29,6 +33,10 @@ export interface FolderTreeItemProps {
   isExpanded?: boolean
   isSelected: boolean
   isRenaming: boolean
+  /** Whether this item is currently being dragged */
+  isDragging?: boolean
+  /** Sortable ID for @dnd-kit (e.g. "folder-{id}" or "doc-{id}") */
+  sortableId?: string
   /** @deprecated Lock status is now queried internally for documents */
   isLocked?: boolean
   /** @deprecated Lock status is now queried internally for documents */
@@ -47,6 +55,8 @@ export function FolderTreeItem({
   isExpanded,
   isSelected,
   isRenaming,
+  isDragging: isDraggingProp,
+  sortableId,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   isLocked: _isLockedProp,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -65,6 +75,27 @@ export function FolderTreeItem({
   const { isLocked, lockHolder } = useDocumentLockStatus(
     type === 'document' ? node.id : null
   )
+
+  // Sortable hook for drag-and-drop
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging: isDraggingSortable,
+  } = useSortable({
+    id: sortableId || node.id,
+    disabled: !sortableId || isRenaming,
+  })
+
+  const isDragging = isDraggingProp || isDraggingSortable
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  }
 
   const [renameValue, setRenameValue] = useState(displayName)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -114,12 +145,20 @@ export function FolderTreeItem({
 
   return (
     <div
+      ref={setNodeRef}
+      {...attributes}
+      {...listeners}
       className={cn(
         'flex items-center gap-1.5 py-1 pr-2 cursor-pointer rounded-sm',
         'hover:bg-accent/50 transition-colors',
-        isSelected && 'bg-accent text-accent-foreground'
+        isSelected && 'bg-accent text-accent-foreground',
+        isDragging && 'cursor-grabbing bg-accent/30',
+        sortableId && !isDragging && 'cursor-grab'
       )}
-      style={{ paddingLeft: depth * 20 + 12 }}
+      style={{
+        ...style,
+        paddingLeft: depth * 20 + 12,
+      }}
       onClick={handleClick}
       onContextMenu={onContextMenu}
       role="treeitem"

@@ -2,16 +2,33 @@
  * Folder Tree
  *
  * Recursive folder tree component with expand/collapse, unfiled documents section,
- * loading skeleton, and context menu integration.
+ * loading skeleton, context menu integration, and drag-and-drop reordering.
  *
  * Loading behavior (CACHE-03): The tree renders immediately from IndexedDB cache.
  * A loading skeleton is only shown when there is no data at all (including no cache).
  * Background refetches do not trigger spinners or skeletons.
+ *
+ * Drag-and-drop: Uses @dnd-kit for reordering items within the same scope.
+ * Cross-scope moves are prevented per CONTEXT.md constraints.
  */
 
 import { useState, useCallback, useMemo, useEffect } from 'react'
-import { FilePlus, Loader2 } from 'lucide-react'
+import { FilePlus, Folder, FileText, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
+import {
+  DndContext,
+  DragEndEvent,
+  DragOverlay,
+  DragStartEvent,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  closestCenter,
+} from '@dnd-kit/core'
+import {
+  SortableContext,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/contexts/auth-context'
 import { useKnowledgeBase } from '@/contexts/knowledge-base-context'
@@ -20,6 +37,7 @@ import {
   useCreateFolder,
   useRenameFolder,
   useDeleteFolder,
+  useReorderFolder,
   type FolderTreeNode,
 } from '@/hooks/use-document-folders'
 import {
@@ -27,6 +45,7 @@ import {
   useCreateDocument,
   useRenameDocument,
   useDeleteDocument,
+  useReorderDocument,
   type DocumentListItem,
 } from '@/hooks/use-documents'
 import { FolderTreeItem } from './folder-tree-item'
@@ -44,6 +63,12 @@ interface ContextMenuTarget {
   name: string
   x: number
   y: number
+}
+
+interface ActiveDragItem {
+  id: string
+  type: 'folder' | 'document'
+  name: string
 }
 
 // ============================================================================
@@ -125,6 +150,20 @@ export function FolderTree(): JSX.Element {
   const renameDocument = useRenameDocument(scope, scopeId ?? '')
   const deleteFolder = useDeleteFolder(scope, scopeId ?? '')
   const deleteDocument = useDeleteDocument(scope, scopeId ?? '')
+  const reorderFolder = useReorderFolder(scope, scopeId ?? '')
+  const reorderDocument = useReorderDocument(scope, scopeId ?? '')
+
+  // ========================================================================
+  // Drag and drop state
+  // ========================================================================
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 5 },
+    })
+  )
+
+  const [activeItem, setActiveItem] = useState<ActiveDragItem | null>(null)
 
   // Local UI state
   const [renamingItemId, setRenamingItemId] = useState<string | null>(null)
@@ -200,6 +239,105 @@ export function FolderTree(): JSX.Element {
 
     expandMatchingFolders(filteredFolders)
   }, [searchQuery, filteredFolders, expandFolder])
+
+  // ========================================================================
+  // Drag and drop handlers
+  // ========================================================================
+
+  // Create flat list of sortable IDs for DndContext
+  const sortableItems = useMemo(() => {
+    const items: string[] = []
+
+    // Add all folders (flattened recursively)
+    const addFolders = (nodes: FolderTreeNode[]) => {
+      nodes.forEach(node => {
+        items.push(`folder-${node.id}`)
+        addFolders(node.children)
+      })
+    }
+    addFolders(filteredFolders)
+
+    // Add unfiled documents
+    filteredDocs.forEach(doc => {
+      items.push(`doc-${doc.id}`)
+    })
+
+    return items
+  }, [filteredFolders, filteredDocs])
+
+  // Helper to find folder by id from tree
+  const findFolderById = useCallback((nodes: FolderTreeNode[], id: string): FolderTreeNode | null => {
+    for (const node of nodes) {
+      if (node.id === id) return node
+      const found = findFolderById(node.children, id)
+      if (found) return found
+    }
+    return null
+  }, [])
+
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    const { active } = event
+    const activeIdStr = String(active.id)
+    const [type, id] = activeIdStr.split('-')
+
+    if (type === 'folder') {
+      const folder = findFolderById(filteredFolders, id)
+      if (folder) {
+        setActiveItem({ id, type: 'folder', name: folder.name })
+      }
+    } else if (type === 'doc') {
+      const doc = filteredDocs.find(d => d.id === id)
+      if (doc) {
+        setActiveItem({ id, type: 'document', name: doc.title })
+      }
+    }
+  }, [filteredFolders, filteredDocs, findFolderById])
+
+  const handleDragEnd = useCallback(async (event: DragEndEvent) => {
+    const { active, over } = event
+    setActiveItem(null)
+
+    if (!over || active.id === over.id) return
+
+    const activeIdStr = String(active.id)
+    const overIdStr = String(over.id)
+
+    const [activeType, activeId] = activeIdStr.split('-')
+    const [overType] = overIdStr.split('-')
+
+    // Only allow reordering within same type (folder with folders, doc with docs)
+    // This prevents cross-type moves which could cause confusion
+    if (activeType !== overType) {
+      return
+    }
+
+    // Find the new position index
+    const overIndex = sortableItems.indexOf(overIdStr)
+    if (overIndex === -1) return
+
+    // Calculate new sort_order based on surrounding items
+    // Using simple index-based ordering for now
+    const newSortOrder = overIndex
+
+    try {
+      if (activeType === 'folder') {
+        await reorderFolder.mutateAsync({
+          folderId: activeId,
+          sortOrder: newSortOrder,
+        })
+      } else if (activeType === 'doc') {
+        // Documents need row_version, use 1 as default
+        await reorderDocument.mutateAsync({
+          documentId: activeId,
+          sortOrder: newSortOrder,
+          rowVersion: 1,
+        })
+      }
+    } catch (error) {
+      console.error('Failed to reorder:', error)
+      toast.error('Failed to reorder item')
+    }
+  }, [sortableItems, reorderFolder, reorderDocument])
 
   // ========================================================================
   // Context menu handlers
@@ -393,6 +531,8 @@ export function FolderTree(): JSX.Element {
             isExpanded={isExpanded}
             isSelected={isSelected}
             isRenaming={renamingItemId === node.id}
+            isDragging={activeItem?.id === node.id && activeItem?.type === 'folder'}
+            sortableId={`folder-${node.id}`}
             onToggleExpand={() => toggleFolder(node.id)}
             onSelect={() => handleSelectFolder(node.id)}
             onContextMenu={(e) => handleContextMenu(e, node.id, 'folder', node.name)}
@@ -408,6 +548,7 @@ export function FolderTree(): JSX.Element {
       expandedFolderIds,
       selectedFolderId,
       renamingItemId,
+      activeItem,
       toggleFolder,
       handleSelectFolder,
       handleContextMenu,
@@ -428,6 +569,8 @@ export function FolderTree(): JSX.Element {
           depth={depth}
           isSelected={isSelected}
           isRenaming={renamingItemId === doc.id}
+          isDragging={activeItem?.id === doc.id && activeItem?.type === 'document'}
+          sortableId={`doc-${doc.id}`}
           onSelect={() => handleSelectDocument(doc.id)}
           onContextMenu={(e) => handleContextMenu(e, doc.id, 'document', doc.title)}
           onRenameSubmit={handleRenameSubmit}
@@ -438,6 +581,7 @@ export function FolderTree(): JSX.Element {
     [
       selectedDocumentId,
       renamingItemId,
+      activeItem,
       handleSelectDocument,
       handleContextMenu,
       handleRenameSubmit,
@@ -493,23 +637,46 @@ export function FolderTree(): JSX.Element {
   }
 
   return (
-    <div className="py-1" role="tree">
-      {/* Subtle background refresh indicator */}
-      {isFoldersFetching && !isFoldersLoading && (
-        <div className="flex items-center justify-end px-2 pb-0.5">
-          <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+    >
+      <SortableContext items={sortableItems} strategy={verticalListSortingStrategy}>
+        <div className="py-1" role="tree">
+          {/* Subtle background refresh indicator */}
+          {isFoldersFetching && !isFoldersLoading && (
+            <div className="flex items-center justify-end px-2 pb-0.5">
+              <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+            </div>
+          )}
+
+          {/* Folder tree */}
+          {filteredFolders.map((node) => renderFolderNode(node, 0))}
+
+          {/* Root-level documents (no folder) */}
+          {filteredDocs.length > 0 && (
+            <>
+              {filteredDocs.map((doc) => renderDocumentItem(doc, 0))}
+            </>
+          )}
         </div>
-      )}
+      </SortableContext>
 
-      {/* Folder tree */}
-      {filteredFolders.map((node) => renderFolderNode(node, 0))}
-
-      {/* Root-level documents (no folder) - render without confusing "Unfiled" label */}
-      {filteredDocs.length > 0 && (
-        <>
-          {filteredDocs.map((doc) => renderDocumentItem(doc, 0))}
-        </>
-      )}
+      {/* Drag overlay */}
+      <DragOverlay>
+        {activeItem && (
+          <div className="flex items-center gap-1.5 px-3 py-1.5 bg-background border rounded-md shadow-lg opacity-90">
+            {activeItem.type === 'folder' ? (
+              <Folder className="h-4 w-4 text-muted-foreground" />
+            ) : (
+              <FileText className="h-4 w-4 text-muted-foreground" />
+            )}
+            <span className="text-sm truncate max-w-[200px]">{activeItem.name}</span>
+          </div>
+        )}
+      </DragOverlay>
 
       {/* Context menu */}
       {contextMenuTarget && (
@@ -546,7 +713,7 @@ export function FolderTree(): JSX.Element {
         itemType={deleteTarget?.type || 'document'}
         onConfirm={handleDeleteConfirm}
       />
-    </div>
+    </DndContext>
   )
 }
 
