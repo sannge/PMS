@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 02.1 of 10 (OneNote-Style Knowledge Tree Redesign)
-Plan: 11 of 15 in phase 02.1 (gap closure)
+Plan: 10 of 15 in phase 02.1 (gap closure)
 Status: In progress
-Last activity: 2026-02-03 -- Completed 02.1-11-PLAN.md
+Last activity: 2026-02-03 -- Completed 02.1-10-PLAN.md
 
 Progress: [█████████████████████████] ~81%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 29
+- Total plans completed: 30
 - Average duration: ~5 min
-- Total execution time: ~2.4 hours
+- Total execution time: ~2.5 hours
 
 **By Phase:**
 
@@ -33,10 +33,10 @@ Progress: [███████████████████████
 | 04 | 4/4 | ~12 min | ~3 min |
 | 05 | 2/2 | ~10 min | ~5 min |
 | 04.1 | 2/2 | ~6 min | ~3 min |
-| 02.1 | 10/15 | ~50 min | ~5 min |
+| 02.1 | 11/15 | ~54 min | ~5 min |
 
 **Recent Trend:**
-- Last 5 plans: 02.1-07 (~8 min), 02.1-08 (~4 min), 02.1-09 (~2 min), 02.1-11 (~7 min)
+- Last 5 plans: 02.1-08 (~4 min), 02.1-09 (~2 min), 02.1-10 (~4 min), 02.1-11 (~7 min)
 - Trend: stable at ~2-8 min
 
 *Updated after each plan completion*
@@ -113,6 +113,9 @@ Recent decisions affecting current work:
 - [02.1-08]: DeleteDialog reuses AlertDialog from confirm-dialog.tsx
 - [02.1-08]: Quick create buttons use selectedFolderId from context for nested creation
 - [02.1-09]: Folder nesting verified working (fixed in 02.1-08) -- parent_id flows from context menu through state to mutation
+- [02.1-10]: ResizeObserver calculates visible tab count dynamically based on container width
+- [02.1-10]: hideIfEmpty pattern: project sections hide themselves after loading empty content
+- [02.1-10]: Removed Unfiled label entirely rather than renaming (cleaner UX)
 - [02.1-11]: Client-side filtering for both local and global search modes (backend full-text search deferred to Phase 9)
 - [02.1-11]: Recursive filter keeps folders visible if any descendant matches
 - [02.1-11]: matchesSearch() + filterFolderTree() pattern for hierarchical tree filtering
@@ -137,5 +140,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 02.1-11-PLAN.md. Search filtering wired to tree components, global toggle state in context.
+Stopped at: Completed 02.1-10-PLAN.md. Tab bar overflow, project filtering, and Unfiled label removal.
 Resume file: None
