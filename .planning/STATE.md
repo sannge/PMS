@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 02.1 of 10 (OneNote-Style Knowledge Tree Redesign)
-Plan: 10 of 15 in phase 02.1 (gap closure)
+Plan: 12 of 15 in phase 02.1 (gap closure)
 Status: In progress
-Last activity: 2026-02-03 -- Completed 02.1-10-PLAN.md
+Last activity: 2026-02-03 -- Completed 02.1-12-PLAN.md
 
-Progress: [█████████████████████████] ~81%
+Progress: [██████████████████████████] ~84%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 30
+- Total plans completed: 31
 - Average duration: ~5 min
-- Total execution time: ~2.5 hours
+- Total execution time: ~2.6 hours
 
 **By Phase:**
 
@@ -33,11 +33,11 @@ Progress: [███████████████████████
 | 04 | 4/4 | ~12 min | ~3 min |
 | 05 | 2/2 | ~10 min | ~5 min |
 | 04.1 | 2/2 | ~6 min | ~3 min |
-| 02.1 | 11/15 | ~54 min | ~5 min |
+| 02.1 | 12/15 | ~63 min | ~5 min |
 
 **Recent Trend:**
-- Last 5 plans: 02.1-08 (~4 min), 02.1-09 (~2 min), 02.1-10 (~4 min), 02.1-11 (~7 min)
-- Trend: stable at ~2-8 min
+- Last 5 plans: 02.1-09 (~2 min), 02.1-10 (~4 min), 02.1-11 (~7 min), 02.1-12 (~9 min)
+- Trend: stable at ~2-9 min
 
 *Updated after each plan completion*
 
@@ -120,6 +120,9 @@ Recent decisions affecting current work:
 - [02.1-11]: Recursive filter keeps folders visible if any descendant matches
 - [02.1-11]: matchesSearch() + filterFolderTree() pattern for hierarchical tree filtering
 - [02.1-11]: isGlobalSearch context state for future Phase 9 backend integration
+- [02.1-12]: TreeItemSkeleton matches FolderTreeItem layout (icon + text with proper indentation)
+- [02.1-12]: Loader2 spinners acceptable for button states and background refresh (non-blocking)
+- [02.1-12]: EditorSkeleton shows title + paragraph placeholders while document loads
 
 ### Roadmap Evolution
 
@@ -140,5 +143,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 02.1-10-PLAN.md. Tab bar overflow, project filtering, and Unfiled label removal.
+Stopped at: Completed 02.1-12-PLAN.md. Skeleton loading states for folder trees and editor panel.
 Resume file: None
