@@ -38,6 +38,12 @@ interface KnowledgeBaseUIState {
   selectedDocumentId: string | null
   selectedFolderId: string | null
   searchQuery: string
+  /** Global search toggle - when true, indicates user wants to search all tabs.
+   * NOTE: For now (Phase 02.1), this is UI-only state. Both global and local
+   * modes use the same client-side filtering. Backend full-text search across
+   * all documents is deferred to Phase 9.
+   */
+  isGlobalSearch: boolean
   activeTagIds: string[]
 }
 
@@ -51,6 +57,7 @@ interface KnowledgeBaseContextValue extends KnowledgeBaseUIState {
   selectDocument: (documentId: string | null) => void
   selectFolder: (folderId: string | null) => void
   setSearch: (query: string) => void
+  setGlobalSearch: (isGlobal: boolean) => void
   toggleTag: (tagId: string) => void
   clearTags: () => void
   resetSelection: () => void
@@ -180,6 +187,7 @@ type KnowledgeBaseAction =
   | { type: 'SELECT_DOCUMENT'; documentId: string | null }
   | { type: 'SELECT_FOLDER'; folderId: string | null }
   | { type: 'SET_SEARCH'; query: string }
+  | { type: 'SET_GLOBAL_SEARCH'; isGlobal: boolean }
   | { type: 'TOGGLE_TAG'; tagId: string }
   | { type: 'CLEAR_TAGS' }
   | { type: 'RESET_SELECTION' }
@@ -255,6 +263,9 @@ function knowledgeBaseReducer(
     case 'SET_SEARCH':
       return { ...state, searchQuery: action.query }
 
+    case 'SET_GLOBAL_SEARCH':
+      return { ...state, isGlobalSearch: action.isGlobal }
+
     case 'TOGGLE_TAG': {
       const idx = state.activeTagIds.indexOf(action.tagId)
       const next =
@@ -320,6 +331,7 @@ export function KnowledgeBaseProvider({
       selectedDocumentId: null,
       selectedFolderId: null,
       searchQuery: '',
+      isGlobalSearch: false,
       activeTagIds: [],
     }
   })
@@ -386,6 +398,10 @@ export function KnowledgeBaseProvider({
     dispatch({ type: 'SET_SEARCH', query })
   }, [])
 
+  const setGlobalSearch = useCallback((isGlobal: boolean) => {
+    dispatch({ type: 'SET_GLOBAL_SEARCH', isGlobal })
+  }, [])
+
   const toggleTag = useCallback((tagId: string) => {
     dispatch({ type: 'TOGGLE_TAG', tagId })
   }, [])
@@ -409,6 +425,7 @@ export function KnowledgeBaseProvider({
     selectDocument,
     selectFolder,
     setSearch,
+    setGlobalSearch,
     toggleTag,
     clearTags,
     resetSelection,

@@ -7,6 +7,14 @@
  *
  * Includes a global search toggle (Globe icon) that switches between
  * searching within the current tab scope and searching across all tabs.
+ *
+ * NOTE: For Phase 02.1, both local and global modes use the same client-side
+ * filtering within the current tab. The global toggle tracks user intent
+ * in context state for future backend integration.
+ *
+ * TODO (Phase 9): When isGlobalSearch is true, call backend full-text search
+ * API instead of client-side filtering. For now, local filtering works for
+ * both modes.
  */
 
 import { useState, useEffect, useRef } from 'react'
@@ -22,9 +30,8 @@ export interface SearchBarProps {
 }
 
 export function SearchBar({ onGlobalToggle }: SearchBarProps = {}): JSX.Element {
-  const { searchQuery, setSearch } = useKnowledgeBase()
+  const { searchQuery, setSearch, isGlobalSearch, setGlobalSearch } = useKnowledgeBase()
   const [localValue, setLocalValue] = useState(searchQuery)
-  const [isGlobal, setIsGlobal] = useState(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Sync local value when context query changes externally
@@ -56,8 +63,8 @@ export function SearchBar({ onGlobalToggle }: SearchBarProps = {}): JSX.Element 
   }
 
   const handleToggleGlobal = () => {
-    const next = !isGlobal
-    setIsGlobal(next)
+    const next = !isGlobalSearch
+    setGlobalSearch(next)
     onGlobalToggle?.(next)
   }
 
@@ -68,7 +75,7 @@ export function SearchBar({ onGlobalToggle }: SearchBarProps = {}): JSX.Element 
         <Input
           value={localValue}
           onChange={(e) => setLocalValue(e.target.value)}
-          placeholder={isGlobal ? 'Search all documents...' : 'Search documents...'}
+          placeholder={isGlobalSearch ? 'Search all documents...' : 'Search in this tab...'}
           className={cn(
             'h-8 pl-7 text-xs',
             'bg-muted/50 border-transparent',
@@ -92,13 +99,13 @@ export function SearchBar({ onGlobalToggle }: SearchBarProps = {}): JSX.Element 
         onClick={handleToggleGlobal}
         className={cn(
           'flex items-center justify-center shrink-0 h-8 w-8 rounded-md transition-colors',
-          isGlobal
+          isGlobalSearch
             ? 'bg-primary/10 text-primary hover:bg-primary/20'
             : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
         )}
-        title={isGlobal ? 'Searching all tabs (click for current tab only)' : 'Search current tab (click for all tabs)'}
-        aria-label={isGlobal ? 'Disable global search' : 'Enable global search'}
-        aria-pressed={isGlobal}
+        title={isGlobalSearch ? 'Searching all tabs (click for current tab only)' : 'Search current tab (click for all tabs)'}
+        aria-label={isGlobalSearch ? 'Disable global search' : 'Enable global search'}
+        aria-pressed={isGlobalSearch}
       >
         <Globe className="h-3.5 w-3.5" />
       </button>
