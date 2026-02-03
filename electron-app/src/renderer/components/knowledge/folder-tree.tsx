@@ -504,16 +504,9 @@ export function FolderTree(): JSX.Element {
       {/* Folder tree */}
       {filteredFolders.map((node) => renderFolderNode(node, 0))}
 
-      {/* Unfiled documents section */}
+      {/* Root-level documents (no folder) - render without confusing "Unfiled" label */}
       {filteredDocs.length > 0 && (
         <>
-          {filteredFolders.length > 0 && (
-            <div className="px-2 pt-2 pb-0.5">
-              <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                Unfiled
-              </span>
-            </div>
-          )}
           {filteredDocs.map((doc) => renderDocumentItem(doc, 0))}
         </>
       )}
