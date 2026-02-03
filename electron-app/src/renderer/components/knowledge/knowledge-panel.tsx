@@ -9,7 +9,7 @@
  * so multiple mounted instances don't share localStorage state.
  */
 
-import { useCallback, useRef, useEffect } from 'react'
+import { useCallback, useRef, useEffect, useState } from 'react'
 import { FileText, FilePlus, FolderPlus } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -26,6 +26,8 @@ import { SearchBar } from './search-bar'
 import { FolderTree } from './folder-tree'
 import { ApplicationTree } from './application-tree'
 import { DocumentEditor } from './document-editor'
+import { SaveStatus } from './SaveStatus'
+import type { SaveStatus as SaveStatusType } from '@/hooks/use-auto-save'
 
 // ============================================================================
 // Types
@@ -53,24 +55,43 @@ interface InnerPanelProps {
 /** Debounce delay for saving content changes (ms) */
 const SAVE_DEBOUNCE_MS = 2000
 
+/** Resize constraints for tree panel */
+const MIN_TREE_WIDTH = 200
+const MAX_TREE_WIDTH = 500
+const DEFAULT_TREE_WIDTH = 280
+
 function InnerPanel({ scope, scopeId, showProjectFolders, className }: InnerPanelProps) {
   const userId = useAuthStore((s) => s.user?.id ?? '')
+  const userName = useAuthStore((s) => s.user?.display_name ?? s.user?.email ?? '')
   const { selectedDocumentId, selectDocument, selectFolder } = useKnowledgeBase()
 
-  // Document data for the editor
-  const { data: document } = useDocument(selectedDocumentId)
+  // Resizable tree panel state
+  const [treeWidth, setTreeWidth] = useState(DEFAULT_TREE_WIDTH)
+  const isResizingRef = useRef(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  // Document data for the editor (renamed to avoid shadowing global document)
+  const { data: currentDoc } = useDocument(selectedDocumentId)
 
   // Save mutation for content changes
   const saveMutation = useSaveDocumentContent()
   const saveTimerRef = useRef<ReturnType<typeof setTimeout>>()
   const rowVersionRef = useRef(1)
 
+  // Save status state
+  const [saveStatus, setSaveStatus] = useState<SaveStatusType>({ state: 'idle' })
+
   // Keep row version in sync
   useEffect(() => {
-    if (document?.row_version) {
-      rowVersionRef.current = document.row_version
+    if (currentDoc?.row_version) {
+      rowVersionRef.current = currentDoc.row_version
     }
-  }, [document?.row_version])
+  }, [currentDoc?.row_version])
+
+  // Reset save status when document changes
+  useEffect(() => {
+    setSaveStatus({ state: 'idle' })
+  }, [selectedDocumentId])
 
   // Cleanup timer on unmount
   useEffect(() => {
@@ -121,7 +142,10 @@ function InnerPanel({ scope, scopeId, showProjectFolders, className }: InnerPane
       if (saveTimerRef.current) {
         clearTimeout(saveTimerRef.current)
       }
+
       saveTimerRef.current = setTimeout(() => {
+        setSaveStatus({ state: 'saving' })
+
         saveMutation.mutate(
           {
             documentId: selectedDocumentId,
@@ -133,6 +157,10 @@ function InnerPanel({ scope, scopeId, showProjectFolders, className }: InnerPane
               if (data.row_version) {
                 rowVersionRef.current = data.row_version
               }
+              setSaveStatus({ state: 'saved', at: Date.now() })
+            },
+            onError: (error) => {
+              setSaveStatus({ state: 'error', message: error.message })
             },
           }
         )
@@ -141,10 +169,49 @@ function InnerPanel({ scope, scopeId, showProjectFolders, className }: InnerPane
     [selectedDocumentId, saveMutation]
   )
 
+  // Resize handlers for tree panel
+  const handleResizeMouseMove = useCallback((e: MouseEvent) => {
+    if (!isResizingRef.current || !containerRef.current) return
+    const containerRect = containerRef.current.getBoundingClientRect()
+    const newWidth = e.clientX - containerRect.left
+    setTreeWidth(Math.max(MIN_TREE_WIDTH, Math.min(MAX_TREE_WIDTH, newWidth)))
+  }, [])
+
+  const handleResizeMouseUp = useCallback(() => {
+    isResizingRef.current = false
+    document.removeEventListener('mousemove', handleResizeMouseMove)
+    document.removeEventListener('mouseup', handleResizeMouseUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }, [handleResizeMouseMove])
+
+  const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    isResizingRef.current = true
+    document.addEventListener('mousemove', handleResizeMouseMove)
+    document.addEventListener('mouseup', handleResizeMouseUp)
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+  }, [handleResizeMouseMove, handleResizeMouseUp])
+
+  // Cleanup resize listeners on unmount
+  useEffect(() => {
+    return () => {
+      document.removeEventListener('mousemove', handleResizeMouseMove)
+      document.removeEventListener('mouseup', handleResizeMouseUp)
+    }
+  }, [handleResizeMouseMove, handleResizeMouseUp])
+
   return (
-    <div className={cn('flex h-full border rounded-lg border-border overflow-hidden', className)}>
+    <div
+      ref={containerRef}
+      className={cn('flex h-full overflow-hidden', className)}
+    >
       {/* Left panel: tree */}
-      <div className="w-64 flex-shrink-0 flex flex-col border-r border-border bg-sidebar">
+      <div
+        style={{ width: treeWidth }}
+        className="flex-shrink-0 flex flex-col border-r border-border bg-sidebar"
+      >
         {/* Search */}
         <div className="p-2 border-b border-border">
           <SearchBar />
@@ -178,18 +245,33 @@ function InnerPanel({ scope, scopeId, showProjectFolders, className }: InnerPane
         </ScrollArea>
       </div>
 
+      {/* Resize handle */}
+      <div
+        className="w-1 cursor-col-resize bg-border hover:bg-primary/50 transition-colors flex-shrink-0"
+        onMouseDown={handleResizeMouseDown}
+      />
+
       {/* Right panel: editor or empty state */}
       <div className="flex-1 flex flex-col min-w-0">
-        {selectedDocumentId && document ? (
-          <DocumentEditor
-            content={document.content_json ? JSON.parse(document.content_json) : undefined}
-            onChange={handleEditorChange}
-            editable={true}
-            placeholder="Start writing..."
-            documentId={selectedDocumentId}
-            userId={userId}
-            className="flex-1"
-          />
+        {selectedDocumentId && currentDoc ? (
+          <>
+            {/* Save status indicator */}
+            <div className="flex items-center justify-end px-4 py-1 border-b bg-muted/30">
+              <SaveStatus status={saveStatus} />
+            </div>
+
+            {/* Document editor */}
+            <DocumentEditor
+              content={currentDoc.content_json ? JSON.parse(currentDoc.content_json) : undefined}
+              onChange={handleEditorChange}
+              editable={true}
+              placeholder="Start writing..."
+              documentId={selectedDocumentId}
+              userId={userId}
+              userName={userName}
+              className="flex-1 border-0 rounded-none"
+            />
+          </>
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground gap-3">
             <FileText className="h-12 w-12 text-muted-foreground/30" />
