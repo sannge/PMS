@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 02.1 of 10 (OneNote-Style Knowledge Tree Redesign)
-Plan: 15 of 15 in phase 02.1 (gap closure)
-Status: Phase complete
-Last activity: 2026-02-03 -- Completed 02.1-15-PLAN.md
+Plan: 14 of 15 in phase 02.1 (gap closure - out of order)
+Status: In progress
+Last activity: 2026-02-03 -- Completed 02.1-14-PLAN.md (UI polish)
 
 Progress: [████████████████████████████] ~93%
 
@@ -128,6 +128,8 @@ Recent decisions affecting current work:
 - [02.1-15]: Used existing PUT endpoints with sort_order field instead of creating dedicated reorder endpoints
 - [02.1-15]: Scope-aware sortable IDs encode scope and type for drag validation (app-folder-{id}, project-{projId}-doc-{id})
 - [02.1-15]: Each ProjectSection has its own SortableContext for isolated project-level DnD
+- [02.1-14]: Search bar at page header level (full width, outside sidebar panel)
+- [02.1-14]: Icon size h-3.5 w-3.5 for compact create buttons
 
 ### Roadmap Evolution
 
@@ -148,5 +150,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 02.1-15-PLAN.md. Phase 02.1 complete - @dnd-kit drag-and-drop reorder for knowledge tree.
+Stopped at: Completed 02.1-14-PLAN.md. UI polish - compact create buttons and page-level search bar.
 Resume file: None
