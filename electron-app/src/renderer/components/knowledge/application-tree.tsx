@@ -10,7 +10,7 @@
  * Project folder contents are only fetched when the section is expanded.
  */
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import { FilePlus, FolderKanban, ChevronRight, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -89,6 +89,8 @@ interface ProjectSectionProps {
   selectedFolderId: string | null
   selectedDocumentId: string | null
   renamingItemId: string | null
+  /** Hide this project section if it has no documents after loading */
+  hideIfEmpty?: boolean
   onToggleFolder: (folderId: string) => void
   onSelectFolder: (folderId: string) => void
   onSelectDocument: (documentId: string) => void
@@ -110,13 +112,14 @@ function ProjectSection({
   selectedFolderId,
   selectedDocumentId,
   renamingItemId,
+  hideIfEmpty = false,
   onToggleFolder,
   onSelectFolder,
   onSelectDocument,
   onContextMenu,
   onRenameSubmit,
   onRenameCancel,
-}: ProjectSectionProps): JSX.Element {
+}: ProjectSectionProps): JSX.Element | null {
   const [isExpanded, setIsExpanded] = useState(false)
 
   // Lazy-load project tree only when expanded.
@@ -139,6 +142,18 @@ function ProjectSection({
   const folders = projectFolders ?? []
   const unfiledDocs = projectUnfiled?.items ?? []
   const isLoading = isExpanded && isFoldersLoading && isUnfiledLoading
+
+  // Determine if project has content (only knowable after data loads)
+  const isEmpty = useMemo(() => {
+    // Can't determine if loading or not yet expanded
+    if (!isExpanded || isLoading) return false
+    return folders.length === 0 && unfiledDocs.length === 0
+  }, [isExpanded, isLoading, folders.length, unfiledDocs.length])
+
+  // Hide section if expanded, loaded, and empty (when hideIfEmpty is true)
+  if (hideIfEmpty && isExpanded && isEmpty && !isLoading) {
+    return null
+  }
 
   const renderFolderNode = useCallback(
     (node: FolderTreeNode, depth: number): JSX.Element => {
@@ -675,6 +690,7 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
               selectedFolderId={selectedFolderId}
               selectedDocumentId={selectedDocumentId}
               renamingItemId={renamingItemId}
+              hideIfEmpty={true}
               onToggleFolder={toggleFolder}
               onSelectFolder={handleSelectFolder}
               onSelectDocument={handleSelectDocument}
