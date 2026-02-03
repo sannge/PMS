@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-31)
 
 **Core value:** Teams can create, organize, and find internal documentation without leaving their project management tool.
-**Current focus:** Phase 02.1 gap closure (fixing editor and autosave blockers).
+**Current focus:** Phase 02.1 complete (OneNote-Style Knowledge Tree Redesign). Awaiting UAT verification.
 
 ## Current Position
 
 Phase: 02.1 of 10 (OneNote-Style Knowledge Tree Redesign)
-Plan: 6 of 7 in phase 02.1 (gap closure plans added)
-Status: In progress
-Last activity: 2026-02-03 -- Completed 02.1-06-PLAN.md
+Plan: 7 of 7 in phase 02.1 (gap closure plans complete)
+Status: Phase complete (awaiting verification)
+Last activity: 2026-02-03 -- Completed 02.1-07-PLAN.md
 
-Progress: [████████████████████████] ~76%
+Progress: [████████████████████████] ~78%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 25
+- Total plans completed: 26
 - Average duration: ~5 min
-- Total execution time: ~2.0 hours
+- Total execution time: ~2.1 hours
 
 **By Phase:**
 
@@ -33,11 +33,11 @@ Progress: [███████████████████████
 | 04 | 4/4 | ~12 min | ~3 min |
 | 05 | 2/2 | ~10 min | ~5 min |
 | 04.1 | 2/2 | ~6 min | ~3 min |
-| 02.1 | 6/7 | ~29 min | ~5 min |
+| 02.1 | 7/7 | ~37 min | ~5 min |
 
 **Recent Trend:**
-- Last 5 plans: 02.1-03 (~2 min), 02.1-04 (~4 min), 02.1-05 (~6 min), 02.1-06 (~8 min)
-- Trend: stable at ~2-8 min
+- Last 5 plans: 02.1-04 (~4 min), 02.1-05 (~6 min), 02.1-06 (~8 min), 02.1-07 (~8 min)
+- Trend: stable at ~4-8 min
 
 *Updated after each plan completion*
 
@@ -108,6 +108,8 @@ Recent decisions affecting current work:
 - [02.1-06]: currentDoc variable rename to avoid shadowing global document object
 - [02.1-06]: SaveStatus indicator in dedicated header bar above editor
 - [02.1-06]: EditorPanel pattern: useDocument + debounced save + rowVersionRef + SaveStatus
+- [02.1-07]: Tree resize constraints: min 200px, max 500px, default 280px
+- [02.1-07]: Mouse event resize handlers with refs for isResizing and containerRef
 
 ### Roadmap Evolution
 
@@ -128,5 +130,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 02.1-06-PLAN.md. Editor and autosave gaps fixed.
+Stopped at: Completed 02.1-07-PLAN.md. Layout gap closure complete. Phase 02.1 ready for UAT.
 Resume file: None
