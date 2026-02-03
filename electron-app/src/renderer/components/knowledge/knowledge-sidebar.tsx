@@ -11,6 +11,7 @@
  * Supports collapsed/expanded modes with smooth transitions.
  */
 
+import { useState } from 'react'
 import { PanelLeftClose, PanelLeftOpen, FilePlus, FolderPlus } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -23,13 +24,24 @@ import { SearchBar } from './search-bar'
 import { FolderTree } from './folder-tree'
 import { ApplicationTree } from './application-tree'
 import { TagFilterList } from './tag-filter-list'
+import { CreateDialog } from './create-dialog'
 
 export function KnowledgeSidebar(): JSX.Element {
-  const { isSidebarCollapsed, toggleSidebar, activeTab, setActiveTab } = useKnowledgeBase()
+  const {
+    isSidebarCollapsed,
+    toggleSidebar,
+    activeTab,
+    setActiveTab,
+    selectedFolderId,
+  } = useKnowledgeBase()
   const userId = useAuthStore((s) => s.user?.id ?? null)
   const { data: scopesSummary } = useApplicationsWithDocs()
   const createDocument = useCreateDocument()
   const createFolder = useCreateFolder()
+
+  // Dialog state
+  const [createDialogOpen, setCreateDialogOpen] = useState(false)
+  const [createType, setCreateType] = useState<'document' | 'folder'>('document')
 
   const resolveScope = () => {
     if (activeTab === 'personal') {
@@ -39,26 +51,35 @@ export function KnowledgeSidebar(): JSX.Element {
     return { scope: 'application' as const, scopeId: appId }
   }
 
-  const handleCreateDoc = () => {
-    const { scope, scopeId } = resolveScope()
-    if (!scopeId) return
-    createDocument.mutate({
-      title: 'Untitled',
-      scope,
-      scope_id: scopeId,
-      folder_id: null,
-    })
+  const handleCreateDocClick = () => {
+    setCreateType('document')
+    setCreateDialogOpen(true)
   }
 
-  const handleCreateFolder = () => {
+  const handleCreateFolderClick = () => {
+    setCreateType('folder')
+    setCreateDialogOpen(true)
+  }
+
+  const handleCreateSubmit = async (name: string) => {
     const { scope, scopeId } = resolveScope()
     if (!scopeId) return
-    createFolder.mutate({
-      name: 'New Folder',
-      scope,
-      scope_id: scopeId,
-      parent_id: null,
-    })
+
+    if (createType === 'document') {
+      await createDocument.mutateAsync({
+        title: name,
+        scope,
+        scope_id: scopeId,
+        folder_id: selectedFolderId || null, // Use selected folder
+      })
+    } else {
+      await createFolder.mutateAsync({
+        name,
+        scope,
+        scope_id: scopeId,
+        parent_id: selectedFolderId || null, // Create inside selected folder
+      })
+    }
   }
 
   return (
@@ -112,20 +133,28 @@ export function KnowledgeSidebar(): JSX.Element {
           {/* Quick creation buttons */}
           <div className="flex items-center gap-1 px-2 py-1 border-b border-border">
             <button
-              onClick={handleCreateDoc}
+              onClick={handleCreateDocClick}
               className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
               title="New document"
             >
               <FilePlus className="h-4 w-4" />
             </button>
             <button
-              onClick={handleCreateFolder}
+              onClick={handleCreateFolderClick}
               className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
               title="New folder"
             >
               <FolderPlus className="h-4 w-4" />
             </button>
           </div>
+
+          {/* Create dialog */}
+          <CreateDialog
+            open={createDialogOpen}
+            onOpenChange={setCreateDialogOpen}
+            type={createType}
+            onSubmit={handleCreateSubmit}
+          />
 
           {/* Folder tree section */}
           <ScrollArea className="flex-1">
