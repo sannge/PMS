@@ -42,6 +42,34 @@ export interface KnowledgePanelProps {
 }
 
 // ============================================================================
+// Skeleton
+// ============================================================================
+
+/**
+ * Editor content skeleton - shows title and paragraph placeholders
+ */
+function EditorSkeleton(): JSX.Element {
+  return (
+    <div className="flex-1 p-6 space-y-4">
+      {/* Title skeleton */}
+      <div className="h-8 w-48 rounded bg-muted animate-pulse" />
+      {/* Paragraph skeletons */}
+      <div className="space-y-2.5">
+        <div className="h-4 rounded bg-muted animate-pulse" style={{ width: '90%' }} />
+        <div className="h-4 rounded bg-muted animate-pulse" style={{ width: '75%' }} />
+        <div className="h-4 rounded bg-muted animate-pulse" style={{ width: '85%' }} />
+        <div className="h-4 rounded bg-muted animate-pulse" style={{ width: '60%' }} />
+      </div>
+      {/* Second paragraph */}
+      <div className="space-y-2.5 pt-2">
+        <div className="h-4 rounded bg-muted animate-pulse" style={{ width: '80%' }} />
+        <div className="h-4 rounded bg-muted animate-pulse" style={{ width: '70%' }} />
+      </div>
+    </div>
+  )
+}
+
+// ============================================================================
 // Inner panel (must be inside KnowledgeBaseProvider)
 // ============================================================================
 
@@ -71,7 +99,7 @@ function InnerPanel({ scope, scopeId, showProjectFolders, className }: InnerPane
   const containerRef = useRef<HTMLDivElement>(null)
 
   // Document data for the editor (renamed to avoid shadowing global document)
-  const { data: currentDoc } = useDocument(selectedDocumentId)
+  const { data: currentDoc, isLoading: isDocLoading } = useDocument(selectedDocumentId)
 
   // Save mutation for content changes
   const saveMutation = useSaveDocumentContent()
@@ -253,25 +281,34 @@ function InnerPanel({ scope, scopeId, showProjectFolders, className }: InnerPane
 
       {/* Right panel: editor or empty state */}
       <div className="flex-1 flex flex-col min-w-0">
-        {selectedDocumentId && currentDoc ? (
-          <>
-            {/* Save status indicator */}
-            <div className="flex items-center justify-end px-4 py-1 border-b bg-muted/30">
-              <SaveStatus status={saveStatus} />
-            </div>
+        {selectedDocumentId ? (
+          isDocLoading ? (
+            <EditorSkeleton />
+          ) : currentDoc ? (
+            <>
+              {/* Save status indicator */}
+              <div className="flex items-center justify-end px-4 py-1 border-b bg-muted/30">
+                <SaveStatus status={saveStatus} />
+              </div>
 
-            {/* Document editor */}
-            <DocumentEditor
-              content={currentDoc.content_json ? JSON.parse(currentDoc.content_json) : undefined}
-              onChange={handleEditorChange}
-              editable={true}
-              placeholder="Start writing..."
-              documentId={selectedDocumentId}
-              userId={userId}
-              userName={userName}
-              className="flex-1 border-0 rounded-none"
-            />
-          </>
+              {/* Document editor */}
+              <DocumentEditor
+                content={currentDoc.content_json ? JSON.parse(currentDoc.content_json) : undefined}
+                onChange={handleEditorChange}
+                editable={true}
+                placeholder="Start writing..."
+                documentId={selectedDocumentId}
+                userId={userId}
+                userName={userName}
+                className="flex-1 border-0 rounded-none"
+              />
+            </>
+          ) : (
+            <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground gap-3">
+              <FileText className="h-12 w-12 text-muted-foreground/30" />
+              <p className="text-sm">Document not found</p>
+            </div>
+          )
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground gap-3">
             <FileText className="h-12 w-12 text-muted-foreground/30" />
