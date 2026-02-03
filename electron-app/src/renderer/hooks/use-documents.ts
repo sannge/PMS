@@ -399,6 +399,66 @@ export function useDeleteDocument(
 }
 
 // ============================================================================
+// Reorder Mutation
+// ============================================================================
+
+interface ReorderDocumentParams {
+  documentId: string
+  sortOrder: number
+  folderId?: string | null
+  rowVersion: number
+}
+
+/**
+ * Reorder a document by updating its sort_order.
+ * Uses the existing PUT endpoint with sort_order field.
+ */
+export function useReorderDocument(
+  scope: string,
+  scopeId: string
+): UseMutationResult<Document, Error, ReorderDocumentParams> {
+  const token = useAuthStore((s) => s.token)
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({ documentId, sortOrder, folderId, rowVersion }: ReorderDocumentParams) => {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      const body: { sort_order: number; folder_id?: string | null; row_version: number } = {
+        sort_order: sortOrder,
+        row_version: rowVersion,
+      }
+      if (folderId !== undefined) {
+        body.folder_id = folderId
+      }
+
+      const response = await window.electronAPI.put<Document>(
+        `/api/documents/${documentId}`,
+        body,
+        getAuthHeaders(token)
+      )
+
+      if (response.status !== 200) {
+        throw new Error(parseApiError(response.status, response.data))
+      }
+
+      return response.data
+    },
+    onSuccess: (updatedDoc) => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.documents(scope, scopeId),
+      })
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.documentFolders(scope, scopeId),
+      })
+      queryClient.setQueryData(queryKeys.document(updatedDoc.id), updatedDoc)
+    },
+  })
+}
+
+// ============================================================================
 // Scopes Summary Hook
 // ============================================================================
 

@@ -309,3 +309,57 @@ export function useDeleteFolder(
     },
   })
 }
+
+// ============================================================================
+// Reorder Mutation
+// ============================================================================
+
+interface ReorderFolderParams {
+  folderId: string
+  sortOrder: number
+  parentId?: string | null
+}
+
+/**
+ * Reorder a folder by updating its sort_order.
+ * Uses the existing PUT endpoint with sort_order field.
+ */
+export function useReorderFolder(
+  scope: string,
+  scopeId: string
+): UseMutationResult<DocumentFolder, Error, ReorderFolderParams> {
+  const token = useAuthStore((s) => s.token)
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({ folderId, sortOrder, parentId }: ReorderFolderParams) => {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      const body: { sort_order: number; parent_id?: string | null } = {
+        sort_order: sortOrder,
+      }
+      if (parentId !== undefined) {
+        body.parent_id = parentId
+      }
+
+      const response = await window.electronAPI.put<DocumentFolder>(
+        `/api/document-folders/${folderId}`,
+        body,
+        getAuthHeaders(token)
+      )
+
+      if (response.status !== 200) {
+        throw new Error(parseApiError(response.status, response.data))
+      }
+
+      return response.data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.documentFolders(scope, scopeId),
+      })
+    },
+  })
+}
