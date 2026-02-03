@@ -12,6 +12,9 @@
  * - WebSocket subscription for real-time lock state updates
  * - Unmount cleanup with fire-and-forget release
  *
+ * Also exports useDocumentLockStatus for read-only lock status display
+ * (e.g., showing lock icons in the folder tree).
+ *
  * @module use-document-lock
  */
 
@@ -491,5 +494,142 @@ export function useDocumentLock({
     forceTakeLock,
     canForceTake,
     isLoading: lockQuery.isLoading || acquireMutation.isPending || releaseMutation.isPending,
+  }
+}
+
+// ============================================================================
+// Read-Only Lock Status Hook (for tree display)
+// ============================================================================
+
+/**
+ * Return type for useDocumentLockStatus hook
+ */
+export interface UseDocumentLockStatusReturn {
+  /** Whether the document is currently locked */
+  isLocked: boolean
+  /** Info about who holds the lock (null if not locked) */
+  lockHolder: { userId: string; userName: string } | null
+  /** Whether the lock status is being loaded */
+  isLoading: boolean
+}
+
+/**
+ * Query lock status for a document (read-only, for display).
+ *
+ * This is a SEPARATE hook from useDocumentLock which is for acquiring locks.
+ * Use this hook to display lock indicators in the folder tree or document list.
+ *
+ * Features:
+ * - Queries lock status from API
+ * - Subscribes to WebSocket for real-time updates
+ * - 30s polling fallback
+ * - Disabled when documentId is null
+ *
+ * @param documentId - Document ID to query lock status for (null to disable)
+ * @returns Lock status info for display
+ *
+ * @example
+ * ```tsx
+ * function DocumentItem({ doc }) {
+ *   const { isLocked, lockHolder } = useDocumentLockStatus(doc.id)
+ *
+ *   return (
+ *     <div>
+ *       <span>{doc.title}</span>
+ *       {isLocked && <Lock title={`Editing: ${lockHolder?.userName}`} />}
+ *     </div>
+ *   )
+ * }
+ * ```
+ */
+export function useDocumentLockStatus(documentId: string | null): UseDocumentLockStatusReturn {
+  const token = useAuthStore((s) => s.token)
+  const queryClient = useQueryClient()
+  const { subscribe, status: wsStatus } = useWebSocket()
+
+  // Query lock status
+  const { data, isLoading } = useQuery({
+    queryKey: queryKeys.documentLock(documentId ?? ''),
+    queryFn: async (): Promise<LockStatusResponse> => {
+      if (!window.electronAPI || !documentId) {
+        return { is_locked: false, lock_holder: null }
+      }
+
+      const response = await window.electronAPI.get<LockStatusResponse>(
+        `/api/documents/${documentId}/lock`,
+        getAuthHeaders(token)
+      )
+
+      if (response.status !== 200) {
+        // Return unlocked state on error
+        return { is_locked: false, lock_holder: null }
+      }
+
+      return response.data
+    },
+    enabled: !!token && !!documentId,
+    staleTime: 10_000, // 10 seconds
+    refetchInterval: 30_000, // 30s fallback poll
+    gcTime: 60_000,
+  })
+
+  // Subscribe to WebSocket for real-time lock updates
+  useEffect(() => {
+    if (!documentId || !wsStatus.isConnected) return
+
+    const handleLocked = (eventData: { document_id: string; lock_holder: LockHolder }) => {
+      if (eventData.document_id !== documentId) return
+      queryClient.setQueryData<LockStatusResponse>(
+        queryKeys.documentLock(documentId),
+        { is_locked: true, lock_holder: eventData.lock_holder }
+      )
+    }
+
+    const handleUnlocked = (eventData: { document_id: string }) => {
+      if (eventData.document_id !== documentId) return
+      queryClient.setQueryData<LockStatusResponse>(
+        queryKeys.documentLock(documentId),
+        { is_locked: false, lock_holder: null }
+      )
+    }
+
+    const handleForceTaken = (eventData: { document_id: string; lock_holder: LockHolder }) => {
+      if (eventData.document_id !== documentId) return
+      queryClient.setQueryData<LockStatusResponse>(
+        queryKeys.documentLock(documentId),
+        { is_locked: true, lock_holder: eventData.lock_holder }
+      )
+    }
+
+    const unsubLocked = subscribe<{ document_id: string; lock_holder: LockHolder }>(
+      MessageType.DOCUMENT_LOCKED,
+      handleLocked
+    )
+    const unsubUnlocked = subscribe<{ document_id: string }>(
+      MessageType.DOCUMENT_UNLOCKED,
+      handleUnlocked
+    )
+    const unsubForceTaken = subscribe<{ document_id: string; lock_holder: LockHolder }>(
+      MessageType.DOCUMENT_FORCE_TAKEN,
+      handleForceTaken
+    )
+
+    return () => {
+      unsubLocked()
+      unsubUnlocked()
+      unsubForceTaken()
+    }
+  }, [documentId, wsStatus.isConnected, subscribe, queryClient])
+
+  // Derive return values
+  const isLocked = !!data?.is_locked && !!data?.lock_holder
+  const lockHolder = data?.lock_holder
+    ? { userId: data.lock_holder.user_id, userName: data.lock_holder.user_name }
+    : null
+
+  return {
+    isLocked,
+    lockHolder,
+    isLoading,
   }
 }
