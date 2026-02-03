@@ -131,20 +131,20 @@ export function KnowledgeSidebar(): JSX.Element {
           </div>
 
           {/* Quick creation buttons */}
-          <div className="flex items-center gap-1 px-2 py-1 border-b border-border">
+          <div className="flex items-center gap-0.5 px-1.5 py-0.5 border-b border-border">
             <button
               onClick={handleCreateDocClick}
               className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
               title="New document"
             >
-              <FilePlus className="h-4 w-4" />
+              <FilePlus className="h-3.5 w-3.5" />
             </button>
             <button
               onClick={handleCreateFolderClick}
               className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
               title="New folder"
             >
-              <FolderPlus className="h-4 w-4" />
+              <FolderPlus className="h-3.5 w-3.5" />
             </button>
           </div>
 
