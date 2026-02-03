@@ -26,10 +26,11 @@ import { useKnowledgeBase } from '@/contexts/knowledge-base-context'
 const DEBOUNCE_MS = 300
 
 export interface SearchBarProps {
+  className?: string
   onGlobalToggle?: (isGlobal: boolean) => void
 }
 
-export function SearchBar({ onGlobalToggle }: SearchBarProps = {}): JSX.Element {
+export function SearchBar({ className, onGlobalToggle }: SearchBarProps = {}): JSX.Element {
   const { searchQuery, setSearch, isGlobalSearch, setGlobalSearch } = useKnowledgeBase()
   const [localValue, setLocalValue] = useState(searchQuery)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -69,7 +70,7 @@ export function SearchBar({ onGlobalToggle }: SearchBarProps = {}): JSX.Element 
   }
 
   return (
-    <div className="relative flex items-center gap-1">
+    <div className={cn('relative flex items-center gap-1', className)}>
       <div className="relative flex-1">
         <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
         <Input

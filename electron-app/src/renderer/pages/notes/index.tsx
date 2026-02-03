@@ -4,8 +4,11 @@
  * Main entry point for the Knowledge Base / Notes screen.
  * Wraps content in KnowledgeBaseProvider for shared UI state.
  *
- * Layout: sidebar on the left, editor panel on the right.
- * The sidebar provides tab bar, search, folder tree, and tag filter.
+ * Layout:
+ * - Search bar at top (full width, outside sidebar)
+ * - Sidebar on the left (tab bar, create buttons, folder tree, tag filter)
+ * - Editor panel on the right
+ *
  * The editor panel shows the document editor with autosave.
  */
 
@@ -16,6 +19,7 @@ import { useAuthStore } from '@/contexts/auth-context'
 import { useDocument } from '@/hooks/use-documents'
 import { useSaveDocumentContent } from '@/hooks/use-queries'
 import { KnowledgeSidebar } from '@/components/knowledge/knowledge-sidebar'
+import { SearchBar } from '@/components/knowledge/search-bar'
 import { DocumentEditor } from '@/components/knowledge/document-editor'
 import { SaveStatus } from '@/components/knowledge/SaveStatus'
 import type { SaveStatus as SaveStatusType } from '@/hooks/use-auto-save'
@@ -137,11 +141,19 @@ function EditorPanel() {
 export function NotesPage(): JSX.Element {
   return (
     <KnowledgeBaseProvider>
-      <div className="flex h-full">
-        <KnowledgeSidebar />
-        <main className="flex-1 flex flex-col">
-          <EditorPanel />
-        </main>
+      <div className="flex flex-col h-full">
+        {/* Global search bar - positioned outside sidebar panel */}
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-background">
+          <SearchBar className="flex-1 max-w-sm" />
+        </div>
+
+        {/* Main content area */}
+        <div className="flex flex-1 min-h-0">
+          <KnowledgeSidebar />
+          <main className="flex-1 flex flex-col">
+            <EditorPanel />
+          </main>
+        </div>
       </div>
     </KnowledgeBaseProvider>
   )

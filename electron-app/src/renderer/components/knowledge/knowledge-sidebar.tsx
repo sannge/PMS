@@ -3,11 +3,11 @@
  *
  * Main sidebar container that composes all sidebar sections:
  * - Tab bar (KnowledgeTabBar for My Notes + application tabs)
- * - Search bar
  * - Quick creation buttons (new doc / new folder)
  * - Folder tree (FolderTree component)
  * - Tag filter (TagFilterList with click-to-filter)
  *
+ * Note: Search bar is now positioned outside the sidebar at page level.
  * Supports collapsed/expanded modes with smooth transitions.
  */
 
@@ -20,7 +20,6 @@ import { useAuthStore } from '@/contexts/auth-context'
 import { useApplicationsWithDocs, useCreateDocument } from '@/hooks/use-documents'
 import { useCreateFolder } from '@/hooks/use-document-folders'
 import { KnowledgeTabBar } from './knowledge-tab-bar'
-import { SearchBar } from './search-bar'
 import { FolderTree } from './folder-tree'
 import { ApplicationTree } from './application-tree'
 import { TagFilterList } from './tag-filter-list'
@@ -124,11 +123,6 @@ export function KnowledgeSidebar(): JSX.Element {
             onTabChange={setActiveTab}
             applicationsWithDocs={scopesSummary?.applications ?? []}
           />
-
-          {/* Search bar section */}
-          <div className="p-2 border-b border-border">
-            <SearchBar />
-          </div>
 
           {/* Quick creation buttons */}
           <div className="flex items-center gap-0.5 px-1.5 py-0.5 border-b border-border">
