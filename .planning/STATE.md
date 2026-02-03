@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 02.1 of 10 (OneNote-Style Knowledge Tree Redesign)
-Plan: 12 of 15 in phase 02.1 (gap closure)
+Plan: 13 of 15 in phase 02.1 (gap closure)
 Status: In progress
-Last activity: 2026-02-03 -- Completed 02.1-12-PLAN.md
+Last activity: 2026-02-03 -- Completed 02.1-13-PLAN.md
 
-Progress: [██████████████████████████] ~84%
+Progress: [██████████████████████████] ~87%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 31
+- Total plans completed: 32
 - Average duration: ~5 min
-- Total execution time: ~2.6 hours
+- Total execution time: ~2.7 hours
 
 **By Phase:**
 
@@ -33,11 +33,11 @@ Progress: [███████████████████████
 | 04 | 4/4 | ~12 min | ~3 min |
 | 05 | 2/2 | ~10 min | ~5 min |
 | 04.1 | 2/2 | ~6 min | ~3 min |
-| 02.1 | 12/15 | ~63 min | ~5 min |
+| 02.1 | 13/15 | ~68 min | ~5 min |
 
 **Recent Trend:**
-- Last 5 plans: 02.1-09 (~2 min), 02.1-10 (~4 min), 02.1-11 (~7 min), 02.1-12 (~9 min)
-- Trend: stable at ~2-9 min
+- Last 5 plans: 02.1-10 (~4 min), 02.1-11 (~7 min), 02.1-12 (~9 min), 02.1-13 (~5 min)
+- Trend: stable at ~4-9 min
 
 *Updated after each plan completion*
 
@@ -123,6 +123,8 @@ Recent decisions affecting current work:
 - [02.1-12]: TreeItemSkeleton matches FolderTreeItem layout (icon + text with proper indentation)
 - [02.1-12]: Loader2 spinners acceptable for button states and background refresh (non-blocking)
 - [02.1-12]: EditorSkeleton shows title + paragraph placeholders while document loads
+- [02.1-13]: Per-item lock query: Each tree item queries its own lock status (simpler than batch approach)
+- [02.1-13]: Scope room broadcasting: Lock events broadcast to both document room and scope room (application/project)
 
 ### Roadmap Evolution
 
@@ -143,5 +145,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 02.1-12-PLAN.md. Skeleton loading states for folder trees and editor panel.
+Stopped at: Completed 02.1-13-PLAN.md. Real-time lock indicators in folder tree with WebSocket updates.
 Resume file: None
