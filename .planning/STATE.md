@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-31)
 
 **Core value:** Teams can create, organize, and find internal documentation without leaving their project management tool.
-**Current focus:** Phase 02.1 complete (OneNote-Style Knowledge Tree Redesign). Awaiting verification checkpoint.
+**Current focus:** Phase 02.1 gap closure (fixing editor and autosave blockers).
 
 ## Current Position
 
 Phase: 02.1 of 10 (OneNote-Style Knowledge Tree Redesign)
-Plan: 5 of 5 in phase 02.1
-Status: Phase complete (awaiting verification)
-Last activity: 2026-02-02 -- Completed 02.1-05-PLAN.md
+Plan: 6 of 7 in phase 02.1 (gap closure plans added)
+Status: In progress
+Last activity: 2026-02-03 -- Completed 02.1-06-PLAN.md
 
-Progress: [████████████████████████] ~75%
+Progress: [████████████████████████] ~76%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 24
+- Total plans completed: 25
 - Average duration: ~5 min
-- Total execution time: ~1.9 hours
+- Total execution time: ~2.0 hours
 
 **By Phase:**
 
@@ -33,11 +33,11 @@ Progress: [███████████████████████
 | 04 | 4/4 | ~12 min | ~3 min |
 | 05 | 2/2 | ~10 min | ~5 min |
 | 04.1 | 2/2 | ~6 min | ~3 min |
-| 02.1 | 5/5 | ~21 min | ~4 min |
+| 02.1 | 6/7 | ~29 min | ~5 min |
 
 **Recent Trend:**
-- Last 5 plans: 02.1-01 (~7 min), 02.1-03 (~2 min), 02.1-04 (~4 min), 02.1-05 (~6 min)
-- Trend: stable at ~2-7 min
+- Last 5 plans: 02.1-03 (~2 min), 02.1-04 (~4 min), 02.1-05 (~6 min), 02.1-06 (~8 min)
+- Trend: stable at ~2-8 min
 
 *Updated after each plan completion*
 
@@ -105,6 +105,9 @@ Recent decisions affecting current work:
 - [02.1-05]: KnowledgePanel wraps in KnowledgeBaseProvider with scoped storagePrefix for localStorage isolation
 - [02.1-05]: Application detail replaces showArchive boolean with activeView union type (projects/archive/knowledge)
 - [02.1-05]: Content save in KnowledgePanel uses useSaveDocumentContent with 2s debounce (useAutoSave requires editor instance)
+- [02.1-06]: currentDoc variable rename to avoid shadowing global document object
+- [02.1-06]: SaveStatus indicator in dedicated header bar above editor
+- [02.1-06]: EditorPanel pattern: useDocument + debounced save + rowVersionRef + SaveStatus
 
 ### Roadmap Evolution
 
@@ -124,6 +127,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-02-02
-Stopped at: Completed 02.1-05-PLAN.md. Phase 02.1 complete (5/5 plans). Awaiting human verification checkpoint.
+Last session: 2026-02-03
+Stopped at: Completed 02.1-06-PLAN.md. Editor and autosave gaps fixed.
 Resume file: None
