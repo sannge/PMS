@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 02.1 of 10 (OneNote-Style Knowledge Tree Redesign)
-Plan: 7 of 7 in phase 02.1 (gap closure plans complete)
+Plan: 8 of 8 in phase 02.1 (gap closure plans complete)
 Status: Phase complete (awaiting verification)
-Last activity: 2026-02-03 -- Completed 02.1-07-PLAN.md
+Last activity: 2026-02-03 -- Completed 02.1-08-PLAN.md
 
-Progress: [████████████████████████] ~78%
+Progress: [████████████████████████] ~79%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 26
+- Total plans completed: 27
 - Average duration: ~5 min
-- Total execution time: ~2.1 hours
+- Total execution time: ~2.2 hours
 
 **By Phase:**
 
@@ -33,10 +33,10 @@ Progress: [███████████████████████
 | 04 | 4/4 | ~12 min | ~3 min |
 | 05 | 2/2 | ~10 min | ~5 min |
 | 04.1 | 2/2 | ~6 min | ~3 min |
-| 02.1 | 7/7 | ~37 min | ~5 min |
+| 02.1 | 8/8 | ~41 min | ~5 min |
 
 **Recent Trend:**
-- Last 5 plans: 02.1-04 (~4 min), 02.1-05 (~6 min), 02.1-06 (~8 min), 02.1-07 (~8 min)
+- Last 5 plans: 02.1-05 (~6 min), 02.1-06 (~8 min), 02.1-07 (~8 min), 02.1-08 (~4 min)
 - Trend: stable at ~4-8 min
 
 *Updated after each plan completion*
@@ -110,6 +110,9 @@ Recent decisions affecting current work:
 - [02.1-06]: EditorPanel pattern: useDocument + debounced save + rowVersionRef + SaveStatus
 - [02.1-07]: Tree resize constraints: min 200px, max 500px, default 280px
 - [02.1-07]: Mouse event resize handlers with refs for isResizing and containerRef
+- [02.1-08]: CreateDialog default names reset on dialog open (Untitled/New Folder)
+- [02.1-08]: DeleteDialog reuses AlertDialog from confirm-dialog.tsx
+- [02.1-08]: Quick create buttons use selectedFolderId from context for nested creation
 
 ### Roadmap Evolution
 
@@ -130,5 +133,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 02.1-07-PLAN.md. Layout gap closure complete. Phase 02.1 ready for UAT.
+Stopped at: Completed 02.1-08-PLAN.md. Dialog UX gap closure complete. Phase 02.1 ready for UAT.
 Resume file: None
