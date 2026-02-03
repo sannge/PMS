@@ -58,23 +58,50 @@ interface ContextMenuTarget {
 // Skeleton
 // ============================================================================
 
-function TreeSkeleton(): JSX.Element {
-  const rows = [
-    { width: '60%', paddingLeft: 8 },
-    { width: '80%', paddingLeft: 24 },
-    { width: '50%', paddingLeft: 24 },
-    { width: '70%', paddingLeft: 40 },
-  ]
-
+/**
+ * Tree item skeleton - matches FolderTreeItem layout (icon + text)
+ */
+function TreeItemSkeleton({ depth = 0, widthPercent = 60 }: { depth?: number; widthPercent?: number }): JSX.Element {
   return (
-    <div className="p-2 space-y-1.5">
-      {rows.map((row, i) => (
-        <div
-          key={i}
-          className="h-6 rounded animate-pulse bg-muted"
-          style={{ width: row.width, marginLeft: row.paddingLeft }}
-        />
-      ))}
+    <div
+      className="flex items-center gap-1.5 py-1 pr-2"
+      style={{ paddingLeft: depth * 20 + 12 }}
+    >
+      <div className="h-4 w-4 rounded bg-muted animate-pulse shrink-0" />
+      <div
+        className="h-4 rounded bg-muted animate-pulse"
+        style={{ width: `${widthPercent}%` }}
+      />
+    </div>
+  )
+}
+
+function TreeSkeleton(): JSX.Element {
+  return (
+    <div className="py-1 space-y-0.5">
+      {/* Folder skeleton */}
+      <TreeItemSkeleton depth={0} widthPercent={55} />
+      {/* Nested document skeletons */}
+      <TreeItemSkeleton depth={1} widthPercent={70} />
+      <TreeItemSkeleton depth={1} widthPercent={50} />
+      {/* Another folder */}
+      <TreeItemSkeleton depth={0} widthPercent={45} />
+      {/* Nested items */}
+      <TreeItemSkeleton depth={1} widthPercent={65} />
+      <TreeItemSkeleton depth={2} widthPercent={60} />
+    </div>
+  )
+}
+
+/**
+ * Skeleton for project section content - shows 3 document rows at depth 1
+ */
+function ProjectContentSkeleton(): JSX.Element {
+  return (
+    <div className="space-y-0.5 py-1">
+      <TreeItemSkeleton depth={1} widthPercent={65} />
+      <TreeItemSkeleton depth={1} widthPercent={80} />
+      <TreeItemSkeleton depth={1} widthPercent={50} />
     </div>
   )
 }
@@ -252,10 +279,7 @@ function ProjectSection({
       {isExpanded && (
         <div className="pl-2">
           {isLoading ? (
-            <div className="flex items-center gap-1.5 px-2 py-1.5 text-xs text-muted-foreground">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              <span>Loading...</span>
-            </div>
+            <ProjectContentSkeleton />
           ) : (
             <>
               {folders.map((node) => renderFolderNode(node, 1))}
@@ -732,16 +756,9 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
         </>
       )}
 
-      {/* App-level unfiled documents */}
+      {/* App-level root documents (no folder) - render without confusing "Unfiled" label */}
       {filteredDocs.length > 0 && (
         <>
-          {filteredFolders.length > 0 && (
-            <div className="px-2 pt-2 pb-0.5">
-              <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                Unfiled
-              </span>
-            </div>
-          )}
           {filteredDocs.map((doc) => renderDocumentItem(doc, 0))}
         </>
       )}
