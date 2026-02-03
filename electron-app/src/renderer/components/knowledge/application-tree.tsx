@@ -282,6 +282,7 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
     expandedFolderIds,
     selectedFolderId,
     selectedDocumentId,
+    searchQuery,
     toggleFolder,
     expandFolder,
     selectDocument,
@@ -334,6 +335,66 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
   const folders = folderTree ?? []
   const unfiledDocs = unfiledResponse?.items ?? []
   const projectList = projects ?? []
+
+  // ========================================================================
+  // Search filtering
+  // ========================================================================
+
+  const matchesSearch = useCallback((text: string): boolean => {
+    if (!searchQuery) return true
+    return text.toLowerCase().includes(searchQuery.toLowerCase())
+  }, [searchQuery])
+
+  const filterFolderTree = useCallback((nodes: FolderTreeNode[]): FolderTreeNode[] => {
+    if (!searchQuery) return nodes
+
+    return nodes.reduce<FolderTreeNode[]>((acc, node) => {
+      const filteredChildren = filterFolderTree(node.children)
+      const hasMatchingChildren = filteredChildren.length > 0
+      const nodeMatches = matchesSearch(node.name)
+
+      if (nodeMatches || hasMatchingChildren) {
+        acc.push({
+          ...node,
+          children: filteredChildren,
+        })
+      }
+      return acc
+    }, [])
+  }, [searchQuery, matchesSearch])
+
+  const filteredFolders = useMemo(
+    () => filterFolderTree(folders),
+    [filterFolderTree, folders]
+  )
+
+  const filteredDocs = useMemo(() => {
+    if (!searchQuery) return unfiledDocs
+    return unfiledDocs.filter(doc => matchesSearch(doc.title))
+  }, [unfiledDocs, searchQuery, matchesSearch])
+
+  // Filter projects: keep project if its name matches search
+  // (Project section content is lazy-loaded so we can't filter by document content)
+  const filteredProjects = useMemo(() => {
+    if (!searchQuery) return projectList
+    return projectList.filter(project => matchesSearch(project.name))
+  }, [projectList, searchQuery, matchesSearch])
+
+  // Auto-expand folders with matching children when searching
+  useEffect(() => {
+    if (!searchQuery) return
+
+    const expandMatchingFolders = (nodes: FolderTreeNode[]) => {
+      nodes.forEach(node => {
+        if (node.children.length > 0) {
+          expandFolder(node.id)
+          expandMatchingFolders(node.children)
+        }
+      })
+    }
+
+    expandMatchingFolders(filteredFolders)
+  }, [searchQuery, filteredFolders, expandFolder])
 
   // ========================================================================
   // Context menu handlers (scope-aware)
@@ -617,9 +678,11 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
     return <TreeSkeleton />
   }
 
-  const isEmpty = folders.length === 0 && unfiledDocs.length === 0 && projectList.length === 0
+  const hasNoData = folders.length === 0 && unfiledDocs.length === 0 && projectList.length === 0
+  const hasNoResults = filteredFolders.length === 0 && filteredDocs.length === 0 && filteredProjects.length === 0
 
-  if (isEmpty) {
+  // Empty state - no data at all
+  if (hasNoData) {
     return (
       <div className="flex flex-col items-center justify-center p-6 text-center">
         <p className="text-sm text-muted-foreground mb-3">No documents yet</p>
@@ -644,6 +707,15 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
     )
   }
 
+  // No search results
+  if (searchQuery && hasNoResults) {
+    return (
+      <div className="flex flex-col items-center justify-center p-6 text-center">
+        <p className="text-sm text-muted-foreground">No results found</p>
+      </div>
+    )
+  }
+
   return (
     <div className="py-1" role="tree">
       {/* Subtle background refresh indicator */}
@@ -654,35 +726,35 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
       )}
 
       {/* App-level folder tree */}
-      {folders.length > 0 && (
+      {filteredFolders.length > 0 && (
         <>
-          {folders.map((node) => renderFolderNode(node, 0))}
+          {filteredFolders.map((node) => renderFolderNode(node, 0))}
         </>
       )}
 
       {/* App-level unfiled documents */}
-      {unfiledDocs.length > 0 && (
+      {filteredDocs.length > 0 && (
         <>
-          {folders.length > 0 && (
+          {filteredFolders.length > 0 && (
             <div className="px-2 pt-2 pb-0.5">
               <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                 Unfiled
               </span>
             </div>
           )}
-          {unfiledDocs.map((doc) => renderDocumentItem(doc, 0))}
+          {filteredDocs.map((doc) => renderDocumentItem(doc, 0))}
         </>
       )}
 
       {/* Project sections */}
-      {projectList.length > 0 && (
+      {filteredProjects.length > 0 && (
         <>
           <div className="px-2 pt-3 pb-1">
             <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
               Projects
             </span>
           </div>
-          {projectList.map((project) => (
+          {filteredProjects.map((project) => (
             <ProjectSection
               key={project.id}
               project={project}
@@ -690,7 +762,7 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
               selectedFolderId={selectedFolderId}
               selectedDocumentId={selectedDocumentId}
               renamingItemId={renamingItemId}
-              hideIfEmpty={true}
+              hideIfEmpty={!searchQuery}
               onToggleFolder={toggleFolder}
               onSelectFolder={handleSelectFolder}
               onSelectDocument={handleSelectDocument}
