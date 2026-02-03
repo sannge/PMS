@@ -5,6 +5,9 @@
  * OneNote page-list style: no chevron arrows, clean indentation only.
  * Handles expand/collapse, selection, right-click context menu, and inline rename.
  * Shows lock indicator when a document is being edited by another user.
+ *
+ * Lock status is queried per-document using useDocumentLockStatus hook
+ * with real-time WebSocket updates for instant feedback.
  */
 
 import { useRef, useEffect, useState, useCallback } from 'react'
@@ -15,6 +18,7 @@ import {
   Lock,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useDocumentLockStatus } from '@/hooks/use-document-lock'
 import type { FolderTreeNode } from '@/hooks/use-document-folders'
 import type { DocumentListItem } from '@/hooks/use-documents'
 
@@ -25,7 +29,9 @@ export interface FolderTreeItemProps {
   isExpanded?: boolean
   isSelected: boolean
   isRenaming: boolean
+  /** @deprecated Lock status is now queried internally for documents */
   isLocked?: boolean
+  /** @deprecated Lock status is now queried internally for documents */
   lockHolderName?: string
   onToggleExpand?: () => void
   onSelect: () => void
@@ -41,8 +47,10 @@ export function FolderTreeItem({
   isExpanded,
   isSelected,
   isRenaming,
-  isLocked,
-  lockHolderName,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  isLocked: _isLockedProp,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  lockHolderName: _lockHolderNameProp,
   onToggleExpand,
   onSelect,
   onContextMenu,
@@ -52,6 +60,11 @@ export function FolderTreeItem({
   const displayName = type === 'folder'
     ? (node as FolderTreeNode).name
     : (node as DocumentListItem).title
+
+  // Query lock status for documents (hook is disabled for folders via null id)
+  const { isLocked, lockHolder } = useDocumentLockStatus(
+    type === 'document' ? node.id : null
+  )
 
   const [renameValue, setRenameValue] = useState(displayName)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -144,10 +157,10 @@ export function FolderTreeItem({
       )}
 
       {/* Lock indicator for documents being edited */}
-      {isLocked && !isRenaming && (
+      {type === 'document' && isLocked && !isRenaming && (
         <span
-          className="shrink-0 text-muted-foreground"
-          title={lockHolderName ? `Editing: ${lockHolderName}` : 'Locked'}
+          className="shrink-0 text-amber-500"
+          title={lockHolder?.userName ? `Editing: ${lockHolder.userName}` : 'Locked'}
         >
           <Lock className="h-3.5 w-3.5" />
         </span>
