@@ -32,6 +32,8 @@ import {
 } from '@/hooks/use-documents'
 import { FolderTreeItem } from './folder-tree-item'
 import { FolderContextMenu } from './folder-context-menu'
+import { CreateDialog } from './create-dialog'
+import { DeleteDialog } from './delete-dialog'
 
 // ============================================================================
 // Types
@@ -299,6 +301,19 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
   const [renamingItemType, setRenamingItemType] = useState<'folder' | 'document'>('folder')
   const [contextMenuTarget, setContextMenuTarget] = useState<ContextMenuTarget | null>(null)
 
+  // Dialog state
+  const [createDialogOpen, setCreateDialogOpen] = useState(false)
+  const [createType, setCreateType] = useState<'document' | 'folder'>('document')
+  const [createParentId, setCreateParentId] = useState<string | null>(null)
+  const [createScope, setCreateScope] = useState<'application' | 'project'>('application')
+  const [createScopeId, setCreateScopeId] = useState<string>(applicationId)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<{
+    id: string
+    type: 'document' | 'folder'
+    name: string
+  } | null>(null)
+
   const isLoading = isFoldersLoading && isUnfiledLoading
 
   const folders = folderTree ?? []
@@ -348,23 +363,13 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
       const scope = target?.scope ?? 'application'
       const scopeId = target?.scopeId ?? applicationId
 
-      createFolder.mutate(
-        {
-          name: 'New Folder',
-          parent_id: parentId,
-          scope,
-          scope_id: scopeId,
-        },
-        {
-          onSuccess: (data) => {
-            expandFolder(parentId)
-            setRenamingItemId(data.id)
-            setRenamingItemType('folder')
-          },
-        }
-      )
+      setCreateType('folder')
+      setCreateParentId(parentId)
+      setCreateScope(scope)
+      setCreateScopeId(scopeId)
+      setCreateDialogOpen(true)
     },
-    [contextMenuTarget, applicationId, createFolder, expandFolder, handleCloseContextMenu]
+    [contextMenuTarget, applicationId, handleCloseContextMenu]
   )
 
   const handleNewDocument = useCallback(
@@ -374,28 +379,38 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
       const scope = target?.scope ?? 'application'
       const scopeId = target?.scopeId ?? applicationId
 
-      createDocument.mutate(
-        {
-          title: 'Untitled',
-          scope,
-          scope_id: scopeId,
-          folder_id: folderId,
-        },
-        {
-          onSuccess: (data) => {
-            expandFolder(folderId)
-            selectDocument(data.id)
-            selectFolder(null)
-            setRenamingItemId(data.id)
-            setRenamingItemType('document')
-          },
-          onError: (error) => {
-            toast.error(error.message)
-          },
-        }
-      )
+      setCreateType('document')
+      setCreateParentId(folderId)
+      setCreateScope(scope)
+      setCreateScopeId(scopeId)
+      setCreateDialogOpen(true)
     },
-    [contextMenuTarget, applicationId, createDocument, expandFolder, selectDocument, selectFolder, handleCloseContextMenu]
+    [contextMenuTarget, applicationId, handleCloseContextMenu]
+  )
+
+  const handleCreateSubmit = useCallback(
+    async (name: string) => {
+      if (createType === 'document') {
+        const doc = await createDocument.mutateAsync({
+          title: name,
+          scope: createScope,
+          scope_id: createScopeId,
+          folder_id: createParentId,
+        })
+        selectDocument(doc.id)
+        selectFolder(null)
+        if (createParentId) expandFolder(createParentId)
+      } else {
+        await createFolder.mutateAsync({
+          name,
+          scope: createScope,
+          scope_id: createScopeId,
+          parent_id: createParentId,
+        })
+        if (createParentId) expandFolder(createParentId)
+      }
+    },
+    [createType, createScope, createScopeId, createParentId, createDocument, createFolder, selectDocument, selectFolder, expandFolder]
   )
 
   const handleRename = useCallback(
@@ -436,20 +451,27 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
   const handleDelete = useCallback(
     (id: string, type: 'folder' | 'document') => {
       handleCloseContextMenu()
-      if (type === 'folder') {
-        deleteFolderApp.mutate(id)
-        if (selectedFolderId === id) {
-          selectFolder(null)
-        }
-      } else {
-        deleteDocumentApp.mutate(id)
-        if (selectedDocumentId === id) {
-          selectDocument(null)
-        }
-      }
+      // Find the name from the tree data
+      const name =
+        type === 'folder'
+          ? folders.find((f) => f.id === id)?.name || 'this folder'
+          : unfiledDocs.find((d) => d.id === id)?.title || 'this document'
+      setDeleteTarget({ id, type, name })
+      setDeleteDialogOpen(true)
     },
-    [deleteFolderApp, deleteDocumentApp, selectedFolderId, selectedDocumentId, selectFolder, selectDocument, handleCloseContextMenu]
+    [folders, unfiledDocs, handleCloseContextMenu]
   )
+
+  const handleDeleteConfirm = useCallback(async () => {
+    if (!deleteTarget) return
+    if (deleteTarget.type === 'folder') {
+      await deleteFolderApp.mutateAsync(deleteTarget.id)
+      if (selectedFolderId === deleteTarget.id) selectFolder(null)
+    } else {
+      await deleteDocumentApp.mutateAsync(deleteTarget.id)
+      if (selectedDocumentId === deleteTarget.id) selectDocument(null)
+    }
+  }, [deleteTarget, deleteFolderApp, deleteDocumentApp, selectedFolderId, selectedDocumentId, selectFolder, selectDocument])
 
   // ========================================================================
   // Selection handlers
@@ -682,6 +704,23 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
           onDelete={handleDelete}
         />
       )}
+
+      {/* Create dialog */}
+      <CreateDialog
+        open={createDialogOpen}
+        onOpenChange={setCreateDialogOpen}
+        type={createType}
+        onSubmit={handleCreateSubmit}
+      />
+
+      {/* Delete dialog */}
+      <DeleteDialog
+        open={deleteDialogOpen}
+        onOpenChange={setDeleteDialogOpen}
+        itemName={deleteTarget?.name || ''}
+        itemType={deleteTarget?.type || 'document'}
+        onConfirm={handleDeleteConfirm}
+      />
     </div>
   )
 }
