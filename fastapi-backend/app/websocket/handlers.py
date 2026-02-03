@@ -138,9 +138,15 @@ async def handle_document_lock_change(
     lock_holder: dict[str, Any] | None,
     triggered_by: str | None = None,
     connection_manager: Optional[ConnectionManager] = None,
+    application_id: str | None = None,
+    project_id: str | None = None,
 ) -> BroadcastResult:
     """
-    Handle document lock state change and broadcast to document room.
+    Handle document lock state change and broadcast to document room AND scope room.
+
+    Broadcasts to both the document room (for users editing the document) and
+    the document's scope room (application or project room for tree viewers).
+    This ensures lock indicators update in real-time for all viewers.
 
     Args:
         document_id: The document's UUID string
@@ -148,12 +154,14 @@ async def handle_document_lock_change(
         lock_holder: Lock holder info dict (or None for unlocked)
         triggered_by: UUID string of user who triggered the change
         connection_manager: Optional custom manager (defaults to global)
+        application_id: Document's application scope (for scope room broadcast)
+        project_id: Document's project scope (for scope room broadcast)
 
     Returns:
         BroadcastResult: Result of the broadcast operation
     """
     mgr = connection_manager or manager
-    room_id = get_document_room(document_id)
+    document_room = get_document_room(document_id)
 
     # Map lock_type to MessageType
     type_map = {
@@ -177,16 +185,32 @@ async def handle_document_lock_change(
         "data": payload,
     }
 
-    recipients = await mgr.broadcast_to_room(room_id, message)
+    # Broadcast to document room (for users editing the document)
+    recipients = await mgr.broadcast_to_room(document_room, message)
+
+    # Also broadcast to scope room (for tree viewers)
+    # Project room takes precedence if both are set (project is more specific)
+    scope_room: str | None = None
+    if project_id:
+        scope_room = get_project_room(project_id)
+    elif application_id:
+        scope_room = get_application_room(application_id)
+
+    scope_recipients = 0
+    if scope_room and scope_room != document_room:
+        scope_recipients = await mgr.broadcast_to_room(scope_room, message)
+
+    total_recipients = recipients + scope_recipients
 
     logger.info(
         f"Document lock {lock_type}: document_id={document_id}, "
-        f"room={room_id}, recipients={recipients}"
+        f"document_room={document_room} ({recipients}), "
+        f"scope_room={scope_room} ({scope_recipients})"
     )
 
     return BroadcastResult(
-        room_id=room_id,
-        recipients=recipients,
+        room_id=document_room,
+        recipients=total_recipients,
         message_type=message_type.value,
         success=True,
     )

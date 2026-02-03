@@ -43,6 +43,7 @@ router = APIRouter(prefix="/api/documents", tags=["document-locks"])
 async def acquire_lock(
     document_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
     lock_service: DocumentLockService = Depends(get_lock_service),
 ) -> DocumentLockResponse:
     """Acquire an exclusive edit lock on a document."""
@@ -63,11 +64,19 @@ async def acquire_lock(
             },
         )
 
-    # Broadcast lock acquired
+    # Look up document scope for WebSocket broadcast
+    doc_result = await db.execute(
+        select(Document.application_id, Document.project_id).where(Document.id == document_id)
+    )
+    doc_scope = doc_result.one_or_none()
+
+    # Broadcast lock acquired to document room and scope room
     await handle_document_lock_change(
         document_id=str(document_id),
         lock_type="locked",
         lock_holder=result,
+        application_id=str(doc_scope.application_id) if doc_scope and doc_scope.application_id else None,
+        project_id=str(doc_scope.project_id) if doc_scope and doc_scope.project_id else None,
     )
 
     return DocumentLockResponse(
@@ -90,6 +99,7 @@ async def acquire_lock(
 async def release_lock(
     document_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
     lock_service: DocumentLockService = Depends(get_lock_service),
 ) -> DocumentLockResponse:
     """Release an edit lock on a document."""
@@ -99,11 +109,19 @@ async def release_lock(
     )
 
     if released:
-        # Broadcast lock released
+        # Look up document scope for WebSocket broadcast
+        doc_result = await db.execute(
+            select(Document.application_id, Document.project_id).where(Document.id == document_id)
+        )
+        doc_scope = doc_result.one_or_none()
+
+        # Broadcast lock released to document room and scope room
         await handle_document_lock_change(
             document_id=str(document_id),
             lock_type="unlocked",
             lock_holder=None,
+            application_id=str(doc_scope.application_id) if doc_scope and doc_scope.application_id else None,
+            project_id=str(doc_scope.project_id) if doc_scope and doc_scope.project_id else None,
         )
 
     return DocumentLockResponse(locked=False, lock_holder=None)
@@ -224,12 +242,14 @@ async def force_take_lock(
 
     new_holder = await lock_service.get_lock_holder(str(document_id))
 
-    # Broadcast force-take event
+    # Broadcast force-take event to document room and scope room
     await handle_document_lock_change(
         document_id=str(document_id),
         lock_type="force_taken",
         lock_holder=new_holder,
         triggered_by=str(current_user.id),
+        application_id=str(document.application_id) if document.application_id else None,
+        project_id=str(document.project_id) if document.project_id else None,
     )
 
     return DocumentLockResponse(
