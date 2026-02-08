@@ -9,6 +9,7 @@ This module provides WebSocket connection management with:
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -103,6 +104,16 @@ class MessageType(str, Enum):
     DOCUMENT_UNLOCKED = "document_unlocked"
     DOCUMENT_FORCE_TAKEN = "document_force_taken"
 
+    # Document CRUD events (knowledge base)
+    DOCUMENT_CREATED = "document_created"
+    DOCUMENT_UPDATED = "document_updated"
+    DOCUMENT_DELETED = "document_deleted"
+
+    # Folder CRUD events (knowledge base)
+    FOLDER_CREATED = "folder_created"
+    FOLDER_UPDATED = "folder_updated"
+    FOLDER_DELETED = "folder_deleted"
+
     # Ping/pong for keepalive
     PING = "ping"
     PONG = "pong"
@@ -153,6 +164,8 @@ class ConnectionManager:
         self._connections: dict[WebSocket, WebSocketConnection] = {}
         # Map of user_id -> set of connections (for user-targeted messages)
         self._user_connections: dict[UUID, set[WebSocketConnection]] = {}
+        # Debounce timestamp for Redis disconnection warnings
+        self._last_redis_warning: float = 0.0
         # Lock for thread-safe operations
         self._lock = asyncio.Lock()
         # Redis initialization flag
@@ -488,6 +501,14 @@ class ConnectionManager:
             return len(self._rooms.get(room_id, []))
 
         # Fallback to local-only broadcast if Redis is not connected
+        # Debounce warning to avoid log flooding (max once per 60s)
+        now = time.monotonic()
+        if now - self._last_redis_warning > 60:
+            self._last_redis_warning = now
+            logger.warning(
+                "Redis not connected - falling back to local-only broadcast. "
+                "Cross-worker real-time sync is degraded.",
+            )
         connections = self._rooms.get(room_id, set()).copy()
 
         if exclude:

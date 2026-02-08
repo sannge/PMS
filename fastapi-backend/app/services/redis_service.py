@@ -236,10 +236,7 @@ class RedisService:
 
     async def delete_pattern(self, pattern: str) -> int:
         """
-        Delete all keys matching a pattern.
-
-        Warning: Uses KEYS command which can be slow on large datasets.
-        Use sparingly (e.g., for invalidation on role changes).
+        Delete all keys matching a pattern using SCAN (non-blocking).
 
         Args:
             pattern: The glob-style pattern to match
@@ -247,7 +244,7 @@ class RedisService:
         Returns:
             Number of keys deleted
         """
-        keys = await self.client.keys(pattern)
+        keys = await self.scan_keys(pattern)
         if keys:
             return await self.client.delete(*keys)
         return 0
@@ -344,6 +341,31 @@ class RedisService:
             The timestamp or None if not present
         """
         return await self.client.zscore(f"presence:{room_id}", user_id)
+
+    async def scan_keys(self, pattern: str, count: int = 100) -> list[str]:
+        """
+        Iterate keys matching pattern using SCAN (non-blocking, O(1) per call).
+
+        Unlike KEYS which is O(N) and blocks Redis, SCAN uses a cursor to
+        incrementally iterate without holding the server.
+
+        Args:
+            pattern: Glob-style pattern (e.g. "presence:*")
+            count: Hint for how many keys to return per iteration
+
+        Returns:
+            List of matching key strings
+        """
+        result: list[str] = []
+        cursor = 0
+        while True:
+            cursor, keys = await self.client.scan(
+                cursor=cursor, match=pattern, count=count
+            )
+            result.extend(keys)
+            if cursor == 0:
+                break
+        return result
 
     # =========================================================================
     # Rate Limiting Methods

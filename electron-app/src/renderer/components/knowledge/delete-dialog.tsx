@@ -38,6 +38,8 @@ export function DeleteDialog({
     setIsDeleting(true)
     try {
       await onConfirm()
+      // With optimistic updates, the item disappears instantly from the tree
+      // so we can close the dialog immediately
       onOpenChange(false)
     } finally {
       setIsDeleting(false)

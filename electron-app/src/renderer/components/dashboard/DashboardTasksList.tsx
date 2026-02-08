@@ -32,11 +32,11 @@ const TASK_SORT_OPTIONS: { value: TaskSortField; label: string }[] = [
 ]
 
 const TASK_STATUS_OPTIONS = [
-  { value: 'todo', label: 'Todo', className: 'bg-slate-500/10 text-slate-600 dark:text-slate-400 hover:bg-slate-500/20 border-slate-500/20' },
-  { value: 'in_progress', label: 'In Progress', className: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-500/20 border-blue-500/20' },
-  { value: 'in_review', label: 'Review', className: 'bg-violet-500/10 text-violet-600 dark:text-violet-400 hover:bg-violet-500/20 border-violet-500/20' },
-  { value: 'issue', label: 'Issue', className: 'bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20 border-red-500/20' },
-  { value: 'done', label: 'Done', className: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 border-emerald-500/20' },
+  { value: 'Todo', label: 'Todo', className: 'bg-slate-500/10 text-slate-600 dark:text-slate-400 hover:bg-slate-500/20 border-slate-500/20' },
+  { value: 'In Progress', label: 'In Progress', className: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-500/20 border-blue-500/20' },
+  { value: 'In Review', label: 'Review', className: 'bg-violet-500/10 text-violet-600 dark:text-violet-400 hover:bg-violet-500/20 border-violet-500/20' },
+  { value: 'Issue', label: 'Issue', className: 'bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20 border-red-500/20' },
+  { value: 'Done', label: 'Done', className: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 border-emerald-500/20' },
 ] as const
 
 // ============================================================================
@@ -45,19 +45,14 @@ const TASK_STATUS_OPTIONS = [
 
 function getStatusConfig(status: string) {
   switch (status) {
-    case 'todo':
     case 'Todo':
       return { label: 'Todo', className: 'bg-slate-500/10 text-slate-600 dark:text-slate-400' }
-    case 'in_progress':
     case 'In Progress':
       return { label: 'In Progress', className: 'bg-blue-500/10 text-blue-600 dark:text-blue-400' }
-    case 'in_review':
     case 'In Review':
       return { label: 'In Review', className: 'bg-violet-500/10 text-violet-600 dark:text-violet-400' }
-    case 'issue':
     case 'Issue':
       return { label: 'Issue', className: 'bg-red-500/10 text-red-600 dark:text-red-400' }
-    case 'done':
     case 'Done':
       return { label: 'Done', className: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' }
     default:

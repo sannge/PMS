@@ -1,9 +1,13 @@
 /**
  * DocumentEditor Component
  *
- * Main rich text editor for the knowledge base.
- * Composes the EditorToolbar + TipTap EditorContent + status bar placeholder.
+ * Pure rich text editor for the knowledge base.
+ * Composes the EditorToolbar + TipTap EditorContent + status bar.
  * Content is persisted as TipTap JSON (not HTML).
+ *
+ * When `editable=false`, shows read-only content without toolbar.
+ * When `editable=true`, shows toolbar and allows editing.
+ * Content sync: always syncs in view mode; only on initial load in edit mode.
  */
 
 import { useEditor, EditorContent, useEditorState } from '@tiptap/react'
@@ -12,8 +16,6 @@ import { useCallback, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { createDocumentExtensions } from './editor-extensions'
 import { EditorToolbar } from './editor-toolbar'
-import { LockBanner } from './LockBanner'
-import { useDocumentLock } from '@/hooks/use-document-lock'
 import type { DocumentEditorProps } from './editor-types'
 import './editor-styles.css'
 
@@ -48,31 +50,19 @@ export function DocumentEditor({
   editable = true,
   placeholder,
   className,
-  documentId,
-  userId,
-  userName,
-  userRole,
-  onSaveNow,
 }: DocumentEditorProps) {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const onChangeRef = useRef(onChange)
+  const editableRef = useRef(editable)
 
-  // Document lock integration (only active when documentId is provided)
-  const lock = useDocumentLock({
-    documentId: documentId ?? null,
-    userId: userId ?? '',
-    userName: userName ?? '',
-    userRole: userRole ?? null,
-    onBeforeRelease: onSaveNow,
-  })
-
-  // Effective editable state: editable from props AND not locked by someone else
-  const effectiveEditable = editable && !lock.isLockedByOther
-
-  // Keep onChange ref current to avoid re-creating editor on every render
+  // Keep refs current
   useEffect(() => {
     onChangeRef.current = onChange
   }, [onChange])
+
+  useEffect(() => {
+    editableRef.current = editable
+  }, [editable])
 
   // Stable onUpdate handler using ref-based debounce
   const handleUpdate = useCallback(({ editor: ed }: { editor: ReturnType<typeof useEditor> extends infer E ? NonNullable<E> : never }) => {
@@ -87,8 +77,28 @@ export function DocumentEditor({
   const editor = useEditor({
     extensions: createDocumentExtensions({ placeholder }),
     content: content || undefined,
-    editable: effectiveEditable,
+    editable,
     onUpdate: handleUpdate,
+    editorProps: {
+      handleClick: (view, pos, event) => {
+        // In view mode, allow link clicks to open in new tab
+        if (!editable) {
+          // Find closest anchor tag (handles nested elements like <a><strong>text</strong></a>)
+          const anchor = (event.target as HTMLElement).closest('a')
+          if (anchor && anchor.hasAttribute('href')) {
+            const href = anchor.getAttribute('href')
+            // Security: Only allow safe URL schemes
+            if (href && /^(https?:\/\/|mailto:|tel:)/.test(href)) {
+              window.open(href, '_blank', 'noopener,noreferrer')
+              event.preventDefault()
+              return true
+            }
+          }
+        }
+        return false
+      },
+      // No context menu handler - let browser/Electron handle it natively
+    },
   })
 
   // Cleanup debounce timer on unmount
@@ -100,37 +110,34 @@ export function DocumentEditor({
     }
   }, [])
 
-  // Sync editable state (includes lock-based read-only)
+  // Sync editable state
   useEffect(() => {
     if (editor) {
-      editor.setEditable(effectiveEditable)
+      editor.setEditable(editable)
     }
-  }, [editor, effectiveEditable])
+  }, [editor, editable])
 
-  // Sync content prop (only when editor is not focused, to avoid overwriting user typing)
+  // Sync content prop:
+  // - In view mode (not editable): always sync to reflect latest server data
+  // - In edit mode (editable): only sync if editor is not focused (initial load)
+  // - When switching from edit to view: always sync to discard unsaved changes
   useEffect(() => {
-    if (editor && content && !editor.isFocused) {
+    if (!editor || !content) return
+    if (!editableRef.current || !editor.isFocused) {
       editor.commands.setContent(content)
     }
-  }, [editor, content])
+  }, [editor, content, editable])
 
   if (!editor) {
     return null
   }
 
   return (
-    <div className={cn('border rounded-lg overflow-hidden bg-background', className)}>
-      {effectiveEditable && <EditorToolbar editor={editor} />}
-      {documentId && (
-        <LockBanner
-          lockHolder={lock.lockHolder}
-          isLockedByMe={lock.isLockedByMe}
-          canForceTake={lock.canForceTake}
-          onStopEditing={() => void lock.releaseLock()}
-          onForceTake={() => void lock.forceTakeLock()}
-        />
-      )}
-      <EditorContent editor={editor} className="prose prose-sm max-w-none" />
+    <div className={cn('overflow-hidden bg-background flex flex-col min-h-0', className)}>
+      {editable && <EditorToolbar editor={editor} />}
+      <div className="flex-1 overflow-y-auto min-h-0">
+        <EditorContent editor={editor} className="prose prose-sm max-w-none" />
+      </div>
       <EditorStatusBar editor={editor} />
     </div>
   )

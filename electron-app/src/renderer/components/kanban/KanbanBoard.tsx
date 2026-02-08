@@ -23,8 +23,8 @@ import {
   type CollisionDetection,
 } from '@dnd-kit/core'
 import { cn } from '@/lib/utils'
-import { useAuthStore, getAuthHeaders } from '@/contexts/auth-context'
-import { useMoveTask, useArchivedTasksCount, type Task } from '@/hooks/use-queries'
+import { useAuthStore } from '@/contexts/auth-context'
+import { useMoveTask, useTasks, useArchivedTasksCount, useTaskStatuses, type Task } from '@/hooks/use-queries'
 import {
   LayoutGrid,
   Plus,
@@ -107,7 +107,7 @@ const customCollisionDetection: CollisionDetection = (args) => {
   const columnCollision = pointerCollisions.find(
     (c) =>
       typeof c.id === 'string' &&
-      ['todo', 'in_progress', 'in_review', 'issue', 'done', 'Todo', 'In Progress', 'In Review', 'Issue', 'Done'].includes(c.id)
+      ['Todo', 'In Progress', 'In Review', 'Issue', 'Done'].includes(c.id)
   )
 
   if (columnCollision) {
@@ -139,6 +139,9 @@ export function KanbanBoard({
   onRefresh,
   canEdit = true,
 }: KanbanBoardProps): JSX.Element {
+  // Current user (for filtering self-initiated WS notices)
+  const currentUserId = useAuthStore((s) => s.user?.id)
+
   // State
   const [tasks, setTasks] = useState<Task[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -152,15 +155,24 @@ export function KanbanBoard({
     tasksRef.current = tasks
   }, [tasks])
 
-  // Auth
-  const token = useAuthStore((state) => state.token)
-
   // Task move mutation
   const moveTaskMutation = useMoveTask(projectId)
   const isMoving = moveTaskMutation.isPending
 
   // Archived tasks count for tab badge
   const { data: archivedCount } = useArchivedTasksCount(projectId)
+
+  // Task statuses for looking up status UUID by name
+  const { data: taskStatuses } = useTaskStatuses(projectId)
+  const statusNameToInfo = useMemo(() => {
+    const map = new Map<string, { id: string; category: string; rank: number }>()
+    if (taskStatuses) {
+      for (const s of taskStatuses) {
+        map.set(s.name, { id: s.id, category: s.category, rank: s.rank })
+      }
+    }
+    return map
+  }, [taskStatuses])
 
   // WebSocket status
   const { status } = useWebSocket()
@@ -188,19 +200,36 @@ export function KanbanBoard({
         return true
       }
 
+      // Look up the target status info from the status name
+      const targetInfo = statusNameToInfo.get(targetStatus)
+      if (!targetInfo) {
+        setRealtimeNotice('Unknown target status')
+        setTimeout(() => setRealtimeNotice(null), 5000)
+        return false
+      }
+
       // Optimistic update
       const originalTasks = [...currentTasks]
       const now = new Date().toISOString()
       setTasks((prevTasks) =>
         prevTasks.map((t) => {
           if (t.id !== taskId) return t
-          // Set completed_at when moving to done, clear when moving away
-          const isDone = targetStatus === 'Done'
+          const isDone = targetInfo.category === 'Done'
           const wasDone = t.task_status?.category === 'Done'
           const completed_at = isDone
             ? (t.completed_at || now)
             : (wasDone ? null : t.completed_at)
-          return { ...t, completed_at }
+          return {
+            ...t,
+            task_status_id: targetInfo.id,
+            task_status: {
+              id: targetInfo.id,
+              name: targetStatus,
+              category: targetInfo.category,
+              rank: targetInfo.rank,
+            },
+            completed_at,
+          }
         })
       )
 
@@ -213,8 +242,10 @@ export function KanbanBoard({
         // Make API call using TanStack Query mutation
         const result = await moveTaskMutation.mutateAsync({
           taskId,
-          targetStatusId: task.task_status_id,
+          targetStatusId: targetInfo.id,
           targetStatusName: targetStatus,
+          targetStatusCategory: targetInfo.category,
+          targetStatusRank: targetInfo.rank,
           beforeTaskId: beforeTaskId || undefined,
           afterTaskId: afterTaskId || undefined,
         })
@@ -234,7 +265,7 @@ export function KanbanBoard({
         return false
       }
     },
-    [moveTaskMutation, onTaskStatusChange]
+    [moveTaskMutation, onTaskStatusChange, statusNameToInfo]
   )
 
   // ============================================================================
@@ -265,20 +296,26 @@ export function KanbanBoard({
     (data: TaskUpdateEventData) => {
       if (data.project_id !== projectId) return
 
+      const isSelf = data.changed_by === currentUserId
+
       setTasks((currentTasks) => {
         if (data.action === 'created' && data.task) {
           const exists = currentTasks.some((t) => t.id === data.task_id)
           if (!exists) {
-            setRealtimeNotice('New task added')
-            setTimeout(() => setRealtimeNotice(null), 3000)
+            if (!isSelf) {
+              setRealtimeNotice('New task added')
+              setTimeout(() => setRealtimeNotice(null), 3000)
+            }
             return [...currentTasks, data.task as unknown as Task]
           }
           return currentTasks
         } else if (data.action === 'updated' && data.task) {
           const index = currentTasks.findIndex((t) => t.id === data.task_id)
           if (index !== -1) {
-            setRealtimeNotice('Task updated')
-            setTimeout(() => setRealtimeNotice(null), 3000)
+            if (!isSelf) {
+              setRealtimeNotice('Task updated')
+              setTimeout(() => setRealtimeNotice(null), 3000)
+            }
             const newTasks = [...currentTasks]
             newTasks[index] = data.task as unknown as Task
             return newTasks
@@ -287,16 +324,20 @@ export function KanbanBoard({
         } else if (data.action === 'deleted') {
           const index = currentTasks.findIndex((t) => t.id === data.task_id)
           if (index !== -1) {
-            setRealtimeNotice('Task removed')
-            setTimeout(() => setRealtimeNotice(null), 3000)
+            if (!isSelf) {
+              setRealtimeNotice('Task removed')
+              setTimeout(() => setRealtimeNotice(null), 3000)
+            }
             return currentTasks.filter((t) => t.id !== data.task_id)
           }
           return currentTasks
         } else if (data.action === 'status_changed' && data.task) {
           const index = currentTasks.findIndex((t) => t.id === data.task_id)
           if (index !== -1) {
-            setRealtimeNotice('Task status changed')
-            setTimeout(() => setRealtimeNotice(null), 3000)
+            if (!isSelf) {
+              setRealtimeNotice('Task status changed')
+              setTimeout(() => setRealtimeNotice(null), 3000)
+            }
             const newTasks = [...currentTasks]
             newTasks[index] = data.task as unknown as Task
             return newTasks
@@ -306,7 +347,7 @@ export function KanbanBoard({
         return currentTasks
       })
     },
-    [projectId]
+    [projectId, currentUserId]
   )
 
   // Subscribe to task updates
@@ -324,21 +365,27 @@ export function KanbanBoard({
         return
       }
 
+      const isSelf = data.changed_by === currentUserId
+
       setTasks((currentTasks) => {
         const taskIndex = currentTasks.findIndex((t) => t.id === data.task_id)
         if (taskIndex === -1) {
           // Task not found, might have been added - add it if we have the task data
           if (data.task) {
-            setRealtimeNotice('Task moved')
-            setTimeout(() => setRealtimeNotice(null), 3000)
+            if (!isSelf) {
+              setRealtimeNotice('Task moved')
+              setTimeout(() => setRealtimeNotice(null), 3000)
+            }
             return [...currentTasks, data.task as unknown as Task]
           }
           return currentTasks
         }
 
         // Update the task's status and rank
-        setRealtimeNotice('Task moved')
-        setTimeout(() => setRealtimeNotice(null), 3000)
+        if (!isSelf) {
+          setRealtimeNotice('Task moved')
+          setTimeout(() => setRealtimeNotice(null), 3000)
+        }
 
         const newTasks = [...currentTasks]
         const existingTask = newTasks[taskIndex]
@@ -357,48 +404,40 @@ export function KanbanBoard({
         return newTasks
       })
     },
-    [projectId]
+    [projectId, currentUserId]
   )
 
   // Subscribe to task moved events
   useTaskMoved(enableRealtime ? projectId : null, handleTaskMoved)
 
   // ============================================================================
-  // Fetch Tasks
+  // Fetch Tasks via TanStack Query (single source of truth)
   // ============================================================================
 
-  const fetchTasks = useCallback(async () => {
-    setIsLoading(true)
-    setError(null)
+  const { data: cachedTasks, isLoading: isQueryLoading, error: queryError, refetch } = useTasks(projectId)
 
-    try {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<Task[]>(
-        `/api/projects/${projectId}/tasks`,
-        getAuthHeaders(token)
-      )
-
-      if (response.status !== 200) {
-        throw new Error('Failed to fetch tasks')
-      }
-
-      setTasks(response.data || [])
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch tasks')
-    } finally {
+  // Sync TanStack cache → local state (local state is needed for optimistic DnD updates)
+  useEffect(() => {
+    if (cachedTasks) {
+      setTasks(cachedTasks)
       setIsLoading(false)
     }
-  }, [projectId, token])
+  }, [cachedTasks])
 
-  // Initial fetch - clear stale data when projectId changes
   useEffect(() => {
-    setTasks([])
-    setError(null)
-    fetchTasks()
-  }, [fetchTasks])
+    if (queryError) {
+      setError(queryError.message)
+      setIsLoading(false)
+    }
+  }, [queryError])
+
+  useEffect(() => {
+    setIsLoading(isQueryLoading)
+  }, [isQueryLoading])
+
+  const fetchTasks = useCallback(() => {
+    refetch()
+  }, [refetch])
 
   // Register refresh callback with parent
   useEffect(() => {

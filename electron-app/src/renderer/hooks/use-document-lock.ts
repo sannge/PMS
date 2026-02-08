@@ -2,13 +2,12 @@
  * useDocumentLock Hook
  *
  * Manages document lock lifecycle: acquire, release, force-take, heartbeat,
- * inactivity auto-release, and real-time WebSocket updates.
+ * and real-time WebSocket updates.
  *
  * Features:
  * - Lock status query with 30s fallback poll
  * - Acquire/release/force-take mutations
- * - 10s heartbeat interval while lock is held
- * - 30s inactivity auto-release (calls onBeforeRelease first)
+ * - 60s heartbeat interval while lock is held
  * - WebSocket subscription for real-time lock state updates
  * - Unmount cleanup with fire-and-forget release
  *
@@ -18,63 +17,75 @@
  * @module use-document-lock
  */
 
-import { useCallback, useEffect, useRef } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useAuthStore } from '@/contexts/auth-context'
-import { useWebSocket } from './use-websocket'
-import { MessageType } from '@/lib/websocket'
-import { queryKeys } from '@/lib/query-client'
+import React, { useCallback, useEffect, useRef } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useAuthStore } from "@/contexts/auth-context";
+import { useWebSocket } from "./use-websocket";
+import { MessageType } from "@/lib/websocket";
+import { queryKeys } from "@/lib/query-client";
+import { isTempId } from "./use-documents";
 
 // ============================================================================
 // Types
 // ============================================================================
 
 export interface LockHolder {
-  user_id: string
-  user_name: string
-  acquired_at: number | null
+  user_id: string;
+  user_name: string;
+  acquired_at: number | null;
 }
 
 export interface LockStatusResponse {
-  is_locked: boolean
-  lock_holder: LockHolder | null
+  is_locked: boolean;
+  lock_holder: LockHolder | null;
 }
 
 export interface UseDocumentLockOptions {
-  documentId: string | null
-  userId: string
-  userName: string
-  userRole: string | null // 'owner' | 'editor' | 'viewer' | null
-  onBeforeRelease?: () => Promise<void> // Save callback (Phase 4's saveNow)
+  documentId: string | null;
+  userId: string;
+  userName: string;
+  userRole: string | null; // 'owner' | 'editor' | 'viewer' | null
+  lastActivityRef?: React.RefObject<number>;
 }
 
 export interface UseDocumentLockReturn {
-  lockHolder: LockHolder | null
-  isLockedByMe: boolean
-  isLockedByOther: boolean
-  acquireLock: () => Promise<boolean>
-  releaseLock: () => Promise<void>
-  forceTakeLock: () => Promise<boolean>
-  canForceTake: boolean
-  isLoading: boolean
+  lockHolder: LockHolder | null;
+  isLockedByMe: boolean;
+  isLockedByOther: boolean;
+  acquireLock: () => Promise<boolean>;
+  releaseLock: () => Promise<void>;
+  forceTakeLock: () => Promise<boolean>;
+  canForceTake: boolean;
+  isLoading: boolean;
 }
 
 // ============================================================================
 // Constants
 // ============================================================================
 
-const HEARTBEAT_INTERVAL_MS = 10_000 // 10 seconds
-const INACTIVITY_CHECK_INTERVAL_MS = 5_000 // 5 seconds
-const INACTIVITY_THRESHOLD_MS = 30_000 // 30 seconds
-const LOCK_POLL_INTERVAL_MS = 30_000 // 30 seconds fallback poll
+const HEARTBEAT_INTERVAL_MS = 60_000; // 60 seconds
+const LOCK_POLL_INTERVAL_MS = 30_000; // 30 seconds fallback poll
+/** After this idle duration, heartbeats stop and the proactive inactivity dialog fires. */
+export const INACTIVITY_TIMEOUT_MS = 1 * 60 * 1000; // 5 minutes
+// isTempId imported from use-documents.ts
 
 // ============================================================================
 // Helpers
 // ============================================================================
 
 function getAuthHeaders(token: string | null): Record<string, string> {
-  if (!token) return {}
-  return { Authorization: `Bearer ${token}` }
+  if (!token) return {};
+  return { Authorization: `Bearer ${token}` };
+}
+
+/** Normalize API response (field is `locked`) to frontend shape (`is_locked`). */
+function normalizeLockResponse(
+  raw: Record<string, unknown>,
+): LockStatusResponse {
+  return {
+    is_locked: (raw.is_locked ?? raw.locked ?? false) as boolean,
+    lock_holder: (raw.lock_holder as LockHolder | null) ?? null,
+  };
 }
 
 // ============================================================================
@@ -86,69 +97,71 @@ export function useDocumentLock({
   userId,
   userName: _userName,
   userRole,
-  onBeforeRelease,
+  lastActivityRef,
 }: UseDocumentLockOptions): UseDocumentLockReturn {
-  const token = useAuthStore((s) => s.token)
-  const queryClient = useQueryClient()
-  const { subscribe, status: wsStatus } = useWebSocket()
+  const token = useAuthStore((s) => s.token);
+  const queryClient = useQueryClient();
+  const { subscribe, status: wsStatus } = useWebSocket();
 
   // Refs to avoid re-renders and stale closures
-  const lockReleasedRef = useRef(false)
-  const heartbeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const inactivityTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const lastActivityRef = useRef<number>(Date.now())
-  const onBeforeReleaseRef = useRef(onBeforeRelease)
-  const documentIdRef = useRef(documentId)
-  const tokenRef = useRef(token)
-  const userIdRef = useRef(userId)
+  const lockReleasedRef = useRef(false);
+  const heartbeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const documentIdRef = useRef(documentId);
+  const tokenRef = useRef(token);
+  const userIdRef = useRef(userId);
 
   // Keep refs current
   useEffect(() => {
-    onBeforeReleaseRef.current = onBeforeRelease
-    documentIdRef.current = documentId
-    tokenRef.current = token
-    userIdRef.current = userId
-  })
+    documentIdRef.current = documentId;
+    tokenRef.current = token;
+    userIdRef.current = userId;
+  });
+
+  // Reset lockReleasedRef when switching documents
+  useEffect(() => {
+    lockReleasedRef.current = false;
+  }, [documentId]);
 
   // ============================================================================
   // Lock Status Query
   // ============================================================================
 
   const lockQuery = useQuery({
-    queryKey: queryKeys.documentLock(documentId || ''),
+    queryKey: queryKeys.documentLock(documentId || ""),
     queryFn: async (): Promise<LockStatusResponse> => {
       if (!window.electronAPI) {
-        throw new Error('Electron API not available')
+        throw new Error("Electron API not available");
       }
 
-      const response = await window.electronAPI.get<LockStatusResponse>(
+      const response = await window.electronAPI.get<Record<string, unknown>>(
         `/api/documents/${documentId}/lock`,
-        getAuthHeaders(token)
-      )
+        getAuthHeaders(token),
+      );
 
       if (response.status !== 200) {
-        throw new Error('Failed to fetch lock status')
+        throw new Error("Failed to fetch lock status");
       }
 
-      return response.data
+      return normalizeLockResponse(response.data);
     },
-    enabled: !!token && !!documentId,
+    // Skip temp IDs from optimistic updates - they don't exist on the server yet
+    enabled: !!token && !!documentId && !isTempId(documentId),
     refetchInterval: LOCK_POLL_INTERVAL_MS,
     staleTime: 10_000,
     gcTime: 60_000,
-  })
+  });
 
   // Derived state
-  const lockHolder = lockQuery.data?.lock_holder ?? null
-  const isLockedByMe = lockHolder?.user_id === userId && !!userId
-  const isLockedByOther = lockHolder != null && lockHolder.user_id !== userId
-  const canForceTake = isLockedByOther && userRole === 'owner'
+  const lockHolder = lockQuery.data?.lock_holder ?? null;
+  const isLockedByMe = lockHolder?.user_id === userId && !!userId;
+  const isLockedByOther = lockHolder != null && lockHolder.user_id !== userId;
+  const canForceTake = isLockedByOther && userRole === "owner";
 
   // Store isLockedByMe in ref for cleanup
-  const isLockedByMeRef = useRef(isLockedByMe)
+  const isLockedByMeRef = useRef(isLockedByMe);
   useEffect(() => {
-    isLockedByMeRef.current = isLockedByMe
-  }, [isLockedByMe])
+    isLockedByMeRef.current = isLockedByMe;
+  }, [isLockedByMe]);
 
   // ============================================================================
   // Acquire Mutation
@@ -156,67 +169,68 @@ export function useDocumentLock({
 
   const acquireMutation = useMutation({
     mutationFn: async (): Promise<boolean> => {
-      if (!window.electronAPI || !documentId) return false
+      if (!window.electronAPI || !documentId) return false;
 
       const response = await window.electronAPI.post<LockStatusResponse>(
         `/api/documents/${documentId}/lock`,
         {},
-        getAuthHeaders(token)
-      )
+        getAuthHeaders(token),
+      );
 
       if (response.status === 200) {
-        lockReleasedRef.current = false
-        return true
+        lockReleasedRef.current = false;
+        return true;
       }
 
       // 409 = locked by someone else
       if (response.status === 409) {
-        queryClient.invalidateQueries({ queryKey: queryKeys.documentLock(documentId) })
-        return false
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.documentLock(documentId),
+        });
+        return false;
       }
 
-      throw new Error('Failed to acquire lock')
+      throw new Error("Failed to acquire lock");
     },
     onSuccess: (acquired) => {
       if (acquired && documentId) {
-        queryClient.invalidateQueries({ queryKey: queryKeys.documentLock(documentId) })
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.documentLock(documentId),
+        });
       }
     },
-  })
+  });
 
   // ============================================================================
   // Release Mutation
   // ============================================================================
 
   const releaseMutation = useMutation({
-    mutationFn: async (): Promise<void> => {
-      if (!window.electronAPI || !documentId || lockReleasedRef.current) return
+    mutationFn: async (docId: string): Promise<void> => {
+      if (!window.electronAPI || lockReleasedRef.current) return;
 
-      lockReleasedRef.current = true
+      lockReleasedRef.current = true;
 
-      // Save before release
       try {
-        await onBeforeReleaseRef.current?.()
+        const response = await window.electronAPI.delete<void>(
+          `/api/documents/${docId}/lock`,
+          getAuthHeaders(tokenRef.current),
+        );
+
+        if (response.status !== 200 && response.status !== 204) {
+          lockReleasedRef.current = false;
+        }
       } catch {
-        // Best effort save
-      }
-
-      const response = await window.electronAPI.delete<void>(
-        `/api/documents/${documentId}/lock`,
-        getAuthHeaders(token)
-      )
-
-      if (response.status !== 200 && response.status !== 204) {
-        // Reset flag if release failed
-        lockReleasedRef.current = false
+        // Network error — reset flag so release can be retried
+        lockReleasedRef.current = false;
       }
     },
-    onSuccess: () => {
-      if (documentId) {
-        queryClient.invalidateQueries({ queryKey: queryKeys.documentLock(documentId) })
-      }
+    onSuccess: (_data, docId) => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.documentLock(docId),
+      });
     },
-  })
+  });
 
   // ============================================================================
   // Force-Take Mutation
@@ -224,27 +238,29 @@ export function useDocumentLock({
 
   const forceTakeMutation = useMutation({
     mutationFn: async (): Promise<boolean> => {
-      if (!window.electronAPI || !documentId) return false
+      if (!window.electronAPI || !documentId) return false;
 
       const response = await window.electronAPI.post<LockStatusResponse>(
         `/api/documents/${documentId}/lock/force-take`,
         {},
-        getAuthHeaders(token)
-      )
+        getAuthHeaders(token),
+      );
 
       if (response.status === 200) {
-        lockReleasedRef.current = false
-        return true
+        lockReleasedRef.current = false;
+        return true;
       }
 
-      return false
+      return false;
     },
     onSuccess: (taken) => {
       if (taken && documentId) {
-        queryClient.invalidateQueries({ queryKey: queryKeys.documentLock(documentId) })
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.documentLock(documentId),
+        });
       }
     },
-  })
+  });
 
   // ============================================================================
   // Stable callbacks
@@ -252,27 +268,29 @@ export function useDocumentLock({
 
   const acquireLock = useCallback(async (): Promise<boolean> => {
     try {
-      return await acquireMutation.mutateAsync()
+      return await acquireMutation.mutateAsync();
     } catch {
-      return false
+      return false;
     }
-  }, [acquireMutation])
+  }, [acquireMutation]);
 
   const releaseLock = useCallback(async (): Promise<void> => {
+    const docId = documentIdRef.current;
+    if (!docId) return;
     try {
-      await releaseMutation.mutateAsync()
+      await releaseMutation.mutateAsync(docId);
     } catch {
       // Best effort release
     }
-  }, [releaseMutation])
+  }, [releaseMutation]);
 
   const forceTakeLock = useCallback(async (): Promise<boolean> => {
     try {
-      return await forceTakeMutation.mutateAsync()
+      return await forceTakeMutation.mutateAsync();
     } catch {
-      return false
+      return false;
     }
-  }, [forceTakeMutation])
+  }, [forceTakeMutation]);
 
   // ============================================================================
   // Heartbeat
@@ -281,173 +299,126 @@ export function useDocumentLock({
   useEffect(() => {
     if (!isLockedByMe || !documentId) {
       if (heartbeatTimerRef.current) {
-        clearInterval(heartbeatTimerRef.current)
-        heartbeatTimerRef.current = null
+        clearInterval(heartbeatTimerRef.current);
+        heartbeatTimerRef.current = null;
       }
-      return
+      return;
     }
 
     const sendHeartbeat = async () => {
-      if (!window.electronAPI || !documentIdRef.current) return
+      if (!window.electronAPI || !documentIdRef.current) return;
+
+      // Activity gate: if lastActivityRef is provided and user has been idle
+      // longer than the inactivity timeout, skip the heartbeat so the server
+      // TTL expires and the lock is released automatically.
+      if (lastActivityRef?.current != null) {
+        const idleMs = Date.now() - lastActivityRef.current;
+        if (idleMs > INACTIVITY_TIMEOUT_MS) {
+          return; // Skip heartbeat — let server TTL expire as backup
+        }
+      }
 
       try {
         const response = await window.electronAPI.post<void>(
           `/api/documents/${documentIdRef.current}/lock/heartbeat`,
           {},
-          getAuthHeaders(tokenRef.current)
-        )
+          getAuthHeaders(tokenRef.current),
+        );
 
         // 409 = lock lost (expired or taken)
         if (response.status === 409) {
           queryClient.invalidateQueries({
             queryKey: queryKeys.documentLock(documentIdRef.current),
-          })
+          });
         }
       } catch {
         // Heartbeat failure - invalidate to check status
         if (documentIdRef.current) {
           queryClient.invalidateQueries({
             queryKey: queryKeys.documentLock(documentIdRef.current),
-          })
+          });
         }
       }
-    }
+    };
 
-    heartbeatTimerRef.current = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS)
+    heartbeatTimerRef.current = setInterval(
+      sendHeartbeat,
+      HEARTBEAT_INTERVAL_MS,
+    );
 
     return () => {
       if (heartbeatTimerRef.current) {
-        clearInterval(heartbeatTimerRef.current)
-        heartbeatTimerRef.current = null
+        clearInterval(heartbeatTimerRef.current);
+        heartbeatTimerRef.current = null;
       }
-    }
-  }, [isLockedByMe, documentId, queryClient])
-
-  // ============================================================================
-  // Inactivity Timer
-  // ============================================================================
-
-  useEffect(() => {
-    if (!isLockedByMe || !documentId) {
-      if (inactivityTimerRef.current) {
-        clearInterval(inactivityTimerRef.current)
-        inactivityTimerRef.current = null
-      }
-      return
-    }
-
-    // Reset activity on lock acquire
-    lastActivityRef.current = Date.now()
-
-    // Activity tracking
-    const trackActivity = () => {
-      lastActivityRef.current = Date.now()
-    }
-
-    // Listen for activity events
-    window.addEventListener('keydown', trackActivity)
-    window.addEventListener('mousemove', trackActivity)
-    window.addEventListener('click', trackActivity)
-
-    // Check inactivity periodically
-    inactivityTimerRef.current = setInterval(async () => {
-      const elapsed = Date.now() - lastActivityRef.current
-      if (elapsed > INACTIVITY_THRESHOLD_MS) {
-        // Auto-release: save first, then release
-        try {
-          await onBeforeReleaseRef.current?.()
-        } catch {
-          // Best effort save
-        }
-
-        if (
-          documentIdRef.current &&
-          !lockReleasedRef.current &&
-          window.electronAPI
-        ) {
-          lockReleasedRef.current = true
-          await window.electronAPI.delete<void>(
-            `/api/documents/${documentIdRef.current}/lock`,
-            getAuthHeaders(tokenRef.current)
-          )
-          queryClient.invalidateQueries({
-            queryKey: queryKeys.documentLock(documentIdRef.current),
-          })
-        }
-      }
-    }, INACTIVITY_CHECK_INTERVAL_MS)
-
-    return () => {
-      window.removeEventListener('keydown', trackActivity)
-      window.removeEventListener('mousemove', trackActivity)
-      window.removeEventListener('click', trackActivity)
-      if (inactivityTimerRef.current) {
-        clearInterval(inactivityTimerRef.current)
-        inactivityTimerRef.current = null
-      }
-    }
-  }, [isLockedByMe, documentId, queryClient])
+    };
+  }, [isLockedByMe, documentId, queryClient]);
 
   // ============================================================================
   // WebSocket Subscription
   // ============================================================================
 
   useEffect(() => {
-    if (!documentId || !wsStatus.isConnected) return
+    if (!documentId || !wsStatus.isConnected) return;
 
-    const handleLocked = (data: { document_id: string; lock_holder: LockHolder }) => {
-      if (data.document_id !== documentId) return
+    const handleLocked = (data: {
+      document_id: string;
+      lock_holder: LockHolder;
+    }) => {
+      if (data.document_id !== documentId) return;
       queryClient.setQueryData<LockStatusResponse>(
         queryKeys.documentLock(documentId),
-        { is_locked: true, lock_holder: data.lock_holder }
-      )
-    }
+        { is_locked: true, lock_holder: data.lock_holder },
+      );
+    };
 
     const handleUnlocked = (data: { document_id: string }) => {
-      if (data.document_id !== documentId) return
+      if (data.document_id !== documentId) return;
       queryClient.setQueryData<LockStatusResponse>(
         queryKeys.documentLock(documentId),
-        { is_locked: false, lock_holder: null }
-      )
-    }
+        { is_locked: false, lock_holder: null },
+      );
+    };
 
-    const handleForceTaken = (data: { document_id: string; lock_holder: LockHolder }) => {
-      if (data.document_id !== documentId) return
+    const handleForceTaken = (data: {
+      document_id: string;
+      lock_holder: LockHolder;
+    }) => {
+      if (data.document_id !== documentId) return;
 
-      // If I lost the lock, save before updating state
       if (data.lock_holder.user_id !== userIdRef.current) {
-        void onBeforeReleaseRef.current?.()
-        lockReleasedRef.current = true
+        // I lost the lock — useEditMode detects this via isLockedByMe transition
+        lockReleasedRef.current = true;
       } else {
         // I now hold the lock
-        lockReleasedRef.current = false
+        lockReleasedRef.current = false;
       }
 
       queryClient.setQueryData<LockStatusResponse>(
         queryKeys.documentLock(documentId),
-        { is_locked: true, lock_holder: data.lock_holder }
-      )
-    }
+        { is_locked: true, lock_holder: data.lock_holder },
+      );
+    };
 
-    const unsubLocked = subscribe<{ document_id: string; lock_holder: LockHolder }>(
-      MessageType.DOCUMENT_LOCKED,
-      handleLocked
-    )
+    const unsubLocked = subscribe<{
+      document_id: string;
+      lock_holder: LockHolder;
+    }>(MessageType.DOCUMENT_LOCKED, handleLocked);
     const unsubUnlocked = subscribe<{ document_id: string }>(
       MessageType.DOCUMENT_UNLOCKED,
-      handleUnlocked
-    )
-    const unsubForceTaken = subscribe<{ document_id: string; lock_holder: LockHolder }>(
-      MessageType.DOCUMENT_FORCE_TAKEN,
-      handleForceTaken
-    )
+      handleUnlocked,
+    );
+    const unsubForceTaken = subscribe<{
+      document_id: string;
+      lock_holder: LockHolder;
+    }>(MessageType.DOCUMENT_FORCE_TAKEN, handleForceTaken);
 
     return () => {
-      unsubLocked()
-      unsubUnlocked()
-      unsubForceTaken()
-    }
-  }, [documentId, wsStatus.isConnected, subscribe, queryClient])
+      unsubLocked();
+      unsubUnlocked();
+      unsubForceTaken();
+    };
+  }, [documentId, wsStatus.isConnected, subscribe, queryClient]);
 
   // ============================================================================
   // Cleanup on Unmount
@@ -462,24 +433,20 @@ export function useDocumentLock({
         documentIdRef.current &&
         window.electronAPI
       ) {
-        lockReleasedRef.current = true
+        lockReleasedRef.current = true;
         void window.electronAPI.delete<void>(
           `/api/documents/${documentIdRef.current}/lock`,
-          getAuthHeaders(tokenRef.current)
-        )
+          getAuthHeaders(tokenRef.current),
+        );
       }
 
       // Clear timers
       if (heartbeatTimerRef.current) {
-        clearInterval(heartbeatTimerRef.current)
-        heartbeatTimerRef.current = null
+        clearInterval(heartbeatTimerRef.current);
+        heartbeatTimerRef.current = null;
       }
-      if (inactivityTimerRef.current) {
-        clearInterval(inactivityTimerRef.current)
-        inactivityTimerRef.current = null
-      }
-    }
-  }, [])
+    };
+  }, []);
 
   // ============================================================================
   // Return
@@ -493,8 +460,11 @@ export function useDocumentLock({
     releaseLock,
     forceTakeLock,
     canForceTake,
-    isLoading: lockQuery.isLoading || acquireMutation.isPending || releaseMutation.isPending,
-  }
+    isLoading:
+      lockQuery.isLoading ||
+      acquireMutation.isPending ||
+      releaseMutation.isPending,
+  };
 }
 
 // ============================================================================
@@ -506,11 +476,11 @@ export function useDocumentLock({
  */
 export interface UseDocumentLockStatusReturn {
   /** Whether the document is currently locked */
-  isLocked: boolean
+  isLocked: boolean;
   /** Info about who holds the lock (null if not locked) */
-  lockHolder: { userId: string; userName: string } | null
+  lockHolder: { userId: string; userName: string } | null;
   /** Whether the lock status is being loaded */
-  isLoading: boolean
+  isLoading: boolean;
 }
 
 /**
@@ -542,94 +512,103 @@ export interface UseDocumentLockStatusReturn {
  * }
  * ```
  */
-export function useDocumentLockStatus(documentId: string | null): UseDocumentLockStatusReturn {
-  const token = useAuthStore((s) => s.token)
-  const queryClient = useQueryClient()
-  const { subscribe, status: wsStatus } = useWebSocket()
+export function useDocumentLockStatus(
+  documentId: string | null,
+): UseDocumentLockStatusReturn {
+  const token = useAuthStore((s) => s.token);
+  const queryClient = useQueryClient();
+  const { subscribe, status: wsStatus } = useWebSocket();
 
   // Query lock status
   const { data, isLoading } = useQuery({
-    queryKey: queryKeys.documentLock(documentId ?? ''),
+    queryKey: queryKeys.documentLock(documentId ?? ""),
     queryFn: async (): Promise<LockStatusResponse> => {
       if (!window.electronAPI || !documentId) {
-        return { is_locked: false, lock_holder: null }
+        return { is_locked: false, lock_holder: null };
       }
 
-      const response = await window.electronAPI.get<LockStatusResponse>(
+      const response = await window.electronAPI.get<Record<string, unknown>>(
         `/api/documents/${documentId}/lock`,
-        getAuthHeaders(token)
-      )
+        getAuthHeaders(token),
+      );
 
       if (response.status !== 200) {
         // Return unlocked state on error
-        return { is_locked: false, lock_holder: null }
+        return { is_locked: false, lock_holder: null };
       }
 
-      return response.data
+      return normalizeLockResponse(response.data);
     },
-    enabled: !!token && !!documentId,
+    // Skip temp IDs from optimistic updates - they don't exist on the server yet
+    enabled: !!token && !!documentId && !isTempId(documentId),
     staleTime: 10_000, // 10 seconds
     refetchInterval: 30_000, // 30s fallback poll
     gcTime: 60_000,
-  })
+  });
 
   // Subscribe to WebSocket for real-time lock updates
   useEffect(() => {
-    if (!documentId || !wsStatus.isConnected) return
+    if (!documentId || !wsStatus.isConnected) return;
 
-    const handleLocked = (eventData: { document_id: string; lock_holder: LockHolder }) => {
-      if (eventData.document_id !== documentId) return
+    const handleLocked = (eventData: {
+      document_id: string;
+      lock_holder: LockHolder;
+    }) => {
+      if (eventData.document_id !== documentId) return;
       queryClient.setQueryData<LockStatusResponse>(
         queryKeys.documentLock(documentId),
-        { is_locked: true, lock_holder: eventData.lock_holder }
-      )
-    }
+        { is_locked: true, lock_holder: eventData.lock_holder },
+      );
+    };
 
     const handleUnlocked = (eventData: { document_id: string }) => {
-      if (eventData.document_id !== documentId) return
+      if (eventData.document_id !== documentId) return;
       queryClient.setQueryData<LockStatusResponse>(
         queryKeys.documentLock(documentId),
-        { is_locked: false, lock_holder: null }
-      )
-    }
+        { is_locked: false, lock_holder: null },
+      );
+    };
 
-    const handleForceTaken = (eventData: { document_id: string; lock_holder: LockHolder }) => {
-      if (eventData.document_id !== documentId) return
+    const handleForceTaken = (eventData: {
+      document_id: string;
+      lock_holder: LockHolder;
+    }) => {
+      if (eventData.document_id !== documentId) return;
       queryClient.setQueryData<LockStatusResponse>(
         queryKeys.documentLock(documentId),
-        { is_locked: true, lock_holder: eventData.lock_holder }
-      )
-    }
+        { is_locked: true, lock_holder: eventData.lock_holder },
+      );
+    };
 
-    const unsubLocked = subscribe<{ document_id: string; lock_holder: LockHolder }>(
-      MessageType.DOCUMENT_LOCKED,
-      handleLocked
-    )
+    const unsubLocked = subscribe<{
+      document_id: string;
+      lock_holder: LockHolder;
+    }>(MessageType.DOCUMENT_LOCKED, handleLocked);
     const unsubUnlocked = subscribe<{ document_id: string }>(
       MessageType.DOCUMENT_UNLOCKED,
-      handleUnlocked
-    )
-    const unsubForceTaken = subscribe<{ document_id: string; lock_holder: LockHolder }>(
-      MessageType.DOCUMENT_FORCE_TAKEN,
-      handleForceTaken
-    )
+      handleUnlocked,
+    );
+    const unsubForceTaken = subscribe<{
+      document_id: string;
+      lock_holder: LockHolder;
+    }>(MessageType.DOCUMENT_FORCE_TAKEN, handleForceTaken);
 
     return () => {
-      unsubLocked()
-      unsubUnlocked()
-      unsubForceTaken()
-    }
-  }, [documentId, wsStatus.isConnected, subscribe, queryClient])
+      unsubLocked();
+      unsubUnlocked();
+      unsubForceTaken();
+    };
+  }, [documentId, wsStatus.isConnected, subscribe, queryClient]);
 
   // Derive return values
-  const isLocked = !!data?.is_locked && !!data?.lock_holder
+  const isLocked = !!data?.is_locked && !!data?.lock_holder;
   const lockHolder = data?.lock_holder
     ? { userId: data.lock_holder.user_id, userName: data.lock_holder.user_name }
-    : null
+    : null;
 
   return {
     isLocked,
     lockHolder,
     isLoading,
-  }
+  };
 }

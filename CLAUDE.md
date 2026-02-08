@@ -10,7 +10,7 @@ PM Desktop is a project management application with Jira-like features and OneNo
 
 - Python 3.12 + FastAPI, SQLAlchemy, Pydantic, Alembic
 - TypeScript 5.5 + React 18, Electron 30, Zustand, Radix UI, TailwindCSS, TipTap
-- Microsoft SQL Server (via pyodbc)
+- Postgres SQL
 - Redis 7+ (WebSocket pub/sub and caching)
 - @dnd-kit (drag-and-drop)
 - pycrdt (Python CRDT for Yjs compatibility)

@@ -115,35 +115,35 @@ export interface KanbanColumnProps {
  */
 export const DEFAULT_COLUMNS: KanbanColumnConfig[] = [
   {
-    id: 'todo',
+    id: 'Todo',
     title: 'To Do',
     icon: <Circle className="h-4 w-4" />,
     color: 'bg-slate-500',
     bgColor: 'bg-slate-500/10',
   },
   {
-    id: 'in_progress',
+    id: 'In Progress',
     title: 'In Progress',
     icon: <Timer className="h-4 w-4" />,
     color: 'bg-blue-500',
     bgColor: 'bg-blue-500/10',
   },
   {
-    id: 'in_review',
+    id: 'In Review',
     title: 'In Review',
     icon: <Eye className="h-4 w-4" />,
     color: 'bg-purple-500',
     bgColor: 'bg-purple-500/10',
   },
   {
-    id: 'issue',
+    id: 'Issue',
     title: 'Issue',
     icon: <XCircle className="h-4 w-4" />,
     color: 'bg-red-500',
     bgColor: 'bg-red-500/10',
   },
   {
-    id: 'done',
+    id: 'Done',
     title: 'Done',
     icon: <CheckCircle2 className="h-4 w-4" />,
     color: 'bg-green-500',

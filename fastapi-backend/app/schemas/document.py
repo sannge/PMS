@@ -155,3 +155,12 @@ class ScopesSummaryResponse(BaseModel):
 
     has_personal_docs: bool
     applications: list[ApplicationWithDocs]
+
+
+class ProjectsWithContentResponse(BaseModel):
+    """Response for projects that have knowledge content."""
+
+    project_ids: list[str] = Field(
+        ...,
+        description="List of project IDs that have documents or folders",
+    )

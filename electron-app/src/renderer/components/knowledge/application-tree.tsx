@@ -47,6 +47,7 @@ import {
   useRenameDocument,
   useDeleteDocument,
   useReorderDocument,
+  useProjectsWithContent,
   type DocumentListItem,
 } from '@/hooks/use-documents'
 import { FolderTreeItem } from './folder-tree-item'
@@ -206,11 +207,6 @@ function ProjectSection({
     return folders.length === 0 && unfiledDocs.length === 0
   }, [isExpanded, isLoading, folders.length, unfiledDocs.length])
 
-  // Hide section if expanded, loaded, and empty (when hideIfEmpty is true)
-  if (hideIfEmpty && isExpanded && isEmpty && !isLoading) {
-    return null
-  }
-
   // Create sortable IDs for this project's items
   const projectSortableItems = useMemo(() => {
     const items: string[] = []
@@ -307,6 +303,12 @@ function ProjectSection({
     ]
   )
 
+  // Hide section if expanded, loaded, and empty (when hideIfEmpty is true)
+  // This must be AFTER all hooks to avoid React "fewer hooks" error
+  if (hideIfEmpty && isExpanded && isEmpty && !isLoading) {
+    return null
+  }
+
   return (
     <div className="border-l-2 border-primary/20 ml-2 mt-1">
       {/* Project section header */}
@@ -380,6 +382,7 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
 
   // Projects for this application
   const { data: projects } = useProjects(applicationId)
+  const { data: projectsWithContent, isLoading: isProjectsContentLoading } = useProjectsWithContent(applicationId)
 
   // Mutations -- app scope
   const createFolder = useCreateFolder()
@@ -421,7 +424,7 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
     name: string
   } | null>(null)
 
-  const isLoading = isFoldersLoading && isUnfiledLoading
+  const isLoading = (isFoldersLoading && isUnfiledLoading) || isProjectsContentLoading
 
   const folders = folderTree ?? []
   const unfiledDocs = unfiledResponse?.items ?? []
@@ -466,10 +469,20 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
 
   // Filter projects: keep project if its name matches search
   // (Project section content is lazy-loaded so we can't filter by document content)
+  // Set of project IDs that have documents/folders
+  const projectIdsWithContent = useMemo(
+    () => new Set(projectsWithContent?.project_ids ?? []),
+    [projectsWithContent?.project_ids]
+  )
+
   const filteredProjects = useMemo(() => {
-    if (!searchQuery) return projectList
-    return projectList.filter(project => matchesSearch(project.name))
-  }, [projectList, searchQuery, matchesSearch])
+    // When searching, show all projects that match the search
+    if (searchQuery) {
+      return projectList.filter(project => matchesSearch(project.name))
+    }
+    // When not searching, only show projects with content
+    return projectList.filter(project => projectIdsWithContent.has(project.id))
+  }, [projectList, projectIdsWithContent, searchQuery, matchesSearch])
 
   // Auto-expand folders with matching children when searching
   useEffect(() => {
@@ -618,8 +631,7 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
           })
         }
       } else {
-        // Project-level reorder - extract project ID from scope
-        const projectId = activeParsed.scope.replace('project:', '')
+        // Project-level reorder
         // Note: For project items, we'd need project-scoped mutations
         // For now, the app-level mutations work since they're ID-based
         if (activeParsed.type === 'folder') {
@@ -820,24 +832,12 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
   // ========================================================================
 
   const handleCreateFirstDocument = useCallback(() => {
-    createDocument.mutate(
-      {
-        title: 'Untitled',
-        scope: 'application',
-        scope_id: applicationId,
-      },
-      {
-        onSuccess: (data) => {
-          selectDocument(data.id)
-          setRenamingItemId(data.id)
-          setRenamingItemType('document')
-        },
-        onError: (error) => {
-          toast.error(error.message)
-        },
-      }
-    )
-  }, [applicationId, createDocument, selectDocument])
+    setCreateType('document')
+    setCreateParentId(null)
+    setCreateScope('application')
+    setCreateScopeId(applicationId)
+    setCreateDialogOpen(true)
+  }, [applicationId])
 
   // ========================================================================
   // Recursive folder renderer (app-level)
@@ -931,32 +931,35 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
     return <TreeSkeleton />
   }
 
-  const hasNoData = folders.length === 0 && unfiledDocs.length === 0 && projectList.length === 0
+  const hasNoData = folders.length === 0 && unfiledDocs.length === 0 && projectIdsWithContent.size === 0
   const hasNoResults = filteredFolders.length === 0 && filteredDocs.length === 0 && filteredProjects.length === 0
 
   // Empty state - no data at all
   if (hasNoData) {
     return (
-      <div className="flex flex-col items-center justify-center p-6 text-center">
-        <p className="text-sm text-muted-foreground mb-3">No documents yet</p>
-        <button
-          onClick={handleCreateFirstDocument}
-          disabled={createDocument.isPending}
-          className={cn(
-            'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md',
-            'bg-primary text-primary-foreground hover:bg-primary/90',
-            'transition-colors',
-            'disabled:pointer-events-none disabled:opacity-50'
-          )}
-        >
-          {createDocument.isPending ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
+      <>
+        <div className="flex flex-col items-center justify-center p-6 text-center">
+          <p className="text-sm text-muted-foreground mb-3">No documents yet</p>
+          <button
+            onClick={handleCreateFirstDocument}
+            className={cn(
+              'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md',
+              'bg-primary text-primary-foreground hover:bg-primary/90',
+              'transition-colors'
+            )}
+          >
             <FilePlus className="h-4 w-4" />
-          )}
-          {createDocument.isPending ? 'Creating...' : 'Create your first document'}
-        </button>
-      </div>
+            Create your first document
+          </button>
+        </div>
+
+        <CreateDialog
+          open={createDialogOpen}
+          onOpenChange={setCreateDialogOpen}
+          type={createType}
+          onSubmit={handleCreateSubmit}
+        />
+      </>
     )
   }
 
@@ -1017,7 +1020,7 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
                 selectedDocumentId={selectedDocumentId}
                 renamingItemId={renamingItemId}
                 activeItem={activeItem}
-                hideIfEmpty={!searchQuery}
+                hideIfEmpty={false}
                 onToggleFolder={toggleFolder}
                 onSelectFolder={handleSelectFolder}
                 onSelectDocument={handleSelectDocument}

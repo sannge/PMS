@@ -21,8 +21,9 @@ import {
   XCircle,
   ChevronDown,
 } from 'lucide-react'
-// Legacy TaskStatus type - kept for internal badge use until full migration
-type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'issue' | 'done'
+
+/** StatusName values matching TaskStatus.name from the backend */
+type StatusName = 'Todo' | 'In Progress' | 'In Review' | 'Issue' | 'Done'
 
 // ============================================================================
 // Types
@@ -30,13 +31,13 @@ type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'issue' | 'done'
 
 export interface TaskStatusBadgeProps {
   /**
-   * Current task status
+   * Current task status name (e.g. "Todo", "In Progress", "Done")
    */
-  status: TaskStatus
+  status: StatusName
   /**
    * Callback when status is changed (enables interactive mode)
    */
-  onStatusChange?: (status: TaskStatus) => void
+  onStatusChange?: (status: StatusName) => void
   /**
    * Whether the badge is disabled
    */
@@ -63,38 +64,38 @@ interface StatusConfig {
 // Constants
 // ============================================================================
 
-const STATUS_ORDER: TaskStatus[] = ['todo', 'in_progress', 'in_review', 'issue', 'done']
+const STATUS_ORDER: StatusName[] = ['Todo', 'In Progress', 'In Review', 'Issue', 'Done']
 
-const STATUS_CONFIG: Record<TaskStatus, StatusConfig> = {
-  todo: {
+const STATUS_CONFIG: Record<StatusName, StatusConfig> = {
+  Todo: {
     label: 'To Do',
     icon: <Circle className="h-3.5 w-3.5" />,
     bgColor: 'bg-slate-100 dark:bg-slate-800',
     textColor: 'text-slate-700 dark:text-slate-300',
     borderColor: 'border-slate-300 dark:border-slate-600',
   },
-  in_progress: {
+  'In Progress': {
     label: 'In Progress',
     icon: <Timer className="h-3.5 w-3.5" />,
     bgColor: 'bg-blue-100 dark:bg-blue-900/50',
     textColor: 'text-blue-700 dark:text-blue-300',
     borderColor: 'border-blue-300 dark:border-blue-700',
   },
-  in_review: {
+  'In Review': {
     label: 'In Review',
     icon: <Eye className="h-3.5 w-3.5" />,
     bgColor: 'bg-purple-100 dark:bg-purple-900/50',
     textColor: 'text-purple-700 dark:text-purple-300',
     borderColor: 'border-purple-300 dark:border-purple-700',
   },
-  issue: {
+  Issue: {
     label: 'Issue',
     icon: <XCircle className="h-3.5 w-3.5" />,
     bgColor: 'bg-red-100 dark:bg-red-900/50',
     textColor: 'text-red-700 dark:text-red-300',
     borderColor: 'border-red-300 dark:border-red-700',
   },
-  done: {
+  Done: {
     label: 'Done',
     icon: <CheckCircle2 className="h-3.5 w-3.5" />,
     bgColor: 'bg-green-100 dark:bg-green-900/50',
@@ -124,7 +125,7 @@ export function TaskStatusBadge({
   const dropdownRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
 
-  const config = STATUS_CONFIG[status]
+  const config = STATUS_CONFIG[status] || STATUS_CONFIG.Todo
   const isInteractive = !!onStatusChange && !disabled
 
   // Close dropdown on outside click
@@ -161,7 +162,7 @@ export function TaskStatusBadge({
 
   // Handle status selection
   const handleStatusSelect = useCallback(
-    (newStatus: TaskStatus) => {
+    (newStatus: StatusName) => {
       if (newStatus !== status && onStatusChange) {
         onStatusChange(newStatus)
       }
@@ -261,16 +262,16 @@ export function TaskStatusBadge({
 // ============================================================================
 
 /**
- * Get status configuration
+ * Get status configuration by StatusName
  */
-export function getStatusConfig(status: TaskStatus): StatusConfig {
-  return STATUS_CONFIG[status]
+export function getStatusConfig(status: string): StatusConfig {
+  return STATUS_CONFIG[status as StatusName] || STATUS_CONFIG.Todo
 }
 
 /**
  * Get all available statuses in order
  */
-export function getStatusOptions(): { value: TaskStatus; label: string }[] {
+export function getStatusOptions(): { value: string; label: string }[] {
   return STATUS_ORDER.map((s) => ({
     value: s,
     label: STATUS_CONFIG[s].label,

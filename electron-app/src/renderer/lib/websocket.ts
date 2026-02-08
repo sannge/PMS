@@ -113,6 +113,16 @@ export enum MessageType {
   DOCUMENT_UNLOCKED = 'document_unlocked',
   DOCUMENT_FORCE_TAKEN = 'document_force_taken',
 
+  // Document CRUD events (knowledge base)
+  DOCUMENT_CREATED = 'document_created',
+  DOCUMENT_UPDATED = 'document_updated',
+  DOCUMENT_DELETED = 'document_deleted',
+
+  // Folder CRUD events (knowledge base)
+  FOLDER_CREATED = 'folder_created',
+  FOLDER_UPDATED = 'folder_updated',
+  FOLDER_DELETED = 'folder_deleted',
+
   // Keepalive
   PING = 'ping',
   PONG = 'pong',
@@ -743,6 +753,13 @@ export class WebSocketClient {
    */
   static getProjectRoom(projectId: string): string {
     return `project:${projectId}`
+  }
+
+  /**
+   * Get user room ID (for personal content like notes)
+   */
+  static getUserRoom(userId: string): string {
+    return `user:${userId}`
   }
 
   /**

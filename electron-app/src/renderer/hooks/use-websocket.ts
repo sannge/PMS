@@ -37,6 +37,8 @@ import {
   type NotificationReadEventData,
 } from '@/lib/websocket'
 
+// WebSocketClient is re-exported at the bottom of this file
+
 /**
  * Project status update event data
  */
@@ -379,7 +381,7 @@ export function useTaskMoved(
   projectId: string | null,
   onMoved: (data: TaskMovedEventData) => void
 ): void {
-  const { subscribe, status } = useWebSocket()
+  const { subscribe, joinRoom, leaveRoom, status } = useWebSocket()
   const callbackRef = useRef(onMoved)
 
   // Keep callback ref up to date
@@ -387,11 +389,15 @@ export function useTaskMoved(
     callbackRef.current = onMoved
   }, [onMoved])
 
-  // Subscribe to task_moved events (room is already joined by useTaskUpdates)
+  // Join project room and subscribe to task_moved events
   useEffect(() => {
     if (!projectId || !status.isConnected) {
       return
     }
+
+    // Explicitly join room (ref-counted — safe to call even if useTaskUpdates also joins)
+    const roomId = WebSocketClient.getProjectRoom(projectId)
+    joinRoom(roomId)
 
     const unsubscribeMoved = subscribe<TaskMovedEventData>(
       MessageType.TASK_MOVED,
@@ -405,9 +411,9 @@ export function useTaskMoved(
 
     return () => {
       unsubscribeMoved()
-      // Don't leave room here - useTaskUpdates manages the room lifecycle
+      leaveRoom(roomId)
     }
-  }, [projectId, status.isConnected, subscribe])
+  }, [projectId, status.isConnected, subscribe, joinRoom, leaveRoom])
 }
 
 /**
@@ -889,7 +895,6 @@ export interface ProjectMemberRemovedEventData {
   project_id: string
   user_id: string
   removed_by: string
-  tasks_unassigned: number
 }
 
 /**

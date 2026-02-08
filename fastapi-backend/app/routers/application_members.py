@@ -22,9 +22,11 @@ from sqlalchemy.orm import selectinload
 from ..database import get_db
 from ..models.application import Application
 from ..models.application_member import ApplicationMember
+from ..models.project import Project
+from ..models.task import Task
+from ..models.task_status import TaskStatus, StatusCategory
 from ..models.user import User
 from ..schemas.application_member import (
-    MemberResponse,
     MemberUpdate,
     MemberWithUser,
 )
@@ -577,6 +579,7 @@ async def update_member_role(
         401: {"description": "Not authenticated"},
         403: {"description": "Access denied - insufficient permissions"},
         404: {"description": "Application or member not found"},
+        409: {"description": "Member has active tasks assigned in one or more projects"},
     },
 )
 async def remove_member(
@@ -593,6 +596,9 @@ async def remove_member(
     - Viewer: Cannot remove other members
     - Editor: Cannot remove other members
     - Owner: Can remove any member
+
+    Removal is blocked if the member has active tasks assigned (not Done, not archived)
+    in any project within the application.
 
     Cannot remove the last owner.
     """
@@ -650,6 +656,42 @@ async def remove_member(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot remove the last owner of the application.",
             )
+
+    # Check for active tasks assigned to this user across all projects in the application
+    # Active = not Done and not archived
+    result = await db.execute(
+        select(Task.id, Project.name)
+        .join(Project, Task.project_id == Project.id)
+        .join(TaskStatus, Task.task_status_id == TaskStatus.id)
+        .where(
+            Project.application_id == application_id,
+            Task.assignee_id == user_id,
+            Task.archived_at.is_(None),
+            TaskStatus.category != StatusCategory.DONE.value,
+        )
+    )
+    active_tasks = result.all()
+
+    active_assignments: list[dict] = []
+    if active_tasks:
+        # Group active tasks by project name
+        project_counts: dict[str, int] = {}
+        for _task_id, project_name in active_tasks:
+            project_counts[project_name] = project_counts.get(project_name, 0) + 1
+
+        active_assignments = [
+            {"project_name": name, "active_task_count": count}
+            for name, count in project_counts.items()
+        ]
+
+    if active_assignments:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "Cannot remove member. They have active tasks assigned.",
+                "active_assignments": active_assignments,
+            },
+        )
 
     # Store member info for notifications before deletion
     member_user = member.user

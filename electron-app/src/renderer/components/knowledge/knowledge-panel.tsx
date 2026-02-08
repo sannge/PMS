@@ -7,27 +7,37 @@
  *
  * Wraps itself in a KnowledgeBaseProvider with a scoped storage prefix
  * so multiple mounted instances don't share localStorage state.
+ *
+ * Documents open in view mode by default. Users click "Edit" to acquire
+ * a lock and enter edit mode, then "Save" to persist or "Cancel" to discard.
  */
 
-import { useCallback, useRef, useEffect, useState } from 'react'
-import { FileText, FilePlus, FolderPlus } from 'lucide-react'
+import { useCallback, useRef, useEffect, useState, useMemo } from 'react'
+import { FileText, FilePlus, FolderPlus, Save, Trash2, AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
 import {
   KnowledgeBaseProvider,
   useKnowledgeBase,
   type ScopeType,
 } from '@/contexts/knowledge-base-context'
-import { useAuthStore } from '@/contexts/auth-context'
-import { useDocument, useCreateDocument } from '@/hooks/use-documents'
+import { useCreateDocument } from '@/hooks/use-documents'
 import { useCreateFolder } from '@/hooks/use-document-folders'
-import { useSaveDocumentContent } from '@/hooks/use-queries'
+import { useEditMode } from '@/hooks/use-edit-mode'
 import { SearchBar } from './search-bar'
 import { FolderTree } from './folder-tree'
 import { ApplicationTree } from './application-tree'
 import { DocumentEditor } from './document-editor'
-import { SaveStatus } from './SaveStatus'
-import type { SaveStatus as SaveStatusType } from '@/hooks/use-auto-save'
+import { DocumentActionBar } from './document-action-bar'
 
 // ============================================================================
 // Types
@@ -45,22 +55,16 @@ export interface KnowledgePanelProps {
 // Skeleton
 // ============================================================================
 
-/**
- * Editor content skeleton - shows title and paragraph placeholders
- */
 function EditorSkeleton(): JSX.Element {
   return (
     <div className="flex-1 p-6 space-y-4">
-      {/* Title skeleton */}
       <div className="h-8 w-48 rounded bg-muted animate-pulse" />
-      {/* Paragraph skeletons */}
       <div className="space-y-2.5">
         <div className="h-4 rounded bg-muted animate-pulse" style={{ width: '90%' }} />
         <div className="h-4 rounded bg-muted animate-pulse" style={{ width: '75%' }} />
         <div className="h-4 rounded bg-muted animate-pulse" style={{ width: '85%' }} />
         <div className="h-4 rounded bg-muted animate-pulse" style={{ width: '60%' }} />
       </div>
-      {/* Second paragraph */}
       <div className="space-y-2.5 pt-2">
         <div className="h-4 rounded bg-muted animate-pulse" style={{ width: '80%' }} />
         <div className="h-4 rounded bg-muted animate-pulse" style={{ width: '70%' }} />
@@ -80,17 +84,12 @@ interface InnerPanelProps {
   className?: string
 }
 
-/** Debounce delay for saving content changes (ms) */
-const SAVE_DEBOUNCE_MS = 2000
-
 /** Resize constraints for tree panel */
 const MIN_TREE_WIDTH = 200
 const MAX_TREE_WIDTH = 500
 const DEFAULT_TREE_WIDTH = 280
 
 function InnerPanel({ scope, scopeId, showProjectFolders, className }: InnerPanelProps) {
-  const userId = useAuthStore((s) => s.user?.id ?? '')
-  const userName = useAuthStore((s) => s.user?.display_name ?? s.user?.email ?? '')
   const { selectedDocumentId, selectDocument, selectFolder } = useKnowledgeBase()
 
   // Resizable tree panel state
@@ -98,37 +97,20 @@ function InnerPanel({ scope, scopeId, showProjectFolders, className }: InnerPane
   const isResizingRef = useRef(false)
   const containerRef = useRef<HTMLDivElement>(null)
 
-  // Document data for the editor (renamed to avoid shadowing global document)
-  const { data: currentDoc, isLoading: isDocLoading } = useDocument(selectedDocumentId)
+  // Edit mode state machine — owns the document query
+  const editMode = useEditMode({
+    documentId: selectedDocumentId,
+    userRole: null,
+  })
 
-  // Save mutation for content changes
-  const saveMutation = useSaveDocumentContent()
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout>>()
-  const rowVersionRef = useRef(1)
+  const currentDoc = editMode.document
+  const isDocLoading = editMode.isDocLoading
 
-  // Save status state
-  const [saveStatus, setSaveStatus] = useState<SaveStatusType>({ state: 'idle' })
-
-  // Keep row version in sync
-  useEffect(() => {
-    if (currentDoc?.row_version) {
-      rowVersionRef.current = currentDoc.row_version
-    }
-  }, [currentDoc?.row_version])
-
-  // Reset save status when document changes
-  useEffect(() => {
-    setSaveStatus({ state: 'idle' })
-  }, [selectedDocumentId])
-
-  // Cleanup timer on unmount
-  useEffect(() => {
-    return () => {
-      if (saveTimerRef.current) {
-        clearTimeout(saveTimerRef.current)
-      }
-    }
-  }, [])
+  // Memoize parsed content to avoid new object reference on every render
+  const parsedContent = useMemo(
+    () => currentDoc?.content_json ? JSON.parse(currentDoc.content_json) as object : undefined,
+    [currentDoc?.content_json]
+  )
 
   // Creation mutations
   const createDocument = useCreateDocument()
@@ -161,41 +143,6 @@ function InnerPanel({ scope, scopeId, showProjectFolders, className }: InnerPane
       parent_id: null,
     })
   }, [scope, scopeId, createFolder])
-
-  const handleEditorChange = useCallback(
-    (json: object) => {
-      if (!selectedDocumentId) return
-
-      // Debounced save
-      if (saveTimerRef.current) {
-        clearTimeout(saveTimerRef.current)
-      }
-
-      saveTimerRef.current = setTimeout(() => {
-        setSaveStatus({ state: 'saving' })
-
-        saveMutation.mutate(
-          {
-            documentId: selectedDocumentId,
-            content_json: JSON.stringify(json),
-            row_version: rowVersionRef.current,
-          },
-          {
-            onSuccess: (data) => {
-              if (data.row_version) {
-                rowVersionRef.current = data.row_version
-              }
-              setSaveStatus({ state: 'saved', at: Date.now() })
-            },
-            onError: (error) => {
-              setSaveStatus({ state: 'error', message: error.message })
-            },
-          }
-        )
-      }, SAVE_DEBOUNCE_MS)
-    },
-    [selectedDocumentId, saveMutation]
-  )
 
   // Resize handlers for tree panel
   const handleResizeMouseMove = useCallback((e: MouseEvent) => {
@@ -280,28 +227,107 @@ function InnerPanel({ scope, scopeId, showProjectFolders, className }: InnerPane
       />
 
       {/* Right panel: editor or empty state */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
         {selectedDocumentId ? (
           isDocLoading ? (
             <EditorSkeleton />
           ) : currentDoc ? (
             <>
-              {/* Save status indicator */}
-              <div className="flex items-center justify-end px-4 py-1 border-b bg-muted/30">
-                <SaveStatus status={saveStatus} />
-              </div>
+              {/* Action bar: Edit/Save/Cancel buttons */}
+              <DocumentActionBar
+                mode={editMode.mode}
+                lockHolder={editMode.lockHolder}
+                isLockedByOther={editMode.isLockedByOther}
+                canForceTake={editMode.canForceTake}
+                isDirty={editMode.isDirty}
+                isSaving={editMode.isSaving}
+                isEntering={editMode.isEntering}
+                isExiting={editMode.isExiting}
+                onEdit={() => void editMode.enterEditMode()}
+                onSave={() => void editMode.save()}
+                onCancel={editMode.cancel}
+                onForceTake={() => void editMode.forceTake()}
+              />
 
               {/* Document editor */}
               <DocumentEditor
-                content={currentDoc.content_json ? JSON.parse(currentDoc.content_json) : undefined}
-                onChange={handleEditorChange}
-                editable={true}
+                content={parsedContent}
+                onChange={editMode.handleContentChange}
+                editable={editMode.mode === 'edit'}
                 placeholder="Start writing..."
-                documentId={selectedDocumentId}
-                userId={userId}
-                userName={userName}
-                className="flex-1 border-0 rounded-none"
+                className="flex-1"
               />
+
+              {/* Discard changes dialog */}
+              <Dialog open={editMode.showDiscardDialog} onOpenChange={(open) => { if (!open) editMode.cancelDiscard() }}>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Discard changes?</DialogTitle>
+                    <DialogDescription>
+                      You have unsaved changes. Are you sure you want to discard them?
+                    </DialogDescription>
+                  </DialogHeader>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={editMode.cancelDiscard}>
+                      Keep editing
+                    </Button>
+                    <Button variant="destructive" onClick={editMode.confirmDiscard}>
+                      Discard
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+
+              {/* Inactivity dialog */}
+              <Dialog open={editMode.showInactivityDialog} onOpenChange={(open) => { if (!open) editMode.inactivityKeepEditing() }}>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Are you still editing?</DialogTitle>
+                    <DialogDescription>
+                      Your changes will be auto-saved in 60 seconds.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <DialogFooter>
+                    <Button variant="destructive" onClick={editMode.inactivityDiscard}>
+                      Discard
+                    </Button>
+                    <Button variant="outline" onClick={() => void editMode.inactivitySave()}>
+                      Save
+                    </Button>
+                    <Button onClick={editMode.inactivityKeepEditing}>
+                      Keep Editing
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+
+              {/* Quit confirmation dialog */}
+              <Dialog open={editMode.showQuitDialog} onOpenChange={() => { /* prevent close via overlay */ }}>
+                <DialogContent className="sm:max-w-md">
+                  <DialogHeader>
+                    <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-amber-500/10">
+                      <AlertTriangle className="h-6 w-6 text-amber-500" />
+                    </div>
+                    <DialogTitle className="text-center">Unsaved changes</DialogTitle>
+                    <DialogDescription className="text-center">
+                      You have unsaved changes in your document. What would you like to do before closing?
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="flex flex-col gap-2 pt-2">
+                    <Button onClick={editMode.quitSave} className="w-full gap-2">
+                      <Save className="h-4 w-4" />
+                      Save and close
+                    </Button>
+                    <Button variant="destructive" onClick={editMode.quitDiscard} className="w-full gap-2">
+                      <Trash2 className="h-4 w-4" />
+                      Discard and close
+                    </Button>
+                    <Button variant="outline" onClick={editMode.quitCancel} className="w-full">
+                      Keep editing
+                    </Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
             </>
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground gap-3">

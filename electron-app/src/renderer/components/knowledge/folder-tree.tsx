@@ -13,7 +13,7 @@
  */
 
 import { useState, useCallback, useMemo, useEffect } from 'react'
-import { FilePlus, Folder, FileText, Loader2 } from 'lucide-react'
+import { FilePlus, Folder, FileText } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   DndContext,
@@ -135,7 +135,6 @@ export function FolderTree(): JSX.Element {
   const {
     data: folderTree,
     isLoading: isFoldersLoading,
-    isFetching: isFoldersFetching,
   } = useFolderTree(scope, scopeId)
 
   const {
@@ -493,25 +492,10 @@ export function FolderTree(): JSX.Element {
   // ========================================================================
 
   const handleCreateFirstDocument = useCallback(() => {
-    const resolvedScopeId = scope === 'personal' ? (userId ?? '') : (scopeId ?? '')
-    createDocument.mutate(
-      {
-        title: 'Untitled',
-        scope,
-        scope_id: resolvedScopeId,
-      },
-      {
-        onSuccess: (data) => {
-          selectDocument(data.id)
-          setRenamingItemId(data.id)
-          setRenamingItemType('document')
-        },
-        onError: (error) => {
-          toast.error(error.message)
-        },
-      }
-    )
-  }, [scope, scopeId, userId, createDocument, selectDocument])
+    setCreateType('document')
+    setCreateParentId(null)
+    setCreateDialogOpen(true)
+  }, [])
 
   // ========================================================================
   // Recursive folder renderer
@@ -604,26 +588,30 @@ export function FolderTree(): JSX.Element {
   // Empty state - no data at all
   if (hasNoData) {
     return (
-      <div className="flex flex-col items-center justify-center p-6 text-center">
-        <p className="text-sm text-muted-foreground mb-3">No documents yet</p>
-        <button
-          onClick={handleCreateFirstDocument}
-          disabled={createDocument.isPending}
-          className={cn(
-            'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md',
-            'bg-primary text-primary-foreground hover:bg-primary/90',
-            'transition-colors',
-            'disabled:pointer-events-none disabled:opacity-50'
-          )}
-        >
-          {createDocument.isPending ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
+      <>
+        <div className="flex flex-col items-center justify-center p-6 text-center">
+          <p className="text-sm text-muted-foreground mb-3">No documents yet</p>
+          <button
+            onClick={handleCreateFirstDocument}
+            className={cn(
+              'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md',
+              'bg-primary text-primary-foreground hover:bg-primary/90',
+              'transition-colors'
+            )}
+          >
             <FilePlus className="h-4 w-4" />
-          )}
-          {createDocument.isPending ? 'Creating...' : 'Create your first document'}
-        </button>
-      </div>
+            Create your first document
+          </button>
+        </div>
+
+        {/* Create dialog - must be rendered even in empty state */}
+        <CreateDialog
+          open={createDialogOpen}
+          onOpenChange={setCreateDialogOpen}
+          type={createType}
+          onSubmit={handleCreateSubmit}
+        />
+      </>
     )
   }
 
@@ -645,13 +633,6 @@ export function FolderTree(): JSX.Element {
     >
       <SortableContext items={sortableItems} strategy={verticalListSortingStrategy}>
         <div className="py-1" role="tree">
-          {/* Subtle background refresh indicator */}
-          {isFoldersFetching && !isFoldersLoading && (
-            <div className="flex items-center justify-end px-2 pb-0.5">
-              <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
-            </div>
-          )}
-
           {/* Folder tree */}
           {filteredFolders.map((node) => renderFolderNode(node, 0))}
 

@@ -27,13 +27,12 @@ from ..database import get_db
 from ..models.application import Application
 from ..models.application_member import ApplicationMember
 from ..models.project import Project
-from ..models.project_member import ProjectMember, ProjectMemberRole
+from ..models.project_member import ProjectMember
 from ..models.task import Task
+from ..models.task_status import StatusCategory, TaskStatus
 from ..models.user import User
 from ..schemas.project_member import (
     ProjectMemberBase,
-    ProjectMemberCreate,
-    ProjectMemberResponse,
     ProjectMemberUpdate,
     ProjectMemberWithUser,
     ProjectMemberRole as ProjectMemberRoleSchema,
@@ -206,7 +205,7 @@ async def list_project_members(
     Returns members ordered by creation date (oldest first).
     """
     # Verify user has access to view the project (any application member)
-    project = await verify_project_access(project_id, current_user, db)
+    await verify_project_access(project_id, current_user, db)
 
     # Fetch all project members with users eagerly loaded
     result = await db.execute(
@@ -269,7 +268,7 @@ async def get_project_member_count(
     - total: Total number of project members
     """
     # Verify user has access to view the project
-    project = await verify_project_access(project_id, current_user, db)
+    await verify_project_access(project_id, current_user, db)
 
     result = await db.execute(
         select(func.count(ProjectMember.id)).where(ProjectMember.project_id == project_id)
@@ -308,7 +307,7 @@ async def get_project_member(
     Any member of the parent application can view member details.
     """
     # Verify user has access to view the project
-    project = await verify_project_access(project_id, current_user, db)
+    await verify_project_access(project_id, current_user, db)
 
     result = await db.execute(
         select(ProjectMember)
@@ -507,6 +506,7 @@ async def add_project_member(
         401: {"description": "Not authenticated"},
         403: {"description": "Access denied - only owners or project admins can remove members"},
         404: {"description": "Project or member not found"},
+        409: {"description": "Member has active tasks assigned - reassign or unassign first"},
     },
 )
 async def remove_project_member(
@@ -519,11 +519,10 @@ async def remove_project_member(
     Remove a user from project membership.
 
     Application owners or project admins can remove project members.
+    Members can also remove themselves.
 
-    When a member is removed:
-    - All tasks assigned to them in this project are unassigned
-    - Project admins are notified if tasks need reassignment
-    - The removed user receives a notification
+    Removal is blocked if the member has active tasks assigned (not Done, not archived).
+    Reassign or unassign their tasks first before removing.
 
     Cannot remove the last admin - must promote another member first.
     """
@@ -569,24 +568,30 @@ async def remove_project_member(
                 detail="Cannot remove the last project admin. Promote another member to admin first.",
             )
 
-    # Find all tasks assigned to this user in this project
+    # Check for active tasks assigned to this user in this project
+    # Active = not Done and not archived
     result = await db.execute(
-        select(Task).where(
+        select(Task.id)
+        .join(TaskStatus, Task.task_status_id == TaskStatus.id)
+        .where(
             Task.project_id == project_id,
             Task.assignee_id == user_id,
+            Task.archived_at.is_(None),
+            TaskStatus.category != StatusCategory.DONE.value,
         )
     )
-    assigned_tasks = result.scalars().all()
+    active_task_ids: list[str] = [str(row[0]) for row in result.all()]
 
-    # Clear assignee from all tasks
-    task_ids_cleared = []
-    for task in assigned_tasks:
-        task.assignee_id = None
-        task.updated_at = datetime.utcnow()
-        task_ids_cleared.append(str(task.id))
-
-    # Store member name before deletion
-    removed_user_name = member.user.display_name or member.user.email if member.user else "User"
+    if active_task_ids:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "Cannot remove member. They have active tasks assigned in this project. "
+                           "Reassign or unassign their tasks first.",
+                "active_task_count": len(active_task_ids),
+                "active_task_ids": active_task_ids,
+            },
+        )
 
     # Remove the member
     await db.delete(member)
@@ -607,27 +612,6 @@ async def remove_project_member(
     )
     await NotificationService.create_notification(db, removed_notification)
 
-    # Notify project admins about tasks needing reassignment
-    if task_ids_cleared:
-        result = await db.execute(
-            select(ProjectMember).where(
-                ProjectMember.project_id == project_id,
-                ProjectMember.role == "admin",
-            )
-        )
-        project_admins = result.scalars().all()
-
-        for admin in project_admins:
-            admin_notification = NotificationCreate(
-                user_id=admin.user_id,
-                type=NotificationType.TASK_REASSIGNMENT_NEEDED,
-                title=f"{len(task_ids_cleared)} task(s) need reassignment",
-                message=f"Tasks were unassigned when {removed_user_name} was removed from {project.name}",
-                entity_type=EntityType.PROJECT,
-                entity_id=project_id,
-            )
-            await NotificationService.create_notification(db, admin_notification)
-
     # Broadcast member removed to project room for real-time updates
     room_id = f"project:{project_id}"
     await manager.broadcast_to_room(
@@ -638,14 +622,12 @@ async def remove_project_member(
                 "project_id": str(project_id),
                 "user_id": str(user_id),
                 "removed_by": str(current_user.id),
-                "tasks_unassigned": len(task_ids_cleared),
             },
         },
     )
 
     return {
         "message": "Member removed",
-        "tasks_unassigned": len(task_ids_cleared),
     }
 
 
@@ -926,7 +908,7 @@ async def check_project_membership(
     Any member of the parent application can check membership.
     """
     # Verify user has access to view the project
-    project = await verify_project_access(project_id, current_user, db)
+    await verify_project_access(project_id, current_user, db)
 
     result = await db.execute(
         select(ProjectMember).where(

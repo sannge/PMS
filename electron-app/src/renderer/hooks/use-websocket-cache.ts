@@ -15,6 +15,7 @@ import { useEffect, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { wsClient, MessageType, type Unsubscribe } from '@/lib/websocket'
 import { queryKeys } from '@/lib/query-client'
+import type { Task } from '@/hooks/use-queries'
 import { showBrowserNotification } from '@/lib/notifications'
 import { useAuthStore } from '@/contexts/auth-context'
 
@@ -77,6 +78,28 @@ interface NotificationEventData {
 interface AttachmentEventData {
   task_id: string
   attachment_id?: string
+  [key: string]: unknown
+}
+
+interface DocumentEventData {
+  document_id: string
+  scope: string
+  scope_id: string
+  folder_id?: string | null
+  actor_id?: string | null
+  /** For project-scoped items, the parent application ID */
+  application_id?: string | null
+  [key: string]: unknown
+}
+
+interface FolderEventData {
+  folder_id: string
+  scope: string
+  scope_id: string
+  parent_id?: string | null
+  actor_id?: string | null
+  /** For project-scoped items, the parent application ID */
+  application_id?: string | null
   [key: string]: unknown
 }
 
@@ -218,15 +241,27 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
       wsClient.on<TaskEventData>(MessageType.TASK_CREATED, (data) => {
         queryClient.invalidateQueries({ queryKey: queryKeys.tasks(data.project_id) })
         queryClient.invalidateQueries({ queryKey: queryKeys.project(data.project_id) })
-        queryClient.invalidateQueries({ queryKey: ['projects'] })
         queryClient.invalidateQueries({ queryKey: queryKeys.myTasksCrossApp })
       })
     )
 
     unsubscribers.push(
       wsClient.on<TaskEventData>(MessageType.TASK_UPDATED, (data) => {
-        queryClient.invalidateQueries({ queryKey: queryKeys.task(data.task_id) })
-        queryClient.invalidateQueries({ queryKey: queryKeys.tasks(data.project_id) })
+        // WS payload: { task_id, project_id, task: { id, title, ... } }
+        const taskPayload = (data as Record<string, unknown>).task as Record<string, unknown> | undefined
+        if (taskPayload?.id && taskPayload?.title) {
+          // Full task payload — update cache in-place, no refetch needed
+          const task = taskPayload as unknown as Task
+          queryClient.setQueryData<Task>(queryKeys.task(data.task_id), task)
+          queryClient.setQueryData<Task[]>(queryKeys.tasks(data.project_id), (old) =>
+            old?.map((t) => (t.id === data.task_id ? task : t))
+          )
+        } else {
+          // Partial payload — fall back to invalidation
+          queryClient.invalidateQueries({ queryKey: queryKeys.task(data.task_id) })
+          queryClient.invalidateQueries({ queryKey: queryKeys.tasks(data.project_id) })
+        }
+        // Invalidate cross-app list — updates can change assignee which affects "My Tasks"
         queryClient.invalidateQueries({ queryKey: queryKeys.myTasksCrossApp })
       })
     )
@@ -234,26 +269,46 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
     unsubscribers.push(
       wsClient.on<TaskEventData>(MessageType.TASK_DELETED, (data) => {
         queryClient.removeQueries({ queryKey: queryKeys.task(data.task_id) })
-        queryClient.invalidateQueries({ queryKey: queryKeys.tasks(data.project_id) })
+        // Remove from list cache directly instead of refetching
+        queryClient.setQueryData<Task[]>(queryKeys.tasks(data.project_id), (old) =>
+          old?.filter((t) => t.id !== data.task_id)
+        )
         queryClient.invalidateQueries({ queryKey: queryKeys.project(data.project_id) })
-        queryClient.invalidateQueries({ queryKey: ['projects'] })
         queryClient.invalidateQueries({ queryKey: queryKeys.myTasksCrossApp })
       })
     )
 
     unsubscribers.push(
       wsClient.on<TaskEventData>(MessageType.TASK_STATUS_CHANGED, (data) => {
-        queryClient.invalidateQueries({ queryKey: queryKeys.task(data.task_id) })
-        queryClient.invalidateQueries({ queryKey: queryKeys.tasks(data.project_id) })
+        const taskPayload = (data as Record<string, unknown>).task as Record<string, unknown> | undefined
+        if (taskPayload?.id && taskPayload?.title) {
+          const task = taskPayload as unknown as Task
+          queryClient.setQueryData<Task>(queryKeys.task(data.task_id), task)
+          queryClient.setQueryData<Task[]>(queryKeys.tasks(data.project_id), (old) =>
+            old?.map((t) => (t.id === data.task_id ? task : t))
+          )
+        } else {
+          queryClient.invalidateQueries({ queryKey: queryKeys.task(data.task_id) })
+          queryClient.invalidateQueries({ queryKey: queryKeys.tasks(data.project_id) })
+        }
         queryClient.invalidateQueries({ queryKey: queryKeys.myTasksCrossApp })
       })
     )
 
     unsubscribers.push(
       wsClient.on<TaskEventData>(MessageType.TASK_MOVED, (data) => {
-        queryClient.invalidateQueries({ queryKey: queryKeys.task(data.task_id) })
-        queryClient.invalidateQueries({ queryKey: queryKeys.tasks(data.project_id) })
-        queryClient.invalidateQueries({ queryKey: queryKeys.myTasksCrossApp })
+        const taskPayload = (data as Record<string, unknown>).task as Record<string, unknown> | undefined
+        if (taskPayload?.id && taskPayload?.title) {
+          const task = taskPayload as unknown as Task
+          queryClient.setQueryData<Task>(queryKeys.task(data.task_id), task)
+          queryClient.setQueryData<Task[]>(queryKeys.tasks(data.project_id), (old) =>
+            old?.map((t) => (t.id === data.task_id ? task : t))
+          )
+        } else {
+          queryClient.invalidateQueries({ queryKey: queryKeys.task(data.task_id) })
+          queryClient.invalidateQueries({ queryKey: queryKeys.tasks(data.project_id) })
+        }
+        // No myTasksCrossApp invalidation — column moves don't change cross-app membership
       })
     )
 
@@ -501,6 +556,109 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
         queryClient.invalidateQueries({ queryKey: queryKeys.attachments(data.task_id) })
         if (data.attachment_id) {
           queryClient.removeQueries({ queryKey: queryKeys.downloadUrl(data.attachment_id) })
+        }
+      })
+    )
+
+    // ========================================================================
+    // Document Events (Knowledge Base)
+    // Skip own actions - optimistic updates already handled the local cache
+    // ========================================================================
+
+    unsubscribers.push(
+      wsClient.on<DocumentEventData>(MessageType.DOCUMENT_CREATED, (data) => {
+        // Skip own actions - already handled by optimistic update
+        if (data.actor_id && data.actor_id === currentUserRef.current?.id) return
+
+        queryClient.invalidateQueries({ queryKey: queryKeys.documents(data.scope, data.scope_id) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders(data.scope, data.scope_id) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.scopesSummary() })
+        if (data.scope === 'project') {
+          queryClient.invalidateQueries({ queryKey: ['projects-with-content'] })
+          // Also invalidate application queries for users viewing app tree
+          if (data.application_id) {
+            queryClient.invalidateQueries({ queryKey: queryKeys.documents('application', data.application_id) })
+            queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders('application', data.application_id) })
+          }
+        }
+      })
+    )
+
+    unsubscribers.push(
+      wsClient.on<DocumentEventData>(MessageType.DOCUMENT_UPDATED, (data) => {
+        // Skip own actions - already handled by optimistic update
+        if (data.actor_id && data.actor_id === currentUserRef.current?.id) return
+
+        queryClient.invalidateQueries({ queryKey: queryKeys.document(data.document_id) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.documents(data.scope, data.scope_id) })
+        if (data.folder_id !== undefined) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders(data.scope, data.scope_id) })
+        }
+        // Also invalidate application queries for project-scoped updates
+        if (data.scope === 'project' && data.application_id) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.documents('application', data.application_id) })
+          if (data.folder_id !== undefined) {
+            queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders('application', data.application_id) })
+          }
+        }
+      })
+    )
+
+    unsubscribers.push(
+      wsClient.on<DocumentEventData>(MessageType.DOCUMENT_DELETED, (data) => {
+        // Skip own actions - already handled by optimistic update
+        if (data.actor_id && data.actor_id === currentUserRef.current?.id) return
+
+        queryClient.removeQueries({ queryKey: queryKeys.document(data.document_id) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.documents(data.scope, data.scope_id) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders(data.scope, data.scope_id) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.scopesSummary() })
+        if (data.scope === 'project') {
+          queryClient.invalidateQueries({ queryKey: ['projects-with-content'] })
+          // Also invalidate application queries for users viewing app tree
+          if (data.application_id) {
+            queryClient.invalidateQueries({ queryKey: queryKeys.documents('application', data.application_id) })
+            queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders('application', data.application_id) })
+          }
+        }
+      })
+    )
+
+    // ========================================================================
+    // Folder Events (Knowledge Base)
+    // Skip own actions - optimistic updates already handled the local cache
+    // ========================================================================
+
+    unsubscribers.push(
+      wsClient.on<FolderEventData>(MessageType.FOLDER_CREATED, (data) => {
+        // Skip own actions - already handled by optimistic update
+        if (data.actor_id && data.actor_id === currentUserRef.current?.id) return
+
+        queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders(data.scope, data.scope_id) })
+        if (data.scope === 'project') {
+          queryClient.invalidateQueries({ queryKey: ['projects-with-content'] })
+        }
+      })
+    )
+
+    unsubscribers.push(
+      wsClient.on<FolderEventData>(MessageType.FOLDER_UPDATED, (data) => {
+        // Skip own actions - already handled by optimistic update
+        if (data.actor_id && data.actor_id === currentUserRef.current?.id) return
+
+        queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders(data.scope, data.scope_id) })
+      })
+    )
+
+    unsubscribers.push(
+      wsClient.on<FolderEventData>(MessageType.FOLDER_DELETED, (data) => {
+        // Skip own actions - already handled by optimistic update
+        if (data.actor_id && data.actor_id === currentUserRef.current?.id) return
+
+        queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders(data.scope, data.scope_id) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.documents(data.scope, data.scope_id) })
+        if (data.scope === 'project') {
+          queryClient.invalidateQueries({ queryKey: ['projects-with-content'] })
         }
       })
     )

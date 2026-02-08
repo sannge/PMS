@@ -8,7 +8,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { useAuthStore, getAuthHeaders } from '@/contexts/auth-context'
-import { useMoveTask, type Task } from '@/hooks/use-queries'
+import { useMoveTask, useTaskStatuses, type Task } from '@/hooks/use-queries'
 import {
   DndContext,
   DragOverlay,
@@ -284,6 +284,18 @@ export function TaskKanbanBoard({
   const moveTaskMutation = useMoveTask(projectId)
   const isMoving = moveTaskMutation.isPending
 
+  // Task statuses for resolving status name -> UUID
+  const { data: taskStatuses } = useTaskStatuses(projectId)
+  const statusNameToInfo = useMemo(() => {
+    const map = new Map<string, { id: string; category: string; rank: number }>()
+    if (taskStatuses) {
+      for (const s of taskStatuses) {
+        map.set(s.name, { id: s.id, category: s.category, rank: s.rank })
+      }
+    }
+    return map
+  }, [taskStatuses])
+
   // WebSocket status
   const { status } = useWebSocket()
 
@@ -447,12 +459,21 @@ export function TaskKanbanBoard({
         onTaskStatusChange(task, targetStatus)
       }
 
+      // Resolve target status info from name
+      const targetInfo = statusNameToInfo.get(targetStatus)
+      if (!targetInfo) {
+        console.error(`[TaskKanbanBoard] Unknown status name: "${targetStatus}"`)
+        return
+      }
+
       try {
         // API call using TanStack Query mutation
         await moveTaskMutation.mutateAsync({
           taskId,
-          targetStatusId: task.task_status_id,
+          targetStatusId: targetInfo.id,
           targetStatusName: targetStatus,
+          targetStatusCategory: targetInfo.category,
+          targetStatusRank: targetInfo.rank,
         })
       } catch {
         // Revert on failure
@@ -463,7 +484,7 @@ export function TaskKanbanBoard({
         )
       }
     },
-    [tasks, moveTaskMutation, onTaskStatusChange]
+    [tasks, moveTaskMutation, onTaskStatusChange, statusNameToInfo]
   )
 
   // Error state

@@ -21,13 +21,30 @@ logger = logging.getLogger(__name__)
 
 # Lock configuration
 LOCK_KEY_PREFIX = "doc_lock:"
-LOCK_TTL_SECONDS = 45
+LOCK_TTL_SECONDS = 300  # 5 minutes
 
 
 def _lock_key(document_id: str) -> str:
     """Build Redis key for a document lock."""
     return f"{LOCK_KEY_PREFIX}{document_id}"
 
+
+# Lua script: Acquire lock with same-user re-acquisition support
+# KEYS[1] = lock key, ARGV[1] = new value JSON, ARGV[2] = ttl, ARGV[3] = user_id
+# Returns JSON: {status: "acquired"} | {status: "renewed", holder: <data>} | {status: "conflict"}
+_ACQUIRE_LOCK_SCRIPT = """
+local data = redis.call('GET', KEYS[1])
+if data == false then
+    redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))
+    return cjson.encode({status = "acquired"})
+end
+local holder = cjson.decode(data)
+if holder.user_id == ARGV[3] then
+    redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
+    return cjson.encode({status = "renewed", holder = data})
+end
+return cjson.encode({status = "conflict"})
+"""
 
 # Lua script: Release lock only if caller owns it
 # KEYS[1] = lock key, ARGV[1] = user_id
@@ -92,7 +109,10 @@ class DocumentLockService:
         """
         Acquire a lock on a document atomically.
 
-        Uses SET NX (set if not exists) with TTL for atomic acquisition.
+        Uses a Lua script for atomic acquisition with same-user re-acquisition:
+        - If no lock exists → SET with TTL → return new lock data
+        - If locked by same user → EXPIRE (extend TTL) → return existing lock data
+        - If locked by different user → return None (caller should 409)
 
         Args:
             document_id: The document's UUID string
@@ -110,16 +130,24 @@ class DocumentLockService:
         }
         value = json.dumps(lock_data)
 
-        # SET NX returns True on success, None if key already exists
-        result = await redis_service.client.set(
-            key, value, nx=True, ex=LOCK_TTL_SECONDS
+        result_str = await redis_service.client.eval(
+            _ACQUIRE_LOCK_SCRIPT, 1, key, value, str(LOCK_TTL_SECONDS), user_id
         )
 
-        if result is True:
+        result = json.loads(result_str)
+
+        if result["status"] == "acquired":
             logger.info(
                 f"Lock acquired: document={document_id}, user={user_id}"
             )
             return lock_data
+
+        if result["status"] == "renewed":
+            logger.info(
+                f"Lock renewed (same user): document={document_id}, user={user_id}"
+            )
+            # Return the existing lock data from Redis
+            return json.loads(result["holder"])
 
         logger.debug(
             f"Lock acquisition failed (already locked): document={document_id}, user={user_id}"

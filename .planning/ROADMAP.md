@@ -77,14 +77,23 @@ Plans:
   5. Application detail page has a Knowledge tab with full tree + inline editor (same as Notes app tab)
   6. Project detail page has a Knowledge tab showing only that project's docs with inline editor
   7. Scope-filter dropdown and scope-picker-dialog removed (no backward compatibility)
-**Plans**: 5 plans
+**Plans**: 14 plans (5 original + 9 gap closure)
 
 Plans:
-- [ ] 02.1-01-PLAN.md — Backend scopes-summary endpoint, shadcn/ui Tabs component, KnowledgeBaseContext refactor (remove 'all', add activeTab + storagePrefix), useApplicationsWithDocs hook
-- [ ] 02.1-02-PLAN.md — KnowledgeTabBar component, restructured sidebar, OneNote-style folder-tree-item (no chevrons, lock indicators)
-- [ ] 02.1-03-PLAN.md — FolderTree cleanup (remove ScopePickerDialog, remove 'all' scope), delete scope-filter.tsx and scope-picker-dialog.tsx
-- [ ] 02.1-04-PLAN.md — ApplicationTree mixed-scope component (app-level + project sections), search bar global toggle, wire into sidebar
-- [ ] 02.1-05-PLAN.md — KnowledgePanel reusable component, Knowledge tab in Application detail page, Knowledge tab in Project detail page
+- [x] 02.1-01-PLAN.md — Backend scopes-summary endpoint, shadcn/ui Tabs component, KnowledgeBaseContext refactor (remove 'all', add activeTab + storagePrefix), useApplicationsWithDocs hook
+- [x] 02.1-02-PLAN.md — KnowledgeTabBar component, restructured sidebar, OneNote-style folder-tree-item (no chevrons, lock indicators)
+- [x] 02.1-03-PLAN.md — FolderTree cleanup (remove ScopePickerDialog, remove 'all' scope), delete scope-filter.tsx and scope-picker-dialog.tsx
+- [x] 02.1-04-PLAN.md — ApplicationTree mixed-scope component (app-level + project sections), search bar global toggle, wire into sidebar
+- [x] 02.1-05-PLAN.md — KnowledgePanel reusable component, Knowledge tab in Application detail page, Knowledge tab in Project detail page
+- [ ] 02.1-06-PLAN.md — [GAP CLOSURE] Fix editor not showing in Notes/Application screens, wire autosave with save status indicator
+- [ ] 02.1-07-PLAN.md — [GAP CLOSURE] Fix layout: full-width knowledge panels, resizable tree/editor divider, remove editor border
+- [ ] 02.1-08-PLAN.md — [GAP CLOSURE] Add create/delete dialogs with name input and confirmation, selection-aware quick create
+- [ ] 02.1-09-PLAN.md — [GAP CLOSURE] Fix folder nesting (parent_id flow through context menu to mutation)
+- [ ] 02.1-10-PLAN.md — [GAP CLOSURE] Tab bar overflow dropdown, filter projects to only those with docs, remove Unfiled label
+- [ ] 02.1-11-PLAN.md — [GAP CLOSURE] Wire search bar to filter tree items, implement local filtering
+- [ ] 02.1-12-PLAN.md — [GAP CLOSURE] Replace spinners with skeleton loading throughout knowledge tree
+- [ ] 02.1-13-PLAN.md — [GAP CLOSURE] Live lock indicators on tree items via WebSocket
+- [ ] 02.1-14-PLAN.md — [GAP CLOSURE] Minor fixes: compact create buttons, search bar outside panel
 
 ### Phase 3: Rich Text Editor Core
 **Goal**: Users can create and edit documents with a full-featured rich text editor covering all standard formatting
@@ -269,7 +278,7 @@ Note: Phase 2.1 is inserted after Phase 5 (needs lock indicators) and redesigns 
 |-------|----------------|--------|-----------|
 | 1. Migration & Data Foundation | 4/4 | Complete | 2026-01-31 |
 | 2. Notes Screen Shell & Folder Navigation | 3/3 | Complete | 2026-01-31 |
-| 2.1. OneNote-Style Knowledge Tree Redesign | 0/5 | Planned | - |
+| 2.1. OneNote-Style Knowledge Tree Redesign | 5/14 | Gap Closure | - |
 | 3. Rich Text Editor Core | 4/4 | Complete | 2026-02-01 |
 | 4. Auto-Save & Content Pipeline | 4/4 | Complete | 2026-02-01 |
 | 4.1. Document Creation Bug Fixes | 2/2 | Complete | 2026-02-01 |

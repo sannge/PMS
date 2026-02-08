@@ -1,10 +1,17 @@
 /**
  * Knowledge Base Editor Types
  *
- * TypeScript interfaces for the DocumentEditor and EditorToolbar components.
+ * TypeScript interfaces for the DocumentEditor, EditorToolbar, and save status.
  */
 
 import type { Editor } from '@tiptap/react'
+
+/** Save status union for UI display */
+export type SaveStatus =
+  | { state: 'idle' }
+  | { state: 'saving' }
+  | { state: 'saved'; at: number }
+  | { state: 'error'; message: string }
 
 /** Props for the main DocumentEditor component */
 export interface DocumentEditorProps {
@@ -18,16 +25,6 @@ export interface DocumentEditorProps {
   placeholder?: string
   /** Additional CSS classes for the outer container */
   className?: string
-  /** Document ID for lock operations (optional - enables locking when provided) */
-  documentId?: string | null
-  /** Current user ID for lock ownership check */
-  userId?: string
-  /** Current user display name */
-  userName?: string
-  /** User's role in the document's application scope (owner/editor/viewer) */
-  userRole?: string | null
-  /** Imperative save callback for onBeforeRelease (auto-save's saveNow) */
-  onSaveNow?: () => Promise<void>
 }
 
 /** Props for the EditorToolbar component */

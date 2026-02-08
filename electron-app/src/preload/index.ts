@@ -187,6 +187,11 @@ ipcRenderer.on('window-maximized-change', (_event: IpcRendererEvent, isMaximized
 })
 
 ipcRenderer.on('before-quit-save', () => {
+  if (beforeQuitCallbacks.size === 0) {
+    // No handlers registered (e.g., user is not on Notes screen) — allow quit
+    ipcRenderer.send('quit-save-complete')
+    return
+  }
   beforeQuitCallbacks.forEach((callback) => callback())
 })
 
@@ -359,5 +364,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   confirmQuitSave: () => {
     ipcRenderer.send('quit-save-complete')
+  },
+  cancelQuit: () => {
+    ipcRenderer.send('quit-cancelled')
   }
 } satisfies ElectronAPI)

@@ -10,6 +10,7 @@ Access Control:
 - Delete projects: Application owners or project admins
 """
 
+import asyncio
 from datetime import datetime, timedelta
 from typing import Annotated, Dict, List, Optional
 from uuid import UUID
@@ -469,33 +470,29 @@ async def create_project(
     await db.commit()
     await db.refresh(project)
 
-    # Get the derived status name for the response
-    derived_status_name = None
-    if project.derived_status_id:
-        result = await db.execute(
-            select(TaskStatus).where(TaskStatus.id == project.derived_status_id)
-        )
-        task_status = result.scalar_one_or_none()
-        derived_status_name = task_status.name if task_status else None
+    # Get the derived status name for the response (use in-memory todo_status)
+    derived_status_name = todo_status.name if todo_status else None
 
-    # Broadcast project creation to application room for real-time updates
+    # Broadcast project creation to application room (fire-and-forget for performance)
     app_room_id = f"application:{application_id}"
-    await manager.broadcast_to_room(
-        app_room_id,
-        {
-            "type": MessageType.PROJECT_CREATED,
-            "data": {
-                "project_id": str(project.id),
-                "application_id": str(application_id),
-                "name": project.name,
-                "key": project.key,
-                "description": project.description,
-                "project_type": project.project_type,
-                "created_by": str(current_user.id),
-                "created_at": project.created_at.isoformat() if project.created_at else None,
-                "timestamp": datetime.utcnow().isoformat(),
+    asyncio.create_task(
+        manager.broadcast_to_room(
+            app_room_id,
+            {
+                "type": MessageType.PROJECT_CREATED,
+                "data": {
+                    "project_id": str(project.id),
+                    "application_id": str(application_id),
+                    "name": project.name,
+                    "key": project.key,
+                    "description": project.description,
+                    "project_type": project.project_type,
+                    "created_by": str(current_user.id),
+                    "created_at": project.created_at.isoformat() if project.created_at else None,
+                    "timestamp": datetime.utcnow().isoformat(),
+                },
             },
-        },
+        )
     )
 
     return ProjectWithTasks(
@@ -581,9 +578,25 @@ async def get_project(
     )
     agg = result.scalar_one_or_none()
 
+    # Check if aggregation needs recalculation:
+    # 1. No aggregation exists
+    # 2. Total tasks doesn't match active task count
+    # 3. Sum of individual counters doesn't equal total_tasks (distribution is stale)
+    if agg is not None:
+        counter_sum = (
+            (agg.todo_tasks or 0) +
+            (agg.active_tasks or 0) +
+            (agg.review_tasks or 0) +
+            (agg.issue_tasks or 0) +
+            (agg.done_tasks or 0)
+        )
+    else:
+        counter_sum = -1  # Force recalculation
+
     needs_recalculation = (
         agg is None or
-        agg.total_tasks != active_tasks_count
+        agg.total_tasks != active_tasks_count or
+        counter_sum != (agg.total_tasks or 0)
     )
 
     derived_status_name: Optional[str] = None
@@ -676,6 +689,50 @@ async def get_project(
         archived_at=project.archived_at,
         tasks_count=tasks_count,
     )
+
+
+@router.get(
+    "/api/projects/{project_id}/statuses",
+    summary="List task statuses for a project",
+    description="Get all task statuses defined for a project, ordered by rank.",
+    responses={
+        200: {"description": "Task statuses retrieved successfully"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "Access denied - not a member"},
+        404: {"description": "Project not found"},
+    },
+)
+async def list_project_statuses(
+    project_id: UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+) -> List[dict]:
+    """
+    Get all task statuses for a project, ordered by rank.
+
+    Any member (owner, editor, viewer) can access the project's statuses.
+    """
+    # Verify access (any member can view)
+    await verify_project_access(project_id, current_user, db)
+
+    result = await db.execute(
+        select(TaskStatus)
+        .where(TaskStatus.project_id == project_id)
+        .order_by(TaskStatus.rank)
+    )
+    statuses = result.scalars().all()
+
+    return [
+        {
+            "id": str(s.id),
+            "project_id": str(s.project_id),
+            "name": s.name,
+            "category": s.category,
+            "rank": s.rank,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+        }
+        for s in statuses
+    ]
 
 
 @router.put(

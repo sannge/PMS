@@ -83,7 +83,7 @@ async def check_task_attachment_permission(
         return False, "Task not found"
 
     # Check if task is done - block attachment modifications
-    if check_done and task.status == "done":
+    if check_done and task.task_status and task.task_status.category == "Done":
         return False, "Cannot modify attachments on a completed task. Reopen the task first."
 
     application_id = task.project.application_id

@@ -18,6 +18,7 @@ from ..models.application import Application
 from ..models.application_member import ApplicationMember
 from ..models.project import Project
 from ..models.task import Task
+from ..models.task_status import StatusCategory, TaskStatus as TaskStatusModel
 from ..models.user import User
 from ..schemas.application import (
     ApplicationCreate,
@@ -28,8 +29,9 @@ from ..schemas.application import (
 )
 from ..schemas.invitation import ApplicationRole
 from ..schemas.project import ProjectCursorPage, ProjectResponse, ProjectWithTasks
-from ..schemas.task import TaskCursorPage, TaskResponse, TaskUserInfo
+from ..schemas.task import TaskCursorPage, TaskResponse, TaskStatusInfo, TaskUserInfo
 from ..services.auth_service import get_current_user
+from ..services.task_helpers import get_task_status_info
 from ..websocket.handlers import handle_application_update, UpdateAction
 
 router = APIRouter(prefix="/api/applications", tags=["Applications"])
@@ -578,11 +580,13 @@ async def list_my_pending_tasks(
             selectinload(Task.assignee),
             selectinload(Task.reporter),
             selectinload(Task.project),
+            selectinload(Task.task_status),
         )
+        .join(TaskStatusModel, Task.task_status_id == TaskStatusModel.id)
         .where(
             Task.project_id.in_(project_ids),
             Task.assignee_id == current_user.id,
-            Task.status != "done",
+            TaskStatusModel.category != StatusCategory.DONE.value,
             Task.archived_at.is_(None),
         )
         .order_by(Task.updated_at.desc(), Task.id.desc())
@@ -632,7 +636,6 @@ async def list_my_pending_tasks(
             title=task.title,
             description=task.description,
             task_type=task.task_type,
-            status=task.status,
             priority=task.priority,
             story_points=task.story_points,
             due_date=task.due_date,
@@ -643,6 +646,7 @@ async def list_my_pending_tasks(
             parent_id=task.parent_id,
             sprint_id=task.sprint_id,
             task_status_id=task.task_status_id,
+            task_status=get_task_status_info(task),
             task_rank=task.task_rank,
             row_version=task.row_version,
             checklist_total=task.checklist_total,
@@ -714,11 +718,13 @@ async def list_my_completed_tasks(
             selectinload(Task.assignee),
             selectinload(Task.reporter),
             selectinload(Task.project),
+            selectinload(Task.task_status),
         )
+        .join(TaskStatusModel, Task.task_status_id == TaskStatusModel.id)
         .where(
             Task.project_id.in_(project_ids),
             Task.assignee_id == current_user.id,
-            Task.status == "done",
+            TaskStatusModel.category == StatusCategory.DONE.value,
             Task.completed_at.isnot(None),
             Task.completed_at > threshold_date,
             Task.archived_at.is_(None),  # Not yet archived
@@ -770,7 +776,6 @@ async def list_my_completed_tasks(
             title=task.title,
             description=task.description,
             task_type=task.task_type,
-            status=task.status,
             priority=task.priority,
             story_points=task.story_points,
             due_date=task.due_date,
@@ -781,6 +786,7 @@ async def list_my_completed_tasks(
             parent_id=task.parent_id,
             sprint_id=task.sprint_id,
             task_status_id=task.task_status_id,
+            task_status=get_task_status_info(task),
             task_rank=task.task_rank,
             row_version=task.row_version,
             checklist_total=task.checklist_total,
@@ -849,6 +855,7 @@ async def list_my_archived_tasks(
             selectinload(Task.assignee),
             selectinload(Task.reporter),
             selectinload(Task.project),
+            selectinload(Task.task_status),
         )
         .where(
             Task.project_id.in_(project_ids),
@@ -902,7 +909,6 @@ async def list_my_archived_tasks(
             title=task.title,
             description=task.description,
             task_type=task.task_type,
-            status=task.status,
             priority=task.priority,
             story_points=task.story_points,
             due_date=task.due_date,
@@ -913,6 +919,7 @@ async def list_my_archived_tasks(
             parent_id=task.parent_id,
             sprint_id=task.sprint_id,
             task_status_id=task.task_status_id,
+            task_status=get_task_status_info(task),
             task_rank=task.task_rank,
             row_version=task.row_version,
             checklist_total=task.checklist_total,

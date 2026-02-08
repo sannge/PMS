@@ -35,7 +35,6 @@ class Task(Base):
         title: Task title/summary
         description: Detailed task description
         task_type: Type of task (story, bug, epic, subtask)
-        status: Current status (todo, in_progress, in_review, done) - DEPRECATED, use task_status_id
         priority: Priority level (lowest, low, medium, high, highest)
         assignee_id: FK to assigned user
         reporter_id: FK to reporting user
@@ -94,8 +93,8 @@ class Task(Base):
     )
     task_status_id = Column(
         UUID(as_uuid=True),
-        ForeignKey("TaskStatuses.id", ondelete="SET NULL"),
-        nullable=True,
+        ForeignKey("TaskStatuses.id", ondelete="RESTRICT"),
+        nullable=False,
         index=True,
     )
 
@@ -120,12 +119,6 @@ class Task(Base):
         String(50),
         nullable=False,
         default="story",
-    )
-    status = Column(
-        String(50),
-        nullable=False,
-        default="todo",
-        index=True,
     )
     priority = Column(
         String(20),

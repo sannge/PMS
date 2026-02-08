@@ -383,6 +383,7 @@ function ToolbarButton({
 }: ToolbarButtonProps) {
   return (
     <button
+      type="button"
       onClick={onClick}
       disabled={disabled}
       title={title}
@@ -534,6 +535,7 @@ function Toolbar({ editor, uploadImage }: ToolbarProps) {
         <Popover>
           <PopoverTrigger asChild>
             <button
+              type="button"
               className="flex items-center gap-1 p-1.5 rounded hover:bg-muted transition-colors"
               title="Text Color"
             >
@@ -546,6 +548,7 @@ function Toolbar({ editor, uploadImage }: ToolbarProps) {
               {COLORS.map((color) => (
                 <button
                   key={color}
+                  type="button"
                   onClick={() => editor.chain().focus().setColor(color).run()}
                   className="w-6 h-6 rounded border border-border hover:scale-110 transition-transform"
                   style={{ backgroundColor: color }}
@@ -554,6 +557,7 @@ function Toolbar({ editor, uploadImage }: ToolbarProps) {
               ))}
             </div>
             <button
+              type="button"
               onClick={() => editor.chain().focus().unsetColor().run()}
               className="mt-2 w-full text-xs text-center py-1 rounded hover:bg-muted text-muted-foreground transition-colors"
             >
@@ -565,6 +569,7 @@ function Toolbar({ editor, uploadImage }: ToolbarProps) {
         <Popover>
           <PopoverTrigger asChild>
             <button
+              type="button"
               className={cn(
                 'flex items-center gap-1 p-1.5 rounded hover:bg-muted transition-colors',
                 editor.isActive('highlight') && 'bg-muted text-primary'
@@ -580,6 +585,7 @@ function Toolbar({ editor, uploadImage }: ToolbarProps) {
               {HIGHLIGHT_COLORS.map((color) => (
                 <button
                   key={color}
+                  type="button"
                   onClick={() => editor.chain().focus().toggleHighlight({ color }).run()}
                   className="w-6 h-6 rounded border border-border hover:scale-110 transition-transform"
                   style={{ backgroundColor: color }}
@@ -588,6 +594,7 @@ function Toolbar({ editor, uploadImage }: ToolbarProps) {
               ))}
             </div>
             <button
+              type="button"
               onClick={() => editor.chain().focus().unsetHighlight().run()}
               className="mt-2 w-full text-xs text-center py-1 rounded hover:bg-muted text-muted-foreground transition-colors"
             >
@@ -677,6 +684,7 @@ function Toolbar({ editor, uploadImage }: ToolbarProps) {
         <Popover>
           <PopoverTrigger asChild>
             <button
+              type="button"
               className="flex items-center gap-1 px-2 py-1.5 rounded hover:bg-muted transition-colors text-xs min-w-[55px]"
               title="Font Size"
             >
@@ -699,6 +707,7 @@ function Toolbar({ editor, uploadImage }: ToolbarProps) {
                 return (
                   <button
                     key={value}
+                    type="button"
                     onClick={() => {
                       setFontSize(editor, value)
                     }}
@@ -722,6 +731,7 @@ function Toolbar({ editor, uploadImage }: ToolbarProps) {
         <Popover>
           <PopoverTrigger asChild>
             <button
+              type="button"
               className="flex items-center gap-1 px-2 py-1.5 rounded hover:bg-muted transition-colors text-xs min-w-[55px]"
               title="Font Family"
             >
@@ -743,6 +753,7 @@ function Toolbar({ editor, uploadImage }: ToolbarProps) {
                 return (
                   <button
                     key={value}
+                    type="button"
                     onClick={() => {
                       if (value === 'inherit') {
                         editor.chain().focus().unsetFontFamily().run()
@@ -843,6 +854,7 @@ function Toolbar({ editor, uploadImage }: ToolbarProps) {
               className="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary/30"
             />
             <button
+              type="button"
               onClick={applyLink}
               className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
             >
@@ -850,6 +862,7 @@ function Toolbar({ editor, uploadImage }: ToolbarProps) {
             </button>
             {editor.isActive('link') && (
               <button
+                type="button"
                 onClick={removeLink}
                 className="rounded-md border border-input px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/10 transition-colors"
               >
@@ -857,6 +870,7 @@ function Toolbar({ editor, uploadImage }: ToolbarProps) {
               </button>
             )}
             <button
+              type="button"
               onClick={() => { setLinkDialogOpen(false); setLinkUrl('') }}
               className="rounded-md border border-input px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted transition-colors"
             >

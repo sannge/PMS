@@ -18,6 +18,7 @@ from ..database import get_db
 from ..models.application import Application
 from ..models.application_member import ApplicationMember
 from ..models.document import Document
+from ..models.document_folder import DocumentFolder
 from ..models.document_tag import DocumentTag, DocumentTagAssignment
 from ..models.project import Project
 from ..models.user import User
@@ -28,6 +29,7 @@ from ..schemas.document import (
     DocumentListResponse,
     DocumentResponse,
     DocumentUpdate,
+    ProjectsWithContentResponse,
     ScopesSummaryResponse,
 )
 from ..schemas.document_tag import TagAssignment, TagAssignmentResponse
@@ -41,11 +43,71 @@ from ..services.document_service import (
     validate_scope,
     validate_tag_scope,
 )
+from ..websocket.manager import manager, MessageType
 
 router = APIRouter(
     prefix="/documents",
     tags=["documents"],
 )
+
+
+def _get_document_scope(doc: Document) -> tuple[str, str]:
+    """Extract scope type and ID from a document."""
+    if doc.application_id:
+        return "application", str(doc.application_id)
+    elif doc.project_id:
+        return "project", str(doc.project_id)
+    elif doc.user_id:
+        return "personal", str(doc.user_id)
+    return "unknown", ""
+
+
+async def _broadcast_document_event(
+    message_type: MessageType,
+    doc: Document,
+    actor_id: UUID | None = None,
+    extra_data: dict | None = None,
+    project_application_id: UUID | None = None,
+) -> None:
+    """Broadcast a document event to the appropriate room(s).
+
+    Args:
+        message_type: The WebSocket message type
+        doc: The document being affected
+        actor_id: The user who performed the action (for client-side filtering)
+        extra_data: Additional data to include in the broadcast
+        project_application_id: For project-scoped docs, the parent application ID
+            (so we can also broadcast to the application room)
+    """
+    scope, scope_id = _get_document_scope(doc)
+
+    data = {
+        "document_id": str(doc.id),
+        "scope": scope,
+        "scope_id": scope_id,
+        "folder_id": str(doc.folder_id) if doc.folder_id else None,
+        "actor_id": str(actor_id) if actor_id else None,
+        "timestamp": datetime.utcnow().isoformat(),
+        # Include application_id for project-scoped items so frontend can invalidate app queries
+        "application_id": str(project_application_id) if project_application_id else None,
+    }
+    if extra_data:
+        data.update(extra_data)
+
+    message = {"type": message_type.value, "data": data}
+
+    # Determine the room(s) to broadcast to
+    if doc.application_id:
+        await manager.broadcast_to_room(f"application:{doc.application_id}", message)
+    elif doc.project_id:
+        # Broadcast to project room
+        await manager.broadcast_to_room(f"project:{doc.project_id}", message)
+        # Also broadcast to application room so users viewing the app tree get updates
+        if project_application_id:
+            await manager.broadcast_to_room(f"application:{project_application_id}", message)
+    else:
+        # Personal docs - broadcast to user room
+        await manager.broadcast_to_room(f"user:{doc.user_id}", message)
 
 
 # ============================================================================
@@ -115,7 +177,11 @@ async def get_scopes_summary(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Return which scopes have documents for auto-managed tab visibility."""
+    """Return scopes available for knowledge base tabs.
+
+    Returns all applications the user is a member of (not just those with documents)
+    so users can create documents in empty applications.
+    """
     # Personal docs exist?
     personal_count = await db.scalar(
         select(func.count(Document.id))
@@ -123,39 +189,58 @@ async def get_scopes_summary(
         .where(Document.deleted_at.is_(None))
     )
 
-    # Applications with docs (app-scoped or project-scoped under app)
-    apps_with_docs = await db.execute(
-        select(Application.id, Application.name)
+    # All applications user is a member of (allow creating docs in empty apps)
+    user_apps = await db.execute(
+        select(Application.id, Application.name, Application.description)
         .join(ApplicationMember, ApplicationMember.application_id == Application.id)
         .where(ApplicationMember.user_id == current_user.id)
-        .where(
-            exists(
-                select(Document.id)
-                .where(
-                    or_(
-                        and_(
-                            Document.application_id == Application.id,
-                            Document.project_id.is_(None),
-                        ),
-                        Document.project_id.in_(
-                            select(Project.id).where(
-                                Project.application_id == Application.id
-                            )
-                        ),
-                    )
-                )
-                .where(Document.deleted_at.is_(None))
-            )
-        )
         .order_by(Application.created_at.asc())
     )
 
     return {
         "has_personal_docs": (personal_count or 0) > 0,
         "applications": [
-            {"id": str(r.id), "name": r.name} for r in apps_with_docs.all()
+            {"id": str(r.id), "name": r.name, "description": r.description}
+            for r in user_apps.all()
         ],
     }
+
+
+@router.get("/projects-with-content", response_model=ProjectsWithContentResponse)
+async def get_projects_with_content(
+    application_id: UUID = Query(..., description="Application ID to check projects for"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ProjectsWithContentResponse:
+    """
+    Return project IDs that have knowledge content (documents or folders).
+
+    Used by the application tree to filter out empty projects before rendering.
+    Uses UNION of two EXISTS-optimized queries for efficiency.
+    """
+    # Projects with documents
+    projects_with_docs = select(Document.project_id).where(
+        Document.project_id.isnot(None),
+        Document.deleted_at.is_(None),
+        Document.project_id.in_(
+            select(Project.id).where(Project.application_id == application_id)
+        ),
+    ).distinct()
+
+    # Projects with folders
+    projects_with_folders = select(DocumentFolder.project_id).where(
+        DocumentFolder.project_id.isnot(None),
+        DocumentFolder.project_id.in_(
+            select(Project.id).where(Project.application_id == application_id)
+        ),
+    ).distinct()
+
+    # Combine with UNION
+    combined = projects_with_docs.union(projects_with_folders)
+    result = await db.execute(combined)
+    project_ids = [str(row[0]) for row in result.all()]
+
+    return ProjectsWithContentResponse(project_ids=project_ids)
 
 
 # ============================================================================
@@ -248,6 +333,13 @@ async def create_document(
     """
     await validate_scope(body.scope, body.scope_id, db)
 
+    # For project-scoped documents, get the parent application_id for broadcasting
+    project_application_id: UUID | None = None
+    if body.scope == "project":
+        project = await db.get(Project, UUID(body.scope_id))
+        if project:
+            project_application_id = project.application_id
+
     document = Document(
         title=body.title,
         content_json=body.content_json,
@@ -261,6 +353,14 @@ async def create_document(
     db.add(document)
     await db.flush()
     await db.refresh(document)
+
+    # Broadcast document created event
+    await _broadcast_document_event(
+        MessageType.DOCUMENT_CREATED,
+        document,
+        actor_id=current_user.id,
+        project_application_id=project_application_id,
+    )
 
     return DocumentResponse.model_validate(document)
 
@@ -338,6 +438,21 @@ async def update_document(
     await db.flush()
     await db.refresh(document)
 
+    # For project-scoped documents, get the parent application_id for broadcasting
+    project_application_id: UUID | None = None
+    if document.project_id:
+        project = await db.get(Project, document.project_id)
+        if project:
+            project_application_id = project.application_id
+
+    # Broadcast document updated event
+    await _broadcast_document_event(
+        MessageType.DOCUMENT_UPDATED,
+        document,
+        actor_id=current_user.id,
+        project_application_id=project_application_id,
+    )
+
     return DocumentResponse.model_validate(document)
 
 
@@ -362,6 +477,20 @@ async def save_content(
         row_version=body.row_version,
         user_id=current_user.id,
         db=db,
+    )
+
+    # Broadcast document updated event so other users see fresh content
+    project_application_id: UUID | None = None
+    if document.project_id:
+        project = await db.get(Project, document.project_id)
+        if project:
+            project_application_id = project.application_id
+
+    await _broadcast_document_event(
+        MessageType.DOCUMENT_UPDATED,
+        document,
+        actor_id=current_user.id,
+        project_application_id=project_application_id,
     )
 
     return DocumentResponse.model_validate(document)
@@ -393,8 +522,23 @@ async def delete_document(
             detail=f"Document {document_id} not found",
         )
 
+    # For project-scoped documents, get the parent application_id for broadcasting
+    project_application_id: UUID | None = None
+    if document.project_id:
+        project = await db.get(Project, document.project_id)
+        if project:
+            project_application_id = project.application_id
+
     document.deleted_at = datetime.utcnow()
     await db.flush()
+
+    # Broadcast document deleted event
+    await _broadcast_document_event(
+        MessageType.DOCUMENT_DELETED,
+        document,
+        actor_id=current_user.id,
+        project_application_id=project_application_id,
+    )
 
 
 # ============================================================================

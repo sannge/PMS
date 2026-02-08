@@ -5,6 +5,8 @@ Tasks are the lowest level of the hierarchy: Application > Project > Task.
 All endpoints require authentication.
 """
 
+import asyncio
+import logging
 from datetime import datetime, timedelta
 from typing import Annotated, List, Optional
 from uuid import UUID
@@ -14,13 +16,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from ..database import get_db
+from ..database import async_session_maker, get_db
 from ..models.application import Application
 from ..models.application_member import ApplicationMember
 from ..models.project import Project
 from ..models.project_task_status_agg import ProjectTaskStatusAgg
 from ..models.task import Task
-from ..models.task_status import StatusName
 from ..models.user import User
 from ..schemas.task import (
     TaskCreate,
@@ -28,7 +29,7 @@ from ..schemas.task import (
     TaskMove,
     TaskPriority,
     TaskResponse,
-    TaskStatus,
+    TaskStatusInfo,
     TaskType,
     TaskUpdate,
     TaskUserInfo,
@@ -36,6 +37,7 @@ from ..schemas.task import (
 )
 from ..services.auth_service import get_current_user
 from ..services.notification_service import NotificationService
+from ..services.task_helpers import get_task_status_info
 from ..services.permission_service import PermissionService, get_permission_service
 from ..services.status_derivation_service import (
     derive_project_status_from_model,
@@ -53,6 +55,19 @@ from ..websocket.handlers import (
 from ..websocket.manager import MessageType, manager
 
 router = APIRouter(tags=["Tasks"])
+
+logger = logging.getLogger(__name__)
+
+
+async def _background_auto_archive(project_id) -> None:
+    """Run auto-archive in background with its own DB session."""
+    try:
+        async with async_session_maker() as db:
+            archived_count = await auto_archive_stale_done_tasks(db, project_id)
+            if archived_count > 0:
+                await db.commit()
+    except Exception:
+        logger.exception("Background auto-archive failed for project %s", project_id)
 
 
 # ============================================================================
@@ -214,6 +229,7 @@ async def verify_task_access(
             selectinload(Task.project).selectinload(Project.application),
             selectinload(Task.assignee),
             selectinload(Task.reporter),
+            selectinload(Task.task_status),
         )
         .where(Task.id == task_id)
     )
@@ -407,33 +423,6 @@ async def validate_assignee_eligibility(
 # ============================================================================
 # Status Derivation Helper Functions
 # ============================================================================
-
-
-# Mapping from legacy status values (lowercase) to StatusName values (Title Case)
-LEGACY_STATUS_TO_STATUS_NAME = {
-    "todo": StatusName.TODO.value,
-    "in_progress": StatusName.IN_PROGRESS.value,
-    "in_review": StatusName.IN_REVIEW.value,
-    "issue": StatusName.ISSUE.value,
-    "blocked": StatusName.ISSUE.value,  # blocked -> issue migration
-    "done": StatusName.DONE.value,
-}
-
-
-def get_status_name_from_legacy(legacy_status: str) -> str:
-    """
-    Convert a legacy task status value to the new StatusName value.
-
-    Legacy statuses are lowercase: 'todo', 'in_progress', 'in_review', 'done', 'blocked'
-    New StatusName values are Title Case: 'Todo', 'In Progress', 'In Review', 'Done', 'Issue'
-
-    Args:
-        legacy_status: The legacy status string (lowercase)
-
-    Returns:
-        The StatusName value string (Title Case)
-    """
-    return LEGACY_STATUS_TO_STATUS_NAME.get(legacy_status, StatusName.TODO.value)
 
 
 async def get_or_create_project_aggregation(
@@ -655,11 +644,22 @@ async def auto_archive_stale_done_tasks(
     # - Are in done status
     # - Have completed_at older than threshold
     # - Are not already archived
+    from ..models.task_status import TaskStatus as TaskStatusModel, StatusCategory
+
+    # Get Done status IDs for this project
+    done_result = await db.execute(
+        select(TaskStatusModel.id).where(
+            TaskStatusModel.project_id == project_id,
+            TaskStatusModel.category == StatusCategory.DONE.value,
+        )
+    )
+    done_status_ids = [row[0] for row in done_result.all()]
+
     result = await db.execute(
         update(Task)
         .where(
             Task.project_id == project_id,
-            Task.status == "done",
+            Task.task_status_id.in_(done_status_ids),
             Task.completed_at.isnot(None),
             Task.completed_at < threshold_date,
             Task.archived_at.is_(None),
@@ -795,7 +795,7 @@ def _calculate_midpoint_rank(before_rank: str, after_rank: str) -> str:
 async def get_rank_for_position(
     db: AsyncSession,
     project_id: UUID,
-    target_status: str,
+    target_status_id: Optional[UUID],
     before_task_id: Optional[UUID],
     after_task_id: Optional[UUID],
 ) -> str:
@@ -805,7 +805,7 @@ async def get_rank_for_position(
     Args:
         db: Database session
         project_id: The project ID
-        target_status: The target status column
+        target_status_id: The target task_status_id (FK to TaskStatuses)
         before_task_id: ID of the task to position before (or None)
         after_task_id: ID of the task to position after (or None)
 
@@ -840,12 +840,12 @@ async def get_rank_for_position(
             after_rank = after_task.task_rank
 
     # If neither provided, get the last task in the target status to append
-    if not before_task_id and not after_task_id:
+    if not before_task_id and not after_task_id and target_status_id:
         result = await db.execute(
             select(Task)
             .where(
                 Task.project_id == project_id,
-                Task.status == target_status,
+                Task.task_status_id == target_status_id,
                 Task.task_rank.isnot(None),
             )
             .order_by(Task.task_rank.desc())
@@ -885,7 +885,7 @@ async def list_tasks(
     limit: int = Query(100, ge=1, le=500, description="Maximum number of records to return"),
     search: Optional[str] = Query(None, description="Search term for task title"),
     task_type: Optional[TaskType] = Query(None, description="Filter by task type"),
-    task_status: Optional[TaskStatus] = Query(None, alias="status", description="Filter by task status"),
+    task_status_id: Optional[UUID] = Query(None, alias="status_id", description="Filter by task status ID"),
     priority: Optional[TaskPriority] = Query(None, description="Filter by priority"),
     assignee_id: Optional[UUID] = Query(None, description="Filter by assignee"),
 ) -> List[TaskWithSubtasks]:
@@ -897,7 +897,7 @@ async def list_tasks(
     - **limit**: Maximum number of records to return (1-500)
     - **search**: Optional search term to filter by title
     - **task_type**: Optional filter by task type (story, bug, epic, subtask, task)
-    - **status**: Optional filter by status (todo, in_progress, in_review, done, blocked)
+    - **status_id**: Optional filter by task status ID
     - **priority**: Optional filter by priority (lowest, low, medium, high, highest)
     - **assignee_id**: Optional filter by assigned user
 
@@ -908,10 +908,8 @@ async def list_tasks(
     # Verify project access (any member can view)
     await verify_project_access(project_id, current_user, db)
 
-    # Auto-archive stale done tasks on read
-    archived_count = await auto_archive_stale_done_tasks(db, project_id)
-    if archived_count > 0:
-        await db.commit()
+    # Schedule archival as background task (non-blocking)
+    asyncio.ensure_future(_background_auto_archive(project_id))
 
     # Build query for tasks with subtask count
     # Use a subquery for counting subtasks
@@ -934,6 +932,7 @@ async def list_tasks(
         .options(
             selectinload(Task.assignee),
             selectinload(Task.reporter),
+            selectinload(Task.task_status),
         )
         .outerjoin(
             subtask_count_subquery,
@@ -954,8 +953,8 @@ async def list_tasks(
         query = query.where(Task.task_type == task_type.value)
 
     # Apply status filter if provided
-    if task_status:
-        query = query.where(Task.status == task_status.value)
+    if task_status_id:
+        query = query.where(Task.task_status_id == task_status_id)
 
     # Apply priority filter if provided
     if priority:
@@ -984,7 +983,6 @@ async def list_tasks(
             title=task.title,
             description=task.description,
             task_type=task.task_type,
-            status=task.status,
             priority=task.priority,
             story_points=task.story_points,
             due_date=task.due_date,
@@ -995,6 +993,7 @@ async def list_tasks(
             parent_id=task.parent_id,
             sprint_id=task.sprint_id,
             task_status_id=task.task_status_id,
+            task_status=get_task_status_info(task),
             task_rank=task.task_rank,
             row_version=task.row_version,
             checklist_total=task.checklist_total,
@@ -1036,7 +1035,7 @@ async def create_task(
     - **title**: Task title (required, 1-500 characters)
     - **description**: Detailed task description (optional)
     - **task_type**: Type of task (default: 'story')
-    - **status**: Task status (default: 'todo')
+    - **task_status_id**: Task status ID (optional, defaults to project's 'Todo' status)
     - **priority**: Task priority (default: 'medium')
     - **story_points**: Story point estimate (optional, 0-100)
     - **due_date**: Task due date (optional)
@@ -1090,13 +1089,51 @@ async def create_task(
             db=db,
         )
 
-    # Business rule: Unassigned tasks can only be created with 'todo' status
-    task_status_value = task_data.status.value if task_data.status else "todo"
-    if not task_data.assignee_id and task_status_value != "todo":
+    # Resolve task_status_id
+    from ..models.task_status import TaskStatus as TaskStatusModel
+
+    resolved_task_status_id = task_data.task_status_id
+    resolved_status_name: str = "Todo"
+    if resolved_task_status_id is None:
+        # Default to Todo status for this project
+        result = await db.execute(
+            select(TaskStatusModel).where(
+                TaskStatusModel.project_id == project_id,
+                TaskStatusModel.name == "Todo",
+            )
+        )
+        default_status = result.scalar_one_or_none()
+        if default_status:
+            resolved_task_status_id = default_status.id
+            resolved_status_name = default_status.name
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Project has no default 'Todo' status configured. "
+                       "Please provide an explicit task_status_id.",
+            )
+    else:
+        # Explicit task_status_id provided — validate it belongs to this project
+        result = await db.execute(
+            select(TaskStatusModel).where(
+                TaskStatusModel.id == resolved_task_status_id,
+                TaskStatusModel.project_id == project_id,
+            )
+        )
+        explicit_status = result.scalar_one_or_none()
+        if not explicit_status:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid task_status_id: status does not exist or does not belong to this project.",
+            )
+        resolved_status_name = explicit_status.name
+
+    # Business rule: Unassigned tasks can only be created with 'Todo' status
+    if not task_data.assignee_id and resolved_status_name != "Todo":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unassigned tasks can only be created with 'todo' status. "
-                   "Please assign the task or use 'todo' status.",
+            detail="Unassigned tasks can only be created with 'Todo' status. "
+                   "Please assign the task or use 'Todo' status.",
         )
 
     # Generate task key with atomic counter increment
@@ -1112,7 +1149,6 @@ async def create_task(
         title=task_data.title,
         description=task_data.description,
         task_type=task_data.task_type.value if task_data.task_type else "story",
-        status=task_data.status.value if task_data.status else "todo",
         priority=task_data.priority.value if task_data.priority else "medium",
         story_points=task_data.story_points,
         due_date=task_data.due_date,
@@ -1120,6 +1156,7 @@ async def create_task(
         reporter_id=reporter_id,
         parent_id=task_data.parent_id,
         sprint_id=task_data.sprint_id,
+        task_status_id=resolved_task_status_id,
     )
 
     # Save to database
@@ -1130,30 +1167,28 @@ async def create_task(
     old_derived_status = await get_current_derived_status_name(db, project)
 
     # Update status aggregation for project status derivation
-    task_status_name = get_status_name_from_legacy(task.status)
     agg = await get_or_create_project_aggregation(db, project_id)
-    new_derived_status = update_aggregation_on_task_create(agg, task_status_name)
+    new_derived_status = update_aggregation_on_task_create(agg, resolved_status_name)
 
     # Update project's derived status
     await update_project_derived_status(db, project, new_derived_status)
 
     # Commit all changes
     await db.commit()
-    await db.refresh(task)
+    await db.refresh(task, attribute_names=["task_status", "assignee", "reporter", "project"])
 
-    # Emit WebSocket event if derived status changed (after commit)
-    await emit_project_status_changed_if_needed(
-        project=project,
-        old_status=old_derived_status,
-        new_status=new_derived_status,
-        user_id=current_user.id,
+    # Emit WebSocket event if derived status changed (fire-and-forget for performance)
+    asyncio.create_task(
+        emit_project_status_changed_if_needed(
+            project=project,
+            old_status=old_derived_status,
+            new_status=new_derived_status,
+            user_id=current_user.id,
+        )
     )
 
-    # Load assignee/reporter relationships for WebSocket broadcast and response
-    _ = task.assignee  # Trigger lazy load
-    _ = task.reporter  # Trigger lazy load
-
     # Broadcast task creation to project room for real-time updates
+    ts_info = get_task_status_info(task)
     task_data_ws = {
         "id": str(task.id),
         "project_id": str(task.project_id),
@@ -1161,7 +1196,8 @@ async def create_task(
         "title": task.title,
         "description": task.description,
         "task_type": task.task_type,
-        "status": task.status,
+        "task_status_id": str(task.task_status_id) if task.task_status_id else None,
+        "task_status": ts_info.model_dump(mode="json") if ts_info else None,
         "priority": task.priority,
         "story_points": task.story_points,
         "due_date": task.due_date.isoformat() if task.due_date else None,
@@ -1171,36 +1207,47 @@ async def create_task(
         "reporter": serialize_user_for_ws(task.reporter),
         "parent_id": str(task.parent_id) if task.parent_id else None,
         "sprint_id": str(task.sprint_id) if task.sprint_id else None,
+        "task_rank": task.task_rank,
+        "row_version": task.row_version,
+        "archived_at": task.archived_at.isoformat() if task.archived_at else None,
+        "checklist_total": task.checklist_total,
+        "checklist_done": task.checklist_done,
         "created_at": task.created_at.isoformat() if task.created_at else None,
         "updated_at": task.updated_at.isoformat() if task.updated_at else None,
         "completed_at": task.completed_at.isoformat() if task.completed_at else None,
     }
-    await handle_task_update(
-        project_id=project_id,
-        task_id=task.id,
-        action=UpdateAction.CREATED,
-        task_data=task_data_ws,
-        user_id=current_user.id,
+    # Broadcast task creation (fire-and-forget for performance)
+    asyncio.create_task(
+        handle_task_update(
+            project_id=project_id,
+            task_id=task.id,
+            action=UpdateAction.CREATED,
+            task_data=task_data_ws,
+            user_id=current_user.id,
+        )
     )
 
     # Broadcast project restoration if it was restored by creating this task
     if project_was_restored:
         app_room_id = f"application:{project.application_id}"
-        await manager.broadcast_to_room(
-            app_room_id,
-            {
-                "type": MessageType.PROJECT_UPDATED,
-                "data": {
-                    "project_id": str(project.id),
-                    "application_id": str(project.application_id),
-                    "name": project.name,
-                    "key": project.key,
-                    "archived_at": None,
-                    "restored_by": str(current_user.id),
-                    "restored_via": "task_created",
-                    "timestamp": datetime.utcnow().isoformat(),
+        # Fire-and-forget for performance
+        asyncio.create_task(
+            manager.broadcast_to_room(
+                app_room_id,
+                {
+                    "type": MessageType.PROJECT_UPDATED,
+                    "data": {
+                        "project_id": str(project.id),
+                        "application_id": str(project.application_id),
+                        "name": project.name,
+                        "key": project.key,
+                        "archived_at": None,
+                        "restored_by": str(current_user.id),
+                        "restored_via": "task_created",
+                        "timestamp": datetime.utcnow().isoformat(),
+                    },
                 },
-            },
+            )
         )
 
     # Send notification to assignee if task is assigned to someone other than self
@@ -1267,6 +1314,7 @@ async def get_task(
         .options(
             selectinload(Task.assignee),
             selectinload(Task.reporter),
+            selectinload(Task.task_status),
         )
         .outerjoin(
             subtask_count_subquery,
@@ -1313,7 +1361,6 @@ async def get_task(
         title=task.title,
         description=task.description,
         task_type=task.task_type,
-        status=task.status,
         priority=task.priority,
         story_points=task.story_points,
         due_date=task.due_date,
@@ -1324,6 +1371,7 @@ async def get_task(
         parent_id=task.parent_id,
         sprint_id=task.sprint_id,
         task_status_id=task.task_status_id,
+        task_status=get_task_status_info(task),
         task_rank=task.task_rank,
         row_version=task.row_version,
         checklist_total=task.checklist_total,
@@ -1361,7 +1409,7 @@ async def update_task(
     - **title**: New task title (optional, 1-500 characters)
     - **description**: New description (optional)
     - **task_type**: New task type (optional)
-    - **status**: New status (optional)
+    - **task_status_id**: New task status ID (optional)
     - **priority**: New priority (optional)
     - **story_points**: New story points (optional)
     - **due_date**: New due date (optional)
@@ -1378,14 +1426,16 @@ async def update_task(
     # Business rule: Archived tasks cannot have their status changed
     if task.archived_at is not None:
         update_data_check = task_data.model_dump(exclude_unset=True)
-        if "status" in update_data_check or "task_status_id" in update_data_check:
+        if "task_status_id" in update_data_check:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot change status of an archived task. Restore the task first.",
             )
 
-    # Track old status for aggregation update
-    old_status = task.status
+    # Track old task_status for aggregation update
+    old_task_status_name = task.task_status.name if task.task_status else "Todo"
+    old_task_status_category = task.task_status.category if task.task_status else "Todo"
+    old_task_status_id = task.task_status_id
 
     # Track old assignee for notification
     old_assignee_id = task.assignee_id
@@ -1400,8 +1450,9 @@ async def update_task(
 
     # Business rule: Done tasks can only have status changed (to reopen) or row_version updated
     # Attachments and comments are handled by separate endpoints
-    if old_status == "done":
-        allowed_fields_for_done = {"status", "row_version"}
+    is_done = task.task_status and task.task_status.category == "Done"
+    if is_done:
+        allowed_fields_for_done = {"task_status_id", "row_version"}
         disallowed_fields = set(update_data.keys()) - allowed_fields_for_done
         if disallowed_fields:
             raise HTTPException(
@@ -1410,21 +1461,26 @@ async def update_task(
                        "Reopen the task first by changing its status.",
             )
 
-    # Business rule: Unassigned tasks can only be in 'todo' status
-    new_status = update_data.get("status")
+    # Business rule: Unassigned tasks can only be in 'Todo' status
     is_unassigning = "assignee_id" in update_data and update_data["assignee_id"] is None
 
-    # Determine the effective status after this update
-    effective_status = task.status
-    if new_status is not None:
-        effective_status = new_status.value if hasattr(new_status, "value") else new_status
+    # Determine the effective status name after this update
+    effective_status_name = old_task_status_name
+    if "task_status_id" in update_data and update_data["task_status_id"] is not None:
+        from ..models.task_status import TaskStatus as TaskStatusModel
+        result = await db.execute(
+            select(TaskStatusModel).where(TaskStatusModel.id == update_data["task_status_id"])
+        )
+        new_ts = result.scalar_one_or_none()
+        if new_ts:
+            effective_status_name = new_ts.name
 
     # Will be unassigned after update?
     will_be_unassigned = is_unassigning or (
         task.assignee_id is None and "assignee_id" not in update_data
     )
 
-    if will_be_unassigned and effective_status != "todo":
+    if will_be_unassigned and effective_status_name != "Todo":
         if is_unassigning:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1434,7 +1490,7 @@ async def update_task(
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Unassigned tasks can only have 'todo' status. "
+                detail="Unassigned tasks can only have 'Todo' status. "
                        "Please assign the task before changing its status.",
             )
 
@@ -1472,7 +1528,7 @@ async def update_task(
 
     # Apply updates, converting enums to their values
     for field, value in update_data.items():
-        if isinstance(value, (TaskType, TaskStatus, TaskPriority)):
+        if isinstance(value, (TaskType, TaskPriority)):
             setattr(task, field, value.value)
         else:
             setattr(task, field, value)
@@ -1480,25 +1536,36 @@ async def update_task(
     # Update timestamp
     task.updated_at = datetime.utcnow()
 
+    # Reload task_status relationship if task_status_id changed
+    if "task_status_id" in update_data:
+        from ..models.task_status import TaskStatus as TaskStatusModel
+        ts_result = await db.execute(
+            select(TaskStatusModel).where(TaskStatusModel.id == task.task_status_id)
+        )
+        task_ts_obj = ts_result.scalar_one_or_none()
+    else:
+        task_ts_obj = task.task_status
+
     # Update completed_at based on status change
-    new_task_status = task.status
-    if old_status != new_task_status:
-        if new_task_status == "done":
+    new_task_status_name = task_ts_obj.name if task_ts_obj else "Todo"
+    new_is_done = task_ts_obj.category == "Done" if task_ts_obj else False
+    old_was_done = old_task_status_category == "Done"
+    if old_task_status_id != task.task_status_id:
+        if new_is_done:
             # Set completed_at when moving to done
             task.completed_at = datetime.utcnow()
-        elif old_status == "done":
+        elif old_was_done:
             # Clear completed_at when moving away from done
             task.completed_at = None
 
     # Check if status changed and update aggregation
-    new_status = task.status
     old_derived_status: Optional[str] = None
     new_derived_status: Optional[str] = None
     project: Optional[Project] = None
 
-    if old_status != new_status:
-        old_status_name = get_status_name_from_legacy(old_status)
-        new_status_name = get_status_name_from_legacy(new_status)
+    if old_task_status_id != task.task_status_id:
+        old_status_name = old_task_status_name
+        new_status_name = new_task_status_name
 
         # Use the already-loaded project from verify_task_access (via selectinload)
         project = task.project
@@ -1519,7 +1586,7 @@ async def update_task(
 
     # Save changes
     await db.commit()
-    await db.refresh(task)
+    await db.refresh(task, attribute_names=["task_status", "assignee", "reporter"])
 
     # Emit WebSocket event if derived status changed (after commit)
     if project and new_derived_status is not None:
@@ -1533,6 +1600,7 @@ async def update_task(
     # Assignee/reporter are already loaded via eager loading in verify_task_access
 
     # Broadcast task update to project room for real-time updates
+    ts_info_ws = get_task_status_info(task)
     task_data_ws = {
         "id": str(task.id),
         "project_id": str(task.project_id),
@@ -1540,7 +1608,8 @@ async def update_task(
         "title": task.title,
         "description": task.description,
         "task_type": task.task_type,
-        "status": task.status,
+        "task_status_id": str(task.task_status_id) if task.task_status_id else None,
+        "task_status": ts_info_ws.model_dump(mode="json") if ts_info_ws else None,
         "priority": task.priority,
         "story_points": task.story_points,
         "due_date": task.due_date.isoformat() if task.due_date else None,
@@ -1550,6 +1619,11 @@ async def update_task(
         "reporter": serialize_user_for_ws(task.reporter),
         "parent_id": str(task.parent_id) if task.parent_id else None,
         "sprint_id": str(task.sprint_id) if task.sprint_id else None,
+        "task_rank": task.task_rank,
+        "row_version": task.row_version,
+        "archived_at": task.archived_at.isoformat() if task.archived_at else None,
+        "checklist_total": task.checklist_total,
+        "checklist_done": task.checklist_done,
         "created_at": task.created_at.isoformat() if task.created_at else None,
         "updated_at": task.updated_at.isoformat() if task.updated_at else None,
         "completed_at": task.completed_at.isoformat() if task.completed_at else None,
@@ -1616,7 +1690,7 @@ async def delete_task(
 
     # Store task info for aggregation update before deletion
     project_id = task.project_id
-    task_status = task.status
+    task_status_name_for_agg = task.task_status.name if task.task_status else "Todo"
 
     # Use the already-loaded project from verify_task_access (via selectinload)
     project = task.project
@@ -1629,7 +1703,10 @@ async def delete_task(
         select(Task).where(Task.parent_id == task_id)
     )
     subtasks = result.scalars().all()
-    subtask_statuses = [subtask.status for subtask in subtasks]
+    subtask_status_names = [
+        subtask.task_status.name if subtask.task_status else "Todo"
+        for subtask in subtasks
+    ]
 
     # Delete subtasks first (to handle self-referential cascade)
     await db.execute(
@@ -1645,13 +1722,11 @@ async def delete_task(
     agg = await get_or_create_project_aggregation(db, project_id)
 
     # Update aggregation for the main task
-    task_status_name = get_status_name_from_legacy(task_status)
-    new_derived_status = update_aggregation_on_task_delete(agg, task_status_name)
+    new_derived_status = update_aggregation_on_task_delete(agg, task_status_name_for_agg)
 
     # Update aggregation for each deleted subtask
-    for subtask_status in subtask_statuses:
-        subtask_status_name = get_status_name_from_legacy(subtask_status)
-        new_derived_status = update_aggregation_on_task_delete(agg, subtask_status_name)
+    for subtask_sn in subtask_status_names:
+        new_derived_status = update_aggregation_on_task_delete(agg, subtask_sn)
 
     # Update project's derived status
     if project:
@@ -1706,7 +1781,7 @@ async def move_task(
     Move a task to a new status column and/or reorder within a column.
 
     This endpoint supports Kanban-style drag-and-drop operations:
-    - **Status change**: Use `target_status` or `target_status_id` to move between columns
+    - **Status change**: Use `target_status_id` to move between columns
     - **Reordering**: Use `target_rank` directly, or `before_task_id`/`after_task_id` for auto-calculation
     - **Both**: Change status and position in a single operation
 
@@ -1732,33 +1807,23 @@ async def move_task(
         )
 
     # Business rule: Done tasks can only be reopened (moved to a different status), not reordered
-    if task.status == "done":
+    is_task_done = task.task_status and task.task_status.category == "Done"
+    if is_task_done:
         # Allow if changing status (reopening), block if just reordering within done column
-        if move_data.target_status is None and move_data.target_status_id is None:
+        if move_data.target_status_id is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot reorder a completed task. Change its status to reopen it first.",
             )
 
-    # Business rule: Unassigned tasks can only be moved to 'todo' status
-    if move_data.target_status is not None:
-        target_status_value = move_data.target_status.value
-        if task.assignee_id is None and target_status_value != "todo":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Unassigned tasks can only have 'todo' status. "
-                       "Please assign the task before changing its status.",
-            )
-
     # Check for at least one field to update
-    if (move_data.target_status is None and
-        move_data.target_status_id is None and
+    if (move_data.target_status_id is None and
         move_data.target_rank is None and
         move_data.before_task_id is None and
         move_data.after_task_id is None):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="At least one of target_status, target_status_id, target_rank, "
+            detail="At least one of target_status_id, target_rank, "
                    "before_task_id, or after_task_id must be provided",
         )
 
@@ -1772,15 +1837,12 @@ async def move_task(
             )
 
     # Track old status for aggregation update
-    old_status = task.status
-    new_status = old_status  # Default to same status
+    old_task_status_id = task.task_status_id
+    old_task_status_name = task.task_status.name if task.task_status else "Todo"
+    old_task_status_category = task.task_status.category if task.task_status else "Todo"
+    target_task_status = None  # Will hold the resolved target TaskStatus model
 
-    # Handle status change
-    if move_data.target_status is not None:
-        new_status = move_data.target_status.value
-        task.status = new_status
-
-    # Handle task_status_id change (for new unified status system)
+    # Handle task_status_id change
     if move_data.target_status_id is not None:
         from ..models.task_status import TaskStatus as TaskStatusModel
 
@@ -1799,23 +1861,21 @@ async def move_task(
                 detail="Target task status not found or does not belong to this project",
             )
 
+        # Business rule: Unassigned tasks can only be moved to 'Todo' status
+        if task.assignee_id is None and target_task_status.name != "Todo":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Unassigned tasks can only have 'Todo' status. "
+                       "Please assign the task before changing its status.",
+            )
+
         task.task_status_id = move_data.target_status_id
 
-        # Also update the legacy status field to match the new status name
-        # Map status name to legacy status value
-        status_name_to_legacy = {
-            "Todo": "todo",
-            "In Progress": "in_progress",
-            "In Review": "in_review",
-            "Issue": "issue",
-            "Done": "done",
-        }
-        legacy_status = status_name_to_legacy.get(target_task_status.name, "todo")
-        new_status = legacy_status
-        task.status = new_status
-
-    # Validate: Cannot move from TODO to another status if task is unassigned
-    if old_status == "todo" and new_status != "todo" and task.assignee_id is None:
+    # Validate: Cannot move from Todo to another status if task is unassigned
+    if (old_task_status_name == "Todo" and
+        target_task_status is not None and
+        target_task_status.name != "Todo" and
+        task.assignee_id is None):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Task must be assigned to someone before moving from Todo",
@@ -1851,6 +1911,7 @@ async def move_task(
             )
 
     # Calculate and set the new rank
+    effective_status_id = task.task_status_id
     if move_data.target_rank is not None:
         # Use the explicitly provided rank
         task.task_rank = move_data.target_rank
@@ -1859,7 +1920,7 @@ async def move_task(
         task.task_rank = await get_rank_for_position(
             db=db,
             project_id=task.project_id,
-            target_status=new_status,
+            target_status_id=effective_status_id,
             before_task_id=move_data.before_task_id,
             after_task_id=move_data.after_task_id,
         )
@@ -1868,7 +1929,7 @@ async def move_task(
         task.task_rank = await get_rank_for_position(
             db=db,
             project_id=task.project_id,
-            target_status=new_status,
+            target_status_id=effective_status_id,
             before_task_id=None,
             after_task_id=None,
         )
@@ -1877,26 +1938,28 @@ async def move_task(
     task.updated_at = datetime.utcnow()
     task.row_version = (task.row_version or 0) + 1
 
+    # Determine new status info
+    new_task_status_name = target_task_status.name if target_task_status else old_task_status_name
+    new_task_status_category = target_task_status.category if target_task_status else old_task_status_category
+
     # Update completed_at based on status change
-    if old_status != new_status:
-        if new_status == "done":
+    status_changed = old_task_status_id != task.task_status_id
+    if status_changed:
+        if new_task_status_category == "Done":
             # Set completed_at when moving to done
             task.completed_at = datetime.utcnow()
-        elif old_status == "done":
+        elif old_task_status_category == "Done":
             # Clear completed_at when moving away from done
             task.completed_at = None
-
-    # Store old task_status_id before commit (for WebSocket event)
-    old_task_status_id = task.task_status_id
 
     # Check if status changed and update aggregation
     old_derived_status: Optional[str] = None
     new_derived_status: Optional[str] = None
     project: Optional[Project] = None
 
-    if old_status != new_status:
-        old_status_name = get_status_name_from_legacy(old_status)
-        new_status_name = get_status_name_from_legacy(new_status)
+    if status_changed:
+        old_status_name = old_task_status_name
+        new_status_name = new_task_status_name
 
         # Use the already-loaded project from verify_task_access (via selectinload)
         project = task.project
@@ -1917,37 +1980,43 @@ async def move_task(
 
     # Save changes
     await db.commit()
-    await db.refresh(task)
+    await db.refresh(task, attribute_names=["task_status", "assignee", "reporter"])
 
-    # Assignee/reporter are already loaded via eager loading in verify_task_access
 
     # Emit WebSocket task_moved event for real-time Kanban updates
     # Serialize task data for WebSocket broadcast
+    ts_info_move = get_task_status_info(task)
     task_dict = {
         "id": str(task.id),
         "project_id": str(task.project_id),
         "title": task.title,
         "description": task.description,
         "task_type": task.task_type,
-        "status": task.status,
+        "task_status_id": str(task.task_status_id) if task.task_status_id else None,
+        "task_status": ts_info_move.model_dump(mode="json") if ts_info_move else None,
         "priority": task.priority,
         "task_key": task.task_key,
         "task_rank": task.task_rank,
-        "task_status_id": str(task.task_status_id) if task.task_status_id else None,
         "assignee_id": str(task.assignee_id) if task.assignee_id else None,
         "reporter_id": str(task.reporter_id) if task.reporter_id else None,
         "assignee": serialize_user_for_ws(task.assignee),
         "reporter": serialize_user_for_ws(task.reporter),
+        "parent_id": str(task.parent_id) if task.parent_id else None,
+        "sprint_id": str(task.sprint_id) if task.sprint_id else None,
         "story_points": task.story_points,
         "due_date": task.due_date.isoformat() if task.due_date else None,
+        "row_version": task.row_version,
+        "checklist_total": task.checklist_total,
+        "checklist_done": task.checklist_done,
         "created_at": task.created_at.isoformat() if task.created_at else None,
         "updated_at": task.updated_at.isoformat() if task.updated_at else None,
         "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+        "archived_at": task.archived_at.isoformat() if task.archived_at else None,
     }
     await handle_task_moved(
         project_id=task.project_id,
         task_id=task.id,
-        old_status_id=old_task_status_id or task.project_id,
+        old_status_id=old_task_status_id or task.task_status_id or task.project_id,
         new_status_id=task.task_status_id or task.project_id,
         new_rank=task.task_rank or "",
         user_id=current_user.id,
@@ -2034,6 +2103,7 @@ async def list_archived_tasks(
         .options(
             selectinload(Task.assignee),
             selectinload(Task.reporter),
+            selectinload(Task.task_status),
         )
         .where(
             Task.project_id == project_id,
@@ -2088,7 +2158,6 @@ async def list_archived_tasks(
             title=task.title,
             description=task.description,
             task_type=task.task_type,
-            status=task.status,
             priority=task.priority,
             story_points=task.story_points,
             due_date=task.due_date,
@@ -2099,6 +2168,7 @@ async def list_archived_tasks(
             parent_id=task.parent_id,
             sprint_id=task.sprint_id,
             task_status_id=task.task_status_id,
+            task_status=get_task_status_info(task),
             task_rank=task.task_rank,
             row_version=task.row_version,
             checklist_total=task.checklist_total,
@@ -2189,7 +2259,7 @@ async def unarchive_task(
         await update_project_derived_status(db, project, new_derived_status)
 
     await db.commit()
-    await db.refresh(task)
+    await db.refresh(task, attribute_names=["task_status", "assignee", "reporter"])
 
     # Emit WebSocket event if derived status changed
     if project and new_derived_status is not None:
@@ -2201,6 +2271,7 @@ async def unarchive_task(
         )
 
     # Broadcast task update for real-time sync
+    ts_info_unarch = get_task_status_info(task)
     task_data_ws = {
         "id": str(task.id),
         "project_id": str(task.project_id),
@@ -2208,7 +2279,8 @@ async def unarchive_task(
         "title": task.title,
         "description": task.description,
         "task_type": task.task_type,
-        "status": task.status,
+        "task_status_id": str(task.task_status_id) if task.task_status_id else None,
+        "task_status": ts_info_unarch.model_dump(mode="json") if ts_info_unarch else None,
         "priority": task.priority,
         "story_points": task.story_points,
         "due_date": task.due_date.isoformat() if task.due_date else None,
@@ -2218,7 +2290,11 @@ async def unarchive_task(
         "reporter": serialize_user_for_ws(task.reporter),
         "parent_id": str(task.parent_id) if task.parent_id else None,
         "sprint_id": str(task.sprint_id) if task.sprint_id else None,
+        "task_rank": task.task_rank,
+        "row_version": task.row_version,
         "archived_at": None,
+        "checklist_total": task.checklist_total,
+        "checklist_done": task.checklist_done,
         "completed_at": task.completed_at.isoformat() if task.completed_at else None,
         "created_at": task.created_at.isoformat() if task.created_at else None,
         "updated_at": task.updated_at.isoformat() if task.updated_at else None,
@@ -2289,7 +2365,7 @@ async def list_my_tasks_cross_app(
     search: Optional[str] = Query(None, description="Search term to filter by title or task key"),
     sort_by: str = Query("updated_at", description="Sort field: due_date, title, updated_at"),
     sort_order: str = Query("desc", description="Sort order: asc or desc"),
-    status_filter: Optional[str] = Query(None, alias="status", description="Filter by task status: todo, in_progress, in_review, issue, done"),
+    status_filter: Optional[str] = Query(None, alias="status_name", description="Filter by task status name: Todo, In Progress, In Review, Issue, Done"),
 ) -> TaskCursorPage:
     """
     List all pending tasks assigned to the current user across all applications.
@@ -2317,6 +2393,7 @@ async def list_my_tasks_cross_app(
         .options(
             selectinload(Task.assignee),
             selectinload(Task.reporter),
+            selectinload(Task.task_status),
         )
         .where(
             Project.application_id.in_(select(all_app_ids.c.app_id)),
@@ -2326,10 +2403,16 @@ async def list_my_tasks_cross_app(
     )
 
     # Apply status filter: if specific status requested, filter to that; otherwise exclude done
+    from ..models.task_status import TaskStatus as TaskStatusModel, StatusCategory as SC
+
     if status_filter:
-        query = query.where(Task.status == status_filter)
+        query = query.join(TaskStatusModel, Task.task_status_id == TaskStatusModel.id).where(
+            TaskStatusModel.name == status_filter
+        )
     else:
-        query = query.where(Task.status != "done")
+        query = query.join(TaskStatusModel, Task.task_status_id == TaskStatusModel.id).where(
+            TaskStatusModel.category != SC.DONE.value
+        )
 
     # Apply sorting
     if sort_by == "title":
@@ -2431,7 +2514,6 @@ async def list_my_tasks_cross_app(
             title=task.title,
             description=task.description,
             task_type=task.task_type,
-            status=task.status,
             priority=task.priority,
             story_points=task.story_points,
             due_date=task.due_date,
@@ -2442,6 +2524,7 @@ async def list_my_tasks_cross_app(
             parent_id=task.parent_id,
             sprint_id=task.sprint_id,
             task_status_id=task.task_status_id,
+            task_status=get_task_status_info(task),
             task_rank=task.task_rank,
             row_version=task.row_version,
             checklist_total=task.checklist_total,

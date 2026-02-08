@@ -377,22 +377,9 @@ def recalculate_aggregation_from_tasks(
 
     # Count tasks by status
     for task in tasks:
-        # Get status name from task_status relationship or legacy status field
+        # Get status name from task_status relationship (primary source)
         if hasattr(task, "task_status") and task.task_status is not None:
             status_name = task.task_status.name
-        elif hasattr(task, "status"):
-            # Legacy: map old status values to new status names
-            legacy_status_map = {
-                "todo": StatusName.TODO.value,
-                "in_progress": StatusName.IN_PROGRESS.value,
-                "in_review": StatusName.IN_REVIEW.value,
-                "issue": StatusName.ISSUE.value,
-                "blocked": StatusName.ISSUE.value,  # blocked -> issue migration
-                "done": StatusName.DONE.value,
-            }
-            status_name = legacy_status_map.get(
-                task.status, StatusName.TODO.value
-            )
         else:
             # Default to Todo if no status found
             status_name = StatusName.TODO.value

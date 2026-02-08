@@ -49,8 +49,23 @@ class Settings(BaseSettings):
     redis_retry_on_timeout: bool = True
     redis_required: bool = False  # Set True for multi-worker deployment
 
-    # Archive service settings
-    archive_test_mode: bool = False  # Set True to run archive every 2 min instead of 12 hours
+    # ARQ Worker settings (background job scheduling)
+    # Archive job: runs at these hours (comma-separated, 24h format)
+    # Default "0,12" = midnight and noon
+    # Set to empty string "" to use arq_archive_minutes instead
+    arq_archive_hours: str = "0,12"
+
+    # Archive job: runs at these minutes (comma-separated, 0-59)
+    # Only used if arq_archive_hours is empty
+    # Example: "0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46,48,50,52,54,56,58" = every 2 mins
+    arq_archive_minutes: str = ""
+
+    # Presence cleanup job: runs at these seconds within each minute (comma-separated)
+    # Default "0,30" = every 30 seconds (at :00 and :30 of each minute)
+    arq_presence_cleanup_seconds: str = "0,30"
+
+    # Legacy setting (deprecated, use arq_archive_hours instead)
+    archive_test_mode: bool = False
 
     @property
     def database_url(self) -> str:

@@ -19,6 +19,7 @@ import { ApplicationDetailPage } from '@/pages/applications/[id]'
 import { ProjectsPage } from '@/pages/projects/index'
 import { ProjectDetailPage } from '@/pages/projects/[id]'
 import { NotesPage } from '@/pages/notes/index'
+import { checkScreenGuard } from '@/lib/screen-navigation-guard'
 import { MyTasksPanel } from '@/components/tasks/MyTasksPanel'
 import { MyProjectsPanel } from '@/components/dashboard/MyProjectsPanel'
 import { DashboardTasksList } from '@/components/dashboard/DashboardTasksList'
@@ -567,14 +568,21 @@ export function DashboardPage({
   }, [isCollapsed])
 
   const handleNavigate = useCallback((item: NavItem) => {
-    setActiveItem(item)
-    if (item !== 'applications') {
-      setSelectedApplicationId(null)
-      setSelectedApplicationName(null)
+    const proceed = () => {
+      setActiveItem(item)
+      if (item !== 'applications') {
+        setSelectedApplicationId(null)
+        setSelectedApplicationName(null)
+      }
+      if (item !== 'projects') {
+        setSelectedProjectId(null)
+      }
     }
-    if (item !== 'projects') {
-      setSelectedProjectId(null)
-    }
+
+    // Check if a screen-level guard (e.g., unsaved document edits) blocks navigation
+    if (!checkScreenGuard(proceed)) return
+
+    proceed()
   }, [])
 
   const handleSelectApplication = useCallback((application: Application) => {

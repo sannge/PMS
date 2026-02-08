@@ -84,6 +84,12 @@ function parseApiError(status: number, data: unknown): ApiError {
     if (typeof errorData.detail === 'string') {
       return { message: errorData.detail }
     }
+    if (typeof errorData.detail === 'object' && errorData.detail !== null) {
+      const detail = errorData.detail as Record<string, unknown>
+      if (typeof detail.message === 'string') {
+        return { message: detail.message }
+      }
+    }
     if (Array.isArray(errorData.detail)) {
       const firstError = errorData.detail[0]
       if (firstError && typeof firstError === 'object') {
@@ -107,7 +113,7 @@ function parseApiError(status: number, data: unknown): ApiError {
     case 404:
       return { message: 'Member not found.' }
     case 409:
-      return { message: 'User is already a member.' }
+      return { message: 'Conflict. Please try again.' }
     case 422:
       return { message: 'Validation error. Please check your input.' }
     case 500:
@@ -252,7 +258,7 @@ export function useUpdateAppMemberRole(
  */
 export function useRemoveAppMember(
   applicationId: string
-): UseMutationResult<void, Error, string, { previous?: ApplicationMember[] }> {
+): UseMutationResult<void, Error, string> {
   const token = useAuthStore((s) => s.token)
   const queryClient = useQueryClient()
 
@@ -271,27 +277,7 @@ export function useRemoveAppMember(
         throw new Error(parseApiError(response.status, response.data).message)
       }
     },
-    // Optimistic delete
-    onMutate: async (userId) => {
-      await queryClient.cancelQueries({ queryKey: queryKeys.appMembers(applicationId) })
-
-      const previous = queryClient.getQueryData<ApplicationMember[]>(
-        queryKeys.appMembers(applicationId)
-      )
-
-      queryClient.setQueryData<ApplicationMember[]>(
-        queryKeys.appMembers(applicationId),
-        (old) => old?.filter((m) => m.user_id !== userId)
-      )
-
-      return { previous }
-    },
-    onError: (_err, _vars, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(queryKeys.appMembers(applicationId), context.previous)
-      }
-    },
-    onSettled: () => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.appMembers(applicationId) })
     },
   })
@@ -431,7 +417,7 @@ export function useUpdateProjectMemberRole(
  */
 export function useRemoveProjectMember(
   projectId: string
-): UseMutationResult<void, Error, string, { previous?: ProjectMember[] }> {
+): UseMutationResult<void, Error, string> {
   const token = useAuthStore((s) => s.token)
   const queryClient = useQueryClient()
 
@@ -450,27 +436,7 @@ export function useRemoveProjectMember(
         throw new Error(parseApiError(response.status, response.data).message)
       }
     },
-    // Optimistic delete
-    onMutate: async (userId) => {
-      await queryClient.cancelQueries({ queryKey: queryKeys.projectMembers(projectId) })
-
-      const previous = queryClient.getQueryData<ProjectMember[]>(
-        queryKeys.projectMembers(projectId)
-      )
-
-      queryClient.setQueryData<ProjectMember[]>(
-        queryKeys.projectMembers(projectId),
-        (old) => old?.filter((m) => m.user_id !== userId)
-      )
-
-      return { previous }
-    },
-    onError: (_err, _vars, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(queryKeys.projectMembers(projectId), context.previous)
-      }
-    },
-    onSettled: () => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.projectMembers(projectId) })
     },
   })

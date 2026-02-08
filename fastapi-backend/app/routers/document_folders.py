@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..models.document import Document
 from ..models.document_folder import DocumentFolder
+from ..models.project import Project
 from ..models.user import User
 from ..schemas.document_folder import (
     FolderCreate,
@@ -33,11 +34,71 @@ from ..services.document_service import (
     validate_folder_depth,
     validate_scope,
 )
+from ..websocket.manager import manager, MessageType
 
 router = APIRouter(
     prefix="/document-folders",
     tags=["document-folders"],
 )
+
+
+def _get_folder_scope(folder: DocumentFolder) -> tuple[str, str]:
+    """Extract scope type and ID from a folder."""
+    if folder.application_id:
+        return "application", str(folder.application_id)
+    elif folder.project_id:
+        return "project", str(folder.project_id)
+    elif folder.user_id:
+        return "personal", str(folder.user_id)
+    return "unknown", ""
+
+
+async def _broadcast_folder_event(
+    message_type: MessageType,
+    folder: DocumentFolder,
+    actor_id: UUID | None = None,
+    extra_data: dict | None = None,
+    project_application_id: UUID | None = None,
+) -> None:
+    """Broadcast a folder event to the appropriate room(s).
+
+    Args:
+        message_type: The WebSocket message type
+        folder: The folder being affected
+        actor_id: The user who performed the action (for client-side filtering)
+        extra_data: Additional data to include in the broadcast
+        project_application_id: For project-scoped folders, the parent application ID
+            (so we can also broadcast to the application room)
+    """
+    scope, scope_id = _get_folder_scope(folder)
+
+    data = {
+        "folder_id": str(folder.id),
+        "scope": scope,
+        "scope_id": scope_id,
+        "parent_id": str(folder.parent_id) if folder.parent_id else None,
+        "actor_id": str(actor_id) if actor_id else None,
+        "timestamp": datetime.utcnow().isoformat(),
+        # Include application_id for project-scoped items so frontend can invalidate app queries
+        "application_id": str(project_application_id) if project_application_id else None,
+    }
+    if extra_data:
+        data.update(extra_data)
+
+    message = {"type": message_type.value, "data": data}
+
+    # Determine the room(s) to broadcast to
+    if folder.application_id:
+        await manager.broadcast_to_room(f"application:{folder.application_id}", message)
+    elif folder.project_id:
+        # Broadcast to project room
+        await manager.broadcast_to_room(f"project:{folder.project_id}", message)
+        # Also broadcast to application room so users viewing the app tree get updates
+        if project_application_id:
+            await manager.broadcast_to_room(f"application:{project_application_id}", message)
+    else:
+        # Personal folders - broadcast to user room
+        await manager.broadcast_to_room(f"user:{folder.user_id}", message)
 
 
 @router.get("/tree", response_model=list[FolderTreeNode])
@@ -125,6 +186,13 @@ async def create_folder(
     """
     await validate_scope(body.scope, body.scope_id, db)
 
+    # For project-scoped folders, get the parent application_id for broadcasting
+    project_application_id: UUID | None = None
+    if body.scope == "project":
+        project = await db.get(Project, UUID(body.scope_id))
+        if project:
+            project_application_id = project.application_id
+
     # Validate depth and get parent path
     new_depth, parent_path = await validate_folder_depth(db, body.parent_id)
 
@@ -144,6 +212,14 @@ async def create_folder(
 
     await db.flush()
     await db.refresh(folder)
+
+    # Broadcast folder created event
+    await _broadcast_folder_event(
+        MessageType.FOLDER_CREATED,
+        folder,
+        actor_id=current_user.id,
+        project_application_id=project_application_id,
+    )
 
     return FolderResponse.model_validate(folder)
 
@@ -213,6 +289,21 @@ async def update_folder(
     await db.flush()
     await db.refresh(folder)
 
+    # For project-scoped folders, get the parent application_id for broadcasting
+    project_application_id: UUID | None = None
+    if folder.project_id:
+        project = await db.get(Project, folder.project_id)
+        if project:
+            project_application_id = project.application_id
+
+    # Broadcast folder updated event
+    await _broadcast_folder_event(
+        MessageType.FOLDER_UPDATED,
+        folder,
+        actor_id=current_user.id,
+        project_application_id=project_application_id,
+    )
+
     return FolderResponse.model_validate(folder)
 
 
@@ -239,6 +330,21 @@ async def delete_folder(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Folder {folder_id} not found",
         )
+
+    # For project-scoped folders, get the parent application_id for broadcasting
+    project_application_id: UUID | None = None
+    if folder.project_id:
+        project = await db.get(Project, folder.project_id)
+        if project:
+            project_application_id = project.application_id
+
+    # Broadcast folder deleted event before deletion (need folder data)
+    await _broadcast_folder_event(
+        MessageType.FOLDER_DELETED,
+        folder,
+        actor_id=current_user.id,
+        project_application_id=project_application_id,
+    )
 
     await db.delete(folder)
     await db.flush()

@@ -14,9 +14,30 @@
 
 .ProseMirror {
   outline: none;
-  min-height: 300px;
+  height: 100%;
   padding: 1rem;
   font-family: Arial, sans-serif;
+}
+
+/* Enable text selection in view mode (when contenteditable="false") */
+.ProseMirror[contenteditable="false"] {
+  user-select: text;
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
+  cursor: text; /* Show text cursor (I-beam) to indicate text is selectable */
+}
+
+/* Allow links to be clickable in view mode */
+.ProseMirror[contenteditable="false"] a {
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+/* Allow task list checkboxes to show pointer in view mode (but not clickable) */
+.ProseMirror[contenteditable="false"] input[type="checkbox"] {
+  cursor: default;
+  pointer-events: none;
 }
 
 .ProseMirror p {

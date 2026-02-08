@@ -20,6 +20,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   type ReactNode,
 } from 'react'
 
@@ -38,14 +39,12 @@ interface KnowledgeBaseUIState {
   selectedDocumentId: string | null
   selectedFolderId: string | null
   searchQuery: string
-  /** Global search toggle - when true, indicates user wants to search all tabs.
-   * NOTE: For now (Phase 02.1), this is UI-only state. Both global and local
-   * modes use the same client-side filtering. Backend full-text search across
-   * all documents is deferred to Phase 9.
-   */
-  isGlobalSearch: boolean
   activeTagIds: string[]
 }
+
+/** Navigation guard callback. Returns true to allow navigation, false to block.
+ *  `proceed` is the action to run after the user confirms discard. */
+export type NavigationGuard = (targetDocId: string | null, proceed: () => void) => boolean
 
 interface KnowledgeBaseContextValue extends KnowledgeBaseUIState {
   setScope: (scope: ScopeType, scopeId: string | null) => void
@@ -57,10 +56,11 @@ interface KnowledgeBaseContextValue extends KnowledgeBaseUIState {
   selectDocument: (documentId: string | null) => void
   selectFolder: (folderId: string | null) => void
   setSearch: (query: string) => void
-  setGlobalSearch: (isGlobal: boolean) => void
   toggleTag: (tagId: string) => void
   clearTags: () => void
   resetSelection: () => void
+  registerNavigationGuard: (guard: NavigationGuard) => void
+  unregisterNavigationGuard: () => void
 }
 
 // ============================================================================
@@ -187,7 +187,6 @@ type KnowledgeBaseAction =
   | { type: 'SELECT_DOCUMENT'; documentId: string | null }
   | { type: 'SELECT_FOLDER'; folderId: string | null }
   | { type: 'SET_SEARCH'; query: string }
-  | { type: 'SET_GLOBAL_SEARCH'; isGlobal: boolean }
   | { type: 'TOGGLE_TAG'; tagId: string }
   | { type: 'CLEAR_TAGS' }
   | { type: 'RESET_SELECTION' }
@@ -263,9 +262,6 @@ function knowledgeBaseReducer(
     case 'SET_SEARCH':
       return { ...state, searchQuery: action.query }
 
-    case 'SET_GLOBAL_SEARCH':
-      return { ...state, isGlobalSearch: action.isGlobal }
-
     case 'TOGGLE_TAG': {
       const idx = state.activeTagIds.indexOf(action.tagId)
       const next =
@@ -311,6 +307,7 @@ export function KnowledgeBaseProvider({
 }: KnowledgeBaseProviderProps): JSX.Element {
   const prefix = storagePrefix ?? 'kb-'
   const keys = useMemo(() => buildStorageKeys(prefix), [prefix])
+  const navigationGuardRef = useRef<NavigationGuard | null>(null)
 
   const [state, dispatch] = useReducer(knowledgeBaseReducer, keys, (k) => {
     const storedScope = loadString(k.scope, 'personal')
@@ -331,7 +328,6 @@ export function KnowledgeBaseProvider({
       selectedDocumentId: null,
       selectedFolderId: null,
       searchQuery: '',
-      isGlobalSearch: false,
       activeTagIds: [],
     }
   })
@@ -367,6 +363,9 @@ export function KnowledgeBaseProvider({
   }, [])
 
   const setActiveTab = useCallback((tab: string) => {
+    // Tab change clears document selection — guard if editing
+    const guard = navigationGuardRef.current
+    if (guard && !guard(null, () => dispatch({ type: 'SET_ACTIVE_TAB', tab }))) return
     dispatch({ type: 'SET_ACTIVE_TAB', tab })
   }, [])
 
@@ -387,6 +386,9 @@ export function KnowledgeBaseProvider({
   }, [])
 
   const selectDocument = useCallback((documentId: string | null) => {
+    // Check navigation guard before dispatching
+    const guard = navigationGuardRef.current
+    if (guard && !guard(documentId, () => dispatch({ type: 'SELECT_DOCUMENT', documentId }))) return
     dispatch({ type: 'SELECT_DOCUMENT', documentId })
   }, [])
 
@@ -396,10 +398,6 @@ export function KnowledgeBaseProvider({
 
   const setSearch = useCallback((query: string) => {
     dispatch({ type: 'SET_SEARCH', query })
-  }, [])
-
-  const setGlobalSearch = useCallback((isGlobal: boolean) => {
-    dispatch({ type: 'SET_GLOBAL_SEARCH', isGlobal })
   }, [])
 
   const toggleTag = useCallback((tagId: string) => {
@@ -414,6 +412,14 @@ export function KnowledgeBaseProvider({
     dispatch({ type: 'RESET_SELECTION' })
   }, [])
 
+  const registerNavigationGuard = useCallback((guard: NavigationGuard) => {
+    navigationGuardRef.current = guard
+  }, [])
+
+  const unregisterNavigationGuard = useCallback(() => {
+    navigationGuardRef.current = null
+  }, [])
+
   const value: KnowledgeBaseContextValue = {
     ...state,
     setScope,
@@ -425,10 +431,11 @@ export function KnowledgeBaseProvider({
     selectDocument,
     selectFolder,
     setSearch,
-    setGlobalSearch,
     toggleTag,
     clearTags,
     resetSelection,
+    registerNavigationGuard,
+    unregisterNavigationGuard,
   }
 
   return (

@@ -31,8 +31,20 @@ import { useAuthStore, getAuthHeaders } from '@/contexts/auth-context'
 export interface TaskStatus {
   id: string
   name: string
-  color: string
-  position: number
+  category: string
+  rank: number
+}
+
+/** Derive a display color from task status category */
+function getStatusColor(status: TaskStatus | undefined): string {
+  if (!status) return '#888'
+  switch (status.category) {
+    case 'Todo': return '#6b7280'
+    case 'In Progress': return '#3b82f6'
+    case 'Done': return '#22c55e'
+    case 'Blocked': return '#ef4444'
+    default: return '#8b5cf6'
+  }
 }
 
 export interface Project {
@@ -283,7 +295,7 @@ export function ProjectStatusOverride({
                       >
                         <div
                           className="w-3 h-3 rounded-full"
-                          style={{ backgroundColor: status.color }}
+                          style={{ backgroundColor: getStatusColor(status) }}
                         />
                         <span>{status.name}</span>
                       </button>
@@ -435,13 +447,13 @@ function StatusBadge({ status, label, isOverride, isExpired }: StatusBadgeProps)
         isExpired && 'opacity-50'
       )}
       style={{
-        backgroundColor: status ? `${status.color}20` : undefined,
-        color: status?.color || 'inherit',
+        backgroundColor: status ? `${getStatusColor(status)}20` : undefined,
+        color: getStatusColor(status),
       }}
     >
       <div
         className="w-2 h-2 rounded-full"
-        style={{ backgroundColor: status?.color || '#888' }}
+        style={{ backgroundColor: getStatusColor(status) }}
       />
       {label}
       {isOverride && !isExpired && (

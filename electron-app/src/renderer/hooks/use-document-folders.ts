@@ -16,6 +16,7 @@ import {
 } from '@tanstack/react-query'
 import { useAuthStore } from '@/contexts/auth-context'
 import { queryKeys } from '@/lib/query-client'
+import { TEMP_ID_PREFIX } from './use-documents'
 
 // ============================================================================
 // Types
@@ -127,8 +128,11 @@ export function useFolderTree(
   const token = useAuthStore((s) => s.token)
   const userId = useAuthStore((s) => s.user?.id ?? null)
 
+  // For personal scope, use userId as the cache key so WebSocket invalidation works
+  const effectiveScopeId = scope === 'personal' ? (userId ?? '') : (scopeId ?? '')
+
   return useQuery({
-    queryKey: queryKeys.documentFolders(scope, scopeId ?? ''),
+    queryKey: queryKeys.documentFolders(scope, effectiveScopeId),
     queryFn: async () => {
       if (!window.electronAPI) {
         throw new Error('Electron API not available')
@@ -158,20 +162,66 @@ export function useFolderTree(
       !!token &&
       !!scope &&
       (scope === 'personal' || !!scopeId),
-    staleTime: 30 * 1000,
+    // Use default staleTime (30s) - fresh data won't refetch on focus, stale data will
     gcTime: 24 * 60 * 60 * 1000,
+    // No placeholderData - let isLoading be true on initial fetch so skeleton shows
   })
 }
 
 // ============================================================================
-// Mutation Hooks
+// Mutation Hooks (with Optimistic Updates)
 // ============================================================================
 
+// TEMP_ID_PREFIX imported from use-documents.ts
+
+// Helper to add a folder to tree (handles nested structure)
+function addFolderToTree(tree: FolderTreeNode[], folder: FolderTreeNode, parentId: string | null): FolderTreeNode[] {
+  if (!parentId) {
+    // Add to root level
+    return [...tree, folder]
+  }
+
+  // Find parent and add to its children
+  return tree.map(node => {
+    if (node.id === parentId) {
+      return { ...node, children: [...node.children, folder] }
+    }
+    if (node.children.length > 0) {
+      return { ...node, children: addFolderToTree(node.children, folder, parentId) }
+    }
+    return node
+  })
+}
+
+// Helper to update a folder in tree
+function updateFolderInTree(tree: FolderTreeNode[], folderId: string, updates: Partial<FolderTreeNode>): FolderTreeNode[] {
+  return tree.map(node => {
+    if (node.id === folderId) {
+      return { ...node, ...updates }
+    }
+    if (node.children.length > 0) {
+      return { ...node, children: updateFolderInTree(node.children, folderId, updates) }
+    }
+    return node
+  })
+}
+
+// Helper to remove a folder from tree
+function removeFolderFromTree(tree: FolderTreeNode[], folderId: string): FolderTreeNode[] {
+  return tree
+    .filter(node => node.id !== folderId)
+    .map(node => ({
+      ...node,
+      children: removeFolderFromTree(node.children, folderId),
+    }))
+}
+
 /**
- * Create a new folder.
+ * Create a new folder with optimistic update.
  */
 export function useCreateFolder(): UseMutationResult<DocumentFolder, Error, CreateFolderParams> {
   const token = useAuthStore((s) => s.token)
+  const userId = useAuthStore((s) => s.user?.id ?? null)
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -197,16 +247,59 @@ export function useCreateFolder(): UseMutationResult<DocumentFolder, Error, Crea
 
       return response.data
     },
-    onSuccess: (_data, params) => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.documentFolders(params.scope, params.scope_id),
-      })
+    onMutate: async (params) => {
+      const effectiveScopeId = params.scope === 'personal' ? (userId ?? '') : params.scope_id
+      const queryKey = queryKeys.documentFolders(params.scope, effectiveScopeId)
+
+      await queryClient.cancelQueries({ queryKey })
+
+      const previous = queryClient.getQueryData<FolderTreeNode[]>(queryKey)
+
+      // Create optimistic folder
+      const tempId = TEMP_ID_PREFIX + Date.now()
+      const tempFolder: FolderTreeNode = {
+        id: tempId,
+        name: params.name,
+        parent_id: params.parent_id ?? null,
+        materialized_path: tempId,
+        depth: params.parent_id ? 1 : 0, // Simplified depth
+        sort_order: 0,
+        children: [],
+        document_count: 0,
+      }
+
+      // Add to tree
+      queryClient.setQueryData<FolderTreeNode[]>(queryKey, (old) =>
+        addFolderToTree(old ?? [], tempFolder, params.parent_id ?? null)
+      )
+
+      return { previous, queryKey, tempId }
+    },
+    onSuccess: (data, params, context) => {
+      if (!context) return
+
+      // Replace temp folder with real folder
+      const effectiveScopeId = params.scope === 'personal' ? (userId ?? '') : params.scope_id
+      const queryKey = queryKeys.documentFolders(params.scope, effectiveScopeId)
+
+      queryClient.setQueryData<FolderTreeNode[]>(queryKey, (old) =>
+        updateFolderInTree(old ?? [], context.tempId, {
+          id: data.id,
+          materialized_path: data.materialized_path,
+          depth: data.depth,
+        })
+      )
+    },
+    onError: (_error, _params, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(context.queryKey, context.previous)
+      }
     },
   })
 }
 
 /**
- * Rename a folder.
+ * Rename a folder with optimistic update.
  */
 export function useRenameFolder(
   scope: string,
@@ -214,6 +307,9 @@ export function useRenameFolder(
 ): UseMutationResult<DocumentFolder, Error, RenameFolderParams> {
   const token = useAuthStore((s) => s.token)
   const queryClient = useQueryClient()
+  const userId = useAuthStore((s) => s.user?.id ?? null)
+
+  const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
 
   return useMutation({
     mutationFn: async ({ folderId, name }: RenameFolderParams) => {
@@ -233,16 +329,30 @@ export function useRenameFolder(
 
       return response.data
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.documentFolders(scope, scopeId),
-      })
+    onMutate: async ({ folderId, name }) => {
+      const queryKey = queryKeys.documentFolders(scope, effectiveScopeId)
+
+      await queryClient.cancelQueries({ queryKey })
+
+      const previous = queryClient.getQueryData<FolderTreeNode[]>(queryKey)
+
+      // Optimistically update folder name
+      queryClient.setQueryData<FolderTreeNode[]>(queryKey, (old) =>
+        updateFolderInTree(old ?? [], folderId, { name })
+      )
+
+      return { previous, queryKey }
+    },
+    onError: (_error, _params, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(context.queryKey, context.previous)
+      }
     },
   })
 }
 
 /**
- * Move a folder to a new parent.
+ * Move a folder to a new parent with optimistic update.
  */
 export function useMoveFolder(
   scope: string,
@@ -250,6 +360,9 @@ export function useMoveFolder(
 ): UseMutationResult<DocumentFolder, Error, MoveFolderParams> {
   const token = useAuthStore((s) => s.token)
   const queryClient = useQueryClient()
+  const userId = useAuthStore((s) => s.user?.id ?? null)
+
+  const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
 
   return useMutation({
     mutationFn: async ({ folderId, parent_id }: MoveFolderParams) => {
@@ -269,16 +382,48 @@ export function useMoveFolder(
 
       return response.data
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.documentFolders(scope, scopeId),
-      })
+    onMutate: async ({ folderId, parent_id }) => {
+      const queryKey = queryKeys.documentFolders(scope, effectiveScopeId)
+
+      await queryClient.cancelQueries({ queryKey })
+
+      const previous = queryClient.getQueryData<FolderTreeNode[]>(queryKey)
+
+      // For move, we need to:
+      // 1. Find and remove the folder from its current location
+      // 2. Add it to the new parent
+      if (previous) {
+        // Find the folder to move
+        const findFolder = (nodes: FolderTreeNode[], id: string): FolderTreeNode | null => {
+          for (const node of nodes) {
+            if (node.id === id) return node
+            const found = findFolder(node.children, id)
+            if (found) return found
+          }
+          return null
+        }
+
+        const folderToMove = findFolder(previous, folderId)
+        if (folderToMove) {
+          // Remove from old location, add to new
+          const removed = removeFolderFromTree(previous, folderId)
+          const updated = addFolderToTree(removed, { ...folderToMove, parent_id }, parent_id)
+          queryClient.setQueryData<FolderTreeNode[]>(queryKey, updated)
+        }
+      }
+
+      return { previous, queryKey }
+    },
+    onError: (_error, _params, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(context.queryKey, context.previous)
+      }
     },
   })
 }
 
 /**
- * Delete a folder.
+ * Delete a folder with optimistic update.
  */
 export function useDeleteFolder(
   scope: string,
@@ -286,6 +431,9 @@ export function useDeleteFolder(
 ): UseMutationResult<void, Error, string> {
   const token = useAuthStore((s) => s.token)
   const queryClient = useQueryClient()
+  const userId = useAuthStore((s) => s.user?.id ?? null)
+
+  const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
 
   return useMutation({
     mutationFn: async (folderId: string) => {
@@ -302,10 +450,24 @@ export function useDeleteFolder(
         throw new Error(parseApiError(response.status, response.data))
       }
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.documentFolders(scope, scopeId),
-      })
+    onMutate: async (folderId) => {
+      const queryKey = queryKeys.documentFolders(scope, effectiveScopeId)
+
+      await queryClient.cancelQueries({ queryKey })
+
+      const previous = queryClient.getQueryData<FolderTreeNode[]>(queryKey)
+
+      // Optimistically remove folder from tree
+      queryClient.setQueryData<FolderTreeNode[]>(queryKey, (old) =>
+        removeFolderFromTree(old ?? [], folderId)
+      )
+
+      return { previous, queryKey }
+    },
+    onError: (_error, _folderId, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(context.queryKey, context.previous)
+      }
     },
   })
 }
@@ -321,8 +483,7 @@ interface ReorderFolderParams {
 }
 
 /**
- * Reorder a folder by updating its sort_order.
- * Uses the existing PUT endpoint with sort_order field.
+ * Reorder a folder with optimistic update.
  */
 export function useReorderFolder(
   scope: string,
@@ -330,6 +491,9 @@ export function useReorderFolder(
 ): UseMutationResult<DocumentFolder, Error, ReorderFolderParams> {
   const token = useAuthStore((s) => s.token)
   const queryClient = useQueryClient()
+  const userId = useAuthStore((s) => s.user?.id ?? null)
+
+  const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
 
   return useMutation({
     mutationFn: async ({ folderId, sortOrder, parentId }: ReorderFolderParams) => {
@@ -356,10 +520,14 @@ export function useReorderFolder(
 
       return response.data
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.documentFolders(scope, scopeId),
-      })
+    onMutate: async ({ folderId, sortOrder }) => {
+      const queryKey = queryKeys.documentFolders(scope, effectiveScopeId)
+
+      // Optimistically update sort_order
+      queryClient.setQueryData<FolderTreeNode[]>(queryKey, (old) =>
+        updateFolderInTree(old ?? [], folderId, { sort_order: sortOrder })
+      )
     },
+    // No rollback needed for reorder
   })
 }

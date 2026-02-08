@@ -141,7 +141,7 @@ class TaskStatus(Base):
         "Project",
         back_populates="task_statuses",
         foreign_keys=[project_id],
-        lazy="joined",
+        lazy="select",
     )
 
     tasks = relationship(

@@ -154,9 +154,12 @@ export function useDocuments(
   const token = useAuthStore((s) => s.token)
   const userId = useAuthStore((s) => s.user?.id ?? null)
 
+  // For personal scope, use userId as the cache key so WebSocket invalidation works
+  const effectiveScopeId = scope === 'personal' ? (userId ?? '') : (scopeId ?? '')
+
   return useQuery({
     queryKey: [
-      ...queryKeys.documents(scope, scopeId ?? ''),
+      ...queryKeys.documents(scope, effectiveScopeId),
       options?.folderId ?? '',
       options?.includeUnfiled ?? false,
     ],
@@ -196,8 +199,9 @@ export function useDocuments(
       !!token &&
       !!scope &&
       (scope === 'personal' || !!scopeId),
-    staleTime: 30 * 1000,
+    // Use default staleTime (30s) - fresh data won't refetch on focus, stale data will
     gcTime: 24 * 60 * 60 * 1000,
+    // No placeholderData - let isLoading be true on initial fetch so skeleton shows
   })
 }
 
@@ -232,14 +236,27 @@ export function useDocument(id: string | null): UseQueryResult<Document, Error> 
 }
 
 // ============================================================================
-// Mutation Hooks
+// Mutation Hooks (with Optimistic Updates)
 // ============================================================================
 
+// Temporary ID prefix for optimistic items
+export const TEMP_ID_PREFIX = '__temp_'
+
 /**
- * Create a new document.
+ * Check if an ID is a temporary optimistic update ID.
+ * Temp IDs are created during optimistic updates before the server responds.
+ */
+export function isTempId(id: string | null | undefined): boolean {
+  return !!id && id.startsWith(TEMP_ID_PREFIX)
+}
+
+/**
+ * Create a new document with optimistic update.
+ * Adds document to cache immediately, replaces with server data on success.
  */
 export function useCreateDocument(): UseMutationResult<Document, Error, CreateDocumentParams> {
   const token = useAuthStore((s) => s.token)
+  const userId = useAuthStore((s) => s.user?.id ?? null)
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -265,24 +282,63 @@ export function useCreateDocument(): UseMutationResult<Document, Error, CreateDo
 
       return response.data
     },
-    onSuccess: (_data, params) => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.documents(params.scope, params.scope_id),
-      })
-      // Also invalidate folder tree since document_count changes
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.documentFolders(params.scope, params.scope_id),
-      })
-      // Invalidate scopes summary so tab visibility updates
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.scopesSummary(),
-      })
+    onMutate: async (params) => {
+      // Resolve effective scope ID for cache key
+      const effectiveScopeId = params.scope === 'personal' ? (userId ?? '') : params.scope_id
+
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({ queryKey: queryKeys.documents(params.scope, effectiveScopeId) })
+
+      // Snapshot previous value
+      const queryKey = [...queryKeys.documents(params.scope, effectiveScopeId), params.folder_id ?? '', true]
+      const previous = queryClient.getQueryData<DocumentListResponse>(queryKey)
+
+      // Create optimistic document
+      const tempId = TEMP_ID_PREFIX + Date.now()
+      const tempDoc: DocumentListItem = {
+        id: tempId,
+        title: params.title,
+        folder_id: params.folder_id ?? null,
+        sort_order: 0,
+        created_by: userId,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        deleted_at: null,
+      }
+
+      // Add to cache
+      queryClient.setQueryData<DocumentListResponse>(queryKey, (old) => ({
+        items: [tempDoc, ...(old?.items ?? [])],
+        next_cursor: old?.next_cursor ?? null,
+      }))
+
+      return { previous, queryKey, tempId, effectiveScopeId, scope: params.scope }
+    },
+    onSuccess: (data, _params, context) => {
+      if (!context) return
+
+      // Replace temp document with real document
+      queryClient.setQueryData<DocumentListResponse>(context.queryKey, (old) => ({
+        items: (old?.items ?? []).map((item) =>
+          item.id === context.tempId ? { ...item, id: data.id } : item
+        ),
+        next_cursor: old?.next_cursor ?? null,
+      }))
+
+      // Set the full document data
+      queryClient.setQueryData(queryKeys.document(data.id), data)
+    },
+    onError: (_error, _params, context) => {
+      // Rollback to previous state
+      if (context?.previous) {
+        queryClient.setQueryData(context.queryKey, context.previous)
+      }
     },
   })
 }
 
 /**
- * Rename a document (update title).
+ * Rename a document with optimistic update.
  */
 export function useRenameDocument(
   scope: string,
@@ -290,6 +346,9 @@ export function useRenameDocument(
 ): UseMutationResult<Document, Error, RenameDocumentParams> {
   const token = useAuthStore((s) => s.token)
   const queryClient = useQueryClient()
+  const userId = useAuthStore((s) => s.user?.id ?? null)
+
+  const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
 
   return useMutation({
     mutationFn: async ({ documentId, title, row_version }: RenameDocumentParams) => {
@@ -309,17 +368,50 @@ export function useRenameDocument(
 
       return response.data
     },
-    onSuccess: (updatedDoc) => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.documents(scope, scopeId),
-      })
-      queryClient.setQueryData(queryKeys.document(updatedDoc.id), updatedDoc)
+    onMutate: async ({ documentId, title }) => {
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({ queryKey: queryKeys.document(documentId) })
+
+      // Snapshot previous values
+      const previousDoc = queryClient.getQueryData<Document>(queryKeys.document(documentId))
+
+      // Optimistically update document
+      if (previousDoc) {
+        queryClient.setQueryData<Document>(queryKeys.document(documentId), {
+          ...previousDoc,
+          title,
+          updated_at: new Date().toISOString(),
+        })
+      }
+
+      // Also update in list caches
+      queryClient.setQueriesData<DocumentListResponse>(
+        { queryKey: queryKeys.documents(scope, effectiveScopeId), exact: false },
+        (old) => old ? {
+          ...old,
+          items: old.items.map((item) =>
+            item.id === documentId ? { ...item, title } : item
+          ),
+        } : old
+      )
+
+      return { previousDoc, documentId }
+    },
+    onSuccess: (data) => {
+      // Update with server data
+      queryClient.setQueryData(queryKeys.document(data.id), data)
+    },
+    onError: (_error, { documentId }, context) => {
+      // Rollback
+      if (context?.previousDoc) {
+        queryClient.setQueryData(queryKeys.document(documentId), context.previousDoc)
+      }
     },
   })
 }
 
 /**
- * Move a document to a different folder.
+ * Move a document to a different folder with optimistic update.
  */
 export function useMoveDocument(
   scope: string,
@@ -327,6 +419,9 @@ export function useMoveDocument(
 ): UseMutationResult<Document, Error, MoveDocumentParams> {
   const token = useAuthStore((s) => s.token)
   const queryClient = useQueryClient()
+  const userId = useAuthStore((s) => s.user?.id ?? null)
+
+  const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
 
   return useMutation({
     mutationFn: async ({ documentId, folder_id, row_version }: MoveDocumentParams) => {
@@ -346,20 +441,50 @@ export function useMoveDocument(
 
       return response.data
     },
-    onSuccess: (updatedDoc) => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.documents(scope, scopeId),
-      })
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.documentFolders(scope, scopeId),
-      })
-      queryClient.setQueryData(queryKeys.document(updatedDoc.id), updatedDoc)
+    onMutate: async ({ documentId, folder_id }) => {
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({ queryKey: queryKeys.document(documentId) })
+
+      // Snapshot previous values
+      const previousDoc = queryClient.getQueryData<Document>(queryKeys.document(documentId))
+
+      // Optimistically update document
+      if (previousDoc) {
+        queryClient.setQueryData<Document>(queryKeys.document(documentId), {
+          ...previousDoc,
+          folder_id,
+          updated_at: new Date().toISOString(),
+        })
+      }
+
+      // Update in list caches - move document to new folder
+      queryClient.setQueriesData<DocumentListResponse>(
+        { queryKey: queryKeys.documents(scope, effectiveScopeId), exact: false },
+        (old) => old ? {
+          ...old,
+          items: old.items.map((item) =>
+            item.id === documentId ? { ...item, folder_id } : item
+          ),
+        } : old
+      )
+
+      return { previousDoc, documentId }
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(queryKeys.document(data.id), data)
+      // Note: Folder tree document_count update handled by optimistic update in folder hooks
+    },
+    onError: (_error, { documentId }, context) => {
+      if (context?.previousDoc) {
+        queryClient.setQueryData(queryKeys.document(documentId), context.previousDoc)
+      }
     },
   })
 }
 
 /**
- * Soft delete a document (move to trash).
+ * Soft delete a document with optimistic update.
+ * Removes document from cache immediately, rollback on error.
  */
 export function useDeleteDocument(
   scope: string,
@@ -367,6 +492,9 @@ export function useDeleteDocument(
 ): UseMutationResult<void, Error, string> {
   const token = useAuthStore((s) => s.token)
   const queryClient = useQueryClient()
+  const userId = useAuthStore((s) => s.user?.id ?? null)
+
+  const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
 
   return useMutation({
     mutationFn: async (documentId: string) => {
@@ -383,17 +511,44 @@ export function useDeleteDocument(
         throw new Error(parseApiError(response.status, response.data))
       }
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.documents(scope, scopeId),
+    onMutate: async (documentId) => {
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({ queryKey: queryKeys.documents(scope, effectiveScopeId) })
+
+      // Snapshot all document list caches that might contain this document
+      const previousLists: Map<string, DocumentListResponse | undefined> = new Map()
+      queryClient.getQueriesData<DocumentListResponse>({
+        queryKey: queryKeys.documents(scope, effectiveScopeId),
+        exact: false,
+      }).forEach(([key, data]) => {
+        previousLists.set(JSON.stringify(key), data)
       })
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.documentFolders(scope, scopeId),
-      })
-      // Invalidate scopes summary so tab visibility updates
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.scopesSummary(),
-      })
+
+      // Optimistically remove from all list caches
+      queryClient.setQueriesData<DocumentListResponse>(
+        { queryKey: queryKeys.documents(scope, effectiveScopeId), exact: false },
+        (old) => old ? {
+          ...old,
+          items: old.items.filter((item) => item.id !== documentId),
+        } : old
+      )
+
+      // Remove from individual document cache
+      queryClient.removeQueries({ queryKey: queryKeys.document(documentId) })
+
+      return { previousLists, documentId }
+    },
+    // No onSuccess needed - optimistic update already removed from cache
+    onError: (_error, _documentId, context) => {
+      // Rollback all list caches
+      if (context?.previousLists) {
+        context.previousLists.forEach((data, keyStr) => {
+          const key = JSON.parse(keyStr) as readonly unknown[]
+          if (data) {
+            queryClient.setQueryData(key, data)
+          }
+        })
+      }
     },
   })
 }
@@ -410,8 +565,8 @@ interface ReorderDocumentParams {
 }
 
 /**
- * Reorder a document by updating its sort_order.
- * Uses the existing PUT endpoint with sort_order field.
+ * Reorder a document with optimistic update.
+ * Updates sort_order in cache immediately.
  */
 export function useReorderDocument(
   scope: string,
@@ -419,6 +574,9 @@ export function useReorderDocument(
 ): UseMutationResult<Document, Error, ReorderDocumentParams> {
   const token = useAuthStore((s) => s.token)
   const queryClient = useQueryClient()
+  const userId = useAuthStore((s) => s.user?.id ?? null)
+
+  const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
 
   return useMutation({
     mutationFn: async ({ documentId, sortOrder, folderId, rowVersion }: ReorderDocumentParams) => {
@@ -446,15 +604,22 @@ export function useReorderDocument(
 
       return response.data
     },
-    onSuccess: (updatedDoc) => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.documents(scope, scopeId),
-      })
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.documentFolders(scope, scopeId),
-      })
-      queryClient.setQueryData(queryKeys.document(updatedDoc.id), updatedDoc)
+    onMutate: async ({ documentId, sortOrder }) => {
+      // Optimistically update sort_order in list caches
+      queryClient.setQueriesData<DocumentListResponse>(
+        { queryKey: queryKeys.documents(scope, effectiveScopeId), exact: false },
+        (old) => old ? {
+          ...old,
+          items: old.items.map((item) =>
+            item.id === documentId ? { ...item, sort_order: sortOrder } : item
+          ),
+        } : old
+      )
     },
+    onSuccess: (data) => {
+      queryClient.setQueryData(queryKeys.document(data.id), data)
+    },
+    // No rollback needed for reorder - worst case user refreshes
   })
 }
 
@@ -498,5 +663,45 @@ export function useApplicationsWithDocs(): UseQueryResult<ScopesSummaryResponse,
     },
     staleTime: 30_000,
     enabled: !!token,
+  })
+}
+
+// ============================================================================
+// Projects With Content Hook
+// ============================================================================
+
+export interface ProjectsWithContentResponse {
+  project_ids: string[]
+}
+
+/**
+ * Fetch project IDs that have knowledge content (documents or folders).
+ * Used to filter out empty projects in the application tree.
+ */
+export function useProjectsWithContent(
+  applicationId: string | null
+): UseQueryResult<ProjectsWithContentResponse, Error> {
+  const token = useAuthStore((s) => s.token)
+
+  return useQuery({
+    queryKey: ['projects-with-content', applicationId],
+    queryFn: async () => {
+      if (!window.electronAPI || !applicationId) {
+        throw new Error('Electron API not available or no application ID')
+      }
+
+      const response = await window.electronAPI.get<ProjectsWithContentResponse>(
+        `/api/documents/projects-with-content?application_id=${applicationId}`,
+        getAuthHeaders(token)
+      )
+
+      if (response.status !== 200) {
+        throw new Error(parseApiError(response.status, response.data))
+      }
+
+      return response.data
+    },
+    staleTime: 30_000,
+    enabled: !!token && !!applicationId,
   })
 }

@@ -20,7 +20,7 @@
  * - Real-time updates via WebSocket
  */
 
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import {
   X,
@@ -47,7 +47,7 @@ import {
   Save,
   RotateCcw,
 } from 'lucide-react'
-import { isTaskDone, type Task, type TaskUpdate, type TaskPriority, type TaskType } from '@/hooks/use-queries'
+import { isTaskDone, useTaskStatuses, type Task, type TaskUpdate, type TaskPriority, type TaskType } from '@/hooks/use-queries'
 import { useProjectMembers, useAppMembers } from '@/hooks/use-members'
 import { useAuthStore } from '@/contexts/auth-context'
 import { TaskStatusBadge } from './task-status-badge'
@@ -508,6 +508,16 @@ export function TaskDetail({
   // Project members for assignee selector (auto-fetches when enabled)
   const { data: projectMembers = [] } = useProjectMembers(isOpen ? task.project_id : undefined)
 
+  // Task statuses for status name-to-ID lookup
+  const { data: taskStatuses = [] } = useTaskStatuses(isOpen ? task.project_id : undefined)
+  const statusNameToId = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const s of taskStatuses) {
+      map.set(s.name, s.id)
+    }
+    return map
+  }, [taskStatuses])
+
   // Application members for @mentions (includes viewers) (auto-fetches when enabled)
   const { data: appMembersData = [] } = useAppMembers(isOpen ? applicationId : undefined)
 
@@ -624,14 +634,17 @@ export function TaskDetail({
     }
   }, [isOpen, onClose, showDeleteConfirm])
 
-  // Handle status change
+  // Handle status change - resolve status name to UUID before updating
   const handleStatusChange = useCallback(
-    (status: string) => {
+    (statusName: string) => {
       if (onUpdate) {
-        onUpdate({ task_status_id: status })
+        const statusId = statusNameToId.get(statusName)
+        if (statusId) {
+          onUpdate({ task_status_id: statusId })
+        }
       }
     },
-    [onUpdate]
+    [onUpdate, statusNameToId]
   )
 
   // Handle priority change
@@ -833,7 +846,7 @@ export function TaskDetail({
               {/* Status Badge - Prominent (disabled for archived tasks) */}
               <div className="flex items-center gap-3">
                 <TaskStatusBadge
-                  status={task.task_status?.name as any}
+                  status={(task.task_status?.name || 'Todo') as 'Todo' | 'In Progress' | 'In Review' | 'Issue' | 'Done'}
                   onStatusChange={onUpdate && !isArchived ? handleStatusChange : undefined}
                   disabled={isUpdating || isArchived}
                   size="lg"

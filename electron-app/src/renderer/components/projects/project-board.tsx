@@ -85,9 +85,17 @@ export interface Task {
   due_date: string | null
   created_at: string
   updated_at: string
+  completed_at: string | null
+  archived_at: string | null
   subtasks_count?: number
   task_status_id: string
   task_status: { id: string; name: string; category: string; rank: number }
+  task_rank: string | null
+  row_version: number
+  assignee?: { id: string; display_name?: string | null; avatar_url?: string | null } | null
+  reporter?: { id: string; display_name?: string | null; avatar_url?: string | null } | null
+  checklist_total: number
+  checklist_done: number
 }
 
 /**
@@ -688,10 +696,12 @@ export function ProjectBoard({
     }
   }, [fetchTasks])
 
-  // Group tasks by status for board view
+  // Group tasks by status for board view, sorted by task_rank
   const tasksByStatus = BOARD_COLUMNS.reduce(
     (acc, column) => {
-      acc[column.id] = tasks.filter((t) => t.task_status?.name === column.id)
+      acc[column.id] = tasks
+        .filter((t) => t.task_status?.name === column.id)
+        .sort((a, b) => (a.task_rank ?? '').localeCompare(b.task_rank ?? ''))
       return acc
     },
     {} as Record<string, Task[]>

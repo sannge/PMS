@@ -29,7 +29,6 @@ from contextlib import asynccontextmanager
 from .database import warmup_connection_pool
 from .routers import application_members_router, applications_router, auth_router, checklists_router, comments_router, document_folders_router, document_locks_router, document_tags_router, documents_router, files_router, invitations_router, notifications_router, project_assignments_router, project_members_router, projects_router, tasks_router, users_router
 from .websocket import manager, route_incoming_message, check_room_access
-from .websocket.presence import presence_manager
 from .services.auth_service import decode_access_token
 from .services.redis_service import redis_service
 from .services.archive_service import archive_service
@@ -63,25 +62,12 @@ async def lifespan(app: FastAPI):
             )
         logger.warning(f"Redis connection failed, running in single-worker mode: {e}")
 
-    logger.info("Starting presence manager...")
-    await presence_manager.start()
-    logger.info("Presence manager started")
-
-    logger.info("Starting archive service...")
-    await archive_service.start()
-    logger.info("Archive service started (runs every 12 hours)")
+    # Note: Background jobs (archive, presence cleanup) are handled by ARQ worker
+    # Run separately with: arq app.worker.WorkerSettings
 
     yield
 
     # Shutdown
-    logger.info("Stopping archive service...")
-    await archive_service.stop()
-    logger.info("Archive service stopped")
-
-    logger.info("Stopping presence manager...")
-    await presence_manager.stop()
-    logger.info("Presence manager stopped")
-
     logger.info("Disconnecting from Redis...")
     await redis_service.disconnect()
     logger.info("Redis disconnected")
@@ -182,7 +168,8 @@ async def health_check():
             "rooms": manager.total_rooms,
         },
         "scheduler": {
-            "running": archive_service.is_running,
+            "type": "arq",
+            "note": "Run ARQ worker separately: arq app.worker.WorkerSettings",
         },
     }
 

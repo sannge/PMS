@@ -111,7 +111,7 @@ async def verify_task_access(
         )
 
     # Business rule: Done tasks cannot have checklists modified
-    if require_edit and task.status == "done":
+    if require_edit and task.task_status and task.task_status.category == "Done":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot modify checklists on a completed task. Reopen the task first.",

@@ -21,7 +21,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.config import settings
 from app.database import Base, get_db
 from app.main import app
-from app.models import Application, Note, Notification, Project, Task, User
+from app.models import Application, Notification, Project, Task, User
+from app.models.task_status import TaskStatus, StatusName, STATUS_CATEGORY_MAP
 from app.services.auth_service import create_access_token
 
 
@@ -40,7 +41,7 @@ def get_test_password_hash(password: str) -> str:
     return hashed.decode('utf-8')
 
 
-# Use PostgreSQL test database
+# Use test database (pmsdb_test) - NEVER use main database for tests!
 TEST_DATABASE_URL = settings.test_database_url
 
 
@@ -218,7 +219,7 @@ async def test_application(db_session: AsyncSession, test_user: User) -> Applica
 
 @pytest_asyncio.fixture
 async def test_project(db_session: AsyncSession, test_application: Application) -> Project:
-    """Create a test project."""
+    """Create a test project with default statuses."""
     project = Project(
         id=uuid4(),
         application_id=test_application.id,
@@ -228,13 +229,33 @@ async def test_project(db_session: AsyncSession, test_application: Application) 
         project_type="kanban",
     )
     db_session.add(project)
+    await db_session.flush()
+
+    # Create default statuses for the project
+    statuses = TaskStatus.create_default_statuses(project.id)
+    for status in statuses:
+        db_session.add(status)
+
     await db_session.commit()
     await db_session.refresh(project)
     return project
 
 
 @pytest_asyncio.fixture
-async def test_task(db_session: AsyncSession, test_project: Project, test_user: User) -> Task:
+async def test_task_status_todo(db_session: AsyncSession, test_project: Project) -> TaskStatus:
+    """Get the Todo status for the test project."""
+    from sqlalchemy import select
+    result = await db_session.execute(
+        select(TaskStatus).where(
+            TaskStatus.project_id == test_project.id,
+            TaskStatus.name == StatusName.TODO.value,
+        )
+    )
+    return result.scalar_one()
+
+
+@pytest_asyncio.fixture
+async def test_task(db_session: AsyncSession, test_project: Project, test_user: User, test_task_status_todo: TaskStatus) -> Task:
     """Create a test task."""
     task = Task(
         id=uuid4(),
@@ -243,7 +264,7 @@ async def test_task(db_session: AsyncSession, test_project: Project, test_user: 
         title="Test Task",
         description="A test task description",
         task_type="story",
-        status="todo",
+        task_status_id=test_task_status_todo.id,
         priority="medium",
         reporter_id=test_user.id,
     )
@@ -251,23 +272,6 @@ async def test_task(db_session: AsyncSession, test_project: Project, test_user: 
     await db_session.commit()
     await db_session.refresh(task)
     return task
-
-
-@pytest_asyncio.fixture
-async def test_note(db_session: AsyncSession, test_application: Application, test_user: User) -> Note:
-    """Create a test note."""
-    note = Note(
-        id=uuid4(),
-        application_id=test_application.id,
-        title="Test Note",
-        content="<p>Test note content</p>",
-        tab_order=0,
-        created_by=test_user.id,
-    )
-    db_session.add(note)
-    await db_session.commit()
-    await db_session.refresh(note)
-    return note
 
 
 @pytest_asyncio.fixture

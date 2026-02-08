@@ -206,6 +206,10 @@ export interface TaskMovePayload {
   targetStatusId: string
   /** Target status name for optimistic updates */
   targetStatusName?: string
+  /** Target status category for optimistic done-check */
+  targetStatusCategory?: string
+  /** Target status rank for optimistic updates */
+  targetStatusRank?: number
   /** Direct rank string (optional, auto-calculated if not provided) */
   targetRank?: string
   /** Task ID to position before (optional) */
@@ -803,14 +807,19 @@ export function useUpdateTask(
 
       return { previous }
     },
+    onSuccess: (updatedTask) => {
+      // Sync authoritative server response to cache
+      queryClient.setQueryData(queryKeys.task(taskId), updatedTask)
+      queryClient.setQueryData<Task[]>(queryKeys.tasks(projectId), (old) =>
+        old?.map((t) => (t.id === taskId ? updatedTask : t))
+      )
+    },
     onError: (_err, _newData, context) => {
       // Rollback on error
       if (context?.previous) {
         queryClient.setQueryData(queryKeys.task(taskId), context.previous)
       }
-    },
-    onSettled: () => {
-      // Refetch to ensure consistency
+      // Re-sync cache after failed optimistic update
       queryClient.invalidateQueries({ queryKey: queryKeys.task(taskId) })
       queryClient.invalidateQueries({ queryKey: queryKeys.tasks(projectId) })
     },
@@ -932,7 +941,7 @@ export function useMoveTask(
       return response.data
     },
     // Optimistic update for instant drag-drop feedback
-    onMutate: async ({ taskId, targetStatusName }) => {
+    onMutate: async ({ taskId, targetStatusId, targetStatusName, targetStatusCategory, targetStatusRank }) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.tasks(projectId) })
 
       const previous = queryClient.getQueryData<Task[]>(queryKeys.tasks(projectId))
@@ -942,26 +951,39 @@ export function useMoveTask(
       queryClient.setQueryData<Task[]>(queryKeys.tasks(projectId), (old) =>
         old?.map((t) => {
           if (t.id !== taskId) return t
-          const isDone = targetStatusName === 'Done'
+          const isDone = (targetStatusCategory ?? targetStatusName) === 'Done'
           const wasDone = t.task_status.category === 'Done'
-          // Set completed_at when moving to done, clear when moving away
           const completed_at = isDone
             ? (t.completed_at || now)
             : (wasDone ? null : t.completed_at)
-          return { ...t, completed_at }
+          return {
+            ...t,
+            task_status_id: targetStatusId,
+            task_status: {
+              id: targetStatusId,
+              name: targetStatusName ?? t.task_status.name,
+              category: targetStatusCategory ?? t.task_status.category,
+              rank: targetStatusRank ?? t.task_status.rank,
+            },
+            completed_at,
+          }
         })
       )
 
       return { previous }
+    },
+    onSuccess: (movedTask) => {
+      // Sync authoritative server response to cache
+      queryClient.setQueryData<Task[]>(queryKeys.tasks(projectId), (old) =>
+        old?.map((t) => (t.id === movedTask.id ? movedTask : t))
+      )
     },
     onError: (_err, _vars, context) => {
       // Rollback on error
       if (context?.previous) {
         queryClient.setQueryData(queryKeys.tasks(projectId), context.previous)
       }
-    },
-    onSettled: () => {
-      // Refetch to ensure consistency
+      // Re-sync cache after failed optimistic update
       queryClient.invalidateQueries({ queryKey: queryKeys.tasks(projectId) })
     },
   })
@@ -1669,7 +1691,7 @@ export function useMyTasksCrossApp(
         searchParams.set('sort_order', params.sortOrder)
       }
       if (params?.status) {
-        searchParams.set('status', params.status)
+        searchParams.set('status_name', params.status)
       }
 
       const response = await window.electronAPI.get<TaskCursorPage>(

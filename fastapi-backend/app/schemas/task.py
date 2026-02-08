@@ -18,16 +18,6 @@ class TaskType(str, Enum):
     TASK = "task"
 
 
-class TaskStatus(str, Enum):
-    """Task status enumeration."""
-
-    TODO = "todo"
-    IN_PROGRESS = "in_progress"
-    IN_REVIEW = "in_review"
-    ISSUE = "issue"
-    DONE = "done"
-
-
 class TaskPriority(str, Enum):
     """Task priority enumeration."""
 
@@ -36,6 +26,17 @@ class TaskPriority(str, Enum):
     MEDIUM = "medium"
     HIGH = "high"
     HIGHEST = "highest"
+
+
+class TaskStatusInfo(BaseModel):
+    """Nested task status object in task responses."""
+
+    id: UUID = Field(..., description="Task status ID")
+    name: str = Field(..., description="Status name (e.g. 'Todo', 'In Progress')")
+    category: str = Field(..., description="Status category (Todo, Active, Issue, Done)")
+    rank: int = Field(..., description="Display ordering rank")
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TaskUserInfo(BaseModel):
@@ -69,11 +70,6 @@ class TaskBase(BaseModel):
         TaskType.STORY,
         description="Type of task",
         examples=["story", "bug"],
-    )
-    status: TaskStatus = Field(
-        TaskStatus.TODO,
-        description="Current task status",
-        examples=["todo", "in_progress"],
     )
     priority: TaskPriority = Field(
         TaskPriority.MEDIUM,
@@ -119,7 +115,7 @@ class TaskCreate(TaskBase):
     )
     task_status_id: Optional[UUID] = Field(
         None,
-        description="ID of the task status (FK to TaskStatuses)",
+        description="ID of the task status (FK to TaskStatuses). If not provided, defaults to project's 'Todo' status.",
     )
     task_rank: Optional[str] = Field(
         None,
@@ -146,10 +142,6 @@ class TaskUpdate(BaseModel):
     task_type: Optional[TaskType] = Field(
         None,
         description="Type of task",
-    )
-    status: Optional[TaskStatus] = Field(
-        None,
-        description="Current task status",
     )
     priority: Optional[TaskPriority] = Field(
         None,
@@ -235,9 +227,13 @@ class TaskResponse(TaskBase):
         None,
         description="ID of the sprint",
     )
-    task_status_id: Optional[UUID] = Field(
-        None,
+    task_status_id: UUID = Field(
+        ...,
         description="ID of the task status (FK to TaskStatuses)",
+    )
+    task_status: Optional[TaskStatusInfo] = Field(
+        None,
+        description="Nested task status object with name, category, and rank",
     )
     task_rank: Optional[str] = Field(
         None,
@@ -305,10 +301,6 @@ class TaskMove(BaseModel):
     """
 
     # Status change (optional - for moving between columns)
-    target_status: Optional[TaskStatus] = Field(
-        None,
-        description="New status to move the task to (for column change)",
-    )
     target_status_id: Optional[UUID] = Field(
         None,
         description="New task_status_id to move the task to (FK to TaskStatuses)",

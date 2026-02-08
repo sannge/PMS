@@ -15,7 +15,7 @@
  * - Loading and error states
  */
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import {
   CheckCircle2,
@@ -34,6 +34,7 @@ import type {
   TaskUpdate,
   TaskType,
   TaskPriority,
+  TaskStatus,
 } from '@/hooks/use-queries'
 import { getStatusOptions } from './task-status-badge'
 import { RichTextEditor } from '@/components/editor/RichTextEditor'
@@ -62,6 +63,10 @@ export interface TaskFormProps {
    * Initial status when creating a task
    */
   initialStatus?: string
+  /**
+   * Project task statuses for resolving name → UUID
+   */
+  taskStatuses?: TaskStatus[]
   /**
    * Available assignees (project members)
    */
@@ -174,6 +179,7 @@ function formatDateForInput(dateString: string | null): string {
 export function TaskForm({
   task,
   initialStatus = 'Todo',
+  taskStatuses = [],
   assignees = [],
   isSubmitting = false,
   error,
@@ -181,6 +187,15 @@ export function TaskForm({
   onCancel,
 }: TaskFormProps): JSX.Element {
   const isEditMode = !!task
+
+  // Build status name → UUID lookup
+  const statusNameToId = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const s of taskStatuses) {
+      map.set(s.name, s.id)
+    }
+    return map
+  }, [taskStatuses])
 
   // Form state
   const [formData, setFormData] = useState<FormData>({
@@ -262,7 +277,10 @@ export function TaskForm({
           updateData.task_type = formData.task_type
         }
         if (formData.status !== task?.task_status?.name) {
-          // Status change handled via task_status_id, not status string
+          const statusId = statusNameToId.get(formData.status)
+          if (statusId) {
+            updateData.task_status_id = statusId
+          }
         }
         if (formData.priority !== task?.priority) {
           updateData.priority = formData.priority
@@ -279,6 +297,7 @@ export function TaskForm({
         }
         onSubmit(updateData)
       } else {
+        const statusId = statusNameToId.get(formData.status)
         const createData: TaskCreate = {
           title: formData.title.trim(),
           description: formData.description.trim() || undefined,
@@ -287,6 +306,7 @@ export function TaskForm({
           story_points: storyPoints,
           due_date: formData.due_date || undefined,
           assignee_id: formData.assignee_id || undefined,
+          task_status_id: statusId || undefined,
         }
         onSubmit(createData)
       }

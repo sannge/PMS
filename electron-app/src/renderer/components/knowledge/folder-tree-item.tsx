@@ -6,13 +6,13 @@
  * Handles expand/collapse, selection, right-click context menu, and inline rename.
  * Shows lock indicator when a document is being edited by another user.
  *
- * Lock status is queried per-document using useDocumentLockStatus hook
- * with real-time WebSocket updates for instant feedback.
+ * Lock status is queried per-document using a separate DocumentLockIndicator
+ * component to avoid hook count issues when tree items are added/removed.
  *
  * Drag-and-drop: Uses @dnd-kit useSortable hook for drag feedback.
  */
 
-import { useRef, useEffect, useState, useCallback } from 'react'
+import { useRef, useEffect, useState, useCallback, memo } from 'react'
 import {
   Folder,
   FolderOpen,
@@ -22,9 +22,54 @@ import {
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/contexts/auth-context'
 import { useDocumentLockStatus } from '@/hooks/use-document-lock'
 import type { FolderTreeNode } from '@/hooks/use-document-folders'
 import type { DocumentListItem } from '@/hooks/use-documents'
+
+// ============================================================================
+// Lock Indicator Component (isolated hooks to avoid hook count issues)
+// ============================================================================
+
+interface DocumentLockIndicatorProps {
+  documentId: string
+  hidden?: boolean
+}
+
+/**
+ * Separate component for document lock indicator to isolate the hook.
+ * This prevents "Rendered fewer hooks than expected" errors when
+ * tree items are dynamically added/removed during folder expansion.
+ *
+ * Uses React.memo to prevent unnecessary re-renders when parent re-renders
+ * but documentId hasn't changed.
+ */
+const DocumentLockIndicator = memo(function DocumentLockIndicator({
+  documentId,
+  hidden = false,
+}: DocumentLockIndicatorProps): JSX.Element | null {
+  const userId = useAuthStore((s) => s.user?.id)
+  const { isLocked, lockHolder } = useDocumentLockStatus(documentId)
+
+  // Hide if not locked, during rename, or if locked by the current user
+  if (hidden || !isLocked || lockHolder?.userId === userId) return null
+
+  return (
+    <span
+      className="shrink-0 flex items-center gap-1 text-red-500/80"
+      title={lockHolder?.userName ? `Editing: ${lockHolder.userName}` : 'Locked'}
+    >
+      <Lock className="h-3.5 w-3.5" />
+      {lockHolder?.userName && (
+        <span className="text-[11px] truncate max-w-[80px]">{lockHolder.userName}</span>
+      )}
+    </span>
+  )
+})
+
+// ============================================================================
+// Main Component
+// ============================================================================
 
 export interface FolderTreeItemProps {
   node: FolderTreeNode | DocumentListItem
@@ -70,11 +115,6 @@ export function FolderTreeItem({
   const displayName = type === 'folder'
     ? (node as FolderTreeNode).name
     : (node as DocumentListItem).title
-
-  // Query lock status for documents (hook is disabled for folders via null id)
-  const { isLocked, lockHolder } = useDocumentLockStatus(
-    type === 'document' ? node.id : null
-  )
 
   // Sortable hook for drag-and-drop
   const {
@@ -196,13 +236,8 @@ export function FolderTreeItem({
       )}
 
       {/* Lock indicator for documents being edited */}
-      {type === 'document' && isLocked && !isRenaming && (
-        <span
-          className="shrink-0 text-amber-500"
-          title={lockHolder?.userName ? `Editing: ${lockHolder.userName}` : 'Locked'}
-        >
-          <Lock className="h-3.5 w-3.5" />
-        </span>
+      {type === 'document' && (
+        <DocumentLockIndicator documentId={node.id} hidden={isRenaming} />
       )}
     </div>
   )

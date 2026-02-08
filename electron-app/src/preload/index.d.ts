@@ -154,6 +154,7 @@ export interface ElectronAPI {
   // Before-quit save coordination
   onBeforeQuit: (callback: () => void) => () => void
   confirmQuitSave: () => void
+  cancelQuit: () => void
 }
 
 declare global {

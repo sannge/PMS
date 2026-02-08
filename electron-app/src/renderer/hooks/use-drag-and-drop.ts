@@ -112,11 +112,6 @@ export interface UseDragAndDropReturn {
 export function getStatusFromId(id: UniqueIdentifier): string | null {
   const strId = String(id)
   const validStatuses = [
-    'todo',
-    'in_progress',
-    'in_review',
-    'issue',
-    'done',
     'Todo',
     'In Progress',
     'In Review',

@@ -113,18 +113,17 @@ function createWindow(): void {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
-  // Before-quit save coordination: intercept close, ask renderer to save, wait up to 3s
+  // Before-quit save coordination: intercept close, ask renderer to save/discard/cancel
   mainWindow.on('close', (event) => {
-    if (isQuitting) return // Allow close after save completes or timeout
+    if (isQuitting) return // Allow close after save completes or renderer responds
 
     event.preventDefault()
     mainWindow?.webContents.send('before-quit-save')
+  })
 
-    // Timeout: quit anyway after 3 seconds (IndexedDB draft is the fallback)
-    setTimeout(() => {
-      isQuitting = true
-      mainWindow?.close()
-    }, 3000)
+  // Renderer can cancel the quit (user chose "Keep editing")
+  ipcMain.on('quit-cancelled', () => {
+    // No-op: just prevents the close from proceeding
   })
 
   // Clean up reference when window is closed
@@ -349,7 +348,7 @@ app.whenReady().then(() => {
   // Create the main window
   createWindow()
 
-  // Listen for renderer confirming save is complete before quit
+  // Listen for renderer confirming save/discard is complete before quit
   ipcMain.on('quit-save-complete', () => {
     isQuitting = true
     mainWindow?.close()

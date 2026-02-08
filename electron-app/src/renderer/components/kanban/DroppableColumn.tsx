@@ -65,49 +65,50 @@ export interface DroppableColumnProps {
 // ============================================================================
 
 const COLUMN_ICONS: Record<string, JSX.Element> = {
-  todo: <Circle className="h-4 w-4" />,
-  in_progress: <Timer className="h-4 w-4" />,
-  in_review: <Eye className="h-4 w-4" />,
-  issue: <XCircle className="h-4 w-4" />,
-  done: <CheckCircle2 className="h-4 w-4" />,
+  Todo: <Circle className="h-4 w-4" />,
+  'In Progress': <Timer className="h-4 w-4" />,
+  'In Review': <Eye className="h-4 w-4" />,
+  Issue: <XCircle className="h-4 w-4" />,
+  Done: <CheckCircle2 className="h-4 w-4" />,
 }
 
 /**
- * Default column configurations
+ * Default column configurations.
+ * Column IDs match TaskStatus.name values from the backend.
  */
 export const DEFAULT_COLUMNS: ColumnConfig[] = [
   {
-    id: 'todo',
+    id: 'Todo',
     title: 'To Do',
-    icon: COLUMN_ICONS.todo,
+    icon: COLUMN_ICONS.Todo,
     color: 'bg-slate-500',
     bgColor: 'bg-slate-500/10',
   },
   {
-    id: 'in_progress',
+    id: 'In Progress',
     title: 'In Progress',
-    icon: COLUMN_ICONS.in_progress,
+    icon: COLUMN_ICONS['In Progress'],
     color: 'bg-blue-500',
     bgColor: 'bg-blue-500/10',
   },
   {
-    id: 'in_review',
+    id: 'In Review',
     title: 'In Review',
-    icon: COLUMN_ICONS.in_review,
+    icon: COLUMN_ICONS['In Review'],
     color: 'bg-purple-500',
     bgColor: 'bg-purple-500/10',
   },
   {
-    id: 'issue',
+    id: 'Issue',
     title: 'Issue',
-    icon: COLUMN_ICONS.issue,
+    icon: COLUMN_ICONS.Issue,
     color: 'bg-red-500',
     bgColor: 'bg-red-500/10',
   },
   {
-    id: 'done',
+    id: 'Done',
     title: 'Done',
-    icon: COLUMN_ICONS.done,
+    icon: COLUMN_ICONS.Done,
     color: 'bg-green-500',
     bgColor: 'bg-green-500/10',
   },
