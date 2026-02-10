@@ -114,3 +114,6 @@ Desktop.ini
 
 temp-user-data-*/
 tmp-user-data-*/
+tmp-e2e-data/
+tmp-e2e-compiled/
+test-results/
