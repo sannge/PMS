@@ -23,11 +23,13 @@ import { useApplicationsWithDocs } from '@/hooks/use-documents'
 import { useEditMode } from '@/hooks/use-edit-mode'
 import { useWebSocket, WebSocketClient, MessageType } from '@/hooks/use-websocket'
 import { queryKeys } from '@/lib/query-client'
+import { EditorSkeleton } from '@/components/knowledge/knowledge-panel'
 import { KnowledgeSidebar } from '@/components/knowledge/knowledge-sidebar'
 import { KnowledgeTabBar } from '@/components/knowledge/knowledge-tab-bar'
 import { SearchBar } from '@/components/knowledge/search-bar'
 import { DocumentEditor } from '@/components/knowledge/document-editor'
 import { DocumentActionBar } from '@/components/knowledge/document-action-bar'
+import { ensureContentHeading } from '@/components/knowledge/content-utils'
 import {
   Dialog,
   DialogContent,
@@ -52,21 +54,39 @@ function EditorPanel() {
   })
 
   const currentDoc = editMode.document
+  const isDocError = editMode.isDocError
 
-  // Memoize parsed content to avoid new object reference on every render
+  // Memoize parsed content — ensure it starts with an h1 heading
   const parsedContent = useMemo(
-    () => currentDoc?.content_json ? JSON.parse(currentDoc.content_json) as object : undefined,
-    [currentDoc?.content_json]
+    () => currentDoc
+      ? ensureContentHeading(currentDoc.content_json, currentDoc.title)
+      : undefined,
+    [currentDoc?.content_json, currentDoc?.title]
   )
 
-  // Empty state when no document selected
-  if (!selectedDocumentId || !currentDoc) {
+  // No document selected
+  if (!selectedDocumentId) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground gap-3">
         <FileText className="h-12 w-12 text-muted-foreground/30" />
         <p className="text-sm">Select a document to start editing</p>
       </div>
     )
+  }
+
+  // Document not found (query error)
+  if (!currentDoc && isDocError) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground gap-3">
+        <FileText className="h-12 w-12 text-muted-foreground/30" />
+        <p className="text-sm">Document not found</p>
+      </div>
+    )
+  }
+
+  // Document loading skeleton
+  if (!currentDoc) {
+    return <EditorSkeleton />
   }
 
   return (
@@ -92,9 +112,11 @@ function EditorPanel() {
         key={selectedDocumentId}
         content={parsedContent}
         onChange={editMode.handleContentChange}
+        onBaselineSync={editMode.handleBaselineSync}
         editable={editMode.mode === 'edit'}
         placeholder="Start writing..."
         className="flex-1"
+        updatedAt={currentDoc.updated_at}
       />
 
       {/* Discard changes dialog */}
@@ -141,7 +163,7 @@ function EditorPanel() {
       </Dialog>
 
       {/* Quit confirmation dialog */}
-      <Dialog open={editMode.showQuitDialog} onOpenChange={() => { /* prevent close via overlay */ }}>
+      <Dialog open={editMode.showQuitDialog} onOpenChange={(open) => { if (!open) editMode.quitCancel() }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-amber-500/10">

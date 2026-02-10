@@ -80,7 +80,7 @@ export {
 } from './use-attachments'
 
 // WebSocket cache invalidation
-export { useWebSocketCacheInvalidation, useQueryCacheSync } from './use-websocket-cache'
+export { useWebSocketCacheInvalidation } from './use-websocket-cache'
 
 // Type re-exports for convenience
 export type {

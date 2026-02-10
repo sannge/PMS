@@ -33,8 +33,20 @@ class DocumentCreate(BaseModel):
     )
     content_json: Optional[str] = Field(
         None,
+        max_length=10_485_760,
         description="TipTap JSON content",
     )
+
+    @field_validator("content_json")
+    @classmethod
+    def validate_json_string(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            import json
+            try:
+                json.loads(v)
+            except (json.JSONDecodeError, TypeError) as e:
+                raise ValueError(f"content_json must be valid JSON: {e}")
+        return v
 
 
 class DocumentUpdate(BaseModel):
@@ -74,6 +86,7 @@ class DocumentContentUpdate(BaseModel):
 
     content_json: str = Field(
         ...,
+        max_length=10_485_760,
         description="TipTap JSON content string",
     )
     row_version: int = Field(
@@ -81,6 +94,16 @@ class DocumentContentUpdate(BaseModel):
         ge=1,
         description="Current row_version for optimistic concurrency check",
     )
+
+    @field_validator("content_json")
+    @classmethod
+    def validate_json_string(cls, v: str) -> str:
+        import json
+        try:
+            json.loads(v)
+        except (json.JSONDecodeError, TypeError) as e:
+            raise ValueError(f"content_json must be valid JSON: {e}")
+        return v
 
 
 class DocumentResponse(BaseModel):
@@ -124,6 +147,7 @@ class DocumentListItem(BaseModel):
     title: str
     folder_id: Optional[UUID] = None
     sort_order: int = 0
+    row_version: int = 1
     created_by: Optional[UUID] = None
     created_at: datetime
     updated_at: datetime

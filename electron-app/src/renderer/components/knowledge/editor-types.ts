@@ -25,6 +25,14 @@ export interface DocumentEditorProps {
   placeholder?: string
   /** Additional CSS classes for the outer container */
   className?: string
+  /** ISO timestamp for display above the editor content */
+  updatedAt?: string
+  /**
+   * Called once after setContent in edit mode with TipTap-normalized JSON.
+   * Use this to sync dirty-detection baselines — TipTap adds default attrs
+   * (textAlign, indent) that our raw JSON builders don't include.
+   */
+  onBaselineSync?: (json: object) => void
 }
 
 /** Props for the EditorToolbar component */

@@ -134,6 +134,9 @@ export const queryKeys = {
 
   // Document Locks
   documentLock: (documentId: string) => ['documentLock', documentId] as const,
+
+  // Active Locks (batch)
+  activeLocks: (scope: string, scopeId: string) => ['activeLocks', scope, scopeId] as const,
 }
 
 // ============================================================================

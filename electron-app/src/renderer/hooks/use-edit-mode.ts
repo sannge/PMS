@@ -59,10 +59,11 @@ export interface UseEditModeReturn {
   canForceTake: boolean
   /** Document data from the internal useDocument query */
   document: ReturnType<typeof useDocument>['data']
-  /** Whether document is loading */
-  isDocLoading: boolean
+  /** Whether document query errored (e.g. 404) */
+  isDocError: boolean
   enterEditMode: () => Promise<void>
   handleContentChange: (json: object) => void
+  handleBaselineSync: (json: object) => void
   save: () => Promise<void>
   cancel: () => void
   confirmDiscard: () => void
@@ -132,7 +133,7 @@ export function useEditMode({
   useEffect(() => { tokenRef.current = token }, [token])
 
   // Document data — single source of truth, exposed to consumers
-  const { data: doc, refetch: refetchDoc, isLoading: isDocLoading } = useDocument(documentId)
+  const { data: doc, refetch: refetchDoc, isError: isDocError } = useDocument(documentId)
 
   // Sync row version from document
   useEffect(() => {
@@ -229,10 +230,11 @@ export function useEditMode({
         return
       }
 
-      // Store the content as our baseline
-      const contentStr = freshDoc.content_json ?? null
-      savedContentRef.current = contentStr
-      localContentRef.current = contentStr
+      // Store raw content as preliminary baseline — the editor's
+      // onBaselineSync callback will overwrite this with TipTap-normalized
+      // JSON once setContent runs (adds default attrs like textAlign/indent).
+      savedContentRef.current = freshDoc.content_json ?? null
+      localContentRef.current = freshDoc.content_json ?? null
       rowVersionRef.current = freshDoc.row_version
       lastEditRef.current = Date.now()
       setIsDirty(false)
@@ -244,10 +246,24 @@ export function useEditMode({
   }, [documentId, refetchDoc, lock])
 
   // ============================================================================
+  // Baseline sync (called by editor after setContent normalizes content)
+  // ============================================================================
+
+  const handleBaselineSync = useCallback((json: object) => {
+    if (modeRef.current !== 'edit') return
+    const normalized = JSON.stringify(json)
+    savedContentRef.current = normalized
+    localContentRef.current = normalized
+  }, [])
+
+  // ============================================================================
   // Content change handler
   // ============================================================================
 
   const handleContentChange = useCallback((json: object) => {
+    // Ignore content change events in view mode — TipTap fires onUpdate
+    // even for programmatic setContent calls (e.g. syncing server data).
+    if (modeRef.current !== 'edit') return
     const jsonStr = JSON.stringify(json)
     localContentRef.current = jsonStr
     lastEditRef.current = Date.now()
@@ -346,6 +362,8 @@ export function useEditMode({
   // Refs for callbacks to avoid stale closures in timer effects
   const saveRef = useRef(save)
   useEffect(() => { saveRef.current = save }, [save])
+  const cancelRef = useRef(cancel)
+  useEffect(() => { cancelRef.current = cancel }, [cancel])
   const exitEditModeRef = useRef(exitEditMode)
   useEffect(() => { exitEditModeRef.current = exitEditMode }, [exitEditMode])
 
@@ -391,27 +409,44 @@ export function useEditMode({
 
   const quitSave = useCallback(() => {
     setShowQuitDialog(false)
+    // Prevent the lock-expired effect from re-acquiring during quit
+    isIntentionallyExitingRef.current = true
     if (!documentIdRef.current || !localContentRef.current || !window.electronAPI) {
       window.electronAPI?.confirmQuitSave()
       return
     }
-    // Save then quit — endpoint matches useSaveDocumentContent in use-queries.ts
+    const docId = documentIdRef.current
+    const headers = { Authorization: `Bearer ${tokenRef.current}` }
+    // Save → release lock → quit
     void window.electronAPI
       .put(
-        `/api/documents/${documentIdRef.current}/content`,
+        `/api/documents/${docId}/content`,
         {
           content_json: localContentRef.current,
           row_version: rowVersionRef.current,
         },
-        { Authorization: `Bearer ${tokenRef.current}` }
+        headers
       )
+      .then(() => window.electronAPI?.delete<void>(`/api/documents/${docId}/lock`, headers))
       .then(() => window.electronAPI?.confirmQuitSave())
       .catch(() => window.electronAPI?.confirmQuitSave())
   }, [])
 
   const quitDiscard = useCallback(() => {
     setShowQuitDialog(false)
-    window.electronAPI?.confirmQuitSave()
+    // Prevent the lock-expired effect from re-acquiring during quit
+    isIntentionallyExitingRef.current = true
+    const docId = documentIdRef.current
+    if (docId && window.electronAPI) {
+      const headers = { Authorization: `Bearer ${tokenRef.current}` }
+      // Release lock → quit
+      void window.electronAPI
+        .delete<void>(`/api/documents/${docId}/lock`, headers)
+        .then(() => window.electronAPI?.confirmQuitSave())
+        .catch(() => window.electronAPI?.confirmQuitSave())
+    } else {
+      window.electronAPI?.confirmQuitSave()
+    }
   }, [])
 
   const quitCancel = useCallback(() => {
@@ -551,6 +586,30 @@ export function useEditMode({
   }, [lock.isLockedByMe, lock.lockHolder, queryClient, exitEditMode, setMode])
 
   // ============================================================================
+  // Keyboard shortcuts (Ctrl+S → save, Ctrl+W → cancel)
+  // ============================================================================
+
+  useEffect(() => {
+    if (mode !== 'edit') return
+
+    const handler = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey
+      if (!mod) return
+
+      if (e.key === 's') {
+        e.preventDefault()
+        void saveRef.current()
+      } else if (e.key === 'w') {
+        e.preventDefault()
+        cancelRef.current()
+      }
+    }
+
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [mode])
+
+  // ============================================================================
   // Force-take (owner)
   // ============================================================================
 
@@ -562,9 +621,8 @@ export function useEditMode({
         // Refetch and enter edit mode
         const { data: freshDoc } = await refetchDoc()
         if (freshDoc) {
-          const contentStr = freshDoc.content_json ?? null
-          savedContentRef.current = contentStr
-          localContentRef.current = contentStr
+          savedContentRef.current = freshDoc.content_json ?? null
+          localContentRef.current = freshDoc.content_json ?? null
           rowVersionRef.current = freshDoc.row_version
           lastEditRef.current = Date.now()
           setIsDirty(false)
@@ -591,9 +649,10 @@ export function useEditMode({
     isLockedByOther: lock.isLockedByOther,
     canForceTake: lock.canForceTake,
     document: doc,
-    isDocLoading,
+    isDocError,
     enterEditMode,
     handleContentChange,
+    handleBaselineSync,
     save,
     cancel,
     confirmDiscard,

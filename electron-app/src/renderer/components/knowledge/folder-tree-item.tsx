@@ -2,7 +2,7 @@
  * Folder Tree Item
  *
  * Renders a single node in the folder tree -- either a folder or a document.
- * OneNote page-list style: no chevron arrows, clean indentation only.
+ * VSCode explorer-style: chevron arrows, indent guides, full-width selection.
  * Handles expand/collapse, selection, right-click context menu, and inline rename.
  * Shows lock indicator when a document is being edited by another user.
  *
@@ -14,8 +14,8 @@
 
 import { useRef, useEffect, useState, useCallback, memo } from 'react'
 import {
+  ChevronRight,
   Folder,
-  FolderOpen,
   FileText,
   Lock,
 } from 'lucide-react'
@@ -23,45 +23,43 @@ import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/contexts/auth-context'
-import { useDocumentLockStatus } from '@/hooks/use-document-lock'
+import type { ActiveLockInfo } from '@/hooks/use-document-lock'
 import type { FolderTreeNode } from '@/hooks/use-document-folders'
 import type { DocumentListItem } from '@/hooks/use-documents'
 
 // ============================================================================
-// Lock Indicator Component (isolated hooks to avoid hook count issues)
+// Lock Indicator Component (props-driven, no internal queries)
 // ============================================================================
 
 interface DocumentLockIndicatorProps {
-  documentId: string
+  lockInfo: ActiveLockInfo | undefined
   hidden?: boolean
 }
 
 /**
- * Separate component for document lock indicator to isolate the hook.
- * This prevents "Rendered fewer hooks than expected" errors when
- * tree items are dynamically added/removed during folder expansion.
+ * Displays a lock icon when a document is being edited by another user.
  *
- * Uses React.memo to prevent unnecessary re-renders when parent re-renders
- * but documentId hasn't changed.
+ * Lock info is passed as props from the parent tree component which
+ * fetches all active locks in a single batch query (useActiveLocks).
+ * This avoids N+1 per-document lock status queries.
  */
 const DocumentLockIndicator = memo(function DocumentLockIndicator({
-  documentId,
+  lockInfo,
   hidden = false,
 }: DocumentLockIndicatorProps): JSX.Element | null {
   const userId = useAuthStore((s) => s.user?.id)
-  const { isLocked, lockHolder } = useDocumentLockStatus(documentId)
 
-  // Hide if not locked, during rename, or if locked by the current user
-  if (hidden || !isLocked || lockHolder?.userId === userId) return null
+  // Hide if no lock, during rename, or if locked by the current user
+  if (hidden || !lockInfo || lockInfo.userId === userId) return null
 
   return (
     <span
       className="shrink-0 flex items-center gap-1 text-red-500/80"
-      title={lockHolder?.userName ? `Editing: ${lockHolder.userName}` : 'Locked'}
+      title={lockInfo.userName ? `Editing: ${lockInfo.userName}` : 'Locked'}
     >
       <Lock className="h-3.5 w-3.5" />
-      {lockHolder?.userName && (
-        <span className="text-[11px] truncate max-w-[80px]">{lockHolder.userName}</span>
+      {lockInfo.userName && (
+        <span className="text-[11px] truncate max-w-[80px]">{lockInfo.userName}</span>
       )}
     </span>
   )
@@ -80,12 +78,12 @@ export interface FolderTreeItemProps {
   isRenaming: boolean
   /** Whether this item is currently being dragged */
   isDragging?: boolean
+  /** Whether this folder is a drop target for nesting */
+  isDropTarget?: boolean
   /** Sortable ID for @dnd-kit (e.g. "folder-{id}" or "doc-{id}") */
   sortableId?: string
-  /** @deprecated Lock status is now queried internally for documents */
-  isLocked?: boolean
-  /** @deprecated Lock status is now queried internally for documents */
-  lockHolderName?: string
+  /** Lock info from useActiveLocks (passed down from tree component) */
+  lockInfo?: ActiveLockInfo
   onToggleExpand?: () => void
   onSelect: () => void
   onContextMenu: (e: React.MouseEvent) => void
@@ -101,11 +99,9 @@ export function FolderTreeItem({
   isSelected,
   isRenaming,
   isDragging: isDraggingProp,
+  isDropTarget,
   sortableId,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  isLocked: _isLockedProp,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  lockHolderName: _lockHolderNameProp,
+  lockInfo,
   onToggleExpand,
   onSelect,
   onContextMenu,
@@ -134,7 +130,7 @@ export function FolderTreeItem({
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0.5 : 1,
+    opacity: isDragging ? 0.4 : 1,
   }
 
   const [renameValue, setRenameValue] = useState(displayName)
@@ -176,12 +172,22 @@ export function FolderTreeItem({
     }
   }, [renameValue, displayName, onRenameSubmit, onRenameCancel])
 
+  const handleChevronClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (onToggleExpand) onToggleExpand()
+  }, [onToggleExpand])
+
   const handleClick = useCallback(() => {
-    if (type === 'folder' && onToggleExpand) {
-      onToggleExpand()
+    if (type === 'folder') {
+      if (onToggleExpand) onToggleExpand()
+    } else {
+      onSelect()
     }
-    onSelect()
   }, [type, onToggleExpand, onSelect])
+
+  // Indent guide width per level (px)
+  const INDENT_SIZE = 16
+  const INDENT_OFFSET = 8
 
   return (
     <div
@@ -189,15 +195,15 @@ export function FolderTreeItem({
       {...attributes}
       {...listeners}
       className={cn(
-        'flex items-center gap-1.5 py-1 pr-2 cursor-pointer rounded-sm',
-        'hover:bg-accent/50 transition-colors',
-        isSelected && 'bg-accent text-accent-foreground',
-        isDragging && 'cursor-grabbing bg-accent/30',
-        sortableId && !isDragging && 'cursor-grab'
+        'group relative flex items-center h-[22px] pr-2 cursor-pointer select-none',
+        'hover:bg-[hsl(var(--accent)/0.5)] transition-colors duration-75',
+        isSelected && !isDropTarget && 'bg-accent text-accent-foreground',
+        isDragging && 'opacity-40',
+        isDropTarget && 'bg-primary/20 outline outline-1 outline-primary/60 -outline-offset-1'
       )}
       style={{
         ...style,
-        paddingLeft: depth * 20 + 12,
+        paddingLeft: depth * INDENT_SIZE + INDENT_OFFSET,
       }}
       onClick={handleClick}
       onContextMenu={onContextMenu}
@@ -205,15 +211,37 @@ export function FolderTreeItem({
       aria-expanded={type === 'folder' ? isExpanded : undefined}
       aria-selected={isSelected}
     >
+      {/* Indent guides */}
+      {depth > 0 && Array.from({ length: depth }, (_, i) => (
+        <span
+          key={i}
+          className="absolute top-0 bottom-0 w-px bg-border/40"
+          style={{ left: i * INDENT_SIZE + INDENT_OFFSET + INDENT_SIZE / 2 }}
+        />
+      ))}
+
+      {/* Chevron (folders only) */}
+      {type === 'folder' ? (
+        <span
+          className="shrink-0 flex items-center justify-center w-4 h-4"
+          onClick={handleChevronClick}
+        >
+          <ChevronRight
+            className={cn(
+              'h-3.5 w-3.5 text-muted-foreground/70 transition-transform duration-100',
+              isExpanded && 'rotate-90'
+            )}
+          />
+        </span>
+      ) : (
+        <span className="shrink-0 w-4" />
+      )}
+
       {/* Icon */}
       {type === 'folder' ? (
-        isExpanded ? (
-          <FolderOpen className="h-4 w-4 shrink-0 text-muted-foreground" />
-        ) : (
-          <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
-        )
+        <Folder className="h-4 w-4 shrink-0 mr-1 text-muted-foreground" />
       ) : (
-        <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <FileText className="h-4 w-4 shrink-0 mr-1 text-muted-foreground" />
       )}
 
       {/* Name or rename input */}
@@ -226,18 +254,18 @@ export function FolderTreeItem({
           onKeyDown={handleRenameKeyDown}
           onBlur={handleRenameBlur}
           className={cn(
-            'flex-1 min-w-0 text-sm bg-background border border-border rounded px-1 py-0',
+            'flex-1 min-w-0 text-[13px] leading-[22px] bg-background text-foreground border border-border px-1 rounded-sm',
             'outline-none focus:ring-1 focus:ring-ring'
           )}
           onClick={(e) => e.stopPropagation()}
         />
       ) : (
-        <span className="flex-1 min-w-0 text-sm truncate">{displayName}</span>
+        <span className="flex-1 min-w-0 text-[13px] leading-[22px] truncate">{displayName}</span>
       )}
 
       {/* Lock indicator for documents being edited */}
       {type === 'document' && (
-        <DocumentLockIndicator documentId={node.id} hidden={isRenaming} />
+        <DocumentLockIndicator lockInfo={lockInfo} hidden={isRenaming} />
       )}
     </div>
   )

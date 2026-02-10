@@ -258,6 +258,61 @@ class DocumentLockService:
             return json.loads(old_holder_str)
         return None
 
+    async def get_active_locks(
+        self,
+        document_ids: list[str],
+    ) -> dict[str, dict]:
+        """
+        Batch-check lock status for a list of document IDs.
+
+        Uses Redis MGET for O(1) round-trip regardless of list size.
+        Returns only documents that are currently locked.
+
+        Args:
+            document_ids: List of document UUID strings to check
+
+        Returns:
+            Dict mapping document_id -> lock holder data for locked documents only.
+        """
+        if not document_ids:
+            return {}
+
+        keys = [_lock_key(doc_id) for doc_id in document_ids]
+        values = await redis_service.client.mget(keys)
+
+        result: dict[str, dict] = {}
+        for doc_id, value in zip(document_ids, values):
+            if value:
+                result[doc_id] = json.loads(value)
+
+        return result
+
+    async def scan_all_active_locks(self) -> dict[str, dict]:
+        """
+        Scan all active document locks from Redis.
+
+        Uses SCAN with pattern matching to find all doc_lock:* keys.
+        Efficient because the total number of active locks is typically
+        very small (0-50 system-wide).
+
+        Returns:
+            Dict mapping document_id -> lock holder data for all locked documents.
+        """
+        keys = await redis_service.scan_keys(f"{LOCK_KEY_PREFIX}*", count=200)
+        if not keys:
+            return {}
+
+        values = await redis_service.client.mget(keys)
+
+        result: dict[str, dict] = {}
+        prefix_len = len(LOCK_KEY_PREFIX)
+        for key, value in zip(keys, values):
+            if value:
+                doc_id = key[prefix_len:]
+                result[doc_id] = json.loads(value)
+
+        return result
+
     async def get_lock_holder(
         self,
         document_id: str,

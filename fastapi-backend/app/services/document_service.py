@@ -12,7 +12,7 @@ from typing import Any, Optional, Tuple
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.application import Application
@@ -97,6 +97,80 @@ def get_scope_filter(model: Any, scope: str, scope_id: UUID) -> Any:
         raise ValueError(f"Invalid scope: {scope}")
 
 
+async def check_name_uniqueness(
+    db: AsyncSession,
+    name: str,
+    scope: str,
+    scope_id: UUID,
+    parent_id: Optional[UUID],
+    exclude_folder_id: Optional[UUID] = None,
+    exclude_document_id: Optional[UUID] = None,
+) -> None:
+    """
+    Check that no sibling folder or document has the same name (case-insensitive).
+
+    Folders and documents share the same namespace within a parent level.
+
+    Args:
+        db: Database session
+        name: Name to check
+        scope: One of "application", "project", "personal"
+        scope_id: UUID of the scope entity
+        parent_id: Parent folder UUID (None for root-level items)
+        exclude_folder_id: Folder to exclude from check (for rename/move self)
+        exclude_document_id: Document to exclude from check (for rename/move self)
+
+    Raises:
+        HTTPException: 409 if a sibling with the same name exists
+    """
+    normalized = name.strip().lower()
+
+    # Check folders
+    folder_query = (
+        select(func.count())
+        .select_from(DocumentFolder)
+        .where(get_scope_filter(DocumentFolder, scope, scope_id))
+        .where(func.lower(DocumentFolder.name) == normalized)
+    )
+    if parent_id is not None:
+        folder_query = folder_query.where(DocumentFolder.parent_id == parent_id)
+    else:
+        folder_query = folder_query.where(DocumentFolder.parent_id.is_(None))
+    if exclude_folder_id is not None:
+        folder_query = folder_query.where(DocumentFolder.id != exclude_folder_id)
+
+    folder_count = await db.scalar(folder_query)
+
+    if folder_count and folder_count > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"An item named '{name.strip()}' already exists in this location",
+        )
+
+    # Check documents
+    doc_query = (
+        select(func.count())
+        .select_from(Document)
+        .where(get_scope_filter(Document, scope, scope_id))
+        .where(func.lower(Document.title) == normalized)
+        .where(Document.deleted_at.is_(None))
+    )
+    if parent_id is not None:
+        doc_query = doc_query.where(Document.folder_id == parent_id)
+    else:
+        doc_query = doc_query.where(Document.folder_id.is_(None))
+    if exclude_document_id is not None:
+        doc_query = doc_query.where(Document.id != exclude_document_id)
+
+    doc_count = await db.scalar(doc_query)
+
+    if doc_count and doc_count > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"An item named '{name.strip()}' already exists in this location",
+        )
+
+
 def encode_cursor(created_at: datetime, id: UUID) -> str:
     """
     Encode a cursor from created_at timestamp and document ID.
@@ -135,6 +209,33 @@ def decode_cursor(cursor: str) -> Tuple[datetime, UUID]:
         created_at = datetime.fromisoformat(payload["created_at"])
         id = UUID(payload["id"])
         return created_at, id
+    except (json.JSONDecodeError, KeyError, ValueError) as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid cursor: {e}",
+        )
+
+
+def encode_title_cursor(title: str, id: UUID) -> str:
+    """Encode a cursor for title-based alphabetical pagination."""
+    payload = json.dumps({"title": title, "id": str(id)})
+    return base64.urlsafe_b64encode(payload.encode()).decode()
+
+
+def decode_title_cursor(cursor: str) -> Tuple[str, UUID]:
+    """Decode a title-based cursor string.
+
+    Returns None for cursors in the old created_at format so callers
+    can silently ignore stale cursors from IndexedDB cache.
+    """
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(cursor.encode()).decode())
+        if "title" not in payload:
+            # Old cursor format (created_at-based) — treat as invalid
+            raise KeyError("title")
+        title = payload["title"]
+        id = UUID(payload["id"])
+        return title, id
     except (json.JSONDecodeError, KeyError, ValueError) as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -267,9 +368,9 @@ async def save_document_content(
     """
     Save document content with optimistic concurrency control.
 
-    Checks row_version matches the current database value before updating.
-    Increments row_version on success. Does NOT set updated_at manually
-    because the Document model uses SQLAlchemy's onupdate parameter.
+    Uses an atomic UPDATE ... WHERE row_version = expected to prevent
+    concurrent writes from silently overwriting each other. On success,
+    row_version is incremented atomically.
 
     Args:
         document_id: UUID of the document to update
@@ -284,39 +385,51 @@ async def save_document_content(
     Raises:
         HTTPException: 404 if document not found, 409 if row_version mismatch
     """
+    # Run content conversion BEFORE the atomic update
+    content_dict = json.loads(content_json)
+    from .content_converter import tiptap_json_to_markdown, tiptap_json_to_plain_text
+    content_markdown = tiptap_json_to_markdown(content_dict)
+    content_plain = tiptap_json_to_plain_text(content_dict)
+
+    # Atomic UPDATE with version check — prevents concurrent overwrites
     result = await db.execute(
-        select(Document)
+        update(Document)
         .where(Document.id == document_id)
         .where(Document.deleted_at.is_(None))
+        .where(Document.row_version == row_version)
+        .values(
+            content_json=content_json,
+            content_markdown=content_markdown,
+            content_plain=content_plain,
+            row_version=Document.row_version + 1,
+            updated_at=datetime.utcnow(),
+        )
+        .returning(Document)
     )
     document = result.scalar_one_or_none()
 
+    if document is not None:
+        # RETURNING only loads table columns, not relationships.
+        # Load tags for DocumentResponse (lazy="selectin" won't fire on RETURNING objects).
+        await db.refresh(document, attribute_names=["tags"])
+
     if document is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Document {document_id} not found",
+        # Distinguish 404 vs 409
+        exists = await db.scalar(
+            select(Document.id)
+            .where(Document.id == document_id)
+            .where(Document.deleted_at.is_(None))
         )
-
-    # Optimistic concurrency check
-    if document.row_version != row_version:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Document was modified. Refresh to get latest version.",
-        )
-
-    # Update content fields -- run content pipeline
-    document.content_json = content_json
-    content_dict = json.loads(content_json)
-
-    from .content_converter import tiptap_json_to_markdown, tiptap_json_to_plain_text
-    document.content_markdown = tiptap_json_to_markdown(content_dict)
-    document.content_plain = tiptap_json_to_plain_text(content_dict)
-
-    # Increment version
-    document.row_version += 1
-
-    await db.flush()
-    await db.refresh(document)
+        if exists is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Document {document_id} not found",
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Document was modified. Refresh to get latest version.",
+            )
 
     return document
 

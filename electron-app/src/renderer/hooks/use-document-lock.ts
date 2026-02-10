@@ -11,13 +11,13 @@
  * - WebSocket subscription for real-time lock state updates
  * - Unmount cleanup with fire-and-forget release
  *
- * Also exports useDocumentLockStatus for read-only lock status display
- * (e.g., showing lock icons in the folder tree).
+ * Also exports useActiveLocks for batch lock status in tree views
+ * (replaces per-document queries with a single batch request).
  *
  * @module use-document-lock
  */
 
-import React, { useCallback, useEffect, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/contexts/auth-context";
 import { useWebSocket } from "./use-websocket";
@@ -66,7 +66,7 @@ export interface UseDocumentLockReturn {
 const HEARTBEAT_INTERVAL_MS = 60_000; // 60 seconds
 const LOCK_POLL_INTERVAL_MS = 30_000; // 30 seconds fallback poll
 /** After this idle duration, heartbeats stop and the proactive inactivity dialog fires. */
-export const INACTIVITY_TIMEOUT_MS = 1 * 60 * 1000; // 5 minutes
+export const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 // isTempId imported from use-documents.ts
 
 // ============================================================================
@@ -468,116 +468,168 @@ export function useDocumentLock({
 }
 
 // ============================================================================
-// Read-Only Lock Status Hook (for tree display)
+// Batch Active Locks Hook (for tree display)
 // ============================================================================
 
 /**
- * Return type for useDocumentLockStatus hook
+ * API response shape for the active-locks endpoint.
  */
-export interface UseDocumentLockStatusReturn {
-  /** Whether the document is currently locked */
-  isLocked: boolean;
-  /** Info about who holds the lock (null if not locked) */
-  lockHolder: { userId: string; userName: string } | null;
-  /** Whether the lock status is being loaded */
-  isLoading: boolean;
+interface ActiveLockApiItem {
+  document_id: string;
+  lock_holder: {
+    user_id: string;
+    user_name: string;
+    acquired_at: number | null;
+  };
+}
+
+interface ActiveLocksApiResponse {
+  locks: ActiveLockApiItem[];
 }
 
 /**
- * Query lock status for a document (read-only, for display).
- *
- * This is a SEPARATE hook from useDocumentLock which is for acquiring locks.
- * Use this hook to display lock indicators in the folder tree or document list.
- *
- * Features:
- * - Queries lock status from API
- * - Subscribes to WebSocket for real-time updates
- * - 30s polling fallback
- * - Disabled when documentId is null
- *
- * @param documentId - Document ID to query lock status for (null to disable)
- * @returns Lock status info for display
- *
- * @example
- * ```tsx
- * function DocumentItem({ doc }) {
- *   const { isLocked, lockHolder } = useDocumentLockStatus(doc.id)
- *
- *   return (
- *     <div>
- *       <span>{doc.title}</span>
- *       {isLocked && <Lock title={`Editing: ${lockHolder?.userName}`} />}
- *     </div>
- *   )
- * }
- * ```
+ * Lock info for a single document, as exposed to tree components.
  */
-export function useDocumentLockStatus(
-  documentId: string | null,
-): UseDocumentLockStatusReturn {
+export interface ActiveLockInfo {
+  userId: string;
+  userName: string;
+}
+
+/**
+ * Fetch all active locks for a scope in a single request.
+ *
+ * Replaces per-document useDocumentLockStatus calls in tree views.
+ * Returns a Map<documentId, ActiveLockInfo> for O(1) lookups.
+ *
+ * - staleTime: 5 minutes (WS events keep it fresh while mounted)
+ * - refetchOnMount: 'always' (catch missed events after screen navigation)
+ * - refetchOnWindowFocus: false (WS handles this while component is mounted)
+ *
+ * Also subscribes to DOCUMENT_LOCKED/UNLOCKED/FORCE_TAKEN WS events to
+ * update the cache in-place without refetching.
+ *
+ * @param scope - 'application' | 'project' | 'personal'
+ * @param scopeId - UUID of the scope entity (null to disable)
+ * @returns Map of documentId -> lock info for currently locked documents
+ */
+export function useActiveLocks(
+  scope: string,
+  scopeId: string | null,
+): Map<string, ActiveLockInfo> {
   const token = useAuthStore((s) => s.token);
+  const userId = useAuthStore((s) => s.user?.id ?? null);
   const queryClient = useQueryClient();
   const { subscribe, status: wsStatus } = useWebSocket();
 
-  // Query lock status
-  const { data, isLoading } = useQuery({
-    queryKey: queryKeys.documentLock(documentId ?? ""),
-    queryFn: async (): Promise<LockStatusResponse> => {
-      if (!window.electronAPI || !documentId) {
-        return { is_locked: false, lock_holder: null };
+  // For personal scope, use userId as scope_id (same as useDocuments pattern)
+  const effectiveScopeId =
+    scope === "personal" ? (userId ?? "") : (scopeId ?? "");
+
+  const queryKey = queryKeys.activeLocks(scope, effectiveScopeId);
+
+  const { data } = useQuery({
+    queryKey,
+    queryFn: async (): Promise<ActiveLocksApiResponse> => {
+      if (!window.electronAPI) {
+        throw new Error("Electron API not available");
       }
 
-      const response = await window.electronAPI.get<Record<string, unknown>>(
-        `/api/documents/${documentId}/lock`,
-        getAuthHeaders(token),
-      );
+      const apiScopeId = scope === "personal" ? userId : scopeId;
+      if (!apiScopeId) {
+        return { locks: [] };
+      }
+
+      const params = new URLSearchParams();
+      params.set("scope", scope);
+      params.set("scope_id", apiScopeId);
+
+      const response =
+        await window.electronAPI.get<ActiveLocksApiResponse>(
+          `/api/documents/active-locks?${params.toString()}`,
+          token ? { Authorization: `Bearer ${token}` } : {},
+        );
 
       if (response.status !== 200) {
-        // Return unlocked state on error
-        return { is_locked: false, lock_holder: null };
+        return { locks: [] };
       }
 
-      return normalizeLockResponse(response.data);
+      return response.data;
     },
-    // Skip temp IDs from optimistic updates - they don't exist on the server yet
-    enabled: !!token && !!documentId && !isTempId(documentId),
-    staleTime: 10_000, // 10 seconds
-    refetchInterval: 30_000, // 30s fallback poll
-    gcTime: 60_000,
+    enabled: !!token && !!scope && (scope === "personal" || !!scopeId),
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    refetchOnMount: "always", // silent background refetch on remount
+    refetchOnWindowFocus: false, // WS keeps it fresh while mounted
+    gcTime: 10 * 60 * 1000,
   });
 
-  // Subscribe to WebSocket for real-time lock updates
+  // Invalidate on WS reconnect to catch events missed during disconnect.
+  // Track the previous connected state with a ref to detect false→true transitions.
+  const wasConnectedRef = useRef(wsStatus.isConnected);
   useEffect(() => {
-    if (!documentId || !wsStatus.isConnected) return;
+    const wasConnected = wasConnectedRef.current;
+    wasConnectedRef.current = wsStatus.isConnected;
+
+    if (wsStatus.isConnected && !wasConnected && effectiveScopeId) {
+      queryClient.invalidateQueries({ queryKey });
+    }
+  }, [wsStatus.isConnected, queryClient, queryKey, effectiveScopeId]);
+
+  // Subscribe to lock events and update cache in-place
+  useEffect(() => {
+    if (!wsStatus.isConnected || !effectiveScopeId) return;
 
     const handleLocked = (eventData: {
       document_id: string;
       lock_holder: LockHolder;
     }) => {
-      if (eventData.document_id !== documentId) return;
-      queryClient.setQueryData<LockStatusResponse>(
-        queryKeys.documentLock(documentId),
-        { is_locked: true, lock_holder: eventData.lock_holder },
-      );
+      queryClient.setQueryData<ActiveLocksApiResponse>(queryKey, (old) => {
+        if (!old) return old;
+        // Remove existing entry for this doc (if any), then add
+        const filtered = old.locks.filter(
+          (l) => l.document_id !== eventData.document_id,
+        );
+        return {
+          locks: [
+            ...filtered,
+            {
+              document_id: eventData.document_id,
+              lock_holder: eventData.lock_holder,
+            },
+          ],
+        };
+      });
     };
 
     const handleUnlocked = (eventData: { document_id: string }) => {
-      if (eventData.document_id !== documentId) return;
-      queryClient.setQueryData<LockStatusResponse>(
-        queryKeys.documentLock(documentId),
-        { is_locked: false, lock_holder: null },
-      );
+      queryClient.setQueryData<ActiveLocksApiResponse>(queryKey, (old) => {
+        if (!old) return old;
+        return {
+          locks: old.locks.filter(
+            (l) => l.document_id !== eventData.document_id,
+          ),
+        };
+      });
     };
 
     const handleForceTaken = (eventData: {
       document_id: string;
       lock_holder: LockHolder;
     }) => {
-      if (eventData.document_id !== documentId) return;
-      queryClient.setQueryData<LockStatusResponse>(
-        queryKeys.documentLock(documentId),
-        { is_locked: true, lock_holder: eventData.lock_holder },
-      );
+      queryClient.setQueryData<ActiveLocksApiResponse>(queryKey, (old) => {
+        if (!old) return old;
+        const filtered = old.locks.filter(
+          (l) => l.document_id !== eventData.document_id,
+        );
+        return {
+          locks: [
+            ...filtered,
+            {
+              document_id: eventData.document_id,
+              lock_holder: eventData.lock_holder,
+            },
+          ],
+        };
+      });
     };
 
     const unsubLocked = subscribe<{
@@ -598,17 +650,19 @@ export function useDocumentLockStatus(
       unsubUnlocked();
       unsubForceTaken();
     };
-  }, [documentId, wsStatus.isConnected, subscribe, queryClient]);
+  }, [wsStatus.isConnected, subscribe, queryClient, queryKey, effectiveScopeId]);
 
-  // Derive return values
-  const isLocked = !!data?.is_locked && !!data?.lock_holder;
-  const lockHolder = data?.lock_holder
-    ? { userId: data.lock_holder.user_id, userName: data.lock_holder.user_name }
-    : null;
+  // Convert to Map for O(1) lookups in tree rendering
+  return useMemo(() => {
+    const map = new Map<string, ActiveLockInfo>();
+    if (!data?.locks) return map;
 
-  return {
-    isLocked,
-    lockHolder,
-    isLoading,
-  };
+    for (const lock of data.locks) {
+      map.set(lock.document_id, {
+        userId: lock.lock_holder.user_id,
+        userName: lock.lock_holder.user_name,
+      });
+    }
+    return map;
+  }, [data]);
 }

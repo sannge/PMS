@@ -11,8 +11,9 @@ from typing import Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select, or_, and_, exists, func
+from sqlalchemy import select, or_, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import lazyload, noload
 
 from ..database import get_db
 from ..models.application import Application
@@ -35,8 +36,11 @@ from ..schemas.document import (
 from ..schemas.document_tag import TagAssignment, TagAssignmentResponse
 from ..services.auth_service import get_current_user
 from ..services.document_service import (
+    check_name_uniqueness,
     decode_cursor,
+    decode_title_cursor,
     encode_cursor,
+    encode_title_cursor,
     get_scope_filter,
     save_document_content,
     set_scope_fks,
@@ -87,7 +91,7 @@ async def _broadcast_document_event(
         "scope_id": scope_id,
         "folder_id": str(doc.folder_id) if doc.folder_id else None,
         "actor_id": str(actor_id) if actor_id else None,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": doc.updated_at.isoformat() if doc.updated_at else datetime.utcnow().isoformat(),
         # Include application_id for project-scoped items so frontend can invalidate app queries
         "application_id": str(project_application_id) if project_application_id else None,
     }
@@ -132,6 +136,7 @@ async def list_trash(
         select(Document)
         .where(Document.deleted_at.isnot(None))
         .where(Document.created_by == current_user.id)
+        .options(noload("*"))
     )
 
     # Cursor pagination (keyset: created_at DESC, id DESC)
@@ -268,7 +273,7 @@ async def list_documents(
     """
     List documents for a scope with cursor-based pagination.
 
-    Documents are ordered by created_at DESC, id DESC. Only non-deleted
+    Documents are ordered alphabetically by title ASC, id ASC. Only non-deleted
     documents are returned. When folder_id is omitted and include_unfiled
     is True, returns documents with no folder assignment.
     """
@@ -277,6 +282,7 @@ async def list_documents(
         select(Document)
         .where(get_scope_filter(Document, scope, scope_id))
         .where(Document.deleted_at.is_(None))
+        .options(noload("*"))
     )
 
     # Folder filter
@@ -285,21 +291,25 @@ async def list_documents(
     elif include_unfiled:
         query = query.where(Document.folder_id.is_(None))
 
-    # Cursor pagination (keyset: created_at DESC, id DESC)
+    # Cursor pagination (keyset: title ASC, id ASC)
+    # Gracefully ignore stale cursors (e.g. old created_at-based format from cache)
     if cursor:
-        cursor_created_at, cursor_id = decode_cursor(cursor)
-        query = query.where(
-            or_(
-                Document.created_at < cursor_created_at,
-                and_(
-                    Document.created_at == cursor_created_at,
-                    Document.id < cursor_id,
-                ),
+        try:
+            cursor_title, cursor_id = decode_title_cursor(cursor)
+            query = query.where(
+                or_(
+                    Document.title > cursor_title,
+                    and_(
+                        Document.title == cursor_title,
+                        Document.id > cursor_id,
+                    ),
+                )
             )
-        )
+        except HTTPException:
+            pass  # Stale cursor — start from the beginning
 
-    # Order and limit (fetch one extra to determine if there's a next page)
-    query = query.order_by(Document.created_at.desc(), Document.id.desc())
+    # Order alphabetically by title (frontend applies case-insensitive sort via select)
+    query = query.order_by(Document.title.asc(), Document.id.asc())
     query = query.limit(limit + 1)
 
     result = await db.execute(query)
@@ -315,7 +325,7 @@ async def list_documents(
     next_cursor = None
     if has_next and documents:
         last = documents[-1]
-        next_cursor = encode_cursor(last.created_at, last.id)
+        next_cursor = encode_title_cursor(last.title, last.id)
 
     return DocumentListResponse(items=items, next_cursor=next_cursor)
 
@@ -332,11 +342,12 @@ async def create_document(
     Validates that the scope entity exists and sets the appropriate FK.
     """
     await validate_scope(body.scope, body.scope_id, db)
+    await check_name_uniqueness(db, body.title, body.scope, body.scope_id, body.folder_id)
 
     # For project-scoped documents, get the parent application_id for broadcasting
     project_application_id: UUID | None = None
     if body.scope == "project":
-        project = await db.get(Project, UUID(body.scope_id))
+        project = await db.get(Project, body.scope_id)
         if project:
             project_application_id = project.application_id
 
@@ -353,6 +364,9 @@ async def create_document(
     db.add(document)
     await db.flush()
     await db.refresh(document)
+
+    # Commit before broadcast so clients re-fetch committed data
+    await db.commit()
 
     # Broadcast document created event
     await _broadcast_document_event(
@@ -406,10 +420,15 @@ async def update_document(
     the database value, a 409 Conflict is returned. On success, row_version
     is incremented.
     """
+    # SELECT with FOR UPDATE to lock the row and prevent concurrent modification.
+    # lazyload('*') suppresses lazy="joined" relationships (folder, creator) which
+    # generate LEFT OUTER JOINs incompatible with FOR UPDATE on nullable FK sides.
     result = await db.execute(
         select(Document)
         .where(Document.id == document_id)
         .where(Document.deleted_at.is_(None))
+        .options(lazyload('*'))
+        .with_for_update()
     )
     document = result.scalar_one_or_none()
 
@@ -419,17 +438,29 @@ async def update_document(
             detail=f"Document {document_id} not found",
         )
 
-    # Optimistic concurrency check
+    # Optimistic concurrency check (safe under FOR UPDATE lock)
     if document.row_version != body.row_version:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Document has been modified by another user (expected version {body.row_version}, current {document.row_version})",
         )
 
-    # Apply updates
+    # Check name uniqueness when title or folder changes
     update_data = body.model_dump(exclude_unset=True, exclude={"row_version"})
+    if "title" in update_data or "folder_id" in update_data:
+        new_title = update_data.get("title", document.title)
+        new_folder_id = update_data.get("folder_id", document.folder_id)
+        scope_type, scope_id_str = _get_document_scope(document)
+        await check_name_uniqueness(
+            db, new_title, scope_type, UUID(scope_id_str),
+            new_folder_id, exclude_document_id=document.id,
+        )
+
+    # Apply updates (only allowed fields)
+    UPDATABLE_FIELDS = {"title", "folder_id", "content_json"}
     for field, value in update_data.items():
-        setattr(document, field, value)
+        if field in UPDATABLE_FIELDS:
+            setattr(document, field, value)
 
     # Increment version
     document.row_version += 1
@@ -444,6 +475,9 @@ async def update_document(
         project = await db.get(Project, document.project_id)
         if project:
             project_application_id = project.application_id
+
+    # Commit before broadcast so clients re-fetch committed data
+    await db.commit()
 
     # Broadcast document updated event
     await _broadcast_document_event(
@@ -485,6 +519,9 @@ async def save_content(
         project = await db.get(Project, document.project_id)
         if project:
             project_application_id = project.application_id
+
+    # Commit before broadcast so clients re-fetch committed data
+    await db.commit()
 
     await _broadcast_document_event(
         MessageType.DOCUMENT_UPDATED,
@@ -532,6 +569,9 @@ async def delete_document(
     document.deleted_at = datetime.utcnow()
     await db.flush()
 
+    # Commit before broadcast so clients re-fetch committed data
+    await db.commit()
+
     # Broadcast document deleted event
     await _broadcast_document_event(
         MessageType.DOCUMENT_DELETED,
@@ -571,6 +611,13 @@ async def restore_document(
             detail=f"Document {document_id} not found in trash",
         )
 
+    # Check name uniqueness before restoring
+    scope_type, scope_id_str = _get_document_scope(document)
+    await check_name_uniqueness(
+        db, document.title, scope_type, UUID(scope_id_str),
+        document.folder_id, exclude_document_id=document.id,
+    )
+
     document.deleted_at = None
     await db.flush()
     await db.refresh(document)
@@ -591,14 +638,16 @@ async def permanent_delete_document(
     are removed from the database.
     """
     result = await db.execute(
-        select(Document).where(Document.id == document_id)
+        select(Document)
+        .where(Document.id == document_id)
+        .where(Document.deleted_at.isnot(None))
     )
     document = result.scalar_one_or_none()
 
     if document is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Document {document_id} not found",
+            detail=f"Document {document_id} not found in trash",
         )
 
     await db.delete(document)

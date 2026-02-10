@@ -11,7 +11,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
 from uuid import UUID
@@ -125,7 +125,7 @@ class WebSocketConnection:
 
     websocket: WebSocket
     user_id: UUID
-    connected_at: datetime = field(default_factory=datetime.utcnow)
+    connected_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     rooms: set[str] = field(default_factory=set)
 
     def __hash__(self) -> int:

@@ -35,11 +35,13 @@ export function CreateDialog({
   const defaultName = type === 'document' ? 'Untitled' : 'New Folder'
   const [name, setName] = useState(defaultName)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  // Reset name when dialog opens or type changes
+  // Reset name and error when dialog opens or type changes
   useEffect(() => {
     if (open) {
       setName(type === 'document' ? 'Untitled' : 'New Folder')
+      setError(null)
     }
   }, [open, type])
 
@@ -48,9 +50,12 @@ export function CreateDialog({
     if (!name.trim()) return
 
     setIsSubmitting(true)
+    setError(null)
     try {
       await onSubmit(name.trim())
       onOpenChange(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create')
     } finally {
       setIsSubmitting(false)
     }
@@ -73,12 +78,15 @@ export function CreateDialog({
             <Input
               id="name"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => { setName(e.target.value); setError(null) }}
               placeholder={type === 'document' ? 'Document name' : 'Folder name'}
               autoFocus
               disabled={isSubmitting}
               className="mt-1.5"
             />
+            {error && (
+              <p className="text-sm text-destructive mt-1.5">{error}</p>
+            )}
           </div>
           <DialogFooter>
             <Button

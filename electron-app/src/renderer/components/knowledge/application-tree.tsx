@@ -19,6 +19,7 @@ import { toast } from 'sonner'
 import {
   DndContext,
   DragEndEvent,
+  DragOverEvent,
   DragOverlay,
   DragStartEvent,
   PointerSensor,
@@ -28,9 +29,10 @@ import {
 } from '@dnd-kit/core'
 import {
   SortableContext,
-  verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
+import { useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
+import { queryKeys } from '@/lib/query-client'
 import { useKnowledgeBase } from '@/contexts/knowledge-base-context'
 import { useProjects, type Project } from '@/hooks/query-index'
 import {
@@ -38,7 +40,7 @@ import {
   useCreateFolder,
   useRenameFolder,
   useDeleteFolder,
-  useReorderFolder,
+  useMoveFolder,
   type FolderTreeNode,
 } from '@/hooks/use-document-folders'
 import {
@@ -46,14 +48,22 @@ import {
   useCreateDocument,
   useRenameDocument,
   useDeleteDocument,
-  useReorderDocument,
+  useMoveDocument,
   useProjectsWithContent,
+  type Document,
   type DocumentListItem,
+  type DocumentListResponse,
 } from '@/hooks/use-documents'
+import { useActiveLocks } from '@/hooks/use-document-lock'
 import { FolderTreeItem } from './folder-tree-item'
+import { FolderDocuments } from './folder-documents'
+import { TreeSkeleton, ProjectContentSkeleton } from './tree-skeletons'
+import { RootDropZone, ROOT_DROP_ZONE_ID } from './root-drop-zone'
 import { FolderContextMenu } from './folder-context-menu'
 import { CreateDialog } from './create-dialog'
 import { DeleteDialog } from './delete-dialog'
+import { matchesSearch, filterFolderTree, findFolderById, isDescendantOf } from './tree-utils'
+import { parseSortableId, parsePrefixToScope, type ScopeInfo } from './dnd-utils'
 
 // ============================================================================
 // Types
@@ -80,58 +90,8 @@ interface ActiveDragItem {
   name: string
   /** Scope of the dragged item (app or project:{id}) */
   scope: string
-}
-
-// ============================================================================
-// Skeleton
-// ============================================================================
-
-/**
- * Tree item skeleton - matches FolderTreeItem layout (icon + text)
- */
-function TreeItemSkeleton({ depth = 0, widthPercent = 60 }: { depth?: number; widthPercent?: number }): JSX.Element {
-  return (
-    <div
-      className="flex items-center gap-1.5 py-1 pr-2"
-      style={{ paddingLeft: depth * 20 + 12 }}
-    >
-      <div className="h-4 w-4 rounded bg-muted animate-pulse shrink-0" />
-      <div
-        className="h-4 rounded bg-muted animate-pulse"
-        style={{ width: `${widthPercent}%` }}
-      />
-    </div>
-  )
-}
-
-function TreeSkeleton(): JSX.Element {
-  return (
-    <div className="py-1 space-y-0.5">
-      {/* Folder skeleton */}
-      <TreeItemSkeleton depth={0} widthPercent={55} />
-      {/* Nested document skeletons */}
-      <TreeItemSkeleton depth={1} widthPercent={70} />
-      <TreeItemSkeleton depth={1} widthPercent={50} />
-      {/* Another folder */}
-      <TreeItemSkeleton depth={0} widthPercent={45} />
-      {/* Nested items */}
-      <TreeItemSkeleton depth={1} widthPercent={65} />
-      <TreeItemSkeleton depth={2} widthPercent={60} />
-    </div>
-  )
-}
-
-/**
- * Skeleton for project section content - shows 3 document rows at depth 1
- */
-function ProjectContentSkeleton(): JSX.Element {
-  return (
-    <div className="space-y-0.5 py-1">
-      <TreeItemSkeleton depth={1} widthPercent={65} />
-      <TreeItemSkeleton depth={1} widthPercent={80} />
-      <TreeItemSkeleton depth={1} widthPercent={50} />
-    </div>
-  )
+  /** For documents: the folder_id at drag start (cached to avoid repeated query scans) */
+  folderId: string | null
 }
 
 // ============================================================================
@@ -141,14 +101,15 @@ function ProjectContentSkeleton(): JSX.Element {
 interface ProjectSectionProps {
   project: Project
   expandedFolderIds: Set<string>
-  selectedFolderId: string | null
   selectedDocumentId: string | null
   renamingItemId: string | null
   activeItem: ActiveDragItem | null
+  dropTargetFolderId: string | null
+  /** Folder ID currently targeted by context menu (for transient highlight) */
+  contextMenuFolderId: string | null
   /** Hide this project section if it has no documents after loading */
   hideIfEmpty?: boolean
   onToggleFolder: (folderId: string) => void
-  onSelectFolder: (folderId: string) => void
   onSelectDocument: (documentId: string) => void
   onContextMenu: (
     e: React.MouseEvent,
@@ -165,13 +126,13 @@ interface ProjectSectionProps {
 function ProjectSection({
   project,
   expandedFolderIds,
-  selectedFolderId,
   selectedDocumentId,
   renamingItemId,
   activeItem,
+  dropTargetFolderId,
+  contextMenuFolderId,
   hideIfEmpty = false,
   onToggleFolder,
-  onSelectFolder,
   onSelectDocument,
   onContextMenu,
   onRenameSubmit,
@@ -192,13 +153,16 @@ function ProjectSection({
     { includeUnfiled: true }
   )
 
+  // Active locks for this project scope (lazy: only fetches when expanded)
+  const projectActiveLocks = useActiveLocks('project', isExpanded ? project.id : null)
+
   const toggleExpanded = useCallback(() => {
     setIsExpanded((prev) => !prev)
   }, [])
 
   const folders = projectFolders ?? []
   const unfiledDocs = projectUnfiled?.items ?? []
-  const isLoading = isExpanded && isFoldersLoading && isUnfiledLoading
+  const isLoading = isExpanded && (isFoldersLoading || isUnfiledLoading) && folders.length === 0 && unfiledDocs.length === 0
 
   // Determine if project has content (only knowable after data loads)
   const isEmpty = useMemo(() => {
@@ -223,11 +187,15 @@ function ProjectSection({
     return items
   }, [project.id, folders, unfiledDocs])
 
+  // No-op sorting strategy: items are alphabetically ordered, DnD is only for nesting
+  const noReorderStrategy = useCallback(() => null, [])
+
   const renderFolderNode = useCallback(
     (node: FolderTreeNode, depth: number): JSX.Element => {
       const nodeExpanded = expandedFolderIds.has(node.id)
-      const isSelected = selectedFolderId === node.id
+      const isSelected = contextMenuFolderId === node.id
       const isDragging = activeItem?.id === node.id && activeItem?.type === 'folder' && activeItem?.scope === `project:${project.id}`
+      const isDropTarget = dropTargetFolderId === node.id
 
       return (
         <div key={node.id}>
@@ -239,28 +207,52 @@ function ProjectSection({
             isSelected={isSelected}
             isRenaming={renamingItemId === node.id}
             isDragging={isDragging}
+            isDropTarget={isDropTarget}
             sortableId={`project-${project.id}-folder-${node.id}`}
             onToggleExpand={() => onToggleFolder(node.id)}
-            onSelect={() => onSelectFolder(node.id)}
+            onSelect={() => onToggleFolder(node.id)}
             onContextMenu={(e) =>
               onContextMenu(e, node.id, 'folder', node.name, 'project', project.id)
             }
             onRenameSubmit={onRenameSubmit}
             onRenameCancel={onRenameCancel}
           />
-          {nodeExpanded &&
-            node.children.map((child) => renderFolderNode(child, depth + 1))}
+          {nodeExpanded && (
+            <>
+              {node.children.map((child) => renderFolderNode(child, depth + 1))}
+              <FolderDocuments
+                scope="project"
+                scopeId={project.id}
+                folderId={node.id}
+                depth={depth + 1}
+                selectedDocumentId={selectedDocumentId}
+                renamingItemId={renamingItemId}
+                sortableIdPrefix={`project-${project.id}`}
+                activeItemId={activeItem?.type === 'document' ? activeItem.id : null}
+                activeLocks={projectActiveLocks}
+                onSelectDocument={onSelectDocument}
+                onContextMenu={(e, id, type, name) =>
+                  onContextMenu(e, id, type, name, 'project', project.id)
+                }
+                onRenameSubmit={onRenameSubmit}
+                onRenameCancel={onRenameCancel}
+              />
+            </>
+          )}
         </div>
       )
     },
     [
       expandedFolderIds,
-      selectedFolderId,
+      contextMenuFolderId,
+      selectedDocumentId,
       renamingItemId,
       activeItem,
+      dropTargetFolderId,
       project.id,
+      projectActiveLocks,
       onToggleFolder,
-      onSelectFolder,
+      onSelectDocument,
       onContextMenu,
       onRenameSubmit,
       onRenameCancel,
@@ -282,6 +274,7 @@ function ProjectSection({
           isRenaming={renamingItemId === doc.id}
           isDragging={isDragging}
           sortableId={`project-${project.id}-doc-${doc.id}`}
+          lockInfo={projectActiveLocks.get(doc.id)}
           onSelect={() => onSelectDocument(doc.id)}
           onContextMenu={(e) =>
             onContextMenu(e, doc.id, 'document', doc.title, 'project', project.id)
@@ -296,6 +289,7 @@ function ProjectSection({
       renamingItemId,
       activeItem,
       project.id,
+      projectActiveLocks,
       onSelectDocument,
       onContextMenu,
       onRenameSubmit,
@@ -336,7 +330,7 @@ function ProjectSection({
           {isLoading ? (
             <ProjectContentSkeleton />
           ) : (
-            <SortableContext items={projectSortableItems} strategy={verticalListSortingStrategy}>
+            <SortableContext items={projectSortableItems} strategy={noReorderStrategy}>
               {folders.map((node) => renderFolderNode(node, 1))}
               {unfiledDocs.map((doc) => renderDocumentItem(doc, 1))}
               {folders.length === 0 && unfiledDocs.length === 0 && (
@@ -359,13 +353,11 @@ function ProjectSection({
 export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.Element {
   const {
     expandedFolderIds,
-    selectedFolderId,
     selectedDocumentId,
     searchQuery,
     toggleFolder,
     expandFolder,
     selectDocument,
-    selectFolder,
   } = useKnowledgeBase()
 
   // App-level data queries
@@ -380,19 +372,57 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
     isLoading: isUnfiledLoading,
   } = useDocuments('application', applicationId, { includeUnfiled: true })
 
+  // Active locks for application scope (single batch request replaces N per-document queries)
+  const activeLocks = useActiveLocks('application', applicationId)
+
   // Projects for this application
   const { data: projects } = useProjects(applicationId)
   const { data: projectsWithContent, isLoading: isProjectsContentLoading } = useProjectsWithContent(applicationId)
 
-  // Mutations -- app scope
+  // Mutations
+  const queryClient = useQueryClient()
   const createFolder = useCreateFolder()
   const createDocument = useCreateDocument()
-  const renameFolderApp = useRenameFolder('application', applicationId)
-  const renameDocumentApp = useRenameDocument('application', applicationId)
-  const deleteFolderApp = useDeleteFolder('application', applicationId)
-  const deleteDocumentApp = useDeleteDocument('application', applicationId)
-  const reorderFolderApp = useReorderFolder('application', applicationId)
-  const reorderDocumentApp = useReorderDocument('application', applicationId)
+  const renameFolder = useRenameFolder()
+  const renameDocument = useRenameDocument()
+  const deleteFolder = useDeleteFolder()
+  const deleteDocument = useDeleteDocument()
+  const moveFolder = useMoveFolder()
+  const moveDocument = useMoveDocument()
+
+  /** Find a document's list item data from TanStack Query cache.
+   *  Searches the provided scope first, then application scope as fallback. */
+  const findDocInCache = useCallback((documentId: string, docScope?: string, docScopeId?: string): DocumentListItem | null => {
+    const scopesToSearch = docScope && docScopeId
+      ? [[docScope, docScopeId], ['application', applicationId]]
+      : [['application', applicationId]]
+
+    for (const [s, sid] of scopesToSearch) {
+      const lists = queryClient.getQueriesData<DocumentListResponse>({
+        queryKey: queryKeys.documents(s, sid),
+        exact: false,
+      })
+      for (const [, data] of lists) {
+        const item = data?.items.find(i => i.id === documentId)
+        if (item) return item
+      }
+    }
+    return null
+  }, [queryClient, applicationId])
+
+  /** Look up a document's current row_version from TanStack Query cache. */
+  const getDocRowVersion = useCallback((documentId: string, docScope?: string, docScopeId?: string): number | null => {
+    const doc = queryClient.getQueryData<Document>(queryKeys.document(documentId))
+    if (doc?.row_version) return doc.row_version
+    return findDocInCache(documentId, docScope, docScopeId)?.row_version ?? null
+  }, [queryClient, findDocInCache])
+
+  /** Resolve DnD prefix to scope/scopeId for mutation params. */
+  const getScopeFromPrefix = useCallback((prefix: string): ScopeInfo => {
+    const parsed = parsePrefixToScope(prefix)
+    if (!parsed) return { scope: 'application', scopeId: applicationId }
+    return { scope: parsed.scope, scopeId: parsed.scopeId || applicationId }
+  }, [applicationId])
 
   // ========================================================================
   // Drag and drop state
@@ -405,10 +435,13 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
   )
 
   const [activeItem, setActiveItem] = useState<ActiveDragItem | null>(null)
+  const [dropTargetFolderId, setDropTargetFolderId] = useState<string | null>(null)
 
   // Local UI state
   const [renamingItemId, setRenamingItemId] = useState<string | null>(null)
   const [renamingItemType, setRenamingItemType] = useState<'folder' | 'document'>('folder')
+  const [renamingItemScope, setRenamingItemScope] = useState<string | null>(null)
+  const [renamingItemScopeId, setRenamingItemScopeId] = useState<string | null>(null)
   const [contextMenuTarget, setContextMenuTarget] = useState<ContextMenuTarget | null>(null)
 
   // Dialog state
@@ -422,50 +455,30 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
     id: string
     type: 'document' | 'folder'
     name: string
+    scope: 'application' | 'project'
+    scopeId: string
   } | null>(null)
-
-  const isLoading = (isFoldersLoading && isUnfiledLoading) || isProjectsContentLoading
 
   const folders = folderTree ?? []
   const unfiledDocs = unfiledResponse?.items ?? []
   const projectList = projects ?? []
 
+  // Show skeleton when at least one query is loading and we have no data yet
+  const isLoading = (isFoldersLoading || isUnfiledLoading || isProjectsContentLoading) && folders.length === 0 && unfiledDocs.length === 0
+
   // ========================================================================
   // Search filtering
   // ========================================================================
 
-  const matchesSearch = useCallback((text: string): boolean => {
-    if (!searchQuery) return true
-    return text.toLowerCase().includes(searchQuery.toLowerCase())
-  }, [searchQuery])
-
-  const filterFolderTree = useCallback((nodes: FolderTreeNode[]): FolderTreeNode[] => {
-    if (!searchQuery) return nodes
-
-    return nodes.reduce<FolderTreeNode[]>((acc, node) => {
-      const filteredChildren = filterFolderTree(node.children)
-      const hasMatchingChildren = filteredChildren.length > 0
-      const nodeMatches = matchesSearch(node.name)
-
-      if (nodeMatches || hasMatchingChildren) {
-        acc.push({
-          ...node,
-          children: filteredChildren,
-        })
-      }
-      return acc
-    }, [])
-  }, [searchQuery, matchesSearch])
-
   const filteredFolders = useMemo(
-    () => filterFolderTree(folders),
-    [filterFolderTree, folders]
+    () => filterFolderTree(folders, searchQuery),
+    [folders, searchQuery]
   )
 
   const filteredDocs = useMemo(() => {
     if (!searchQuery) return unfiledDocs
-    return unfiledDocs.filter(doc => matchesSearch(doc.title))
-  }, [unfiledDocs, searchQuery, matchesSearch])
+    return unfiledDocs.filter(doc => matchesSearch(doc.title, searchQuery))
+  }, [unfiledDocs, searchQuery])
 
   // Filter projects: keep project if its name matches search
   // (Project section content is lazy-loaded so we can't filter by document content)
@@ -478,11 +491,11 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
   const filteredProjects = useMemo(() => {
     // When searching, show all projects that match the search
     if (searchQuery) {
-      return projectList.filter(project => matchesSearch(project.name))
+      return projectList.filter(project => matchesSearch(project.name, searchQuery))
     }
     // When not searching, only show projects with content
     return projectList.filter(project => projectIdsWithContent.has(project.id))
-  }, [projectList, projectIdsWithContent, searchQuery, matchesSearch])
+  }, [projectList, projectIdsWithContent, searchQuery])
 
   // Auto-expand folders with matching children when searching
   useEffect(() => {
@@ -520,47 +533,25 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
     return items
   }, [filteredFolders, filteredDocs])
 
-  // Helper to find folder by id from tree
-  const findFolderById = useCallback((nodes: FolderTreeNode[], id: string): FolderTreeNode | null => {
-    for (const node of nodes) {
-      if (node.id === id) return node
-      const found = findFolderById(node.children, id)
-      if (found) return found
-    }
-    return null
-  }, [])
+  // No-op sorting strategy: items are alphabetically ordered by the backend,
+  // so we disable visual shifting during drag. DnD is only for nesting.
+  const noReorderStrategy = useCallback(() => null, [])
 
-  // Parse sortable ID to extract scope and item info
-  // Format: "app-folder-{id}" | "app-doc-{id}" | "project-{projId}-folder-{id}" | "project-{projId}-doc-{id}"
-  const parseSortableId = useCallback((sortableId: string): { scope: string; type: 'folder' | 'document'; itemId: string } | null => {
-    if (sortableId.startsWith('app-folder-')) {
-      return { scope: 'app', type: 'folder', itemId: sortableId.replace('app-folder-', '') }
-    }
-    if (sortableId.startsWith('app-doc-')) {
-      return { scope: 'app', type: 'document', itemId: sortableId.replace('app-doc-', '') }
-    }
-    // project-{projId}-folder-{id} or project-{projId}-doc-{id}
-    const projectMatch = sortableId.match(/^project-([^-]+)-(folder|doc)-(.+)$/)
-    if (projectMatch) {
-      const [, projectId, typeStr, itemId] = projectMatch
-      return {
-        scope: `project:${projectId}`,
-        type: typeStr === 'folder' ? 'folder' : 'document',
-        itemId,
-      }
-    }
-    return null
-  }, [])
+  const validPrefixes = useMemo(() => ['app'], [])
+
+  const parse = useCallback((sortableId: string) => {
+    return parseSortableId(sortableId, validPrefixes)
+  }, [validPrefixes])
 
   const handleDragStart = useCallback((event: DragStartEvent) => {
     const { active } = event
     const activeIdStr = String(active.id)
-    const parsed = parseSortableId(activeIdStr)
+    const parsed = parse(activeIdStr)
 
     if (!parsed) return
 
     let name = 'Item'
-    if (parsed.scope === 'app') {
+    if (parsed.prefix === 'app') {
       if (parsed.type === 'folder') {
         const folder = findFolderById(filteredFolders, parsed.itemId)
         if (folder) name = folder.name
@@ -569,89 +560,219 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
         if (doc) name = doc.title
       }
     }
-    // For project items, name resolution would require project folder data
-    // which may not be loaded. Use a generic fallback.
 
+    let folderId: string | null = null
+    if (parsed.type === 'document') {
+      const isProjectScope = parsed.prefix.startsWith('project:')
+      const docScope = isProjectScope ? 'project' : 'application'
+      const docScopeId = isProjectScope ? parsed.prefix.replace('project:', '') : applicationId
+      folderId = findDocInCache(parsed.itemId, docScope, docScopeId)?.folder_id ?? null
+    }
     setActiveItem({
       id: parsed.itemId,
       type: parsed.type,
       name,
-      scope: parsed.scope,
+      scope: parsed.prefix,
+      folderId,
     })
-  }, [filteredFolders, filteredDocs, findFolderById, parseSortableId])
+  }, [filteredFolders, filteredDocs, parse, findDocInCache, applicationId])
+
+  const handleDragOver = useCallback((event: DragOverEvent) => {
+    const { over, active } = event
+    if (!over || !active) {
+      setDropTargetFolderId(null)
+      return
+    }
+
+    const activeParsed = parse(String(active.id))
+    const overParsed = parse(String(over.id))
+
+    if (!activeParsed || !overParsed) {
+      setDropTargetFolderId(null)
+      return
+    }
+
+    if (overParsed.type === 'folder' && activeParsed.itemId !== overParsed.itemId) {
+      setDropTargetFolderId(overParsed.itemId)
+    } else if (overParsed.type === 'document') {
+      // Resolve the document's parent folder so hovering over a child doc highlights the folder
+      const isOverProjectScope = overParsed.prefix.startsWith('project:')
+      const overProjectId = isOverProjectScope ? overParsed.prefix.replace('project:', '') : null
+      const docScope = isOverProjectScope ? 'project' : 'application'
+      const docScopeId = isOverProjectScope ? overProjectId! : applicationId
+      const parentFolderId = findDocInCache(overParsed.itemId, docScope, docScopeId)?.folder_id ?? null
+
+      if (parentFolderId && activeParsed.itemId !== parentFolderId) {
+        // Resolve the relevant folder tree for descendant checks
+        const relevantFolders = isOverProjectScope
+          ? (queryClient.getQueryData<FolderTreeNode[]>(queryKeys.documentFolders('project', overProjectId!)) ?? [])
+          : folders
+
+        if (
+          // Don't highlight if dragging a doc already in that folder (use cached folderId from drag start)
+          !(activeParsed.type === 'document' && activeItem?.folderId === parentFolderId) &&
+          // Don't highlight if dragging a folder into its own descendant
+          !(activeParsed.type === 'folder' && isDescendantOf(relevantFolders, activeParsed.itemId, parentFolderId))
+        ) {
+          setDropTargetFolderId(parentFolderId)
+        } else {
+          setDropTargetFolderId(null)
+        }
+      } else {
+        setDropTargetFolderId(null)
+      }
+    } else {
+      setDropTargetFolderId(null)
+    }
+  }, [parse, findDocInCache, folders, applicationId, queryClient, activeItem])
+
+  /** Check if a folder is at root level (no parent) in any cached tree */
+  const isRootFolder = useCallback((folderId: string): boolean => {
+    if (folders.some(f => f.id === folderId)) return true
+    const allTrees = queryClient.getQueriesData<FolderTreeNode[]>({
+      queryKey: ['documentFolders'],
+      exact: false,
+    })
+    for (const [, rootNodes] of allTrees) {
+      if (Array.isArray(rootNodes) && rootNodes.some(f => f.id === folderId)) return true
+    }
+    return false
+  }, [folders, queryClient])
+
+  /** Check if a document is at root level (unfiled) in any cached list */
+  const isRootDocument = useCallback((documentId: string): boolean => {
+    if (unfiledDocs.some(d => d.id === documentId)) return true
+    // Search all document list caches (including project scopes)
+    const allLists = queryClient.getQueriesData<DocumentListResponse>({
+      queryKey: ['documents'],
+      exact: false,
+    })
+    for (const [, data] of allLists) {
+      const item = data?.items?.find((i: DocumentListItem) => i.id === documentId)
+      if (item) return !item.folder_id
+    }
+    return false
+  }, [unfiledDocs, queryClient])
+
+  /** Move an item to root (folder_id=null for docs, parent_id=null for folders) */
+  const moveItemToRoot = useCallback(async (parsed: { prefix: string; type: 'folder' | 'document'; itemId: string }) => {
+    const itemScope = getScopeFromPrefix(parsed.prefix)
+    if (parsed.type === 'document') {
+      const docFolderId = findDocInCache(parsed.itemId, itemScope.scope, itemScope.scopeId)?.folder_id
+      if (docFolderId) {
+        const rowVersion = getDocRowVersion(parsed.itemId, itemScope.scope, itemScope.scopeId)
+        if (!rowVersion) {
+          toast.error('Could not determine document version. Please try again.')
+          return
+        }
+        await moveDocument.mutateAsync({ documentId: parsed.itemId, folder_id: null, row_version: rowVersion, ...itemScope })
+        toast.success('Moved to root')
+      }
+    } else {
+      const activeIsRoot = isRootFolder(parsed.itemId)
+      if (!activeIsRoot) {
+        await moveFolder.mutateAsync({ folderId: parsed.itemId, parent_id: null, ...itemScope })
+        toast.success('Moved to root')
+      }
+    }
+  }, [findDocInCache, getDocRowVersion, moveDocument, moveFolder, isRootFolder, getScopeFromPrefix])
 
   const handleDragEnd = useCallback(async (event: DragEndEvent) => {
     const { active, over } = event
     setActiveItem(null)
+    setDropTargetFolderId(null)
 
     if (!over || active.id === over.id) return
 
-    const activeIdStr = String(active.id)
-    const overIdStr = String(over.id)
+    const activeParsed = parse(String(active.id))
 
-    const activeParsed = parseSortableId(activeIdStr)
-    const overParsed = parseSortableId(overIdStr)
+    // Case 0: Dropping onto root drop zone → move to root
+    if (String(over.id) === ROOT_DROP_ZONE_ID) {
+      if (!activeParsed) return
+      try {
+        await moveItemToRoot(activeParsed)
+      } catch (error) {
+        console.error('Failed to move:', error)
+        toast.error(error instanceof Error ? error.message : 'Failed to move item')
+      }
+      return
+    }
+
+    const overParsed = parse(String(over.id))
 
     if (!activeParsed || !overParsed) return
 
     // Prevent cross-scope drags
-    if (activeParsed.scope !== overParsed.scope) {
-      console.log('Cannot drag between scopes:', activeParsed.scope, '->', overParsed.scope)
-      return
+    if (activeParsed.prefix !== overParsed.prefix) return
+
+    // Determine which folder tree to search for project vs app scope
+    const isProjectScope = activeParsed.prefix.startsWith('project:')
+    const projectId = isProjectScope ? activeParsed.prefix.replace('project:', '') : null
+    const relevantFolders = isProjectScope
+      ? (queryClient.getQueryData<FolderTreeNode[]>(queryKeys.documentFolders('project', projectId!)) ?? [])
+      : folders
+
+    // Resolve effective drop target: if dropping on a document inside a folder,
+    // treat it as dropping onto that parent folder
+    let effectiveTargetType = overParsed.type
+    let effectiveTargetId = overParsed.itemId
+    if (overParsed.type === 'document') {
+      const docScope = isProjectScope ? 'project' : 'application'
+      const docScopeId = isProjectScope ? projectId! : applicationId
+      const parentFolderId = findDocInCache(overParsed.itemId, docScope, docScopeId)?.folder_id
+      if (parentFolderId) {
+        effectiveTargetType = 'folder'
+        effectiveTargetId = parentFolderId
+      }
     }
 
-    // Prevent cross-type drags (folder to doc position)
-    if (activeParsed.type !== overParsed.type) {
-      return
-    }
-
-    // Determine the new sort order based on position
-    let newSortOrder: number
-    if (activeParsed.scope === 'app') {
-      newSortOrder = appLevelSortableItems.indexOf(overIdStr)
-    } else {
-      // For project items, calculate based on over position
-      // Since project sections have their own SortableContext, this is simpler
-      newSortOrder = 0 // Will be refined by the mutation
-    }
+    const itemScope = getScopeFromPrefix(activeParsed.prefix)
 
     try {
-      if (activeParsed.scope === 'app') {
-        // App-level reorder
+      // Case 1: Dropping onto a folder → move item inside
+      if (effectiveTargetType === 'folder' && activeParsed.itemId !== effectiveTargetId) {
         if (activeParsed.type === 'folder') {
-          await reorderFolderApp.mutateAsync({
-            folderId: activeParsed.itemId,
-            sortOrder: newSortOrder,
-          })
+          // Prevent circular: can't move folder into itself or its own descendant
+          if (activeParsed.itemId === effectiveTargetId || isDescendantOf(relevantFolders, activeParsed.itemId, effectiveTargetId)) {
+            toast.error('Cannot move a folder into its own subfolder')
+            return
+          }
+          await moveFolder.mutateAsync({ folderId: activeParsed.itemId, parent_id: effectiveTargetId, ...itemScope })
+          const targetFolder = findFolderById(relevantFolders, effectiveTargetId)
+          toast.success(`Moved to ${targetFolder?.name ?? 'folder'}`)
         } else {
-          await reorderDocumentApp.mutateAsync({
-            documentId: activeParsed.itemId,
-            sortOrder: newSortOrder,
-            rowVersion: 1,
-          })
+          const docScope = isProjectScope ? 'project' : 'application'
+          const docScopeId = isProjectScope ? projectId! : applicationId
+          // Skip if doc is already in this folder
+          if (findDocInCache(activeParsed.itemId, docScope, docScopeId)?.folder_id === effectiveTargetId) return
+          const rowVersion = getDocRowVersion(activeParsed.itemId, docScope, docScopeId)
+          if (!rowVersion) {
+            toast.error('Could not determine document version. Please try again.')
+            return
+          }
+          await moveDocument.mutateAsync({ documentId: activeParsed.itemId, folder_id: effectiveTargetId, row_version: rowVersion, ...itemScope })
+          const targetFolder = findFolderById(relevantFolders, effectiveTargetId)
+          toast.success(`Moved to ${targetFolder?.name ?? 'folder'}`)
         }
-      } else {
-        // Project-level reorder
-        // Note: For project items, we'd need project-scoped mutations
-        // For now, the app-level mutations work since they're ID-based
-        if (activeParsed.type === 'folder') {
-          await reorderFolderApp.mutateAsync({
-            folderId: activeParsed.itemId,
-            sortOrder: newSortOrder,
-          })
-        } else {
-          await reorderDocumentApp.mutateAsync({
-            documentId: activeParsed.itemId,
-            sortOrder: newSortOrder,
-            rowVersion: 1,
-          })
-        }
+        expandFolder(effectiveTargetId)
+        return
+      }
+
+      // Case 2: Dropping onto a root-level item → move to root if currently nested
+      if (overParsed.type === 'document' || overParsed.type === 'folder') {
+        const overIsRoot = overParsed.type === 'folder'
+          ? isRootFolder(overParsed.itemId)
+          : isRootDocument(overParsed.itemId)
+
+        if (!overIsRoot) return // Don't do anything if dropping on a nested sibling
+
+        await moveItemToRoot(activeParsed)
       }
     } catch (error) {
-      console.error('Failed to reorder:', error)
-      toast.error('Failed to reorder item')
+      console.error('Failed to move:', error)
+      toast.error(error instanceof Error ? error.message : 'Failed to move item')
     }
-  }, [parseSortableId, appLevelSortableItems, reorderFolderApp, reorderDocumentApp])
+  }, [parse, folders, queryClient, applicationId, moveFolder, moveDocument, expandFolder, getDocRowVersion, findDocInCache, isRootFolder, isRootDocument, moveItemToRoot, getScopeFromPrefix])
 
   // ========================================================================
   // Context menu handlers (scope-aware)
@@ -668,6 +789,10 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
     ) => {
       e.preventDefault()
       e.stopPropagation()
+      // For documents, select to open in editor. Folders only highlight via contextMenuTarget.
+      if (type === 'document') {
+        selectDocument(id)
+      }
       setContextMenuTarget({
         id,
         type,
@@ -678,7 +803,7 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
         scopeId: scopeId || applicationId,
       })
     },
-    [applicationId]
+    [applicationId, selectDocument]
   )
 
   const handleCloseContextMenu = useCallback(() => {
@@ -731,7 +856,6 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
           folder_id: createParentId,
         })
         selectDocument(doc.id)
-        selectFolder(null)
         if (createParentId) expandFolder(createParentId)
       } else {
         await createFolder.mutateAsync({
@@ -743,88 +867,103 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
         if (createParentId) expandFolder(createParentId)
       }
     },
-    [createType, createScope, createScopeId, createParentId, createDocument, createFolder, selectDocument, selectFolder, expandFolder]
+    [createType, createScope, createScopeId, createParentId, createDocument, createFolder, selectDocument, expandFolder]
   )
 
   const handleRename = useCallback(
     (id: string, type: 'folder' | 'document') => {
+      const targetScope = contextMenuTarget?.scope ?? null
+      const targetScopeId = contextMenuTarget?.scopeId ?? null
       handleCloseContextMenu()
       setRenamingItemId(id)
       setRenamingItemType(type)
+      setRenamingItemScope(targetScope)
+      setRenamingItemScopeId(targetScopeId)
     },
-    [handleCloseContextMenu]
+    [handleCloseContextMenu, contextMenuTarget]
   )
 
   const handleRenameSubmit = useCallback(
-    (newName: string) => {
+    async (newName: string) => {
       if (!renamingItemId) return
+      const itemScope = renamingItemScope ?? 'application'
+      const itemScopeId = renamingItemScopeId ?? applicationId
 
-      // Determine which scope mutation to use based on context
-      // For simplicity, use app-scope mutations (project items will
-      // also work since rename/delete endpoints are ID-based, not scope-filtered)
-      if (renamingItemType === 'folder') {
-        renameFolderApp.mutate({ folderId: renamingItemId, name: newName })
-      } else {
-        renameDocumentApp.mutate({
-          documentId: renamingItemId,
-          title: newName,
-          row_version: 1,
-        })
+      try {
+        if (renamingItemType === 'folder') {
+          await renameFolder.mutateAsync({ folderId: renamingItemId, name: newName, scope: itemScope, scopeId: itemScopeId })
+        } else {
+          const rowVersion = getDocRowVersion(renamingItemId)
+          if (!rowVersion) {
+            toast.error('Could not determine document version. Please try again.')
+            setRenamingItemId(null)
+            setRenamingItemScope(null)
+            setRenamingItemScopeId(null)
+            return
+          }
+          await renameDocument.mutateAsync({
+            documentId: renamingItemId,
+            title: newName,
+            row_version: rowVersion,
+            scope: itemScope,
+            scopeId: itemScopeId,
+          })
+        }
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Failed to rename')
       }
 
       setRenamingItemId(null)
+      setRenamingItemScope(null)
+      setRenamingItemScopeId(null)
     },
-    [renamingItemId, renamingItemType, renameFolderApp, renameDocumentApp]
+    [renamingItemId, renamingItemType, renamingItemScope, renamingItemScopeId, renameFolder, renameDocument, getDocRowVersion, applicationId]
   )
 
   const handleRenameCancel = useCallback(() => {
     setRenamingItemId(null)
+    setRenamingItemScope(null)
+    setRenamingItemScopeId(null)
   }, [])
 
   const handleDelete = useCallback(
     (id: string, type: 'folder' | 'document') => {
+      // Capture scope before closing context menu (contextMenuTarget is cleared on close)
+      const scope = contextMenuTarget?.scope ?? 'application'
+      const scopeId = contextMenuTarget?.scopeId ?? applicationId
       handleCloseContextMenu()
       // Find the name from the tree data
       const name =
         type === 'folder'
-          ? folders.find((f) => f.id === id)?.name || 'this folder'
-          : unfiledDocs.find((d) => d.id === id)?.title || 'this document'
-      setDeleteTarget({ id, type, name })
+          ? findFolderById(folders, id)?.name || 'this folder'
+          : findDocInCache(id)?.title || unfiledDocs.find((d) => d.id === id)?.title || 'this document'
+      setDeleteTarget({ id, type, name, scope, scopeId })
       setDeleteDialogOpen(true)
     },
-    [folders, unfiledDocs, handleCloseContextMenu]
+    [folders, unfiledDocs, handleCloseContextMenu, contextMenuTarget, applicationId, findDocInCache]
   )
 
   const handleDeleteConfirm = useCallback(async () => {
     if (!deleteTarget) return
+    const itemScope = deleteTarget.scope ?? 'application'
+    const itemScopeId = deleteTarget.scopeId ?? applicationId
     if (deleteTarget.type === 'folder') {
-      await deleteFolderApp.mutateAsync(deleteTarget.id)
-      if (selectedFolderId === deleteTarget.id) selectFolder(null)
+      await deleteFolder.mutateAsync({ folderId: deleteTarget.id, scope: itemScope, scopeId: itemScopeId })
     } else {
-      await deleteDocumentApp.mutateAsync(deleteTarget.id)
+      await deleteDocument.mutateAsync({ documentId: deleteTarget.id, scope: itemScope, scopeId: itemScopeId })
       if (selectedDocumentId === deleteTarget.id) selectDocument(null)
     }
-  }, [deleteTarget, deleteFolderApp, deleteDocumentApp, selectedFolderId, selectedDocumentId, selectFolder, selectDocument])
+  }, [deleteTarget, deleteFolder, deleteDocument, selectedDocumentId, selectDocument, applicationId])
 
   // ========================================================================
   // Selection handlers
   // ========================================================================
 
-  const handleSelectFolder = useCallback(
-    (folderId: string) => {
-      toggleFolder(folderId)
-      selectFolder(folderId)
-      selectDocument(null)
-    },
-    [toggleFolder, selectFolder, selectDocument]
-  )
-
   const handleSelectDocument = useCallback(
     (documentId: string) => {
       selectDocument(documentId)
-      selectFolder(null)
     },
-    [selectDocument, selectFolder]
+    [selectDocument]
   )
 
   // ========================================================================
@@ -843,11 +982,15 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
   // Recursive folder renderer (app-level)
   // ========================================================================
 
+  // Stable primitive for context-menu folder highlight (avoids object ref in deps)
+  const contextMenuFolderId = contextMenuTarget?.type === 'folder' ? contextMenuTarget.id : null
+
   const renderFolderNode = useCallback(
     (node: FolderTreeNode, depth: number): JSX.Element => {
       const isExpanded = expandedFolderIds.has(node.id)
-      const isSelected = selectedFolderId === node.id
+      const isSelected = contextMenuFolderId === node.id
       const isDragging = activeItem?.id === node.id && activeItem?.type === 'folder' && activeItem?.scope === 'app'
+      const isDropTarget = dropTargetFolderId === node.id
 
       return (
         <div key={node.id}>
@@ -859,28 +1002,52 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
             isSelected={isSelected}
             isRenaming={renamingItemId === node.id}
             isDragging={isDragging}
+            isDropTarget={isDropTarget}
             sortableId={`app-folder-${node.id}`}
             onToggleExpand={() => toggleFolder(node.id)}
-            onSelect={() => handleSelectFolder(node.id)}
+            onSelect={() => toggleFolder(node.id)}
             onContextMenu={(e) =>
               handleContextMenu(e, node.id, 'folder', node.name, 'application', applicationId)
             }
             onRenameSubmit={handleRenameSubmit}
             onRenameCancel={handleRenameCancel}
           />
-          {isExpanded &&
-            node.children.map((child) => renderFolderNode(child, depth + 1))}
+          {isExpanded && (
+            <>
+              {node.children.map((child) => renderFolderNode(child, depth + 1))}
+              <FolderDocuments
+                scope="application"
+                scopeId={applicationId}
+                folderId={node.id}
+                depth={depth + 1}
+                selectedDocumentId={selectedDocumentId}
+                renamingItemId={renamingItemId}
+                sortableIdPrefix="app"
+                activeItemId={activeItem?.type === 'document' ? activeItem.id : null}
+                activeLocks={activeLocks}
+                onSelectDocument={handleSelectDocument}
+                onContextMenu={(e, id, type, name) =>
+                  handleContextMenu(e, id, type, name, 'application', applicationId)
+                }
+                onRenameSubmit={handleRenameSubmit}
+                onRenameCancel={handleRenameCancel}
+              />
+            </>
+          )}
         </div>
       )
     },
     [
       expandedFolderIds,
-      selectedFolderId,
+      contextMenuFolderId,
+      selectedDocumentId,
       renamingItemId,
       activeItem,
+      dropTargetFolderId,
       applicationId,
+      activeLocks,
       toggleFolder,
-      handleSelectFolder,
+      handleSelectDocument,
       handleContextMenu,
       handleRenameSubmit,
       handleRenameCancel,
@@ -902,6 +1069,7 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
           isRenaming={renamingItemId === doc.id}
           isDragging={isDragging}
           sortableId={`app-doc-${doc.id}`}
+          lockInfo={activeLocks.get(doc.id)}
           onSelect={() => handleSelectDocument(doc.id)}
           onContextMenu={(e) =>
             handleContextMenu(e, doc.id, 'document', doc.title, 'application', applicationId)
@@ -916,6 +1084,7 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
       renamingItemId,
       activeItem,
       applicationId,
+      activeLocks,
       handleSelectDocument,
       handleContextMenu,
       handleRenameSubmit,
@@ -977,6 +1146,7 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
       sensors={sensors}
       collisionDetection={closestCenter}
       onDragStart={handleDragStart}
+      onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
     >
       <div className="py-1" role="tree">
@@ -988,7 +1158,7 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
         )}
 
         {/* App-level folder tree */}
-        <SortableContext items={appLevelSortableItems} strategy={verticalListSortingStrategy}>
+        <SortableContext items={appLevelSortableItems} strategy={noReorderStrategy}>
           {filteredFolders.length > 0 && (
             <>
               {filteredFolders.map((node) => renderFolderNode(node, 0))}
@@ -1016,13 +1186,13 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
                 key={project.id}
                 project={project}
                 expandedFolderIds={expandedFolderIds}
-                selectedFolderId={selectedFolderId}
                 selectedDocumentId={selectedDocumentId}
                 renamingItemId={renamingItemId}
                 activeItem={activeItem}
+                dropTargetFolderId={dropTargetFolderId}
+                contextMenuFolderId={contextMenuFolderId}
                 hideIfEmpty={false}
                 onToggleFolder={toggleFolder}
-                onSelectFolder={handleSelectFolder}
                 onSelectDocument={handleSelectDocument}
                 onContextMenu={handleContextMenu}
                 onRenameSubmit={handleRenameSubmit}
@@ -1031,6 +1201,9 @@ export function ApplicationTree({ applicationId }: ApplicationTreeProps): JSX.El
             ))}
           </>
         )}
+
+        {/* Root drop zone - visible during drag for moving items to root */}
+        {activeItem && <RootDropZone />}
       </div>
 
       {/* Drag overlay */}

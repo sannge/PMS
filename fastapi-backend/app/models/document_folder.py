@@ -169,6 +169,7 @@ class DocumentFolder(Base):
         "Document",
         back_populates="folder",
         lazy="dynamic",
+        passive_deletes=True,
     )
 
     creator = relationship(

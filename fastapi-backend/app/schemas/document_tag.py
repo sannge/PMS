@@ -32,6 +32,11 @@ class TagCreate(BaseModel):
         description="ID of the application or user",
     )
 
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, v: str) -> str:
+        return v.strip()
+
     @field_validator("color")
     @classmethod
     def validate_hex_color(cls, v: Optional[str]) -> Optional[str]:
@@ -54,6 +59,13 @@ class TagUpdate(BaseModel):
         None,
         description="Hex color code for UI display",
     )
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            return v.strip()
+        return v
 
     @field_validator("color")
     @classmethod

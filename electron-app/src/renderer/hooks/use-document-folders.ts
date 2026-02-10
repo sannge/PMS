@@ -58,11 +58,15 @@ interface CreateFolderParams {
 interface RenameFolderParams {
   folderId: string
   name: string
+  scope: string
+  scopeId: string
 }
 
 interface MoveFolderParams {
   folderId: string
   parent_id: string | null
+  scope: string
+  scopeId: string
 }
 
 // ============================================================================
@@ -162,8 +166,20 @@ export function useFolderTree(
       !!token &&
       !!scope &&
       (scope === 'personal' || !!scopeId),
+    // Sort folders case-insensitively at every tree level so order is consistent
+    // regardless of backend collation, stale cache, or optimistic update timing.
+    select: (data) => {
+      const sortTree = (nodes: FolderTreeNode[]): FolderTreeNode[] =>
+        [...nodes]
+          .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+          .map(n => ({ ...n, children: sortTree(n.children) }))
+      return sortTree(data)
+    },
     // Use default staleTime (30s) - fresh data won't refetch on focus, stale data will
     gcTime: 24 * 60 * 60 * 1000,
+    // WebSocket subscriptions keep cache fresh while mounted; window focus refetch is redundant.
+    // On remount (screen navigation), refetchOnMount: true (default) ensures stale data is refreshed.
+    refetchOnWindowFocus: false,
     // No placeholderData - let isLoading be true on initial fetch so skeleton shows
   })
 }
@@ -174,14 +190,12 @@ export function useFolderTree(
 
 // TEMP_ID_PREFIX imported from use-documents.ts
 
-// Helper to add a folder to tree (handles nested structure)
+// Helper to add a folder to tree — select transform handles sorting
 function addFolderToTree(tree: FolderTreeNode[], folder: FolderTreeNode, parentId: string | null): FolderTreeNode[] {
   if (!parentId) {
-    // Add to root level
     return [...tree, folder]
   }
 
-  // Find parent and add to its children
   return tree.map(node => {
     if (node.id === parentId) {
       return { ...node, children: [...node.children, folder] }
@@ -301,15 +315,10 @@ export function useCreateFolder(): UseMutationResult<DocumentFolder, Error, Crea
 /**
  * Rename a folder with optimistic update.
  */
-export function useRenameFolder(
-  scope: string,
-  scopeId: string
-): UseMutationResult<DocumentFolder, Error, RenameFolderParams> {
+export function useRenameFolder(): UseMutationResult<DocumentFolder, Error, RenameFolderParams> {
   const token = useAuthStore((s) => s.token)
   const queryClient = useQueryClient()
   const userId = useAuthStore((s) => s.user?.id ?? null)
-
-  const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
 
   return useMutation({
     mutationFn: async ({ folderId, name }: RenameFolderParams) => {
@@ -329,7 +338,8 @@ export function useRenameFolder(
 
       return response.data
     },
-    onMutate: async ({ folderId, name }) => {
+    onMutate: async ({ folderId, name, scope, scopeId }) => {
+      const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
       const queryKey = queryKeys.documentFolders(scope, effectiveScopeId)
 
       await queryClient.cancelQueries({ queryKey })
@@ -354,15 +364,10 @@ export function useRenameFolder(
 /**
  * Move a folder to a new parent with optimistic update.
  */
-export function useMoveFolder(
-  scope: string,
-  scopeId: string
-): UseMutationResult<DocumentFolder, Error, MoveFolderParams> {
+export function useMoveFolder(): UseMutationResult<DocumentFolder, Error, MoveFolderParams> {
   const token = useAuthStore((s) => s.token)
   const queryClient = useQueryClient()
   const userId = useAuthStore((s) => s.user?.id ?? null)
-
-  const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
 
   return useMutation({
     mutationFn: async ({ folderId, parent_id }: MoveFolderParams) => {
@@ -382,7 +387,8 @@ export function useMoveFolder(
 
       return response.data
     },
-    onMutate: async ({ folderId, parent_id }) => {
+    onMutate: async ({ folderId, parent_id, scope, scopeId }) => {
+      const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
       const queryKey = queryKeys.documentFolders(scope, effectiveScopeId)
 
       await queryClient.cancelQueries({ queryKey })
@@ -414,6 +420,15 @@ export function useMoveFolder(
 
       return { previous, queryKey }
     },
+    onSuccess: (_data, { scope, scopeId }) => {
+      const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
+      // Refetch the full tree to get accurate materialized_path and depth
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.documentFolders(scope, effectiveScopeId),
+      })
+      // Update project section visibility
+      queryClient.invalidateQueries({ queryKey: ['projects-with-content'] })
+    },
     onError: (_error, _params, context) => {
       if (context?.previous) {
         queryClient.setQueryData(context.queryKey, context.previous)
@@ -425,18 +440,13 @@ export function useMoveFolder(
 /**
  * Delete a folder with optimistic update.
  */
-export function useDeleteFolder(
-  scope: string,
-  scopeId: string
-): UseMutationResult<void, Error, string> {
+export function useDeleteFolder(): UseMutationResult<void, Error, { folderId: string; scope: string; scopeId: string }> {
   const token = useAuthStore((s) => s.token)
   const queryClient = useQueryClient()
   const userId = useAuthStore((s) => s.user?.id ?? null)
 
-  const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
-
   return useMutation({
-    mutationFn: async (folderId: string) => {
+    mutationFn: async ({ folderId }: { folderId: string; scope: string; scopeId: string }) => {
       if (!window.electronAPI) {
         throw new Error('Electron API not available')
       }
@@ -450,7 +460,8 @@ export function useDeleteFolder(
         throw new Error(parseApiError(response.status, response.data))
       }
     },
-    onMutate: async (folderId) => {
+    onMutate: async ({ folderId, scope, scopeId }) => {
+      const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
       const queryKey = queryKeys.documentFolders(scope, effectiveScopeId)
 
       await queryClient.cancelQueries({ queryKey })
@@ -464,7 +475,22 @@ export function useDeleteFolder(
 
       return { previous, queryKey }
     },
-    onError: (_error, _folderId, context) => {
+    onSuccess: (_data, { scope, scopeId }) => {
+      const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
+      // Documents in the deleted folder are soft-deleted on the server.
+      // Invalidate document queries so they disappear from the UI.
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.documents(scope, effectiveScopeId),
+        exact: false,
+      })
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.scopesSummary(),
+      })
+      queryClient.invalidateQueries({
+        queryKey: ['projects-with-content'],
+      })
+    },
+    onError: (_error, _params, context) => {
       if (context?.previous) {
         queryClient.setQueryData(context.queryKey, context.previous)
       }

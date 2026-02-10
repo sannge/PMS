@@ -53,6 +53,7 @@ class PresenceManager:
     # Key prefixes
     _PRESENCE_PREFIX = "presence:"
     _USER_DATA_PREFIX = "presence_data:"
+    _USER_ROOMS_PREFIX = "user_rooms:"
     _PRESENCE_CHANNEL = "ws:presence"
 
     def __init__(self) -> None:
@@ -107,6 +108,12 @@ class PresenceManager:
                     user_id,
                     user_data
                 )
+
+                # Track room in user's reverse index for O(1) leave_all
+                await redis_service.client.sadd(
+                    f"{self._USER_ROOMS_PREFIX}{user_id}",
+                    room_id
+                )
             except Exception as e:
                 logger.error(f"Redis heartbeat error: {e}")
                 # Fall through to local storage
@@ -151,6 +158,12 @@ class PresenceManager:
                     user_id
                 )
 
+                # Remove room from user's reverse index
+                await redis_service.client.srem(
+                    f"{self._USER_ROOMS_PREFIX}{user_id}",
+                    room_id
+                )
+
                 # Broadcast leave event
                 await redis_service.publish(
                     self._PRESENCE_CHANNEL,
@@ -192,31 +205,21 @@ class PresenceManager:
 
         if redis_service.is_connected:
             try:
-                # Find all rooms where user has presence using SCAN (non-blocking)
-                keys = await redis_service.scan_keys(f"{self._PRESENCE_PREFIX}*")
+                # O(1) lookup via reverse index instead of O(N) SCAN
+                room_ids = await redis_service.client.smembers(
+                    f"{self._USER_ROOMS_PREFIX}{user_id}"
+                )
 
-                # Phase 1: batch-check which rooms contain this user (pipeline)
-                if keys:
+                if room_ids:
+                    # Batch-remove from all rooms in a single pipeline
                     pipe = redis_service.client.pipeline(transaction=False)
-                    room_ids = []
-                    for key in keys:
-                        room_id = key.replace(self._PRESENCE_PREFIX, "")
-                        room_ids.append(room_id)
-                        pipe.zscore(f"{self._PRESENCE_PREFIX}{room_id}", user_id)
-                    scores = await pipe.execute()
-
-                    # Phase 2: batch-remove from rooms where user was present
-                    remove_pipe = redis_service.client.pipeline(transaction=False)
-                    matched_rooms: list[str] = []
-                    for room_id, score in zip(room_ids, scores):
-                        if score is not None:
-                            remove_pipe.zrem(f"{self._PRESENCE_PREFIX}{room_id}", user_id)
-                            remove_pipe.hdel(f"{self._USER_DATA_PREFIX}{room_id}", user_id)
-                            matched_rooms.append(room_id)
-                    if matched_rooms:
-                        await remove_pipe.execute()
-                        # Only report rooms as left after successful removal
-                        rooms_left = matched_rooms
+                    for room_id in room_ids:
+                        pipe.zrem(f"{self._PRESENCE_PREFIX}{room_id}", user_id)
+                        pipe.hdel(f"{self._USER_DATA_PREFIX}{room_id}", user_id)
+                    # Delete the reverse index
+                    pipe.delete(f"{self._USER_ROOMS_PREFIX}{user_id}")
+                    await pipe.execute()
+                    rooms_left = list(room_ids)
             except Exception as e:
                 logger.error(f"Redis leave_all error: {e}")
         else:
@@ -316,22 +319,23 @@ class PresenceManager:
 
         if redis_service.is_connected:
             try:
-                keys = await redis_service.scan_keys(f"{self._PRESENCE_PREFIX}*")
-                if not keys:
+                # O(1) lookup via reverse index
+                room_ids = await redis_service.client.smembers(
+                    f"{self._USER_ROOMS_PREFIX}{user_id}"
+                )
+                if not room_ids:
                     return []
 
-                # Batch all zscore calls in a single pipeline round-trip
+                # Verify presence is still active (not stale)
                 pipe = redis_service.client.pipeline(transaction=False)
-                room_ids = []
-                for key in keys:
-                    room_id = key.replace(self._PRESENCE_PREFIX, "")
-                    room_ids.append(room_id)
+                room_list = list(room_ids)
+                for room_id in room_list:
                     pipe.zscore(f"{self._PRESENCE_PREFIX}{room_id}", user_id)
                 scores = await pipe.execute()
 
                 return [
                     room_id
-                    for room_id, score in zip(room_ids, scores)
+                    for room_id, score in zip(room_list, scores)
                     if score is not None and score > cutoff
                 ]
             except Exception as e:

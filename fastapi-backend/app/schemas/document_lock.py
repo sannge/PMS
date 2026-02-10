@@ -24,3 +24,19 @@ class DocumentLockResponse(BaseModel):
     lock_holder: Optional[LockHolder] = Field(
         None, description="Lock holder info if locked"
     )
+
+
+class ActiveLockItem(BaseModel):
+    """A single active lock in the batch response."""
+
+    document_id: str = Field(..., description="UUID of the locked document")
+    lock_holder: LockHolder = Field(..., description="Who holds the lock")
+
+
+class ActiveLocksResponse(BaseModel):
+    """Batch response for active locks in a scope."""
+
+    locks: list[ActiveLockItem] = Field(
+        default_factory=list,
+        description="Currently locked documents (typically 0-5)",
+    )

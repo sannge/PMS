@@ -38,6 +38,7 @@ import { FolderTree } from './folder-tree'
 import { ApplicationTree } from './application-tree'
 import { DocumentEditor } from './document-editor'
 import { DocumentActionBar } from './document-action-bar'
+import { ensureContentHeading } from './content-utils'
 
 // ============================================================================
 // Types
@@ -55,7 +56,7 @@ export interface KnowledgePanelProps {
 // Skeleton
 // ============================================================================
 
-function EditorSkeleton(): JSX.Element {
+export function EditorSkeleton(): JSX.Element {
   return (
     <div className="flex-1 p-6 space-y-4">
       <div className="h-8 w-48 rounded bg-muted animate-pulse" />
@@ -90,7 +91,7 @@ const MAX_TREE_WIDTH = 500
 const DEFAULT_TREE_WIDTH = 280
 
 function InnerPanel({ scope, scopeId, showProjectFolders, className }: InnerPanelProps) {
-  const { selectedDocumentId, selectDocument, selectFolder } = useKnowledgeBase()
+  const { selectedDocumentId, selectDocument } = useKnowledgeBase()
 
   // Resizable tree panel state
   const [treeWidth, setTreeWidth] = useState(DEFAULT_TREE_WIDTH)
@@ -104,12 +105,14 @@ function InnerPanel({ scope, scopeId, showProjectFolders, className }: InnerPane
   })
 
   const currentDoc = editMode.document
-  const isDocLoading = editMode.isDocLoading
+  const isDocError = editMode.isDocError
 
-  // Memoize parsed content to avoid new object reference on every render
+  // Memoize parsed content — ensure it starts with an h1 heading
   const parsedContent = useMemo(
-    () => currentDoc?.content_json ? JSON.parse(currentDoc.content_json) as object : undefined,
-    [currentDoc?.content_json]
+    () => currentDoc
+      ? ensureContentHeading(currentDoc.content_json, currentDoc.title)
+      : undefined,
+    [currentDoc?.content_json, currentDoc?.title]
   )
 
   // Creation mutations
@@ -128,11 +131,10 @@ function InnerPanel({ scope, scopeId, showProjectFolders, className }: InnerPane
       {
         onSuccess: (data) => {
           selectDocument(data.id)
-          selectFolder(null)
         },
       }
     )
-  }, [scope, scopeId, createDocument, selectDocument, selectFolder])
+  }, [scope, scopeId, createDocument, selectDocument])
 
   const handleCreateFolder = useCallback(() => {
     if (!scopeId) return
@@ -229,9 +231,7 @@ function InnerPanel({ scope, scopeId, showProjectFolders, className }: InnerPane
       {/* Right panel: editor or empty state */}
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
         {selectedDocumentId ? (
-          isDocLoading ? (
-            <EditorSkeleton />
-          ) : currentDoc ? (
+          currentDoc ? (
             <>
               {/* Action bar: Edit/Save/Cancel buttons */}
               <DocumentActionBar
@@ -253,9 +253,11 @@ function InnerPanel({ scope, scopeId, showProjectFolders, className }: InnerPane
               <DocumentEditor
                 content={parsedContent}
                 onChange={editMode.handleContentChange}
+                onBaselineSync={editMode.handleBaselineSync}
                 editable={editMode.mode === 'edit'}
                 placeholder="Start writing..."
                 className="flex-1"
+                updatedAt={currentDoc.updated_at}
               />
 
               {/* Discard changes dialog */}
@@ -302,7 +304,7 @@ function InnerPanel({ scope, scopeId, showProjectFolders, className }: InnerPane
               </Dialog>
 
               {/* Quit confirmation dialog */}
-              <Dialog open={editMode.showQuitDialog} onOpenChange={() => { /* prevent close via overlay */ }}>
+              <Dialog open={editMode.showQuitDialog} onOpenChange={(open) => { if (!open) editMode.quitCancel() }}>
                 <DialogContent className="sm:max-w-md">
                   <DialogHeader>
                     <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-amber-500/10">
@@ -329,11 +331,13 @@ function InnerPanel({ scope, scopeId, showProjectFolders, className }: InnerPane
                 </DialogContent>
               </Dialog>
             </>
-          ) : (
+          ) : isDocError ? (
             <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground gap-3">
               <FileText className="h-12 w-12 text-muted-foreground/30" />
               <p className="text-sm">Document not found</p>
             </div>
+          ) : (
+            <EditorSkeleton />
           )
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground gap-3">

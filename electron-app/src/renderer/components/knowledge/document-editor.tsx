@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { createDocumentExtensions } from './editor-extensions'
 import { EditorToolbar } from './editor-toolbar'
+import { DocumentTimestamp } from './document-header'
 import type { DocumentEditorProps } from './editor-types'
 import './editor-styles.css'
 
@@ -50,10 +51,13 @@ export function DocumentEditor({
   editable = true,
   placeholder,
   className,
+  updatedAt,
+  onBaselineSync,
 }: DocumentEditorProps) {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const onChangeRef = useRef(onChange)
   const editableRef = useRef(editable)
+  const onBaselineSyncRef = useRef(onBaselineSync)
 
   // Keep refs current
   useEffect(() => {
@@ -63,6 +67,10 @@ export function DocumentEditor({
   useEffect(() => {
     editableRef.current = editable
   }, [editable])
+
+  useEffect(() => {
+    onBaselineSyncRef.current = onBaselineSync
+  }, [onBaselineSync])
 
   // Stable onUpdate handler using ref-based debounce
   const handleUpdate = useCallback(({ editor: ed }: { editor: ReturnType<typeof useEditor> extends infer E ? NonNullable<E> : never }) => {
@@ -110,10 +118,12 @@ export function DocumentEditor({
     }
   }, [])
 
-  // Sync editable state
+  // Sync editable state — emitUpdate: false prevents onUpdate from firing
+  // during the view→edit transition, which would otherwise cause a false
+  // dirty-detection (onUpdate fires with stale content before setContent runs).
   useEffect(() => {
     if (editor) {
-      editor.setEditable(editable)
+      editor.setEditable(editable, false)
     }
   }, [editor, editable])
 
@@ -125,6 +135,12 @@ export function DocumentEditor({
     if (!editor || !content) return
     if (!editableRef.current || !editor.isFocused) {
       editor.commands.setContent(content)
+      // After setContent in edit mode, sync TipTap-normalized JSON back to
+      // parent for dirty-detection baseline (TipTap adds default attrs like
+      // textAlign/indent that our raw JSON builders don't include).
+      if (editableRef.current && onBaselineSyncRef.current) {
+        onBaselineSyncRef.current(editor.getJSON())
+      }
     }
   }, [editor, content, editable])
 
@@ -136,6 +152,7 @@ export function DocumentEditor({
     <div className={cn('overflow-hidden bg-background flex flex-col min-h-0', className)}>
       {editable && <EditorToolbar editor={editor} />}
       <div className="flex-1 overflow-y-auto min-h-0">
+        {updatedAt && <DocumentTimestamp updatedAt={updatedAt} />}
         <EditorContent editor={editor} className="prose prose-sm max-w-none" />
       </div>
       <EditorStatusBar editor={editor} />

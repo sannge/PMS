@@ -5,14 +5,17 @@ Folders use a materialized path pattern for efficient tree queries and
 support nesting up to 5 levels deep. All endpoints require authentication.
 """
 
-from collections import defaultdict
+import logging
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import lazyload
+
+logger = logging.getLogger(__name__)
 
 from ..database import get_db
 from ..models.document import Document
@@ -27,6 +30,7 @@ from ..schemas.document_folder import (
 )
 from ..services.auth_service import get_current_user
 from ..services.document_service import (
+    check_name_uniqueness,
     compute_materialized_path,
     get_scope_filter,
     set_scope_fks,
@@ -53,52 +57,52 @@ def _get_folder_scope(folder: DocumentFolder) -> tuple[str, str]:
     return "unknown", ""
 
 
-async def _broadcast_folder_event(
-    message_type: MessageType,
+def _build_folder_broadcast(
     folder: DocumentFolder,
-    actor_id: UUID | None = None,
-    extra_data: dict | None = None,
+    actor_id: UUID,
     project_application_id: UUID | None = None,
-) -> None:
-    """Broadcast a folder event to the appropriate room(s).
+) -> tuple[dict, list[str]]:
+    """Build broadcast payload and target rooms for a folder event.
 
-    Args:
-        message_type: The WebSocket message type
-        folder: The folder being affected
-        actor_id: The user who performed the action (for client-side filtering)
-        extra_data: Additional data to include in the broadcast
-        project_application_id: For project-scoped folders, the parent application ID
-            (so we can also broadcast to the application room)
+    Must be called BEFORE commit so folder attributes are accessible.
+    Returns (data_dict, room_list) for use with _broadcast_to_rooms.
     """
     scope, scope_id = _get_folder_scope(folder)
-
     data = {
         "folder_id": str(folder.id),
         "scope": scope,
         "scope_id": scope_id,
         "parent_id": str(folder.parent_id) if folder.parent_id else None,
-        "actor_id": str(actor_id) if actor_id else None,
+        "actor_id": str(actor_id),
         "timestamp": datetime.utcnow().isoformat(),
-        # Include application_id for project-scoped items so frontend can invalidate app queries
         "application_id": str(project_application_id) if project_application_id else None,
     }
-    if extra_data:
-        data.update(extra_data)
-
-    message = {"type": message_type.value, "data": data}
-
-    # Determine the room(s) to broadcast to
+    rooms: list[str] = []
     if folder.application_id:
-        await manager.broadcast_to_room(f"application:{folder.application_id}", message)
+        rooms.append(f"application:{folder.application_id}")
     elif folder.project_id:
-        # Broadcast to project room
-        await manager.broadcast_to_room(f"project:{folder.project_id}", message)
-        # Also broadcast to application room so users viewing the app tree get updates
+        rooms.append(f"project:{folder.project_id}")
         if project_application_id:
-            await manager.broadcast_to_room(f"application:{project_application_id}", message)
-    else:
-        # Personal folders - broadcast to user room
-        await manager.broadcast_to_room(f"user:{folder.user_id}", message)
+            rooms.append(f"application:{project_application_id}")
+    elif folder.user_id:
+        rooms.append(f"user:{folder.user_id}")
+    return data, rooms
+
+
+async def _broadcast_to_rooms(
+    message_type: MessageType,
+    data: dict,
+    rooms: list[str],
+) -> None:
+    """Broadcast a pre-built event payload to specific rooms.
+
+    Used when broadcast data and room targets must be captured before commit
+    (e.g. delete) but the broadcast itself must happen after commit so clients
+    re-fetch committed data.
+    """
+    message = {"type": message_type.value, "data": data}
+    for room in rooms:
+        await manager.broadcast_to_room(room, message)
 
 
 @router.get("/tree", response_model=list[FolderTreeNode])
@@ -122,7 +126,7 @@ async def get_folder_tree(
     result = await db.execute(
         select(DocumentFolder)
         .where(scope_filter)
-        .order_by(DocumentFolder.materialized_path.asc(), DocumentFolder.sort_order.asc())
+        .order_by(DocumentFolder.materialized_path.asc(), DocumentFolder.name.asc())
     )
     folders = result.scalars().all()
 
@@ -185,11 +189,12 @@ async def create_folder(
     the materialized_path from the parent folder's path.
     """
     await validate_scope(body.scope, body.scope_id, db)
+    await check_name_uniqueness(db, body.name, body.scope, body.scope_id, body.parent_id)
 
     # For project-scoped folders, get the parent application_id for broadcasting
     project_application_id: UUID | None = None
     if body.scope == "project":
-        project = await db.get(Project, UUID(body.scope_id))
+        project = await db.get(Project, body.scope_id)
         if project:
             project_application_id = project.application_id
 
@@ -213,13 +218,13 @@ async def create_folder(
     await db.flush()
     await db.refresh(folder)
 
-    # Broadcast folder created event
-    await _broadcast_folder_event(
-        MessageType.FOLDER_CREATED,
-        folder,
-        actor_id=current_user.id,
-        project_application_id=project_application_id,
+    # Capture broadcast data before commit (folder attrs needed)
+    broadcast_data, broadcast_rooms = _build_folder_broadcast(
+        folder, current_user.id, project_application_id,
     )
+
+    await db.commit()
+    await _broadcast_to_rooms(MessageType.FOLDER_CREATED, broadcast_data, broadcast_rooms)
 
     return FolderResponse.model_validate(folder)
 
@@ -236,7 +241,10 @@ async def update_folder(
     for this folder and all its descendants.
     """
     result = await db.execute(
-        select(DocumentFolder).where(DocumentFolder.id == folder_id)
+        select(DocumentFolder)
+        .options(lazyload("*"))
+        .where(DocumentFolder.id == folder_id)
+        .with_for_update()
     )
     folder = result.scalar_one_or_none()
 
@@ -248,6 +256,16 @@ async def update_folder(
 
     update_data = body.model_dump(exclude_unset=True)
 
+    # Check name uniqueness when name or parent changes
+    if "name" in update_data or "parent_id" in update_data:
+        new_name = update_data.get("name", folder.name)
+        new_parent_id = update_data.get("parent_id", folder.parent_id)
+        scope_type, scope_id_str = _get_folder_scope(folder)
+        await check_name_uniqueness(
+            db, new_name, scope_type, UUID(scope_id_str),
+            new_parent_id, exclude_folder_id=folder.id,
+        )
+
     # Handle parent_id change (folder move)
     if "parent_id" in update_data and update_data["parent_id"] != folder.parent_id:
         new_parent_id = update_data["parent_id"]
@@ -257,6 +275,7 @@ async def update_folder(
             target_result = await db.execute(
                 select(DocumentFolder.materialized_path)
                 .where(DocumentFolder.id == new_parent_id)
+                .with_for_update()
             )
             target_path = target_result.scalar_one_or_none()
             if target_path and f"/{folder_id}/" in target_path:
@@ -267,6 +286,23 @@ async def update_folder(
 
         # Validate new depth
         new_depth, parent_path = await validate_folder_depth(db, new_parent_id)
+
+        # Validate that the deepest descendant won't exceed max depth
+        max_descendant_depth_result = await db.execute(
+            select(func.max(DocumentFolder.depth))
+            .where(DocumentFolder.materialized_path.like(f"{folder.materialized_path}%"))
+            .where(DocumentFolder.id != folder.id)
+        )
+        max_descendant_depth = max_descendant_depth_result.scalar()
+        if max_descendant_depth is not None:
+            # relative depth of deepest descendant from this folder
+            subtree_height = max_descendant_depth - folder.depth
+            if new_depth + subtree_height > 5:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Moving this folder would cause descendants to exceed maximum depth of 5 (deepest descendant would be at depth {new_depth + subtree_height})",
+                )
+
         old_path = folder.materialized_path
         old_depth = folder.depth
 
@@ -281,7 +317,7 @@ async def update_folder(
         await update_descendant_paths(db, old_path, new_path, depth_delta)
 
     # Apply other updates
-    for field in ("name", "sort_order"):
+    for field in ("name",):
         if field in update_data:
             setattr(folder, field, update_data[field])
 
@@ -296,13 +332,13 @@ async def update_folder(
         if project:
             project_application_id = project.application_id
 
-    # Broadcast folder updated event
-    await _broadcast_folder_event(
-        MessageType.FOLDER_UPDATED,
-        folder,
-        actor_id=current_user.id,
-        project_application_id=project_application_id,
+    # Capture broadcast data before commit (folder attrs needed)
+    broadcast_data, broadcast_rooms = _build_folder_broadcast(
+        folder, current_user.id, project_application_id,
     )
+
+    await db.commit()
+    await _broadcast_to_rooms(MessageType.FOLDER_UPDATED, broadcast_data, broadcast_rooms)
 
     return FolderResponse.model_validate(folder)
 
@@ -316,9 +352,9 @@ async def delete_folder(
     """
     Delete a folder.
 
-    Documents in this folder have folder_id set to NULL (unfiled) via
-    the FK ondelete SET NULL constraint. Child folders are cascade-deleted
-    via the FK ondelete CASCADE constraint.
+    All documents in this folder and descendant folders are soft-deleted
+    (moved to trash). Child folders are cascade-deleted via the FK
+    ondelete CASCADE constraint.
     """
     result = await db.execute(
         select(DocumentFolder).where(DocumentFolder.id == folder_id)
@@ -338,13 +374,44 @@ async def delete_folder(
         if project:
             project_application_id = project.application_id
 
-    # Broadcast folder deleted event before deletion (need folder data)
-    await _broadcast_folder_event(
-        MessageType.FOLDER_DELETED,
-        folder,
-        actor_id=current_user.id,
-        project_application_id=project_application_id,
+    # Soft-delete all documents in this folder and descendant folders.
+    # Must run BEFORE db.delete(folder), because the FK ondelete="SET NULL"
+    # will null out folder_id on cascade, making documents unfindable.
+    descendant_result = await db.execute(
+        select(DocumentFolder.id)
+        .where(DocumentFolder.materialized_path.like(f"{folder.materialized_path}%"))
+    )
+    all_folder_ids = [row[0] for row in descendant_result.all()]
+
+    if all_folder_ids:
+        now = datetime.utcnow()
+        soft_delete_result = await db.execute(
+            update(Document)
+            .where(Document.folder_id.in_(all_folder_ids))
+            .where(Document.deleted_at.is_(None))
+            .values(deleted_at=now)
+        )
+        logger.info(
+            "Soft-deleted %d documents in folder %s (descendant folders: %d)",
+            soft_delete_result.rowcount,
+            folder_id,
+            len(all_folder_ids),
+        )
+
+    # Capture broadcast data before deletion (folder attrs unavailable after delete+commit)
+    broadcast_data, broadcast_rooms = _build_folder_broadcast(
+        folder, current_user.id, project_application_id,
     )
 
     await db.delete(folder)
     await db.flush()
+
+    # Commit explicitly so data is persisted before the 204 response reaches
+    # the client. FastAPI >= 0.115 runs yield-dependency cleanup (where
+    # get_db commits) AFTER the response is sent — without this explicit
+    # commit the client's onSuccess re-fetch would race against the commit
+    # and could see stale (pre-soft-delete) data.
+    await db.commit()
+
+    # Broadcast AFTER commit so other clients re-fetch committed data
+    await _broadcast_to_rooms(MessageType.FOLDER_DELETED, broadcast_data, broadcast_rooms)

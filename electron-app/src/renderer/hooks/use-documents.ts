@@ -55,6 +55,7 @@ export interface DocumentListItem {
   title: string
   folder_id: string | null
   sort_order: number
+  row_version: number
   created_by: string | null
   created_at: string
   updated_at: string
@@ -77,12 +78,16 @@ interface RenameDocumentParams {
   documentId: string
   title: string
   row_version: number
+  scope: string
+  scopeId: string
 }
 
 interface MoveDocumentParams {
   documentId: string
   folder_id: string | null
   row_version: number
+  scope: string
+  scopeId: string
 }
 
 interface DocumentsQueryOptions {
@@ -199,8 +204,18 @@ export function useDocuments(
       !!token &&
       !!scope &&
       (scope === 'personal' || !!scopeId),
+    // Sort items case-insensitively so order is consistent regardless of
+    // backend collation, stale cache, or optimistic update timing.
+    select: (data) => ({
+      ...data,
+      items: [...data.items].sort((a, b) =>
+        a.title.localeCompare(b.title, undefined, { sensitivity: 'base' })
+      ),
+    }),
     // Use default staleTime (30s) - fresh data won't refetch on focus, stale data will
     gcTime: 24 * 60 * 60 * 1000,
+    // WebSocket subscriptions keep cache fresh while mounted; window focus refetch is redundant.
+    refetchOnWindowFocus: false,
     // No placeholderData - let isLoading be true on initial fetch so skeleton shows
   })
 }
@@ -290,7 +305,11 @@ export function useCreateDocument(): UseMutationResult<Document, Error, CreateDo
       await queryClient.cancelQueries({ queryKey: queryKeys.documents(params.scope, effectiveScopeId) })
 
       // Snapshot previous value
-      const queryKey = [...queryKeys.documents(params.scope, effectiveScopeId), params.folder_id ?? '', true]
+      // When folder_id is set, target the folder-specific query key (includeUnfiled=false)
+      // When no folder_id, target the unfiled query key (includeUnfiled=true)
+      const queryKey = params.folder_id
+        ? [...queryKeys.documents(params.scope, effectiveScopeId), params.folder_id, false]
+        : [...queryKeys.documents(params.scope, effectiveScopeId), '', true]
       const previous = queryClient.getQueryData<DocumentListResponse>(queryKey)
 
       // Create optimistic document
@@ -300,15 +319,16 @@ export function useCreateDocument(): UseMutationResult<Document, Error, CreateDo
         title: params.title,
         folder_id: params.folder_id ?? null,
         sort_order: 0,
+        row_version: 1,
         created_by: userId,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         deleted_at: null,
       }
 
-      // Add to cache
+      // Append to cache — select transform handles sorting
       queryClient.setQueryData<DocumentListResponse>(queryKey, (old) => ({
-        items: [tempDoc, ...(old?.items ?? [])],
+        items: [...(old?.items ?? []), tempDoc],
         next_cursor: old?.next_cursor ?? null,
       }))
 
@@ -340,15 +360,10 @@ export function useCreateDocument(): UseMutationResult<Document, Error, CreateDo
 /**
  * Rename a document with optimistic update.
  */
-export function useRenameDocument(
-  scope: string,
-  scopeId: string
-): UseMutationResult<Document, Error, RenameDocumentParams> {
+export function useRenameDocument(): UseMutationResult<Document, Error, RenameDocumentParams> {
   const token = useAuthStore((s) => s.token)
   const queryClient = useQueryClient()
   const userId = useAuthStore((s) => s.user?.id ?? null)
-
-  const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
 
   return useMutation({
     mutationFn: async ({ documentId, title, row_version }: RenameDocumentParams) => {
@@ -368,12 +383,22 @@ export function useRenameDocument(
 
       return response.data
     },
-    onMutate: async ({ documentId, title }) => {
+    onMutate: async ({ documentId, title, scope, scopeId }) => {
+      const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
       // Cancel outgoing refetches
       await queryClient.cancelQueries({ queryKey: queryKeys.document(documentId) })
 
       // Snapshot previous values
       const previousDoc = queryClient.getQueryData<Document>(queryKeys.document(documentId))
+
+      // Snapshot list caches for rollback
+      const previousLists: Map<string, DocumentListResponse | undefined> = new Map()
+      queryClient.getQueriesData<DocumentListResponse>({
+        queryKey: queryKeys.documents(scope, effectiveScopeId),
+        exact: false,
+      }).forEach(([key, data]) => {
+        previousLists.set(JSON.stringify(key), data)
+      })
 
       // Optimistically update document
       if (previousDoc) {
@@ -395,16 +420,25 @@ export function useRenameDocument(
         } : old
       )
 
-      return { previousDoc, documentId }
+      return { previousDoc, previousLists, documentId }
     },
     onSuccess: (data) => {
       // Update with server data
       queryClient.setQueryData(queryKeys.document(data.id), data)
     },
     onError: (_error, { documentId }, context) => {
-      // Rollback
+      // Rollback single doc
       if (context?.previousDoc) {
         queryClient.setQueryData(queryKeys.document(documentId), context.previousDoc)
+      }
+      // Rollback list caches
+      if (context?.previousLists) {
+        context.previousLists.forEach((data, keyStr) => {
+          const key = JSON.parse(keyStr) as readonly unknown[]
+          if (data) {
+            queryClient.setQueryData(key, data)
+          }
+        })
       }
     },
   })
@@ -413,15 +447,10 @@ export function useRenameDocument(
 /**
  * Move a document to a different folder with optimistic update.
  */
-export function useMoveDocument(
-  scope: string,
-  scopeId: string
-): UseMutationResult<Document, Error, MoveDocumentParams> {
+export function useMoveDocument(): UseMutationResult<Document, Error, MoveDocumentParams> {
   const token = useAuthStore((s) => s.token)
   const queryClient = useQueryClient()
   const userId = useAuthStore((s) => s.user?.id ?? null)
-
-  const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
 
   return useMutation({
     mutationFn: async ({ documentId, folder_id, row_version }: MoveDocumentParams) => {
@@ -441,14 +470,16 @@ export function useMoveDocument(
 
       return response.data
     },
-    onMutate: async ({ documentId, folder_id }) => {
-      // Cancel outgoing refetches
+    onMutate: async ({ documentId, folder_id, scope, scopeId }) => {
+      const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
+      // Cancel outgoing refetches for all document list queries in this scope
+      await queryClient.cancelQueries({ queryKey: queryKeys.documents(scope, effectiveScopeId) })
       await queryClient.cancelQueries({ queryKey: queryKeys.document(documentId) })
 
       // Snapshot previous values
       const previousDoc = queryClient.getQueryData<Document>(queryKeys.document(documentId))
 
-      // Optimistically update document
+      // Optimistically update the single document cache
       if (previousDoc) {
         queryClient.setQueryData<Document>(queryKeys.document(documentId), {
           ...previousDoc,
@@ -457,26 +488,77 @@ export function useMoveDocument(
         })
       }
 
-      // Update in list caches - move document to new folder
+      // Snapshot all list caches for rollback
+      const previousLists: Map<string, DocumentListResponse | undefined> = new Map()
+      queryClient.getQueriesData<DocumentListResponse>({
+        queryKey: queryKeys.documents(scope, effectiveScopeId),
+        exact: false,
+      }).forEach(([key, data]) => {
+        previousLists.set(JSON.stringify(key), data)
+      })
+
+      // Find the document's list item data before removing it
+      let docItem: DocumentListItem | undefined
+      for (const [, data] of previousLists) {
+        const found = data?.items.find(i => i.id === documentId)
+        if (found) {
+          docItem = found
+          break
+        }
+      }
+
+      // Remove document from ALL current list caches
       queryClient.setQueriesData<DocumentListResponse>(
         { queryKey: queryKeys.documents(scope, effectiveScopeId), exact: false },
         (old) => old ? {
           ...old,
-          items: old.items.map((item) =>
-            item.id === documentId ? { ...item, folder_id } : item
-          ),
+          items: old.items.filter((item) => item.id !== documentId),
         } : old
       )
 
-      return { previousDoc, documentId }
+      // Optimistically add to the target folder's list (so it appears immediately)
+      if (docItem) {
+        const updatedItem: DocumentListItem = { ...docItem, folder_id }
+        const targetKey = folder_id
+          ? [...queryKeys.documents(scope, effectiveScopeId), folder_id, false]
+          : [...queryKeys.documents(scope, effectiveScopeId), '', true]
+
+        queryClient.setQueryData<DocumentListResponse>(targetKey, (old) => ({
+          items: [updatedItem, ...(old?.items ?? [])],
+          next_cursor: old?.next_cursor ?? null,
+        }))
+      }
+
+      return { previousDoc, documentId, previousLists }
     },
-    onSuccess: (data) => {
+    onSuccess: (data, { scope, scopeId }) => {
+      const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
       queryClient.setQueryData(queryKeys.document(data.id), data)
-      // Note: Folder tree document_count update handled by optimistic update in folder hooks
+      // Invalidate both source and target folder caches to get accurate lists
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.documents(scope, effectiveScopeId),
+        exact: false,
+      })
+      // Invalidate folder tree to update document_count
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.documentFolders(scope, effectiveScopeId),
+      })
+      // Update project section visibility
+      queryClient.invalidateQueries({ queryKey: ['projects-with-content'] })
     },
     onError: (_error, { documentId }, context) => {
+      // Rollback single doc
       if (context?.previousDoc) {
         queryClient.setQueryData(queryKeys.document(documentId), context.previousDoc)
+      }
+      // Rollback all list caches
+      if (context?.previousLists) {
+        context.previousLists.forEach((data, keyStr) => {
+          const key = JSON.parse(keyStr) as readonly unknown[]
+          if (data) {
+            queryClient.setQueryData(key, data)
+          }
+        })
       }
     },
   })
@@ -486,18 +568,13 @@ export function useMoveDocument(
  * Soft delete a document with optimistic update.
  * Removes document from cache immediately, rollback on error.
  */
-export function useDeleteDocument(
-  scope: string,
-  scopeId: string
-): UseMutationResult<void, Error, string> {
+export function useDeleteDocument(): UseMutationResult<void, Error, { documentId: string; scope: string; scopeId: string }> {
   const token = useAuthStore((s) => s.token)
   const queryClient = useQueryClient()
   const userId = useAuthStore((s) => s.user?.id ?? null)
 
-  const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
-
   return useMutation({
-    mutationFn: async (documentId: string) => {
+    mutationFn: async ({ documentId }: { documentId: string; scope: string; scopeId: string }) => {
       if (!window.electronAPI) {
         throw new Error('Electron API not available')
       }
@@ -511,7 +588,8 @@ export function useDeleteDocument(
         throw new Error(parseApiError(response.status, response.data))
       }
     },
-    onMutate: async (documentId) => {
+    onMutate: async ({ documentId, scope, scopeId }) => {
+      const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
       // Cancel outgoing refetches
       await queryClient.cancelQueries({ queryKey: queryKeys.documents(scope, effectiveScopeId) })
 
@@ -538,8 +616,11 @@ export function useDeleteDocument(
 
       return { previousLists, documentId }
     },
-    // No onSuccess needed - optimistic update already removed from cache
-    onError: (_error, _documentId, context) => {
+    onSuccess: () => {
+      // Invalidate projects-with-content to update project section visibility
+      queryClient.invalidateQueries({ queryKey: ['projects-with-content'] })
+    },
+    onError: (_error, _params, context) => {
       // Rollback all list caches
       if (context?.previousLists) {
         context.previousLists.forEach((data, keyStr) => {
@@ -703,5 +784,7 @@ export function useProjectsWithContent(
     },
     staleTime: 30_000,
     enabled: !!token && !!applicationId,
+    // WebSocket subscriptions keep cache fresh while mounted; window focus refetch is redundant.
+    refetchOnWindowFocus: false,
   })
 }

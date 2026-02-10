@@ -114,8 +114,10 @@ async def update_tag(
         )
 
     update_data = body.model_dump(exclude_unset=True)
+    UPDATABLE_FIELDS = {"name", "color"}
     for field, value in update_data.items():
-        setattr(tag, field, value)
+        if field in UPDATABLE_FIELDS:
+            setattr(tag, field, value)
 
     try:
         await db.flush()

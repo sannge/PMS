@@ -18,6 +18,8 @@ import { queryKeys } from '@/lib/query-client'
 import type { Task } from '@/hooks/use-queries'
 import { showBrowserNotification } from '@/lib/notifications'
 import { useAuthStore } from '@/contexts/auth-context'
+import type { DocumentListResponse } from './use-documents'
+import type { FolderTreeNode } from './use-document-folders'
 
 // ============================================================================
 // Types for WebSocket Event Data
@@ -610,14 +612,21 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
         if (data.actor_id && data.actor_id === currentUserRef.current?.id) return
 
         queryClient.removeQueries({ queryKey: queryKeys.document(data.document_id) })
-        queryClient.invalidateQueries({ queryKey: queryKeys.documents(data.scope, data.scope_id) })
+        // Directly remove from list caches to avoid race with DB commit
+        queryClient.setQueriesData<DocumentListResponse>(
+          { queryKey: queryKeys.documents(data.scope, data.scope_id), exact: false },
+          (old) => old ? { ...old, items: old.items.filter(i => i.id !== data.document_id) } : old
+        )
+        // Folder tree needs refresh for document_count
         queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders(data.scope, data.scope_id) })
         queryClient.invalidateQueries({ queryKey: queryKeys.scopesSummary() })
         if (data.scope === 'project') {
           queryClient.invalidateQueries({ queryKey: ['projects-with-content'] })
-          // Also invalidate application queries for users viewing app tree
           if (data.application_id) {
-            queryClient.invalidateQueries({ queryKey: queryKeys.documents('application', data.application_id) })
+            queryClient.setQueriesData<DocumentListResponse>(
+              { queryKey: queryKeys.documents('application', data.application_id), exact: false },
+              (old) => old ? { ...old, items: old.items.filter(i => i.id !== data.document_id) } : old
+            )
             queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders('application', data.application_id) })
           }
         }
@@ -637,6 +646,9 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
         queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders(data.scope, data.scope_id) })
         if (data.scope === 'project') {
           queryClient.invalidateQueries({ queryKey: ['projects-with-content'] })
+          if (data.application_id) {
+            queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders('application', data.application_id) })
+          }
         }
       })
     )
@@ -647,6 +659,9 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
         if (data.actor_id && data.actor_id === currentUserRef.current?.id) return
 
         queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders(data.scope, data.scope_id) })
+        if (data.scope === 'project' && data.application_id) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders('application', data.application_id) })
+        }
       })
     )
 
@@ -655,13 +670,39 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
         // Skip own actions - already handled by optimistic update
         if (data.actor_id && data.actor_id === currentUserRef.current?.id) return
 
-        queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders(data.scope, data.scope_id) })
+        // Directly remove from tree cache to avoid race with DB commit
+        const removeFolder = (nodes: FolderTreeNode[]): FolderTreeNode[] =>
+          nodes
+            .filter(n => n.id !== data.folder_id)
+            .map(n => ({ ...n, children: removeFolder(n.children) }))
+
+        queryClient.setQueriesData<FolderTreeNode[]>(
+          { queryKey: queryKeys.documentFolders(data.scope, data.scope_id) },
+          (old) => old ? removeFolder(old) : old
+        )
+        // Documents in deleted folder are soft-deleted; folder counts may change
         queryClient.invalidateQueries({ queryKey: queryKeys.documents(data.scope, data.scope_id) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.scopesSummary() })
         if (data.scope === 'project') {
           queryClient.invalidateQueries({ queryKey: ['projects-with-content'] })
+          if (data.application_id) {
+            queryClient.setQueriesData<FolderTreeNode[]>(
+              { queryKey: queryKeys.documentFolders('application', data.application_id) },
+              (old) => old ? removeFolder(old) : old
+            )
+            queryClient.invalidateQueries({ queryKey: queryKeys.documents('application', data.application_id) })
+          }
         }
       })
     )
+
+    // ========================================================================
+    // Document Lock Events — handled by useActiveLocks hook via setQueryData.
+    // No app-level invalidation needed: in-place WS updates are precise, and
+    // invalidation would trigger refetches that can race with setQueryData
+    // (especially for cross-scope queries where the endpoint's scope filter
+    // correctly excludes the lock, undoing the optimistic WS update).
+    // ========================================================================
 
     // ========================================================================
     // Invitation Events (also update member lists)
@@ -689,10 +730,5 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
     }
   }, [queryClient])
 }
-
-/**
- * Alias for backward compatibility
- */
-export const useQueryCacheSync = useWebSocketCacheInvalidation
 
 export default useWebSocketCacheInvalidation
