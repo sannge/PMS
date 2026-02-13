@@ -15,6 +15,9 @@ minio>=7.2.0
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
 
+# File type detection (magic bytes)
+python-magic-bin>=0.4.14
+
 # Utilities
 python-multipart>=0.0.17
 pydantic-settings>=2.4.0

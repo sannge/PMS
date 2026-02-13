@@ -29,6 +29,7 @@ from ..schemas.document_folder import (
     FolderUpdate,
 )
 from ..services.auth_service import get_current_user
+from ..services.permission_service import PermissionService
 from ..services.document_service import (
     check_name_uniqueness,
     compute_materialized_path,
@@ -121,6 +122,13 @@ async def get_folder_tree(
     includes a document_count of non-deleted documents in that folder.
     Folders are ordered by materialized_path ASC, sort_order ASC.
     """
+    perm_service = PermissionService(db)
+    if not await perm_service.check_can_view_knowledge(current_user.id, scope, scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view folders in this scope",
+        )
+
     # Fetch all folders for scope
     scope_filter = get_scope_filter(DocumentFolder, scope, scope_id)
     result = await db.execute(
@@ -188,6 +196,13 @@ async def create_folder(
     Validates that nesting depth does not exceed 5 levels. Computes
     the materialized_path from the parent folder's path.
     """
+    perm_service = PermissionService(db)
+    if not await perm_service.check_can_edit_knowledge(current_user.id, body.scope, body.scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to create folders in this scope",
+        )
+
     await validate_scope(body.scope, body.scope_id, db)
     await check_name_uniqueness(db, body.name, body.scope, body.scope_id, body.parent_id)
 
@@ -252,6 +267,14 @@ async def update_folder(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Folder {folder_id} not found",
+        )
+
+    perm_service = PermissionService(db)
+    scope_type, scope_id = PermissionService.resolve_entity_scope(folder)
+    if not await perm_service.check_can_edit_knowledge(current_user.id, scope_type, scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to edit this folder",
         )
 
     update_data = body.model_dump(exclude_unset=True)
@@ -365,6 +388,14 @@ async def delete_folder(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Folder {folder_id} not found",
+        )
+
+    perm_service = PermissionService(db)
+    scope_type, scope_id = PermissionService.resolve_entity_scope(folder)
+    if not await perm_service.check_can_edit_knowledge(current_user.id, scope_type, scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to delete this folder",
         )
 
     # For project-scoped folders, get the parent application_id for broadcasting

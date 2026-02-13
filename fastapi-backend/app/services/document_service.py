@@ -7,20 +7,25 @@ content conversion stubs.
 
 import base64
 import json
-from datetime import datetime
-from typing import Any, Optional, Tuple
+import logging
+from datetime import datetime, timedelta
+from typing import Any, Optional, Set, Tuple
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.application import Application
+from ..models.attachment import Attachment
 from ..models.document import Document
 from ..models.document_folder import DocumentFolder
 from ..models.document_tag import DocumentTag
 from ..models.project import Project
 from ..models.user import User
+from ..services.minio_service import MinIOService, MinIOServiceError
+
+logger = logging.getLogger(__name__)
 
 
 async def validate_scope(
@@ -358,12 +363,113 @@ def convert_tiptap_to_markdown(content_json: Optional[str]) -> str:
     return tiptap_json_to_markdown(content_dict)
 
 
+CLEANUP_GRACE_PERIOD = timedelta(minutes=5)
+
+
+def extract_attachment_ids(content_json: str) -> Set[str]:
+    """
+    Recursively walk TipTap JSON and collect all attachmentId values
+    from image nodes.
+
+    NOTE: Update this function if new attachment-bearing node types are added
+    (e.g., video, audio, file embed). Currently only 'image' nodes use attachmentId.
+    """
+    try:
+        content = json.loads(content_json)
+    except (json.JSONDecodeError, TypeError):
+        return set()
+
+    ids: Set[str] = set()
+
+    def walk(node: dict) -> None:
+        if node.get("type") == "image":
+            attachment_id = node.get("attrs", {}).get("attachmentId")
+            if attachment_id:
+                ids.add(attachment_id)
+        for child in node.get("content", []):
+            if isinstance(child, dict):
+                walk(child)
+
+    if isinstance(content, dict):
+        walk(content)
+
+    return ids
+
+
+async def cleanup_orphaned_attachments(
+    document_id: UUID,
+    content_json: str,
+    db: AsyncSession,
+    minio: MinIOService,
+) -> int:
+    """
+    Delete Attachment records (and MinIO files) for this document that are
+    no longer referenced in the given content_json.
+
+    Returns:
+        Number of orphaned attachments deleted
+    """
+    # 1. Extract attachment IDs currently in the content
+    referenced_ids = extract_attachment_ids(content_json)
+
+    # 2. Query all Attachment records for this document
+    result = await db.execute(
+        select(Attachment).where(
+            Attachment.entity_type == "document",
+            Attachment.entity_id == document_id,
+        )
+    )
+    all_attachments = result.scalars().all()
+
+    # 3. Find orphans: attachments whose ID is NOT in the content
+    # Grace period: skip recently created attachments (may be in-flight uploads)
+    cutoff = datetime.utcnow() - CLEANUP_GRACE_PERIOD
+    orphans = [
+        a for a in all_attachments
+        if str(a.id) not in referenced_ids
+        and a.created_at is not None
+        and a.created_at < cutoff
+    ]
+
+    if not orphans:
+        return 0
+
+    # 4. Delete MinIO files (best-effort, log failures but continue)
+    for orphan in orphans:
+        if orphan.minio_bucket and orphan.minio_key:
+            try:
+                minio.delete_file(
+                    bucket=orphan.minio_bucket,
+                    object_name=orphan.minio_key,
+                )
+            except MinIOServiceError:
+                logger.warning(
+                    "Failed to delete MinIO file for orphaned attachment %s "
+                    "(bucket=%s, key=%s)",
+                    orphan.id, orphan.minio_bucket, orphan.minio_key,
+                )
+
+    # 5. Delete Attachment DB records
+    orphan_ids = [o.id for o in orphans]
+    await db.execute(
+        delete(Attachment).where(Attachment.id.in_(orphan_ids))
+    )
+
+    logger.info(
+        "Cleaned up %d orphaned attachment(s) for document %s",
+        len(orphans), document_id,
+    )
+
+    return len(orphans)
+
+
 async def save_document_content(
     document_id: UUID,
     content_json: str,
     row_version: int,
     user_id: UUID,
     db: AsyncSession,
+    minio: MinIOService | None = None,
 ) -> Document:
     """
     Save document content with optimistic concurrency control.
@@ -429,6 +535,16 @@ async def save_document_content(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Document was modified. Refresh to get latest version.",
+            )
+
+    # Clean up orphaned attachments (images removed from content)
+    if minio is not None:
+        try:
+            await cleanup_orphaned_attachments(document_id, content_json, db, minio)
+        except Exception:
+            logger.exception(
+                "Failed to clean up orphaned attachments for document %s",
+                document_id,
             )
 
     return document

@@ -206,6 +206,87 @@ class PermissionService:
         )
         return result.scalar_one_or_none()
 
+    async def check_can_view_knowledge(
+        self, user_id: UUID, scope: str, scope_id: UUID
+    ) -> bool:
+        """Check if user can view documents/folders in a scope.
+
+        Args:
+            user_id: The user's ID
+            scope: One of "personal", "application", "project"
+            scope_id: The scope entity ID (user_id, application_id, or project_id)
+
+        Returns:
+            True if user can view knowledge in this scope.
+        """
+        if scope == "personal":
+            return scope_id == user_id
+        elif scope == "application":
+            return await self.is_application_member(user_id, scope_id)
+        elif scope == "project":
+            project = await self.get_project_with_application(scope_id)
+            if not project:
+                return False
+            return await self.is_application_member(user_id, project.application_id)
+        return False
+
+    async def check_can_edit_knowledge(
+        self, user_id: UUID, scope: str, scope_id: UUID
+    ) -> bool:
+        """Check if user can create/edit/delete documents/folders in a scope.
+
+        Args:
+            user_id: The user's ID
+            scope: One of "personal", "application", "project"
+            scope_id: The scope entity ID (user_id, application_id, or project_id)
+
+        Returns:
+            True if user can edit knowledge in this scope.
+        """
+        if scope == "personal":
+            return scope_id == user_id
+        elif scope == "application":
+            role = await self.get_user_application_role(user_id, scope_id)
+            return role in ("owner", "editor")
+        elif scope == "project":
+            project = await self.get_project_with_application(scope_id)
+            if not project:
+                return False
+            # Archived projects are read-only
+            if project.archived_at is not None:
+                return False
+            app_role = await self.get_user_application_role(
+                user_id, project.application_id
+            )
+            if app_role == "owner":
+                return True
+            if app_role not in ("editor",):
+                # Viewers and non-members cannot edit project knowledge
+                return False
+            return await self.is_project_member(user_id, scope_id)
+        return False
+
+    @staticmethod
+    def resolve_entity_scope(entity) -> tuple[str, UUID]:
+        """Extract (scope_type, scope_id) from a Document or DocumentFolder.
+
+        Args:
+            entity: A Document or DocumentFolder instance
+
+        Returns:
+            Tuple of (scope_type_str, scope_id_uuid)
+
+        Raises:
+            ValueError: If entity has no scope FK set
+        """
+        if entity.application_id:
+            return "application", entity.application_id
+        elif entity.project_id:
+            return "project", entity.project_id
+        elif entity.user_id:
+            return "personal", entity.user_id
+        raise ValueError("Entity has no scope FK set")
+
     async def check_can_manage_tasks(
         self,
         user: User,

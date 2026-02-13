@@ -168,10 +168,12 @@ class DocumentListResponse(BaseModel):
 
 
 class ApplicationWithDocs(BaseModel):
-    """An application that has at least one document."""
+    """An application that the user is a member of."""
 
     id: str
     name: str
+    description: Optional[str] = None
+    user_role: Optional[str] = None
 
 
 class ScopesSummaryResponse(BaseModel):
@@ -181,6 +183,13 @@ class ScopesSummaryResponse(BaseModel):
     applications: list[ApplicationWithDocs]
 
 
+class ProjectPermissionItem(BaseModel):
+    """Per-project edit permission."""
+
+    project_id: str
+    can_edit: bool
+
+
 class ProjectsWithContentResponse(BaseModel):
     """Response for projects that have knowledge content."""
 
@@ -188,3 +197,15 @@ class ProjectsWithContentResponse(BaseModel):
         ...,
         description="List of project IDs that have documents or folders",
     )
+    project_permissions: list[ProjectPermissionItem] = Field(
+        default_factory=list,
+        description="Per-project edit permissions",
+    )
+
+
+class KnowledgePermissionsResponse(BaseModel):
+    """Response for checking knowledge permissions on a scope."""
+
+    can_view: bool
+    can_edit: bool
+    is_owner: bool = False

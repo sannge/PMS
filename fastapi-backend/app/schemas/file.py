@@ -13,6 +13,7 @@ class EntityType(str, Enum):
 
     TASK = "task"
     COMMENT = "comment"
+    DOCUMENT = "document"
 
 
 class AttachmentBase(BaseModel):
@@ -57,7 +58,7 @@ class AttachmentCreate(AttachmentBase):
     entity_type: Optional[EntityType] = Field(
         None,
         description="Type of entity this is attached to",
-        examples=["task", "note"],
+        examples=["task", "comment", "document"],
     )
     entity_id: Optional[UUID] = Field(
         None,

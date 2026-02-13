@@ -2,7 +2,7 @@
 
 Provides endpoints for managing tags within application and personal scopes,
 and for assigning/unassigning tags on documents with scope compatibility
-validation.
+validation. All endpoints require authentication and scope-based authorization.
 """
 
 from typing import Literal
@@ -21,11 +21,21 @@ from ..schemas.document_tag import (
     TagUpdate,
 )
 from ..services.auth_service import get_current_user
+from ..services.permission_service import PermissionService
 
 router = APIRouter(
     prefix="/document-tags",
     tags=["document-tags"],
 )
+
+
+def _resolve_tag_scope(tag: DocumentTag) -> tuple[str, UUID]:
+    """Extract (scope_type, scope_id) from a DocumentTag."""
+    if tag.application_id:
+        return "application", tag.application_id
+    elif tag.user_id:
+        return "personal", tag.user_id
+    raise ValueError("Tag has no scope FK set")
 
 
 @router.get("", response_model=list[TagResponse])
@@ -42,6 +52,13 @@ async def list_tags(
 
     Returns all tags within an application scope or a user's personal scope.
     """
+    perm_service = PermissionService(db)
+    if not await perm_service.check_can_view_knowledge(current_user.id, scope, scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view tags in this scope",
+        )
+
     if scope == "application":
         query = select(DocumentTag).where(DocumentTag.application_id == scope_id)
     else:  # personal
@@ -67,6 +84,13 @@ async def create_tag(
     application and its projects. Tags scoped to a user (personal) can
     only be used by that user's personal documents.
     """
+    perm_service = PermissionService(db)
+    if not await perm_service.check_can_edit_knowledge(current_user.id, body.scope, body.scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to create tags in this scope",
+        )
+
     tag = DocumentTag(name=body.name, color=body.color)
 
     if body.scope == "application":
@@ -113,6 +137,14 @@ async def update_tag(
             detail=f"Tag {tag_id} not found",
         )
 
+    perm_service = PermissionService(db)
+    scope_type, scope_id = _resolve_tag_scope(tag)
+    if not await perm_service.check_can_edit_knowledge(current_user.id, scope_type, scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to edit this tag",
+        )
+
     update_data = body.model_dump(exclude_unset=True)
     UPDATABLE_FIELDS = {"name", "color"}
     for field, value in update_data.items():
@@ -152,6 +184,14 @@ async def delete_tag(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Tag {tag_id} not found",
+        )
+
+    perm_service = PermissionService(db)
+    scope_type, scope_id = _resolve_tag_scope(tag)
+    if not await perm_service.check_can_edit_knowledge(current_user.id, scope_type, scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to delete this tag",
         )
 
     await db.delete(tag)

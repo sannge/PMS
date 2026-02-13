@@ -43,7 +43,12 @@ from ..services.auth_service import get_current_user
 from ..services.permission_service import get_permission_service
 from ..services.notification_service import NotificationService
 from ..services.user_cache_service import invalidate_project_role
-from ..websocket.manager import MessageType, manager
+from ..websocket.handlers import (
+    handle_project_member_added,
+    handle_project_member_removed,
+    handle_project_member_role_changed,
+)
+from ..websocket.room_auth import invalidate_user_cache
 
 router = APIRouter(tags=["Project Members"])
 
@@ -453,27 +458,26 @@ async def add_project_member(
     )
     await NotificationService.create_notification(db, notification_data)
 
-    # Broadcast member added to project room for real-time updates
-    room_id = f"project:{project_id}"
-    await manager.broadcast_to_room(
-        room_id,
-        {
-            "type": MessageType.PROJECT_MEMBER_ADDED,
-            "data": {
-                "project_id": str(project_id),
-                "member_id": str(new_member.id),
-                "user_id": str(new_member.user_id),
-                "role": new_member.role,
-                "user": {
-                    "id": str(target_user.id),
-                    "email": target_user.email,
-                    "display_name": target_user.display_name,
-                    "avatar_url": target_user.avatar_url,
-                },
-                "added_by": str(current_user.id),
+    # Broadcast member added via handler (includes message_id, timestamp)
+    await handle_project_member_added(
+        project_id=project_id,
+        member_data={
+            "member_id": str(new_member.id),
+            "user_id": str(new_member.user_id),
+            "role": new_member.role,
+            "user": {
+                "id": str(target_user.id),
+                "email": target_user.email,
+                "display_name": target_user.display_name,
+                "avatar_url": target_user.avatar_url,
             },
+            "added_by": str(current_user.id),
+            "application_id": str(project.application_id),
         },
     )
+
+    # Invalidate room auth cache for the newly added user
+    invalidate_user_cache(new_member.user_id)
 
     # Return with user info
     user_summary = UserSummary(
@@ -612,19 +616,18 @@ async def remove_project_member(
     )
     await NotificationService.create_notification(db, removed_notification)
 
-    # Broadcast member removed to project room for real-time updates
-    room_id = f"project:{project_id}"
-    await manager.broadcast_to_room(
-        room_id,
-        {
-            "type": MessageType.PROJECT_MEMBER_REMOVED,
-            "data": {
-                "project_id": str(project_id),
-                "user_id": str(user_id),
-                "removed_by": str(current_user.id),
-            },
+    # Broadcast member removed via handler (includes message_id, timestamp)
+    await handle_project_member_removed(
+        project_id=project_id,
+        removed_user_id=user_id,
+        member_data={
+            "removed_by": str(current_user.id),
+            "application_id": str(project.application_id),
         },
     )
+
+    # Invalidate room auth cache for the removed user
+    invalidate_user_cache(user_id)
 
     return {
         "message": "Member removed",
@@ -748,21 +751,20 @@ async def change_project_member_role(
     )
     await NotificationService.create_notification(db, role_notification)
 
-    # Broadcast role change to project room for real-time updates
-    room_id = f"project:{project_id}"
-    await manager.broadcast_to_room(
-        room_id,
-        {
-            "type": MessageType.PROJECT_ROLE_CHANGED,
-            "data": {
-                "project_id": str(project_id),
-                "user_id": str(user_id),
-                "old_role": old_role,
-                "new_role": new_role,
-                "changed_by": str(current_user.id),
-            },
+    # Broadcast role change via handler (includes message_id, timestamp)
+    await handle_project_member_role_changed(
+        project_id=project_id,
+        user_id=user_id,
+        role_data={
+            "old_role": old_role,
+            "new_role": new_role,
+            "changed_by": str(current_user.id),
+            "application_id": str(project.application_id),
         },
     )
+
+    # Invalidate room auth cache for the affected user
+    invalidate_user_cache(user_id)
 
     user_summary = UserSummary(
         id=member.user.id,

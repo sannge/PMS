@@ -18,11 +18,13 @@ from sqlalchemy.orm import lazyload, noload
 from ..database import get_db
 from ..models.application import Application
 from ..models.application_member import ApplicationMember
+from ..models.attachment import Attachment
 from ..models.document import Document
 from ..models.document_folder import DocumentFolder
 from ..models.document_tag import DocumentTag, DocumentTagAssignment
 from ..models.project import Project
 from ..models.user import User
+from ..models.project_member import ProjectMember
 from ..schemas.document import (
     DocumentContentUpdate,
     DocumentCreate,
@@ -30,13 +32,17 @@ from ..schemas.document import (
     DocumentListResponse,
     DocumentResponse,
     DocumentUpdate,
+    KnowledgePermissionsResponse,
+    ProjectPermissionItem,
     ProjectsWithContentResponse,
     ScopesSummaryResponse,
 )
 from ..schemas.document_tag import TagAssignment, TagAssignmentResponse
 from ..services.auth_service import get_current_user
+from ..services.permission_service import PermissionService
 from ..services.document_service import (
     check_name_uniqueness,
+    cleanup_orphaned_attachments,
     decode_cursor,
     decode_title_cursor,
     encode_cursor,
@@ -47,7 +53,11 @@ from ..services.document_service import (
     validate_scope,
     validate_tag_scope,
 )
+from ..services.minio_service import MinIOService, MinIOServiceError, get_minio_service
 from ..websocket.manager import manager, MessageType
+
+import logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/documents",
@@ -194,20 +204,48 @@ async def get_scopes_summary(
         .where(Document.deleted_at.is_(None))
     )
 
-    # All applications user is a member of (allow creating docs in empty apps)
-    user_apps = await db.execute(
-        select(Application.id, Application.name, Application.description)
+    # Applications where user is an ApplicationMember
+    member_apps = await db.execute(
+        select(Application.id, Application.name, Application.description, ApplicationMember.role)
         .join(ApplicationMember, ApplicationMember.application_id == Application.id)
         .where(ApplicationMember.user_id == current_user.id)
         .order_by(Application.created_at.asc())
     )
+    member_rows = member_apps.all()
+
+    # Applications where user is owner_id but NOT in ApplicationMember table
+    member_app_ids = [r.id for r in member_rows]
+    owner_filter = [Application.owner_id == current_user.id]
+    if member_app_ids:
+        owner_filter.append(Application.id.notin_(member_app_ids))
+    owner_apps = await db.execute(
+        select(Application.id, Application.name, Application.description)
+        .where(*owner_filter)
+        .order_by(Application.created_at.asc())
+    )
+    owner_rows = owner_apps.all()
+
+    applications = [
+        {
+            "id": str(r.id),
+            "name": r.name,
+            "description": r.description,
+            "user_role": r.role,
+        }
+        for r in member_rows
+    ] + [
+        {
+            "id": str(r.id),
+            "name": r.name,
+            "description": r.description,
+            "user_role": "owner",
+        }
+        for r in owner_rows
+    ]
 
     return {
         "has_personal_docs": (personal_count or 0) > 0,
-        "applications": [
-            {"id": str(r.id), "name": r.name, "description": r.description}
-            for r in user_apps.all()
-        ],
+        "applications": applications,
     }
 
 
@@ -223,6 +261,14 @@ async def get_projects_with_content(
     Used by the application tree to filter out empty projects before rendering.
     Uses UNION of two EXISTS-optimized queries for efficiency.
     """
+    # Verify user is an application member before exposing project content info
+    perm_service = PermissionService(db)
+    if not await perm_service.is_application_member(current_user.id, application_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view this application's projects",
+        )
+
     # Projects with documents
     projects_with_docs = select(Document.project_id).where(
         Document.project_id.isnot(None),
@@ -245,7 +291,94 @@ async def get_projects_with_content(
     result = await db.execute(combined)
     project_ids = [str(row[0]) for row in result.all()]
 
-    return ProjectsWithContentResponse(project_ids=project_ids)
+    # Determine per-project edit permissions
+    app_role = await perm_service.get_user_application_role(
+        current_user.id, application_id
+    )
+
+    project_permissions: list[ProjectPermissionItem] = []
+    if app_role == "owner":
+        # App owners can edit all projects
+        project_permissions = [
+            ProjectPermissionItem(project_id=pid, can_edit=True)
+            for pid in project_ids
+        ]
+    elif app_role in ("editor", "viewer"):
+        # Check ProjectMember for each project in batch
+        project_uuids = [UUID(pid) for pid in project_ids]
+        if project_uuids:
+            pm_result = await db.execute(
+                select(ProjectMember.project_id)
+                .where(
+                    ProjectMember.project_id.in_(project_uuids),
+                    ProjectMember.user_id == current_user.id,
+                )
+            )
+            member_project_ids = {str(row[0]) for row in pm_result.all()}
+        else:
+            member_project_ids = set()
+
+        project_permissions = [
+            ProjectPermissionItem(
+                project_id=pid,
+                can_edit=(app_role == "editor" and pid in member_project_ids),
+            )
+            for pid in project_ids
+        ]
+    else:
+        # Not a member — no edit on any project
+        project_permissions = [
+            ProjectPermissionItem(project_id=pid, can_edit=False)
+            for pid in project_ids
+        ]
+
+    return ProjectsWithContentResponse(
+        project_ids=project_ids,
+        project_permissions=project_permissions,
+    )
+
+
+# ============================================================================
+# Knowledge permissions endpoint (MUST be before /{document_id})
+# ============================================================================
+
+
+@router.get("/knowledge-permissions", response_model=KnowledgePermissionsResponse)
+async def get_knowledge_permissions(
+    scope: Literal["application", "project", "personal"] = Query(
+        ..., description="Scope type"
+    ),
+    scope_id: UUID = Query(..., description="Scope entity ID"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> KnowledgePermissionsResponse:
+    """Check view/edit permissions for a knowledge scope."""
+    perm_service = PermissionService(db)
+    can_view = await perm_service.check_can_view_knowledge(
+        current_user.id, scope, scope_id
+    )
+    can_edit = await perm_service.check_can_edit_knowledge(
+        current_user.id, scope, scope_id
+    )
+
+    # Determine owner status (for force-take lock capability)
+    is_owner = False
+    if scope == "personal":
+        is_owner = scope_id == current_user.id
+    elif scope == "application":
+        role = await perm_service.get_user_application_role(current_user.id, scope_id)
+        is_owner = role == "owner"
+    elif scope == "project":
+        project = await perm_service.get_project_with_application(scope_id)
+        if project:
+            role = await perm_service.get_user_application_role(
+                current_user.id, project.application_id
+            )
+            is_owner = role == "owner"
+
+    return KnowledgePermissionsResponse(
+        can_view=can_view, can_edit=can_edit, is_owner=is_owner
+    )
 
 
 # ============================================================================
@@ -277,6 +410,13 @@ async def list_documents(
     documents are returned. When folder_id is omitted and include_unfiled
     is True, returns documents with no folder assignment.
     """
+    perm_service = PermissionService(db)
+    if not await perm_service.check_can_view_knowledge(current_user.id, scope, scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view documents in this scope",
+        )
+
     # Build base query
     query = (
         select(Document)
@@ -341,6 +481,13 @@ async def create_document(
 
     Validates that the scope entity exists and sets the appropriate FK.
     """
+    perm_service = PermissionService(db)
+    if not await perm_service.check_can_edit_knowledge(current_user.id, body.scope, body.scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to create documents in this scope",
+        )
+
     await validate_scope(body.scope, body.scope_id, db)
     await check_name_uniqueness(db, body.title, body.scope, body.scope_id, body.folder_id)
 
@@ -403,6 +550,14 @@ async def get_document(
             detail=f"Document {document_id} not found",
         )
 
+    perm_service = PermissionService(db)
+    scope_type, scope_id = PermissionService.resolve_entity_scope(document)
+    if not await perm_service.check_can_view_knowledge(current_user.id, scope_type, scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view this document",
+        )
+
     return DocumentResponse.model_validate(document)
 
 
@@ -412,6 +567,7 @@ async def update_document(
     body: DocumentUpdate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    minio: MinIOService = Depends(get_minio_service),
 ) -> DocumentResponse:
     """
     Update a document with optimistic concurrency control.
@@ -436,6 +592,14 @@ async def update_document(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Document {document_id} not found",
+        )
+
+    perm_service = PermissionService(db)
+    scope_type, scope_id = PermissionService.resolve_entity_scope(document)
+    if not await perm_service.check_can_edit_knowledge(current_user.id, scope_type, scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to edit this document",
         )
 
     # Optimistic concurrency check (safe under FOR UPDATE lock)
@@ -467,6 +631,17 @@ async def update_document(
     document.updated_at = datetime.utcnow()
 
     await db.flush()
+
+    # Clean up orphaned attachments if content was updated
+    if "content_json" in update_data and document.content_json:
+        try:
+            await cleanup_orphaned_attachments(document_id, document.content_json, db, minio)
+        except Exception:
+            logger.exception(
+                "Failed to clean up orphaned attachments for document %s",
+                document_id,
+            )
+
     await db.refresh(document)
 
     # For project-scoped documents, get the parent application_id for broadcasting
@@ -496,6 +671,7 @@ async def save_content(
     body: DocumentContentUpdate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    minio: MinIOService = Depends(get_minio_service),
 ) -> DocumentResponse:
     """
     Auto-save document content with optimistic concurrency control.
@@ -505,12 +681,34 @@ async def save_content(
     was modified by another user/session. On success, content is updated
     and row_version is incremented.
     """
+    # Permission check before saving
+    doc_result = await db.execute(
+        select(Document)
+        .where(Document.id == document_id)
+        .where(Document.deleted_at.is_(None))
+    )
+    doc_for_perm = doc_result.scalar_one_or_none()
+    if doc_for_perm is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document {document_id} not found",
+        )
+
+    perm_service = PermissionService(db)
+    scope_type, scope_id = PermissionService.resolve_entity_scope(doc_for_perm)
+    if not await perm_service.check_can_edit_knowledge(current_user.id, scope_type, scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to edit this document",
+        )
+
     document = await save_document_content(
         document_id=document_id,
         content_json=body.content_json,
         row_version=body.row_version,
         user_id=current_user.id,
         db=db,
+        minio=minio,
     )
 
     # Broadcast document updated event so other users see fresh content
@@ -557,6 +755,14 @@ async def delete_document(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Document {document_id} not found",
+        )
+
+    perm_service = PermissionService(db)
+    scope_type, scope_id = PermissionService.resolve_entity_scope(document)
+    if not await perm_service.check_can_edit_knowledge(current_user.id, scope_type, scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to delete this document",
         )
 
     # For project-scoped documents, get the parent application_id for broadcasting
@@ -611,6 +817,14 @@ async def restore_document(
             detail=f"Document {document_id} not found in trash",
         )
 
+    perm_service = PermissionService(db)
+    scope_type, scope_id = PermissionService.resolve_entity_scope(document)
+    if not await perm_service.check_can_edit_knowledge(current_user.id, scope_type, scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to restore this document",
+        )
+
     # Check name uniqueness before restoring
     scope_type, scope_id_str = _get_document_scope(document)
     await check_name_uniqueness(
@@ -622,6 +836,24 @@ async def restore_document(
     await db.flush()
     await db.refresh(document)
 
+    # For project-scoped documents, get the parent application_id for broadcasting
+    project_application_id: UUID | None = None
+    if document.project_id:
+        project = await db.get(Project, document.project_id)
+        if project:
+            project_application_id = project.application_id
+
+    # Commit before broadcast so clients re-fetch committed data
+    await db.commit()
+
+    # Broadcast document restored event (appears as created to other clients)
+    await _broadcast_document_event(
+        MessageType.DOCUMENT_CREATED,
+        document,
+        actor_id=current_user.id,
+        project_application_id=project_application_id,
+    )
+
     return DocumentResponse.model_validate(document)
 
 
@@ -630,6 +862,7 @@ async def permanent_delete_document(
     document_id: UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    minio: MinIOService = Depends(get_minio_service),
 ) -> None:
     """
     Permanently delete a document (hard delete).
@@ -650,8 +883,41 @@ async def permanent_delete_document(
             detail=f"Document {document_id} not found in trash",
         )
 
+    perm_service = PermissionService(db)
+    scope_type, scope_id = PermissionService.resolve_entity_scope(document)
+    if not await perm_service.check_can_edit_knowledge(current_user.id, scope_type, scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to permanently delete this document",
+        )
+
+    # Delete all attachments for this document (MinIO files + DB records)
+    attach_result = await db.execute(
+        select(Attachment).where(
+            Attachment.entity_type == "document",
+            Attachment.entity_id == document_id,
+        )
+    )
+    doc_attachments = attach_result.scalars().all()
+
+    for attachment in doc_attachments:
+        if attachment.minio_bucket and attachment.minio_key:
+            try:
+                minio.delete_file(
+                    bucket=attachment.minio_bucket,
+                    object_name=attachment.minio_key,
+                )
+            except MinIOServiceError:
+                logger.warning(
+                    "Failed to delete MinIO file for attachment %s during "
+                    "document permanent deletion",
+                    attachment.id,
+                )
+        await db.delete(attachment)
+
     await db.delete(document)
     await db.flush()
+    await db.commit()
 
 
 # ============================================================================
@@ -692,6 +958,14 @@ async def assign_tag_to_document(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Document {document_id} not found",
+        )
+
+    perm_service = PermissionService(db)
+    scope_type, scope_id = PermissionService.resolve_entity_scope(document)
+    if not await perm_service.check_can_edit_knowledge(current_user.id, scope_type, scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to modify tags on this document",
         )
 
     # Fetch tag
@@ -753,6 +1027,28 @@ async def remove_tag_from_document(
     """
     Remove a tag assignment from a document.
     """
+    # Fetch document for permission check
+    doc_result = await db.execute(
+        select(Document)
+        .where(Document.id == document_id)
+        .where(Document.deleted_at.is_(None))
+    )
+    document = doc_result.scalar_one_or_none()
+
+    if document is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document {document_id} not found",
+        )
+
+    perm_service = PermissionService(db)
+    scope_type, scope_id = PermissionService.resolve_entity_scope(document)
+    if not await perm_service.check_can_edit_knowledge(current_user.id, scope_type, scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to modify tags on this document",
+        )
+
     result = await db.execute(
         select(DocumentTagAssignment).where(
             DocumentTagAssignment.document_id == document_id,

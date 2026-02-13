@@ -97,6 +97,13 @@ async def get_active_locks(
     then filter to documents belonging to the requested scope via a lightweight
     DB query. Returns only documents that are currently locked.
     """
+    perm_service = PermissionService(db)
+    if not await perm_service.check_can_view_knowledge(current_user.id, scope, scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view locks in this scope",
+        )
+
     # Step 1: Get all active locks from Redis (fast — typically 0-50 keys)
     all_locks = await lock_service.scan_all_active_locks()
     if not all_locks:
@@ -171,6 +178,25 @@ async def acquire_lock(
     lock_service: DocumentLockService = Depends(get_lock_service),
 ) -> DocumentLockResponse:
     """Acquire an exclusive edit lock on a document."""
+    # Permission check: only users with edit access can acquire locks
+    doc_result = await db.execute(
+        select(Document).where(Document.id == document_id).where(Document.deleted_at.is_(None))
+    )
+    document = doc_result.scalar_one_or_none()
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document {document_id} not found",
+        )
+
+    perm_service = PermissionService(db)
+    scope_type, scope_id = PermissionService.resolve_entity_scope(document)
+    if not await perm_service.check_can_edit_knowledge(current_user.id, scope_type, scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to edit this document",
+        )
+
     result = await lock_service.acquire_lock(
         document_id=str(document_id),
         user_id=str(current_user.id),
@@ -283,9 +309,29 @@ async def release_lock(
 async def get_lock_status(
     document_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
     lock_service: DocumentLockService = Depends(get_lock_service),
 ) -> DocumentLockResponse:
     """Get the current lock status for a document."""
+    # Verify document exists and user can view it before exposing lock info
+    doc_result = await db.execute(
+        select(Document).where(Document.id == document_id).where(Document.deleted_at.is_(None))
+    )
+    document = doc_result.scalar_one_or_none()
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document {document_id} not found",
+        )
+
+    perm_service = PermissionService(db)
+    scope_type, scope_id = PermissionService.resolve_entity_scope(document)
+    if not await perm_service.check_can_view_knowledge(current_user.id, scope_type, scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view this document",
+        )
+
     holder = await lock_service.get_lock_holder(str(document_id))
 
     if holder:
@@ -345,9 +391,9 @@ async def force_take_lock(
     lock_service: DocumentLockService = Depends(get_lock_service),
 ) -> DocumentLockResponse:
     """Force-take a lock from another user (application owners only)."""
-    # Look up the document
+    # Look up the document (exclude soft-deleted documents)
     result = await db.execute(
-        select(Document).where(Document.id == document_id)
+        select(Document).where(Document.id == document_id).where(Document.deleted_at.is_(None))
     )
     document = result.scalar_one_or_none()
 

@@ -40,6 +40,7 @@ from ..websocket.handlers import (
     handle_member_removed,
     handle_role_updated,
 )
+from ..websocket.room_auth import invalidate_user_cache
 
 router = APIRouter(prefix="/api/applications", tags=["Application Members"])
 
@@ -565,6 +566,9 @@ async def update_member_role(
             },
         )
 
+        # Invalidate room auth cache so WS room access reflects new role
+        invalidate_user_cache(user_id)
+
     return member
 
 
@@ -730,5 +734,8 @@ async def remove_member(
             "reason": "self_removal" if is_self_removal else "removed_by_owner",
         },
     )
+
+    # Invalidate room auth cache so removed user can no longer join rooms
+    invalidate_user_cache(user_id)
 
     return None

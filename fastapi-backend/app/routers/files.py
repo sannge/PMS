@@ -19,8 +19,10 @@ from ..models.attachment import Attachment
 from ..models.comment import Comment
 from ..models.project import Project
 from ..models.project_member import ProjectMember
+from ..models.document import Document
 from ..models.task import Task
 from ..models.user import User
+from ..services.permission_service import PermissionService
 from ..schemas.file import (
     AttachmentCreate,
     AttachmentResponse,
@@ -38,6 +40,8 @@ router = APIRouter(prefix="/api/files", tags=["Files"])
 
 # Maximum file size (100 MB)
 MAX_FILE_SIZE = 100 * 1024 * 1024
+# Maximum image file size (10 MB)
+MAX_IMAGE_SIZE = 10 * 1024 * 1024
 
 
 # ============================================================================
@@ -158,6 +162,36 @@ async def verify_task_attachment_access(
         )
 
 
+async def verify_document_attachment_access(
+    document_id: UUID,
+    current_user: User,
+    db: AsyncSession,
+) -> None:
+    """
+    Verify that the user has edit permission on the document.
+    Raises HTTPException if the document doesn't exist or user lacks permission.
+    """
+    result = await db.execute(
+        select(Document).where(
+            Document.id == document_id,
+            Document.deleted_at.is_(None),
+        )
+    )
+    document = result.scalar_one_or_none()
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document with ID {document_id} not found",
+        )
+    perm_service = PermissionService(db)
+    scope_type, scope_id = PermissionService.resolve_entity_scope(document)
+    if not await perm_service.check_can_edit_knowledge(current_user.id, scope_type, scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. You do not have permission to upload files to this document.",
+        )
+
+
 @router.post(
     "/upload",
     response_model=AttachmentResponse,
@@ -225,8 +259,24 @@ async def upload_file(
             detail=f"File size ({file_size} bytes) exceeds maximum allowed ({MAX_FILE_SIZE} bytes)",
         )
 
+    # Image-specific size limit (10 MB)
+    content_type_check = file.content_type or "application/octet-stream"
+    if content_type_check.startswith("image/") and file_size > MAX_IMAGE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Image size ({file_size} bytes) exceeds maximum ({MAX_IMAGE_SIZE} bytes). Images must be under 10 MB.",
+        )
+
     # Determine content type
     content_type = file.content_type or "application/octet-stream"
+
+    # Server-side MIME validation for images (prevent SVG/HTML XSS via spoofed Content-Type)
+    ALLOWED_IMAGE_MIMES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+    if content_type.startswith("image/") and content_type not in ALLOWED_IMAGE_MIMES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Image type '{content_type}' is not allowed. Accepted: PNG, JPEG, GIF, WebP.",
+        )
 
     # Determine entity type and ID
     resolved_entity_type = entity_type.value if entity_type else None
@@ -263,6 +313,10 @@ async def upload_file(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Comment with ID {comment_id} not found",
             )
+
+    # Handle explicit entity_type=document with entity_id
+    if entity_type == EntityType.DOCUMENT and entity_id:
+        await verify_document_attachment_access(entity_id, current_user, db)
 
     # Handle explicit entity_type=task with entity_id
     if entity_type == EntityType.TASK and entity_id:
@@ -651,6 +705,14 @@ async def delete_file(
             attachment.task_id, current_user, db, check_done=False
         )
 
+    # For document attachments, check document edit permission
+    if not can_delete and attachment.entity_type == "document" and attachment.entity_id:
+        try:
+            await verify_document_attachment_access(attachment.entity_id, current_user, db)
+            can_delete = True
+        except HTTPException:
+            pass  # Will fall through to the access denied response
+
     # For comment attachments, check if user is the uploader
     # Note: Comment attachments typically also have task_id set, so task permission
     # is already checked above. This check allows the uploader to delete their own
@@ -837,13 +899,32 @@ async def get_entity_attachments(
     """
     Get all attachments for a specific entity.
 
-    - **entity_type**: Type of entity (task, note, comment)
+    - **entity_type**: Type of entity (task, comment, document)
     - **entity_id**: ID of the entity
     - **skip**: Number of records to skip for pagination
     - **limit**: Maximum number of records to return (1-500)
 
     Returns attachments attached to the specified entity.
     """
+    # Entity-level authorization for document attachments
+    if entity_type == EntityType.DOCUMENT:
+        result = await db.execute(
+            select(Document).where(Document.id == entity_id)
+        )
+        document = result.scalar_one_or_none()
+        if not document:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Document with ID {entity_id} not found",
+            )
+        perm_service = PermissionService(db)
+        scope_type, scope_id = PermissionService.resolve_entity_scope(document)
+        if not await perm_service.check_can_view_knowledge(current_user.id, scope_type, scope_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied. You do not have permission to view attachments for this document.",
+            )
+
     # Build query
     query = (
         select(Attachment)
