@@ -58,7 +58,7 @@ export function SearchBar({ className }: SearchBarProps = {}): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
 
   // Full-text search hook
-  const { data: searchResults, isLoading, isFetching, error: searchError, debouncedQuery, hasMore, loadMore } = useDocumentSearch(localValue)
+  const { data: searchResults, isLoading, isFetching, isFetchingNextPage, error: searchError, debouncedQuery, hasMore, loadMore } = useDocumentSearch(localValue)
 
   // Show results panel when we have a debounced query
   useEffect(() => {
@@ -150,6 +150,7 @@ export function SearchBar({ className }: SearchBarProps = {}): JSX.Element {
           results={searchResults}
           isLoading={isLoading}
           isFetching={isFetching}
+          isFetchingNextPage={isFetchingNextPage}
           error={searchError as (Error & { status?: number }) | undefined}
           containerRef={containerRef}
           onResultClick={handleResultClick}

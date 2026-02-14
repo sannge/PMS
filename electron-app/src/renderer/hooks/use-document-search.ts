@@ -118,13 +118,16 @@ export function useDocumentSearch(query: string) {
   }, [result.data, debouncedQuery])
 
   const loadMore = useCallback(() => {
-    result.fetchNextPage()
-  }, [result.fetchNextPage])
+    if (result.hasNextPage && !result.isFetchingNextPage) {
+      result.fetchNextPage()
+    }
+  }, [result.fetchNextPage, result.hasNextPage, result.isFetchingNextPage])
 
   return {
     data,
     isLoading: result.isLoading,
     isFetching: result.isFetching,
+    isFetchingNextPage: result.isFetchingNextPage,
     error: result.error,
     debouncedQuery,
     hasMore: result.hasNextPage ?? false,
