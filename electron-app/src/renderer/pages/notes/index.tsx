@@ -98,9 +98,11 @@ function NotesPageContent(): JSX.Element {
     const unsubFolderDeleted = subscribe<{ folder_id: string }>(
       MessageType.FOLDER_DELETED,
       () => {
-        // When a folder is deleted, documents inside it are also deleted.
-        // The tree will refresh and if the selected doc no longer exists,
-        // the EditorPanel will show the empty state.
+        // When a folder is deleted, documents inside it are cascade-deleted.
+        // Reset selection so the editor doesn't keep showing a deleted document.
+        if (selectedDocumentId) {
+          selectDocument(null)
+        }
       }
     )
 

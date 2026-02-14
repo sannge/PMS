@@ -50,7 +50,11 @@ export function findFolderById(nodes: FolderTreeNode[], id: string): FolderTreeN
 export function collectAncestorIds(nodes: FolderTreeNode[], targetFolderId: string): string[] {
   const folder = findFolderById(nodes, targetFolderId)
   if (!folder) return [targetFolderId]
-  return folder.materialized_path.split('/').filter(Boolean)
+  const ids = folder.materialized_path.split('/').filter(Boolean)
+  if (!ids.includes(targetFolderId)) {
+    ids.push(targetFolderId)
+  }
+  return ids
 }
 
 /** Check if `candidateChildId` is a descendant of `parentId` in the tree. */

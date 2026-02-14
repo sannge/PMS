@@ -115,7 +115,7 @@ export function SearchBar({ className, scopeToContext }: SearchBarProps = {}): J
     const terms = hit.matchedTerms?.length ? hit.matchedTerms : extractSearchTerms(debouncedQuery)
     if (scopeToContext) {
       // Scoped panel: select document without changing scope/tab
-      revealDocument(hit.id, terms, hit.folder_id ?? undefined, hit.occurrenceIndex ?? 0)
+      revealDocument(hit.id, terms, hit.folder_id ?? undefined, hit.occurrenceIndex ?? 0, hit.project_id ?? undefined)
     } else {
       // Notes page: full navigation with tab/scope switch
       const targetTab = getTargetTab(hit)

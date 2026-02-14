@@ -69,7 +69,7 @@ interface KnowledgeBaseContextValue extends KnowledgeBaseUIState {
   registerNavigationGuard: (guard: NavigationGuard) => void
   unregisterNavigationGuard: () => void
   navigateToDocument: (targetTab: string, documentId: string, searchTerms?: string[], folderId?: string, scrollToOccurrence?: number, projectId?: string) => void
-  revealDocument: (documentId: string, searchTerms?: string[], folderId?: string, scrollToOccurrence?: number) => void
+  revealDocument: (documentId: string, searchTerms?: string[], folderId?: string, scrollToOccurrence?: number, projectId?: string) => void
   expandFolders: (ids: string[]) => void
   clearReveal: () => void
 }
@@ -202,7 +202,7 @@ type KnowledgeBaseAction =
   | { type: 'CLEAR_TAGS' }
   | { type: 'RESET_SELECTION' }
   | { type: 'NAVIGATE_TO_DOCUMENT'; payload: { targetTab: string; documentId: string; searchTerms: string[]; folderId?: string; scrollToOccurrence?: number; projectId?: string } }
-  | { type: 'REVEAL_DOCUMENT'; payload: { documentId: string; searchTerms: string[]; folderId?: string; scrollToOccurrence?: number } }
+  | { type: 'REVEAL_DOCUMENT'; payload: { documentId: string; searchTerms: string[]; folderId?: string; scrollToOccurrence?: number; projectId?: string } }
   | { type: 'EXPAND_FOLDERS'; folderIds: string[] }
   | { type: 'CLEAR_REVEAL' }
 
@@ -327,7 +327,7 @@ function knowledgeBaseReducer(
     }
 
     case 'REVEAL_DOCUMENT': {
-      const { documentId, searchTerms, folderId, scrollToOccurrence } = action.payload
+      const { documentId, searchTerms, folderId, scrollToOccurrence, projectId } = action.payload
       const expandedFolderIds = folderId
         ? new Set([...state.expandedFolderIds, folderId])
         : state.expandedFolderIds
@@ -339,6 +339,7 @@ function knowledgeBaseReducer(
         searchScrollToOccurrence: scrollToOccurrence ?? 0,
         expandedFolderIds,
         revealFolderId: folderId ?? null,
+        revealProjectId: projectId ?? null,
       }
     }
 
@@ -495,9 +496,9 @@ export function KnowledgeBaseProvider({
     dispatch({ type: 'NAVIGATE_TO_DOCUMENT', payload })
   }, [])
 
-  const revealDocument = useCallback((documentId: string, searchTerms?: string[], folderId?: string, scrollToOccurrence?: number) => {
+  const revealDocument = useCallback((documentId: string, searchTerms?: string[], folderId?: string, scrollToOccurrence?: number, projectId?: string) => {
     const guard = navigationGuardRef.current
-    const payload = { documentId, searchTerms: searchTerms ?? [], folderId, scrollToOccurrence }
+    const payload = { documentId, searchTerms: searchTerms ?? [], folderId, scrollToOccurrence, projectId }
     if (guard && !guard(documentId, () => dispatch({ type: 'REVEAL_DOCUMENT', payload }))) return
     dispatch({ type: 'REVEAL_DOCUMENT', payload })
   }, [])

@@ -157,6 +157,11 @@ function ProjectSection({
   const [isExpanded, setIsExpanded] = useState(false)
   const revealProcessedRef = useRef<string | null>(null)
 
+  // Reset reveal guard when revealFolderId is cleared
+  useEffect(() => {
+    if (!revealFolderId) revealProcessedRef.current = null
+  }, [revealFolderId])
+
   // Auto-expand when this project is the reveal target
   useEffect(() => {
     if (revealProjectId === project.id && !isExpanded) {
@@ -495,36 +500,67 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
     return projectList.filter(project => projectIdsWithContent.has(project.id))
   }, [isApplicationScope, projectList, projectIdsWithContent, searchQuery])
 
-  // Auto-expand folders with matching children when searching
+  // Auto-expand folders with matching children when searching (batch dispatch)
   useEffect(() => {
     if (!searchQuery) return
-    const expandMatchingFolders = (nodes: FolderTreeNode[]) => {
+    const idsToExpand: string[] = []
+    const collect = (nodes: FolderTreeNode[]) => {
       nodes.forEach(node => {
         if (node.children.length > 0) {
-          expandFolder(node.id)
-          expandMatchingFolders(node.children)
+          idsToExpand.push(node.id)
+          collect(node.children)
         }
       })
     }
-    expandMatchingFolders(filteredFolders)
-  }, [searchQuery, filteredFolders, expandFolder])
+    collect(filteredFolders)
+    if (idsToExpand.length > 0) expandFolders(idsToExpand)
+  }, [searchQuery, filteredFolders, expandFolders])
 
   // Auto-expand ancestors when navigating to a document via search
   const revealProcessedRef = useRef<string | null>(null)
+  const pendingScrollRef = useRef(false)
+
+  // Reset reveal guard when revealFolderId is cleared so re-navigation to
+  // the same folder works correctly.
   useEffect(() => {
-    if (!revealFolderId || !folders.length || revealProjectId) return // project reveal handled by ProjectSection
+    if (!revealFolderId) {
+      revealProcessedRef.current = null
+      pendingScrollRef.current = false
+    }
+  }, [revealFolderId])
+
+  useEffect(() => {
+    if (!revealFolderId) return
+    if (revealProjectId) {
+      // Project reveal: folder expansion handled by ProjectSection, but we
+      // still need scroll-into-view once the folders expand in the DOM.
+      pendingScrollRef.current = true
+      return
+    }
+    if (!folders.length) return
     if (revealProcessedRef.current === revealFolderId) return
     revealProcessedRef.current = revealFolderId
+    pendingScrollRef.current = true
     const ancestorIds = collectAncestorIds(folders, revealFolderId)
     expandFolders(ancestorIds)
     clearReveal()
   }, [revealFolderId, revealProjectId, folders, expandFolders, clearReveal])
 
-  // Scroll the selected document into view in the tree after reveal expansion
+  // Fallback: clear stale reveal state if project data never loads (e.g. filtered out, query error)
   useEffect(() => {
-    if (!selectedDocumentId || revealProcessedRef.current === null) return
+    if (!revealProjectId || !revealFolderId) return
+    const fallback = setTimeout(() => clearReveal(), 3000)
+    return () => clearTimeout(fallback)
+  }, [revealProjectId, revealFolderId, clearReveal])
+
+  // Scroll the selected document into view in the tree after reveal expansion.
+  // Only fires once per reveal (pendingScrollRef is set in the reveal effect above).
+  // The 150ms delay accounts for DOM updates after folder expansion in a non-virtualized tree.
+  useEffect(() => {
+    if (!selectedDocumentId || !pendingScrollRef.current) return
+    pendingScrollRef.current = false
     const timer = setTimeout(() => {
-      document.querySelector(`[data-tree-document-id="${selectedDocumentId}"]`)
+      document.querySelector(`[data-tree-document-id="${CSS.escape(selectedDocumentId)}"]`)
         ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
     }, 150)
     return () => clearTimeout(timer)
@@ -883,12 +919,28 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
     const itemScope = deleteTarget.scope ?? scope
     const itemScopeId = deleteTarget.scopeId ?? effectiveScopeId ?? ''
     if (deleteTarget.type === 'folder') {
+      // Capture selected doc's folder_id BEFORE mutation invalidates cache
+      const selectedDocFolderId = selectedDocumentId ? findDocInCache(selectedDocumentId)?.folder_id : null
       await deleteFolder.mutateAsync({ folderId: deleteTarget.id, scope: itemScope, scopeId: itemScopeId })
+      // Cascade: folder deletion removes all documents inside it.
+      // Clear selection if the selected document was directly in the deleted folder,
+      // or in any subfolder (descendant), or if the cache was already invalidated.
+      if (selectedDocumentId) {
+        const wasInDeletedFolder = selectedDocFolderId === deleteTarget.id
+        const treeFolders = deleteTarget.scope === 'project' && deleteTarget.scopeId
+          ? (queryClient.getQueryData<FolderTreeNode[]>(queryKeys.documentFolders('project', deleteTarget.scopeId)) ?? [])
+          : folders
+        const wasInSubfolder = selectedDocFolderId != null && isDescendantOf(treeFolders, deleteTarget.id, selectedDocFolderId)
+        const cacheAlreadyCleared = !findDocInCache(selectedDocumentId)
+        if (wasInDeletedFolder || wasInSubfolder || cacheAlreadyCleared) {
+          selectDocument(null)
+        }
+      }
     } else {
       await deleteDocument.mutateAsync({ documentId: deleteTarget.id, scope: itemScope, scopeId: itemScopeId })
       if (selectedDocumentId === deleteTarget.id) selectDocument(null)
     }
-  }, [deleteTarget, deleteFolder, deleteDocument, selectedDocumentId, selectDocument, scope, effectiveScopeId])
+  }, [deleteTarget, deleteFolder, deleteDocument, selectedDocumentId, selectDocument, findDocInCache, queryClient, folders, scope, effectiveScopeId])
 
   // ========================================================================
   // Selection handlers
