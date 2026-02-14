@@ -715,6 +715,8 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
         // Documents in deleted folder are soft-deleted; folder counts may change
         queryClient.invalidateQueries({ queryKey: queryKeys.documents(data.scope, data.scope_id) })
         queryClient.invalidateQueries({ queryKey: queryKeys.scopesSummary() })
+        // Invalidate search cache so deleted documents don't appear in results
+        queryClient.invalidateQueries({ queryKey: ['search'] })
         if (data.scope === 'project') {
           queryClient.invalidateQueries({ queryKey: ['projects-with-content'] })
           if (data.application_id) {

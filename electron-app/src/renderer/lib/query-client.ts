@@ -142,7 +142,8 @@ export const queryKeys = {
   knowledgePermissions: (scope: string, scopeId: string) => ['knowledge-permissions', scope, scopeId] as const,
 
   // Document Search
-  documentSearch: (query: string) => ['search', 'documents', query] as const,
+  documentSearch: (query: string, applicationId?: string, projectId?: string) =>
+    ['search', 'documents', query, applicationId ?? null, projectId ?? null] as const,
 }
 
 // ============================================================================

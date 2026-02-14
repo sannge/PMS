@@ -13,7 +13,7 @@
  * - Lazy-loaded project sections (application scope only)
  */
 
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { FilePlus, Folder, FileText, FolderKanban, ChevronRight } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -63,7 +63,7 @@ import { RootDropZone, ROOT_DROP_ZONE_ID } from './root-drop-zone'
 import { FolderContextMenu } from './folder-context-menu'
 import { CreateDialog } from './create-dialog'
 import { DeleteDialog } from './delete-dialog'
-import { matchesSearch, filterFolderTree, findFolderById, isDescendantOf } from './tree-utils'
+import { matchesSearch, filterFolderTree, findFolderById, isDescendantOf, collectAncestorIds } from './tree-utils'
 import { useProjectPermissionsMap } from '@/hooks/use-knowledge-permissions'
 import { parseSortableId, parsePrefixToScope, type ScopeInfo } from './dnd-utils'
 
@@ -114,6 +114,12 @@ interface ProjectSectionProps {
   hideIfEmpty?: boolean
   /** Whether the user can edit items in this project section */
   canEdit?: boolean
+  /** When this matches project.id, auto-expand the project section */
+  revealProjectId?: string | null
+  /** Folder ID to reveal (expand ancestors) once project content loads */
+  revealFolderId?: string | null
+  expandFolders?: (ids: string[]) => void
+  clearReveal?: () => void
   onToggleFolder: (folderId: string) => void
   onSelectDocument: (documentId: string) => void
   onContextMenu: (
@@ -138,6 +144,10 @@ function ProjectSection({
   contextMenuFolderId,
   hideIfEmpty = false,
   canEdit = true,
+  revealProjectId,
+  revealFolderId,
+  expandFolders: expandFoldersFn,
+  clearReveal: clearRevealFn,
   onToggleFolder,
   onSelectDocument,
   onContextMenu,
@@ -145,6 +155,14 @@ function ProjectSection({
   onRenameCancel,
 }: ProjectSectionProps): JSX.Element | null {
   const [isExpanded, setIsExpanded] = useState(false)
+  const revealProcessedRef = useRef<string | null>(null)
+
+  // Auto-expand when this project is the reveal target
+  useEffect(() => {
+    if (revealProjectId === project.id && !isExpanded) {
+      setIsExpanded(true)
+    }
+  }, [revealProjectId, project.id, isExpanded])
 
   // Lazy-load project content only when expanded
   const { data: projectFolders, isLoading: isFoldersLoading } = useFolderTree(
@@ -166,6 +184,22 @@ function ProjectSection({
   const folders = projectFolders ?? []
   const unfiledDocs = projectUnfiled?.items ?? []
   const isLoading = isExpanded && (isFoldersLoading || isUnfiledLoading) && folders.length === 0 && unfiledDocs.length === 0
+
+  // Expand ancestors when this project is the reveal target and data has loaded
+  useEffect(() => {
+    if (
+      revealProjectId !== project.id ||
+      !revealFolderId ||
+      !expandFoldersFn ||
+      !clearRevealFn ||
+      folders.length === 0 ||
+      revealProcessedRef.current === revealFolderId
+    ) return
+    revealProcessedRef.current = revealFolderId
+    const ancestorIds = collectAncestorIds(folders, revealFolderId)
+    expandFoldersFn(ancestorIds)
+    clearRevealFn()
+  }, [revealProjectId, revealFolderId, project.id, folders, expandFoldersFn, clearRevealFn])
 
   const isEmpty = useMemo(() => {
     if (!isExpanded || isLoading) return false
@@ -332,9 +366,13 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
     expandedFolderIds,
     selectedDocumentId,
     searchQuery,
+    revealFolderId,
+    revealProjectId,
     toggleFolder,
     expandFolder,
     selectDocument,
+    expandFolders,
+    clearReveal,
   } = useKnowledgeBase()
 
   const userId = useAuthStore((s) => s.user?.id ?? null)
@@ -470,6 +508,27 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
     }
     expandMatchingFolders(filteredFolders)
   }, [searchQuery, filteredFolders, expandFolder])
+
+  // Auto-expand ancestors when navigating to a document via search
+  const revealProcessedRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!revealFolderId || !folders.length || revealProjectId) return // project reveal handled by ProjectSection
+    if (revealProcessedRef.current === revealFolderId) return
+    revealProcessedRef.current = revealFolderId
+    const ancestorIds = collectAncestorIds(folders, revealFolderId)
+    expandFolders(ancestorIds)
+    clearReveal()
+  }, [revealFolderId, revealProjectId, folders, expandFolders, clearReveal])
+
+  // Scroll the selected document into view in the tree after reveal expansion
+  useEffect(() => {
+    if (!selectedDocumentId || revealProcessedRef.current === null) return
+    const timer = setTimeout(() => {
+      document.querySelector(`[data-tree-document-id="${selectedDocumentId}"]`)
+        ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    }, 150)
+    return () => clearTimeout(timer)
+  }, [selectedDocumentId, expandedFolderIds]) // re-run when folders expand
 
   // ========================================================================
   // Drag and drop
@@ -1019,6 +1078,10 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
                 dropTargetFolderId={dropTargetFolderId}
                 contextMenuFolderId={contextMenuFolderId}
                 canEdit={projectPermissionsMap.get(project.id) ?? canEdit}
+                revealProjectId={revealProjectId}
+                revealFolderId={revealFolderId}
+                expandFolders={expandFolders}
+                clearReveal={clearReveal}
                 onToggleFolder={toggleFolder}
                 onSelectDocument={handleSelectDocument}
                 onContextMenu={handleContextMenu}

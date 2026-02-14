@@ -43,6 +43,10 @@ interface KnowledgeBaseUIState {
   searchHighlightTerms: string[]
   /** Which occurrence to scroll to after highlights are applied (0-based). -1 = no scroll. */
   searchScrollToOccurrence: number
+  /** Folder to reveal (expand all ancestors for) after navigation. Null = no pending reveal. */
+  revealFolderId: string | null
+  /** Project section to auto-expand after navigation. Null = no pending reveal. */
+  revealProjectId: string | null
 }
 
 /** Navigation guard callback. Returns true to allow navigation, false to block.
@@ -64,7 +68,10 @@ interface KnowledgeBaseContextValue extends KnowledgeBaseUIState {
   resetSelection: () => void
   registerNavigationGuard: (guard: NavigationGuard) => void
   unregisterNavigationGuard: () => void
-  navigateToDocument: (targetTab: string, documentId: string, searchTerms?: string[], folderId?: string, scrollToOccurrence?: number) => void
+  navigateToDocument: (targetTab: string, documentId: string, searchTerms?: string[], folderId?: string, scrollToOccurrence?: number, projectId?: string) => void
+  revealDocument: (documentId: string, searchTerms?: string[], folderId?: string, scrollToOccurrence?: number) => void
+  expandFolders: (ids: string[]) => void
+  clearReveal: () => void
 }
 
 // ============================================================================
@@ -194,7 +201,10 @@ type KnowledgeBaseAction =
   | { type: 'TOGGLE_TAG'; tagId: string }
   | { type: 'CLEAR_TAGS' }
   | { type: 'RESET_SELECTION' }
-  | { type: 'NAVIGATE_TO_DOCUMENT'; payload: { targetTab: string; documentId: string; searchTerms: string[]; folderId?: string; scrollToOccurrence?: number } }
+  | { type: 'NAVIGATE_TO_DOCUMENT'; payload: { targetTab: string; documentId: string; searchTerms: string[]; folderId?: string; scrollToOccurrence?: number; projectId?: string } }
+  | { type: 'REVEAL_DOCUMENT'; payload: { documentId: string; searchTerms: string[]; folderId?: string; scrollToOccurrence?: number } }
+  | { type: 'EXPAND_FOLDERS'; folderIds: string[] }
+  | { type: 'CLEAR_REVEAL' }
 
 function knowledgeBaseReducer(
   state: KnowledgeBaseUIState,
@@ -297,7 +307,7 @@ function knowledgeBaseReducer(
       }
 
     case 'NAVIGATE_TO_DOCUMENT': {
-      const { targetTab, documentId, searchTerms, folderId, scrollToOccurrence } = action.payload
+      const { targetTab, documentId, searchTerms, folderId, scrollToOccurrence, projectId } = action.payload
       const expandedFolderIds = folderId
         ? new Set([...state.expandedFolderIds, folderId])
         : state.expandedFolderIds
@@ -311,8 +321,37 @@ function knowledgeBaseReducer(
         searchHighlightTerms: searchTerms,
         searchScrollToOccurrence: scrollToOccurrence ?? 0,
         expandedFolderIds,
+        revealFolderId: folderId ?? null,
+        revealProjectId: projectId ?? null,
       }
     }
+
+    case 'REVEAL_DOCUMENT': {
+      const { documentId, searchTerms, folderId, scrollToOccurrence } = action.payload
+      const expandedFolderIds = folderId
+        ? new Set([...state.expandedFolderIds, folderId])
+        : state.expandedFolderIds
+      return {
+        ...state,
+        selectedDocumentId: documentId,
+        selectedFolderId: null,
+        searchHighlightTerms: searchTerms,
+        searchScrollToOccurrence: scrollToOccurrence ?? 0,
+        expandedFolderIds,
+        revealFolderId: folderId ?? null,
+      }
+    }
+
+    case 'EXPAND_FOLDERS': {
+      const next = new Set(state.expandedFolderIds)
+      for (const id of action.folderIds) {
+        next.add(id)
+      }
+      return { ...state, expandedFolderIds: next }
+    }
+
+    case 'CLEAR_REVEAL':
+      return { ...state, revealFolderId: null, revealProjectId: null }
 
     default:
       return state
@@ -364,6 +403,8 @@ export function KnowledgeBaseProvider({
       activeTagIds: [],
       searchHighlightTerms: [],
       searchScrollToOccurrence: -1,
+      revealFolderId: null,
+      revealProjectId: null,
     }
   })
 
@@ -447,11 +488,26 @@ export function KnowledgeBaseProvider({
     dispatch({ type: 'RESET_SELECTION' })
   }, [])
 
-  const navigateToDocument = useCallback((targetTab: string, documentId: string, searchTerms?: string[], folderId?: string, scrollToOccurrence?: number) => {
+  const navigateToDocument = useCallback((targetTab: string, documentId: string, searchTerms?: string[], folderId?: string, scrollToOccurrence?: number, projectId?: string) => {
     const guard = navigationGuardRef.current
-    const payload = { targetTab, documentId, searchTerms: searchTerms ?? [], folderId, scrollToOccurrence }
+    const payload = { targetTab, documentId, searchTerms: searchTerms ?? [], folderId, scrollToOccurrence, projectId }
     if (guard && !guard(documentId, () => dispatch({ type: 'NAVIGATE_TO_DOCUMENT', payload }))) return
     dispatch({ type: 'NAVIGATE_TO_DOCUMENT', payload })
+  }, [])
+
+  const revealDocument = useCallback((documentId: string, searchTerms?: string[], folderId?: string, scrollToOccurrence?: number) => {
+    const guard = navigationGuardRef.current
+    const payload = { documentId, searchTerms: searchTerms ?? [], folderId, scrollToOccurrence }
+    if (guard && !guard(documentId, () => dispatch({ type: 'REVEAL_DOCUMENT', payload }))) return
+    dispatch({ type: 'REVEAL_DOCUMENT', payload })
+  }, [])
+
+  const expandFolders = useCallback((ids: string[]) => {
+    dispatch({ type: 'EXPAND_FOLDERS', folderIds: ids })
+  }, [])
+
+  const clearReveal = useCallback(() => {
+    dispatch({ type: 'CLEAR_REVEAL' })
   }, [])
 
   const registerNavigationGuard = useCallback((guard: NavigationGuard) => {
@@ -479,11 +535,15 @@ export function KnowledgeBaseProvider({
     registerNavigationGuard,
     unregisterNavigationGuard,
     navigateToDocument,
+    revealDocument,
+    expandFolders,
+    clearReveal,
   }), [
     state, setScope, setActiveTab, toggleSidebar, toggleFolder,
     expandFolder, collapseFolder, selectDocument, selectFolder,
     setSearch, toggleTag, clearTags, resetSelection,
     registerNavigationGuard, unregisterNavigationGuard, navigateToDocument,
+    revealDocument, expandFolders, clearReveal,
   ])
 
   return (

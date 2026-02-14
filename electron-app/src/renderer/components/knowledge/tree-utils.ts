@@ -42,6 +42,17 @@ export function findFolderById(nodes: FolderTreeNode[], id: string): FolderTreeN
   return null
 }
 
+/**
+ * Collect all ancestor folder IDs for a given folder by parsing its materialized_path.
+ * Returns an array of folder IDs from root to (and including) the target folder.
+ * Falls back to just the targetFolderId if the folder is not found in the tree.
+ */
+export function collectAncestorIds(nodes: FolderTreeNode[], targetFolderId: string): string[] {
+  const folder = findFolderById(nodes, targetFolderId)
+  if (!folder) return [targetFolderId]
+  return folder.materialized_path.split('/').filter(Boolean)
+}
+
 /** Check if `candidateChildId` is a descendant of `parentId` in the tree. */
 export function isDescendantOf(nodes: FolderTreeNode[], parentId: string, candidateChildId: string): boolean {
   const parent = findFolderById(nodes, parentId)

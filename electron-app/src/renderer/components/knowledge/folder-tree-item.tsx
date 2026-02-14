@@ -210,6 +210,7 @@ export function FolderTreeItem({
       role="treeitem"
       aria-expanded={type === 'folder' ? isExpanded : undefined}
       aria-selected={isSelected}
+      {...(type === 'document' ? { 'data-tree-document-id': node.id } : {})}
     >
       {/* Indent guides */}
       {depth > 0 && Array.from({ length: depth }, (_, i) => (
