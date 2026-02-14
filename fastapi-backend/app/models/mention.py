@@ -1,0 +1,80 @@
+"""Mention SQLAlchemy model for @mentions in comments."""
+
+import uuid
+from datetime import datetime
+from typing import TYPE_CHECKING
+
+from sqlalchemy import Column, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
+
+from ..database import Base
+
+if TYPE_CHECKING:
+    from .comment import Comment
+    from .user import User
+
+
+class Mention(Base):
+    """
+    Mention model for tracking @mentions within comments.
+
+    Used for efficient notification queries and linking mentioned users
+    to specific comments.
+
+    Attributes:
+        id: Unique identifier (UUID)
+        comment_id: FK to parent comment
+        user_id: FK to mentioned user
+        created_at: Timestamp when mention was created
+    """
+
+    __tablename__ = "Mentions"
+    __table_args__ = (
+        UniqueConstraint("comment_id", "user_id", name="UX_Mentions_Comment_User"),
+    )
+    __allow_unmapped__ = True
+
+    # Primary key - UUID
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        nullable=False,
+    )
+
+    # Foreign keys
+    comment_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("Comments.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("Users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    # Timestamps
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    # Relationships
+    comment = relationship(
+        "Comment",
+        back_populates="mentions",
+        lazy="joined",
+    )
+    user = relationship(
+        "User",
+        lazy="joined",
+    )
+
+    def __repr__(self) -> str:
+        """String representation of Mention."""
+        return f"<Mention(id={self.id}, comment_id={self.comment_id}, user_id={self.user_id})>"

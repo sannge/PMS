@@ -1,0 +1,9 @@
+Method,Name,Error,Occurrences
+GET,/api/projects/ae2f73a4-f75c-44fe-8078-0acb69cdeac3/tasks,RemoteDisconnected('Remote end closed connection without response'),1
+GET,/api/applications/f0851605-562c-4f4a-a11b-01923eb10ce1/projects,RemoteDisconnected('Remote end closed connection without response'),1
+PUT,/api/tasks/a732d83c-2f93-4ec5-b058-3d7a18dc67f8,"ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)",1
+GET,/api/projects/ae2f73a4-f75c-44fe-8078-0acb69cdeac3,RemoteDisconnected('Remote end closed connection without response'),1
+GET,/api/applications/f0851605-562c-4f4a-a11b-01923eb10ce1/members,RemoteDisconnected('Remote end closed connection without response'),1
+GET,/api/tasks/2b53b1b5-60dd-44bf-9919-23711e882993,RemoteDisconnected('Remote end closed connection without response'),2
+GET,/api/tasks/2b53b1b5-60dd-44bf-9919-23711e882993/comments,RemoteDisconnected('Remote end closed connection without response'),1
+POST,/api/tasks/2b53b1b5-60dd-44bf-9919-23711e882993/comments,"ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)",2

@@ -1,0 +1,15 @@
+Defaulting to user installation because normal site-packages is not writeable
+Collecting apscheduler
+  Downloading apscheduler-3.11.2-py3-none-any.whl.metadata (6.4 kB)
+Collecting tzlocal>=3.0 (from apscheduler)
+  Downloading tzlocal-5.3.1-py3-none-any.whl.metadata (7.6 kB)
+Collecting tzdata (from tzlocal>=3.0->apscheduler)
+  Downloading tzdata-2025.3-py2.py3-none-any.whl.metadata (1.4 kB)
+Downloading apscheduler-3.11.2-py3-none-any.whl (64 kB)
+Downloading tzlocal-5.3.1-py3-none-any.whl (18 kB)
+Downloading tzdata-2025.3-py2.py3-none-any.whl (348 kB)
+Installing collected packages: tzdata, tzlocal, apscheduler
+Successfully installed apscheduler-3.11.2 tzdata-2025.3 tzlocal-5.3.1
+
+[notice] A new release of pip is available: 25.0.1 -> 25.3
+[notice] To update, run: C:\Users\samng\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0\python.exe -m pip install --upgrade pip

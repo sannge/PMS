@@ -1,0 +1,197 @@
+"""TaskStatus SQLAlchemy model for unified 5-status system with category mapping."""
+
+import uuid
+from datetime import datetime
+from enum import Enum
+from typing import TYPE_CHECKING
+
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
+
+from ..database import Base
+
+if TYPE_CHECKING:
+    from .project import Project
+    from .task import Task
+
+
+class StatusName(str, Enum):
+    """Enum for the 5 unified task status names."""
+
+    TODO = "Todo"
+    IN_PROGRESS = "In Progress"
+    IN_REVIEW = "In Review"
+    ISSUE = "Issue"
+    DONE = "Done"
+
+
+class StatusCategory(str, Enum):
+    """
+    Enum for status categories used in project status derivation.
+
+    Categories map multiple statuses to simplified groupings:
+    - Todo: Task hasn't started
+    - Active: Task is being worked on (In Progress, In Review)
+    - Issue: Task has a problem/blocker
+    - Done: Task is complete
+    """
+
+    TODO = "Todo"
+    ACTIVE = "Active"
+    ISSUE = "Issue"
+    DONE = "Done"
+
+
+# Mapping from status name to category
+STATUS_CATEGORY_MAP = {
+    StatusName.TODO: StatusCategory.TODO,
+    StatusName.IN_PROGRESS: StatusCategory.ACTIVE,
+    StatusName.IN_REVIEW: StatusCategory.ACTIVE,
+    StatusName.ISSUE: StatusCategory.ISSUE,
+    StatusName.DONE: StatusCategory.DONE,
+}
+
+# Default status ordering (rank)
+DEFAULT_STATUS_ORDER = [
+    StatusName.TODO,
+    StatusName.IN_PROGRESS,
+    StatusName.IN_REVIEW,
+    StatusName.ISSUE,
+    StatusName.DONE,
+]
+
+
+class TaskStatus(Base):
+    """
+    TaskStatus model for unified 5-status system with category mapping.
+
+    This model defines the available statuses for tasks within a project.
+    Each project has its own set of TaskStatus records, allowing for
+    per-project customization in the future.
+
+    The 5 unified statuses are:
+    - Todo: Task hasn't started yet
+    - In Progress: Task is actively being worked on
+    - In Review: Task is being reviewed/tested
+    - Issue: Task has a problem or blocker
+    - Done: Task is complete
+
+    Categories map statuses to simplified groupings for project status derivation:
+    - Todo -> Todo category
+    - In Progress, In Review -> Active category
+    - Issue -> Issue category
+    - Done -> Done category
+
+    Attributes:
+        id: Unique identifier (UUID)
+        project_id: FK to parent project (each project has its own statuses)
+        name: Status name (Todo, In Progress, In Review, Issue, Done)
+        category: Category for derivation (Todo, Active, Issue, Done)
+        rank: Ordering rank for Kanban column display
+        created_at: Timestamp when status was created
+    """
+
+    __tablename__ = "TaskStatuses"
+    __allow_unmapped__ = True
+
+    # Primary key - UUID
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        nullable=False,
+    )
+
+    # Foreign key to project
+    project_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("Projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    # Status identification
+    name = Column(
+        String(50),
+        nullable=False,
+    )
+
+    # Category for derivation logic
+    category = Column(
+        String(20),
+        nullable=False,
+    )
+
+    # Ordering rank for Kanban columns
+    rank = Column(
+        Integer,
+        nullable=False,
+    )
+
+    # Timestamps
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    # Relationships
+    project = relationship(
+        "Project",
+        back_populates="task_statuses",
+        foreign_keys=[project_id],
+        lazy="select",
+    )
+
+    tasks = relationship(
+        "Task",
+        back_populates="task_status",
+        lazy="dynamic",
+    )
+
+    def __repr__(self) -> str:
+        """String representation of TaskStatus."""
+        return f"<TaskStatus(id={self.id}, name={self.name}, category={self.category})>"
+
+    @classmethod
+    def create_default_statuses(cls, project_id: uuid.UUID) -> list["TaskStatus"]:
+        """
+        Create the default 5 statuses for a project.
+
+        Args:
+            project_id: The UUID of the project to create statuses for
+
+        Returns:
+            List of TaskStatus instances (not yet committed to database)
+        """
+        statuses = []
+        for rank, status_name in enumerate(DEFAULT_STATUS_ORDER):
+            category = STATUS_CATEGORY_MAP[status_name]
+            statuses.append(
+                cls(
+                    project_id=project_id,
+                    name=status_name.value,
+                    category=category.value,
+                    rank=rank,
+                )
+            )
+        return statuses
+
+    @staticmethod
+    def get_category_for_status(status_name: str) -> str:
+        """
+        Get the category for a given status name.
+
+        Args:
+            status_name: The status name string
+
+        Returns:
+            The category string for the status
+        """
+        try:
+            name_enum = StatusName(status_name)
+            return STATUS_CATEGORY_MAP[name_enum].value
+        except ValueError:
+            # Default to Todo category for unknown statuses
+            return StatusCategory.TODO.value

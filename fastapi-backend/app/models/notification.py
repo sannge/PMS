@@ -1,0 +1,105 @@
+"""Notification SQLAlchemy model for user notifications."""
+
+import uuid
+from datetime import datetime
+from typing import TYPE_CHECKING
+
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Text
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
+
+from ..database import Base
+
+if TYPE_CHECKING:
+    from .user import User
+
+
+class Notification(Base):
+    """
+    Notification model representing user notifications.
+
+    Notifications alert users about events like task assignments,
+    mentions, status changes, and other relevant updates.
+
+    Attributes:
+        id: Unique identifier (UUID)
+        user_id: FK to the user receiving the notification
+        type: Type of notification (task_assigned, mention, status_change, etc.)
+        title: Notification title
+        message: Detailed notification message
+        is_read: Whether the notification has been read
+        entity_type: Type of related entity (task, note, project, etc.)
+        entity_id: ID of the related entity
+        created_at: Timestamp when notification was created
+    """
+
+    __tablename__ = "Notifications"
+    __allow_unmapped__ = True
+
+    # Primary key - UUID
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        nullable=False,
+    )
+
+    # Foreign keys
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("Users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    # Notification details
+    type = Column(
+        String(50),
+        nullable=False,
+        index=True,
+    )
+    title = Column(
+        String(255),
+        nullable=False,
+    )
+    message = Column(
+        Text,
+        nullable=True,
+    )
+    is_read = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        index=True,
+    )
+
+    # Polymorphic association - links to related entity
+    entity_type = Column(
+        String(50),
+        nullable=True,
+        index=True,
+    )
+    entity_id = Column(
+        UUID(as_uuid=True),
+        nullable=True,
+        index=True,
+    )
+
+    # Timestamps
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+        index=True,
+    )
+
+    # Relationships
+    user = relationship(
+        "User",
+        back_populates="notifications",
+        lazy="joined",
+    )
+
+    def __repr__(self) -> str:
+        """String representation of Notification."""
+        return f"<Notification(id={self.id}, type={self.type}, user_id={self.user_id})>"

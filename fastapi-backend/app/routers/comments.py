@@ -1,0 +1,389 @@
+"""Comments API endpoints.
+
+Provides endpoints for managing comments on tasks with @mentions support.
+All endpoints require authentication.
+"""
+
+from datetime import datetime
+from typing import Annotated, Optional
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import exists, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from ..database import get_db
+from ..models.application_member import ApplicationMember
+from ..models.comment import Comment
+from ..models.project import Project
+from ..models.task import Task
+from ..models.user import User
+from ..schemas.comment import (
+    CommentCreate,
+    CommentListResponse,
+    CommentResponse,
+    CommentUpdate,
+)
+from ..services.auth_service import get_current_user
+from ..services.minio_service import MinIOService, get_minio_service
+from ..services.comment_service import (
+    build_comment_response,
+    create_comment,
+    get_comment,
+    get_comments_for_task,
+    update_comment,
+)
+from ..services.notification_service import create_mention_notification
+from ..websocket.handlers import (
+    handle_comment_added,
+    handle_comment_deleted,
+    handle_comment_updated,
+)
+
+router = APIRouter(tags=["Comments"])
+
+
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+
+async def verify_task_access(
+    task_id: UUID,
+    current_user: User,
+    db: AsyncSession,
+) -> Task:
+    """
+    Verify that the user has access to the task via application membership.
+
+    Any application member (owner, editor, viewer) can access and comment on tasks.
+
+    Args:
+        task_id: The UUID of the task
+        current_user: The authenticated user
+        db: Database session
+
+    Returns:
+        Task: The verified task
+
+    Raises:
+        HTTPException: If task not found or user doesn't have access
+    """
+    # Fetch task with project and application
+    result = await db.execute(
+        select(Task)
+        .options(
+            selectinload(Task.project).selectinload(Project.application)
+        )
+        .where(Task.id == task_id)
+    )
+    task = result.scalar_one_or_none()
+
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with ID {task_id} not found",
+        )
+
+    # Check application membership
+    application_id = task.project.application_id
+
+    # Check if user is the owner
+    if task.project.application.owner_id == current_user.id:
+        return task
+
+    # Check ApplicationMembers using EXISTS for optimal performance
+    result = await db.execute(
+        select(
+            exists().where(
+                ApplicationMember.application_id == application_id,
+                ApplicationMember.user_id == current_user.id,
+            )
+        )
+    )
+    is_member = result.scalar() or False
+
+    if not is_member:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. You are not a member of this application.",
+        )
+
+    # Any application member (owner, editor, viewer) can comment
+    # No additional permission checks needed for comments
+
+    return task
+
+
+# ============================================================================
+# Comment Endpoints
+# ============================================================================
+
+
+@router.get(
+    "/api/tasks/{task_id}/comments",
+    response_model=CommentListResponse,
+    summary="Get comments for a task",
+    description="Get paginated comments for a task with cursor-based pagination.",
+    responses={
+        200: {"description": "Comments retrieved successfully"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "Access denied"},
+        404: {"description": "Task not found"},
+    },
+)
+async def list_comments(
+    task_id: UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+    cursor: Optional[str] = Query(
+        None,
+        description="Cursor for pagination (ISO datetime string)",
+    ),
+    limit: int = Query(
+        20,
+        ge=1,
+        le=100,
+        description="Maximum number of comments to return",
+    ),
+) -> CommentListResponse:
+    """
+    Get comments for a task.
+
+    Returns comments in newest-first order with cursor-based pagination.
+    The cursor is an ISO datetime string representing the oldest comment
+    from the previous page.
+    """
+    # Verify access
+    await verify_task_access(task_id, current_user, db)
+
+    # Parse cursor
+    cursor_dt = None
+    if cursor:
+        try:
+            cursor_dt = datetime.fromisoformat(cursor)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid cursor format. Expected ISO datetime string.",
+            )
+
+    # Get comments
+    comments, next_cursor = await get_comments_for_task(
+        db=db,
+        task_id=task_id,
+        cursor=cursor_dt,
+        limit=limit,
+    )
+
+    # Build response
+    items = [build_comment_response(c) for c in comments]
+
+    return CommentListResponse(
+        items=items,
+        next_cursor=next_cursor.isoformat() if next_cursor else None,
+    )
+
+
+@router.post(
+    "/api/tasks/{task_id}/comments",
+    response_model=CommentResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a comment",
+    description="Create a new comment on a task with optional @mentions.",
+    responses={
+        201: {"description": "Comment created successfully"},
+        400: {"description": "Validation error"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "Access denied"},
+        404: {"description": "Task not found"},
+    },
+)
+async def create_comment_endpoint(
+    task_id: UUID,
+    comment_data: CommentCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+) -> CommentResponse:
+    """
+    Create a new comment on a task.
+
+    Supports TipTap JSON format for rich text with @mentions.
+    Mentioned users will receive notifications.
+    """
+    # Verify access - any application member can comment
+    task = await verify_task_access(task_id, current_user, db)
+
+    # Create comment
+    comment, mentioned_user_ids = await create_comment(
+        db=db,
+        task_id=task_id,
+        author_id=current_user.id,
+        comment_data=comment_data,
+    )
+
+    # Reload comment with relationships
+    comment = await get_comment(db, comment.id)
+
+    # Build response
+    response = build_comment_response(comment)
+
+    # Broadcast WebSocket event
+    await handle_comment_added(
+        task_id=task_id,
+        comment_data=response,
+        mentioned_user_ids=mentioned_user_ids,
+    )
+
+    # Create notifications for mentioned users
+    for user_id in mentioned_user_ids:
+        if user_id != current_user.id:  # Don't notify self
+            await create_mention_notification(
+                db=db,
+                mentioned_user_id=user_id,
+                mentioner_id=current_user.id,
+                task_id=task_id,
+                comment_id=comment.id,
+            )
+
+    return CommentResponse(**response)
+
+
+@router.put(
+    "/api/comments/{comment_id}",
+    response_model=CommentResponse,
+    summary="Update a comment",
+    description="Update an existing comment. Only the author can update.",
+    responses={
+        200: {"description": "Comment updated successfully"},
+        400: {"description": "Validation error"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "Access denied - not the author"},
+        404: {"description": "Comment not found"},
+    },
+)
+async def update_comment_endpoint(
+    comment_id: UUID,
+    comment_data: CommentUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+) -> CommentResponse:
+    """
+    Update an existing comment.
+
+    Only the comment author can update their own comments.
+    """
+    # Update comment
+    result = await update_comment(
+        db=db,
+        comment_id=comment_id,
+        author_id=current_user.id,
+        comment_data=comment_data,
+    )
+
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Comment not found or you are not the author",
+        )
+
+    comment, added_mentions, removed_mentions = result
+
+    # Reload with relationships
+    comment = await get_comment(db, comment.id)
+
+    # Build response
+    response = build_comment_response(comment)
+
+    # Broadcast WebSocket event
+    await handle_comment_updated(
+        task_id=comment.task_id,
+        comment_id=comment_id,
+        comment_data=response,
+    )
+
+    # Create notifications for newly mentioned users
+    for user_id in added_mentions:
+        if user_id != current_user.id:
+            await create_mention_notification(
+                db=db,
+                mentioned_user_id=user_id,
+                mentioner_id=current_user.id,
+                task_id=comment.task_id,
+                comment_id=comment.id,
+            )
+
+    return CommentResponse(**response)
+
+
+@router.delete(
+    "/api/comments/{comment_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a comment",
+    description="Delete a comment and its attachments. Only the author can delete.",
+    responses={
+        204: {"description": "Comment deleted successfully"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "Access denied - not the author"},
+        404: {"description": "Comment not found"},
+    },
+)
+async def delete_comment_endpoint(
+    comment_id: UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+    minio: MinIOService = Depends(get_minio_service),
+) -> None:
+    """
+    Delete a comment and its attachments.
+
+    Only the comment author can delete their own comments.
+    This will also delete any file attachments from MinIO storage.
+    """
+    # Get comment with attachments
+    result = await db.execute(
+        select(Comment)
+        .options(selectinload(Comment.attachments))
+        .where(
+            Comment.id == comment_id,
+            Comment.author_id == current_user.id,
+            Comment.is_deleted == False,
+        )
+    )
+    comment = result.scalar_one_or_none()
+
+    if not comment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Comment not found or you are not the author",
+        )
+
+    task_id = comment.task_id
+
+    # Collect attachment info before deleting from database
+    attachment_ids = [str(att.id) for att in comment.attachments]
+    minio_files = [
+        (att.minio_bucket, att.minio_key)
+        for att in comment.attachments
+        if att.minio_bucket and att.minio_key
+    ]
+
+    # Delete comment from database (cascade will delete attachment records)
+    await db.delete(comment)
+    await db.commit()
+
+    # Delete files from MinIO storage (after successful DB commit)
+    for bucket, key in minio_files:
+        try:
+            minio.delete_file(bucket=bucket, object_name=key)
+        except Exception:
+            # Log error but continue - file might already be deleted
+            pass
+
+    # Broadcast WebSocket event with deleted attachment IDs
+    await handle_comment_deleted(
+        task_id=task_id,
+        comment_id=comment_id,
+        attachment_ids=attachment_ids,
+    )

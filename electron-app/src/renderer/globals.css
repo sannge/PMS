@@ -1,0 +1,551 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================================
+   DESIGN SYSTEM: Refined Nordic
+   A sophisticated blend of Scandinavian minimalism with warm accents
+   ============================================================================ */
+
+@layer base {
+  :root {
+    /* Typography */
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+    /* Base Colors - Warm Stone Palette */
+    --background: 40 20% 98%;
+    --foreground: 240 10% 10%;
+
+    /* Card & Surface - Subtle warmth */
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 10%;
+
+    /* Popover */
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 10%;
+
+    /* Primary - Deep Slate with warmth */
+    --primary: 240 6% 20%;
+    --primary-foreground: 40 20% 98%;
+
+    /* Secondary - Warm Gray */
+    --secondary: 40 10% 94%;
+    --secondary-foreground: 240 6% 20%;
+
+    /* Muted - Soft Stone */
+    --muted: 40 15% 95%;
+    --muted-foreground: 240 5% 46%;
+
+    /* Accent - Warm Amber */
+    --accent: 35 100% 50%;
+    --accent-foreground: 240 10% 10%;
+    --accent-soft: 35 100% 95%;
+
+    /* Destructive */
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Success */
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 100%;
+
+    /* Warning */
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+
+    /* Border & Input */
+    --border: 40 10% 90%;
+    --input: 40 10% 90%;
+    --ring: 220 70% 50%;
+
+    /* Sidebar specific */
+    --sidebar: 240 6% 12%;
+    --sidebar-foreground: 40 20% 96%;
+    --sidebar-muted: 240 5% 24%;
+    --sidebar-accent: 35 100% 55%;
+
+    /* Radius */
+    --radius: 0.75rem;
+    --radius-lg: 1rem;
+    --radius-xl: 1.25rem;
+
+    /* Shadows */
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.03);
+    --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.05), 0 1px 2px -1px rgb(0 0 0 / 0.05);
+    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.03);
+    --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.05), 0 4px 6px -4px rgb(0 0 0 / 0.03);
+    --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.05), 0 8px 10px -6px rgb(0 0 0 / 0.03);
+    --shadow-glow: 0 0 40px -10px hsl(35 100% 50% / 0.15);
+  }
+
+  .dark {
+    /* Base Colors - Deep Slate */
+    --background: 240 10% 6%;
+    --foreground: 40 15% 95%;
+
+    /* Card - Elevated surface */
+    --card: 240 8% 10%;
+    --card-foreground: 40 15% 95%;
+
+    /* Popover */
+    --popover: 240 8% 10%;
+    --popover-foreground: 40 15% 95%;
+
+    /* Primary - Light for contrast */
+    --primary: 40 15% 95%;
+    --primary-foreground: 240 10% 10%;
+
+    /* Secondary */
+    --secondary: 240 6% 16%;
+    --secondary-foreground: 40 15% 95%;
+
+    /* Muted */
+    --muted: 240 6% 16%;
+    --muted-foreground: 40 10% 60%;
+
+    /* Accent - Warm Amber (slightly muted for dark) */
+    --accent: 35 95% 55%;
+    --accent-foreground: 240 10% 10%;
+    --accent-soft: 35 50% 15%;
+
+    /* Destructive */
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Success */
+    --success: 142 60% 45%;
+    --success-foreground: 0 0% 100%;
+
+    /* Warning */
+    --warning: 38 85% 50%;
+    --warning-foreground: 0 0% 100%;
+
+    /* Border & Input */
+    --border: 240 6% 18%;
+    --input: 240 6% 18%;
+    --ring: 220 70% 55%;
+
+    /* Sidebar */
+    --sidebar: 240 10% 8%;
+    --sidebar-foreground: 40 15% 92%;
+    --sidebar-muted: 240 6% 20%;
+    --sidebar-accent: 35 95% 55%;
+
+    /* Shadows - More prominent in dark mode */
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.2);
+    --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.3), 0 1px 2px -1px rgb(0 0 0 / 0.2);
+    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.3), 0 2px 4px -2px rgb(0 0 0 / 0.2);
+    --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.3), 0 4px 6px -4px rgb(0 0 0 / 0.2);
+    --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.3), 0 8px 10px -6px rgb(0 0 0 / 0.2);
+    --shadow-glow: 0 0 50px -10px hsl(35 95% 55% / 0.2);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "cv11", "ss01", "ss03";
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.2);
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.3);
+  }
+
+  /* Focus visible styles */
+  *:focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+
+  /* Selection */
+  ::selection {
+    background: hsl(var(--accent) / 0.2);
+    color: hsl(var(--foreground));
+  }
+}
+
+@layer components {
+  /* Glass morphism card */
+  .glass {
+    @apply bg-card/80 backdrop-blur-xl border border-border/50;
+  }
+
+  .glass-strong {
+    @apply bg-card/95 backdrop-blur-2xl border border-border/60;
+  }
+
+  /* Gradient text */
+  .gradient-text {
+    @apply bg-gradient-to-r from-foreground via-foreground/90 to-foreground/70 bg-clip-text text-transparent;
+  }
+
+  /* Accent gradient */
+  .accent-gradient {
+    @apply bg-gradient-to-br from-amber-400 via-orange-500 to-amber-600;
+  }
+
+  /* Shimmer effect for loading states */
+  .shimmer {
+    background: linear-gradient(
+      90deg,
+      hsl(var(--muted)) 0%,
+      hsl(var(--muted-foreground) / 0.1) 50%,
+      hsl(var(--muted)) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+  }
+
+  /* Subtle hover lift */
+  .hover-lift {
+    @apply transition-all duration-300 ease-out;
+  }
+
+  .hover-lift:hover {
+    @apply -translate-y-0.5 shadow-lg;
+  }
+
+  /* Interactive card */
+  .interactive-card {
+    @apply rounded-xl border border-border bg-card p-5 transition-all duration-300;
+    @apply hover:border-border/80 hover:shadow-lg hover:-translate-y-0.5;
+    @apply focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2;
+  }
+
+  /* Sidebar nav link */
+  .sidebar-link {
+    @apply flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200;
+    @apply text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-muted/50;
+  }
+
+  .sidebar-link-active {
+    @apply bg-sidebar-accent/15 text-sidebar-accent hover:bg-sidebar-accent/20;
+  }
+
+  /* Input focus animation */
+  .input-focus {
+    @apply transition-all duration-200;
+    @apply focus:border-ring focus:ring-4 focus:ring-ring/10;
+  }
+
+  /* Button variants */
+  .btn-primary {
+    @apply inline-flex items-center justify-center rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground;
+    @apply transition-all duration-200 hover:bg-primary/90 hover:shadow-md;
+    @apply focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2;
+    @apply disabled:pointer-events-none disabled:opacity-50;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center rounded-lg bg-secondary px-4 py-2.5 text-sm font-semibold text-secondary-foreground;
+    @apply transition-all duration-200 hover:bg-secondary/80;
+    @apply focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2;
+    @apply disabled:pointer-events-none disabled:opacity-50;
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center rounded-lg px-4 py-2.5 text-sm font-medium text-muted-foreground;
+    @apply transition-all duration-200 hover:bg-muted hover:text-foreground;
+    @apply focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2;
+    @apply disabled:pointer-events-none disabled:opacity-50;
+  }
+
+  .btn-accent {
+    @apply inline-flex items-center justify-center rounded-lg px-4 py-2.5 text-sm font-semibold;
+    @apply bg-gradient-to-r from-amber-500 to-orange-500 text-white;
+    @apply transition-all duration-200 hover:from-amber-600 hover:to-orange-600 hover:shadow-lg hover:shadow-amber-500/25;
+    @apply focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2;
+    @apply disabled:pointer-events-none disabled:opacity-50;
+  }
+
+  /* Badge variants */
+  .badge {
+    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
+  }
+
+  .badge-primary {
+    @apply badge bg-primary/10 text-primary;
+  }
+
+  .badge-accent {
+    @apply badge bg-accent/15 text-amber-700 dark:text-amber-400;
+  }
+
+  .badge-success {
+    @apply badge bg-success/15 text-green-700 dark:text-green-400;
+  }
+
+  .badge-warning {
+    @apply badge bg-warning/15 text-amber-700 dark:text-amber-400;
+  }
+
+  .badge-destructive {
+    @apply badge bg-destructive/15 text-red-700 dark:text-red-400;
+  }
+
+  .badge-muted {
+    @apply badge bg-muted text-muted-foreground;
+  }
+}
+
+@layer utilities {
+  /* Electron window draggable regions */
+  .app-drag {
+    -webkit-app-region: drag;
+  }
+
+  .app-no-drag {
+    -webkit-app-region: no-drag;
+  }
+
+  /* Animation delays */
+  .animation-delay-100 { animation-delay: 100ms; }
+  .animation-delay-200 { animation-delay: 200ms; }
+  .animation-delay-300 { animation-delay: 300ms; }
+  .animation-delay-400 { animation-delay: 400ms; }
+  .animation-delay-500 { animation-delay: 500ms; }
+
+  /* Text balance for headings */
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* Hide scrollbar but keep functionality */
+  .scrollbar-none {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Aspect ratios */
+  .aspect-card {
+    aspect-ratio: 16 / 10;
+  }
+}
+
+/* Keyframe animations */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in-scale {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes slide-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+@keyframes bounce-soft {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+@keyframes glow {
+  0%, 100% { box-shadow: 0 0 20px -5px hsl(var(--accent) / 0.3); }
+  50% { box-shadow: 0 0 30px -5px hsl(var(--accent) / 0.5); }
+}
+
+@keyframes accordion-down {
+  from { height: 0; }
+  to { height: var(--radix-accordion-content-height); }
+}
+
+@keyframes accordion-up {
+  from { height: var(--radix-accordion-content-height); }
+  to { height: 0; }
+}
+
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ============================================================================
+   TipTap Rich Text Editor Styles (scoped to task editor)
+   ============================================================================ */
+
+/* Table resize handle cursor */
+.task-editor .ProseMirror .tableWrapper {
+  @apply relative overflow-x-auto my-4;
+}
+
+.task-editor .ProseMirror table {
+  @apply border-collapse w-full;
+}
+
+.task-editor .ProseMirror th,
+.task-editor .ProseMirror td {
+  @apply border border-border p-2 relative;
+  min-width: 50px;
+}
+
+.task-editor .ProseMirror th {
+  @apply bg-muted font-semibold;
+}
+
+/* Table column resize handle */
+.task-editor .ProseMirror .column-resize-handle {
+  @apply absolute -right-0.5 top-0 bottom-0 w-1 bg-primary/50 cursor-col-resize z-20;
+}
+
+/* Selected table cell */
+.task-editor .ProseMirror .selectedCell {
+  @apply bg-primary/10;
+}
+
+.task-editor .ProseMirror .selectedCell::after {
+  content: "";
+  @apply absolute inset-0 pointer-events-none border-2 border-primary/30;
+}
+
+/* Table resize cursor when hovering between columns */
+.task-editor .ProseMirror.resize-cursor {
+  cursor: col-resize;
+}
+
+/* Image styles */
+.task-editor .ProseMirror img {
+  @apply max-w-full h-auto rounded-md my-4;
+}
+
+.task-editor .ProseMirror img.ProseMirror-selectednode {
+  @apply ring-2 ring-primary/50;
+}
+
+/* Placeholder style */
+.task-editor .ProseMirror p.is-editor-empty:first-child::before {
+  @apply text-muted-foreground pointer-events-none float-left h-0;
+  content: attr(data-placeholder);
+}
+
+/* Link styles in editor */
+.task-editor .ProseMirror a {
+  @apply text-primary underline cursor-pointer;
+}
+
+/* Code block styles */
+.task-editor .ProseMirror pre {
+  @apply bg-muted rounded-md p-4 my-4 overflow-x-auto;
+}
+
+.task-editor .ProseMirror code {
+  @apply bg-muted px-1.5 py-0.5 rounded text-sm font-mono;
+}
+
+.task-editor .ProseMirror pre code {
+  @apply bg-transparent p-0;
+}
+
+/* List styles */
+.task-editor .ProseMirror ul {
+  @apply list-disc pl-6 my-2;
+}
+
+.task-editor .ProseMirror ol {
+  @apply list-decimal pl-6 my-2;
+}
+
+.task-editor .ProseMirror li {
+  @apply my-1;
+}
+
+/* Blockquote */
+.task-editor .ProseMirror blockquote {
+  @apply border-l-4 border-border pl-4 my-4 italic text-muted-foreground;
+}
+
+/* Horizontal rule */
+.task-editor .ProseMirror hr {
+  @apply border-t border-border my-6;
+}
+
+/* Selection: preserve text color and highlight while selected */
+.task-editor .ProseMirror ::selection {
+  background: rgba(59, 130, 246, 0.18);
+  color: inherit;
+}
+
+.task-editor .ProseMirror mark ::selection {
+  background: rgba(59, 130, 246, 0.25);
+  color: inherit;
+}
+
+/* Focus state */
+.task-editor .ProseMirror:focus {
+  @apply outline-none;
+}

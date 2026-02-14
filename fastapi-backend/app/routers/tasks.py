@@ -1,0 +1,2546 @@
+"""Tasks CRUD API endpoints.
+
+Provides endpoints for managing Tasks within Projects.
+Tasks are the lowest level of the hierarchy: Application > Project > Task.
+All endpoints require authentication.
+"""
+
+import asyncio
+import logging
+from datetime import datetime, timedelta
+from typing import Annotated, List, Optional
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from ..database import async_session_maker, get_db
+from ..models.application import Application
+from ..models.application_member import ApplicationMember
+from ..models.project import Project
+from ..models.project_task_status_agg import ProjectTaskStatusAgg
+from ..models.task import Task
+from ..models.user import User
+from ..schemas.task import (
+    TaskCreate,
+    TaskCursorPage,
+    TaskMove,
+    TaskPriority,
+    TaskResponse,
+    TaskStatusInfo,
+    TaskType,
+    TaskUpdate,
+    TaskUserInfo,
+    TaskWithSubtasks,
+)
+from ..services.auth_service import get_current_user
+from ..services.notification_service import NotificationService
+from ..services.task_helpers import get_task_status_info
+from ..services.permission_service import PermissionService, get_permission_service
+from ..services.status_derivation_service import (
+    derive_project_status_from_model,
+    recalculate_aggregation_from_tasks,
+    update_aggregation_on_task_create,
+    update_aggregation_on_task_delete,
+    update_aggregation_on_task_status_change,
+)
+from ..websocket.handlers import (
+    UpdateAction,
+    handle_project_status_changed,
+    handle_task_moved,
+    handle_task_update,
+)
+from ..websocket.manager import MessageType, manager
+
+router = APIRouter(tags=["Tasks"])
+
+logger = logging.getLogger(__name__)
+
+
+async def _background_auto_archive(project_id) -> None:
+    """Run auto-archive in background with its own DB session."""
+    try:
+        async with async_session_maker() as db:
+            archived_count = await auto_archive_stale_done_tasks(db, project_id)
+            if archived_count > 0:
+                await db.commit()
+    except Exception:
+        logger.exception("Background auto-archive failed for project %s", project_id)
+
+
+# ============================================================================
+# Helper Functions for Role-Based Access Control
+# ============================================================================
+
+
+async def get_user_application_role(
+    db: AsyncSession,
+    user_id: UUID,
+    application_id: UUID,
+    application: Optional[Application] = None,
+) -> Optional[str]:
+    """
+    Get the user's role in an application.
+
+    Args:
+        db: Database session
+        user_id: The user's ID
+        application_id: The application's ID
+        application: Optional pre-fetched application to avoid extra query
+
+    Returns:
+        The role string ('owner', 'editor', 'viewer') or None if not a member.
+    """
+    # If application is provided, use it; otherwise fetch
+    if application is None:
+        result = await db.execute(
+            select(Application).where(Application.id == application_id)
+        )
+        application = result.scalar_one_or_none()
+
+    if not application:
+        return None
+
+    # Check if user is the original owner
+    if application.owner_id == user_id:
+        return "owner"
+
+    # Check ApplicationMembers table
+    result = await db.execute(
+        select(ApplicationMember).where(
+            ApplicationMember.application_id == application_id,
+            ApplicationMember.user_id == user_id,
+        )
+    )
+    member = result.scalar_one_or_none()
+
+    return member.role if member else None
+
+
+async def verify_project_access(
+    project_id: UUID,
+    current_user: User,
+    db: AsyncSession,
+    require_edit: bool = False,
+) -> Project:
+    """
+    Verify that the project exists and the user has access via application membership.
+
+    For edit operations, enforces the ProjectMember gate for Editors:
+    - Application Owners: Always have full access (no ProjectMember gate)
+    - Application Editors: Must be ProjectMembers to edit tasks
+    - Application Viewers: Read-only access only
+
+    Args:
+        project_id: The UUID of the project
+        current_user: The authenticated user
+        db: Database session
+        require_edit: If True, require owner or editor role with ProjectMember gate
+
+    Returns:
+        Project: The verified project
+
+    Raises:
+        HTTPException: If project not found or user doesn't have access
+    """
+    # Fetch project with application in single query using join
+    result = await db.execute(
+        select(Project)
+        .options(selectinload(Project.application))
+        .where(Project.id == project_id)
+    )
+    project = result.scalar_one_or_none()
+
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project with ID {project_id} not found",
+        )
+
+    # Verify access through the parent application membership (pass application to avoid re-fetching)
+    user_role = await get_user_application_role(db, current_user.id, project.application_id, project.application)
+
+    if not user_role:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. You are not a member of this project's application.",
+        )
+
+    if require_edit:
+        # Use PermissionService to check edit permissions with ProjectMember gate
+        permission_service = get_permission_service(db)
+        can_manage = await permission_service.check_can_manage_tasks(
+            current_user, project_id, project.application_id
+        )
+
+        if not can_manage:
+            # Provide appropriate error message based on role
+            if user_role == "viewer":
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied. Viewers cannot manage tasks.",
+                )
+            elif user_role == "editor":
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied. Editors must be project members to manage tasks in this project.",
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied. You do not have permission to manage tasks in this project.",
+                )
+
+    return project
+
+
+async def verify_task_access(
+    task_id: UUID,
+    current_user: User,
+    db: AsyncSession,
+    require_edit: bool = False,
+) -> Task:
+    """
+    Verify that the task exists and the user has access via application membership.
+
+    For edit operations, enforces the ProjectMember gate for Editors:
+    - Application Owners: Always have full access (no ProjectMember gate)
+    - Application Editors: Must be ProjectMembers to edit tasks
+    - Application Viewers: Read-only access only
+
+    Args:
+        task_id: The UUID of the task
+        current_user: The authenticated user
+        db: Database session
+        require_edit: If True, require owner or editor role with ProjectMember gate
+
+    Returns:
+        Task: The verified task
+
+    Raises:
+        HTTPException: If task not found or user doesn't have access
+    """
+    # Fetch task with project, application, assignee, and reporter in single query using joins
+    result = await db.execute(
+        select(Task)
+        .options(
+            selectinload(Task.project).selectinload(Project.application),
+            selectinload(Task.assignee),
+            selectinload(Task.reporter),
+            selectinload(Task.task_status),
+        )
+        .where(Task.id == task_id)
+    )
+    task = result.scalar_one_or_none()
+
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with ID {task_id} not found",
+        )
+
+    # Project is already loaded via selectinload
+    project = task.project
+
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task's parent project not found",
+        )
+
+    # Application is already loaded via chained selectinload (pass it to avoid re-fetching)
+    user_role = await get_user_application_role(db, current_user.id, project.application_id, project.application)
+
+    if not user_role:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. You are not a member of this task's application.",
+        )
+
+    if require_edit:
+        # Use PermissionService to check edit permissions with ProjectMember gate
+        permission_service = get_permission_service(db)
+        can_manage = await permission_service.check_can_manage_tasks(
+            current_user, project.id, project.application_id
+        )
+
+        if not can_manage:
+            # Provide appropriate error message based on role
+            if user_role == "viewer":
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied. Viewers cannot manage tasks.",
+                )
+            elif user_role == "editor":
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied. Editors must be project members to manage tasks in this project.",
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied. You do not have permission to manage tasks in this project.",
+                )
+
+    return task
+
+
+async def generate_task_key(project_id: UUID, project_key: str, db: AsyncSession) -> str:
+    """
+    Generate the next task key for a project using atomic counter increment.
+
+    Task keys follow the format: PROJECT_KEY-NUMBER (e.g., "PROJ-123")
+
+    Uses PostgreSQL UPDATE...RETURNING to atomically increment the counter
+    and return the new value in a single statement. This prevents race
+    conditions when multiple concurrent requests try to create tasks.
+
+    Args:
+        project_id: The project's UUID
+        project_key: The project's key prefix (e.g., "PROJ")
+        db: Database session
+
+    Returns:
+        str: The generated task key (e.g., "PROJ-123")
+    """
+    from sqlalchemy import text
+
+    # Use raw SQL for atomic increment with RETURNING
+    # This avoids loading a separate Project instance that could conflict with session state
+    result = await db.execute(
+        text("""
+            UPDATE "Projects"
+            SET next_task_number = next_task_number + 1
+            WHERE id = :project_id
+            RETURNING next_task_number - 1 AS task_number
+        """),
+        {"project_id": project_id}
+    )
+    row = result.fetchone()
+
+    if row is None:
+        # Fallback: project doesn't exist or has no counter
+        raise ValueError(f"Project {project_id} not found")
+
+    task_number = row[0]
+    return f"{project_key}-{task_number}"
+
+
+def get_user_info(user: Optional[User]) -> Optional[TaskUserInfo]:
+    """Convert a User model to TaskUserInfo schema for API responses."""
+    if user is None:
+        return None
+    return TaskUserInfo(
+        id=user.id,
+        email=user.email,
+        display_name=user.display_name,
+        avatar_url=user.avatar_url,
+    )
+
+
+def serialize_user_for_ws(user: Optional[User]) -> Optional[dict]:
+    """Serialize a User model to dict for WebSocket broadcasts."""
+    if user is None:
+        return None
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "display_name": user.display_name,
+        "avatar_url": user.avatar_url,
+    }
+
+
+async def validate_assignee_eligibility(
+    assignee_id: UUID,
+    project_id: UUID,
+    application_id: UUID,
+    db: AsyncSession,
+) -> None:
+    """
+    Validate that a user can be assigned to a task in a project.
+
+    Assignment eligibility rules:
+    - Must be a ProjectMember of the project
+    - Must have Owner or Editor role in the application
+    - Viewers cannot be assigned to tasks
+
+    Args:
+        assignee_id: The UUID of the user to be assigned
+        project_id: The UUID of the project
+        application_id: The UUID of the parent application
+        db: Database session
+
+    Raises:
+        HTTPException: If assignee does not exist or is not eligible
+    """
+    # Verify the assignee user exists
+    from ..models.user import User as UserModel
+    result = await db.execute(
+        select(UserModel).where(UserModel.id == assignee_id)
+    )
+    assignee_user = result.scalar_one_or_none()
+    if not assignee_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"User with ID {assignee_id} not found",
+        )
+
+    # Use PermissionService to check assignment eligibility
+    permission_service = get_permission_service(db)
+    can_be_assigned = await permission_service.check_can_be_assigned(
+        user_id=assignee_id,
+        project_id=project_id,
+        application_id=application_id,
+    )
+
+    if not can_be_assigned:
+        # Get the user's application role for a more informative error message
+        user_role = await permission_service.get_user_application_role(
+            user_id=assignee_id,
+            application_id=application_id,
+        )
+
+        if not user_role:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot assign task to this user. User is not a member of the application.",
+            )
+        elif user_role == "viewer":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot assign task to this user. Viewers cannot be assigned to tasks.",
+            )
+        else:
+            # User is owner/editor but not a ProjectMember
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot assign task to this user. User must be a project member to be assigned tasks.",
+            )
+
+
+# ============================================================================
+# Status Derivation Helper Functions
+# ============================================================================
+
+
+async def get_or_create_project_aggregation(
+    db: AsyncSession,
+    project_id: UUID,
+) -> ProjectTaskStatusAgg:
+    """
+    Get or create the ProjectTaskStatusAgg for a project.
+
+    If the aggregation record doesn't exist, creates one and recalculates
+    counters from existing tasks. This ensures data integrity when the
+    aggregation system is added to a project with existing tasks.
+
+    Args:
+        db: Database session
+        project_id: The UUID of the project
+
+    Returns:
+        ProjectTaskStatusAgg: The aggregation record
+    """
+    result = await db.execute(
+        select(ProjectTaskStatusAgg).where(
+            ProjectTaskStatusAgg.project_id == project_id
+        )
+    )
+    agg = result.scalar_one_or_none()
+
+    if agg is None:
+        # Create new aggregation
+        agg = ProjectTaskStatusAgg(
+            project_id=project_id,
+            total_tasks=0,
+            todo_tasks=0,
+            active_tasks=0,
+            review_tasks=0,
+            issue_tasks=0,
+            done_tasks=0,
+        )
+        db.add(agg)
+        await db.flush()
+
+        # Recalculate from existing tasks to ensure data integrity
+        # This handles the case where tasks exist before aggregation was added
+        # Use selectinload to ensure task_status relationship is loaded
+        result = await db.execute(
+            select(Task)
+            .options(selectinload(Task.task_status))
+            .where(
+                Task.project_id == project_id,
+                Task.archived_at.is_(None),  # Exclude archived tasks
+            )
+        )
+        existing_tasks = result.scalars().all()
+
+        if existing_tasks:
+            recalculate_aggregation_from_tasks(agg, existing_tasks)
+            await db.flush()
+
+    return agg
+
+
+async def update_project_derived_status(
+    db: AsyncSession,
+    project: Project,
+    new_status_name: str,
+) -> None:
+    """
+    Update a project's derived_status based on the newly derived status name.
+
+    Finds the TaskStatus record matching the status name for this project
+    and updates the project's derived_status_id. Creates default TaskStatuses
+    if they don't exist (for legacy projects).
+
+    Args:
+        db: Database session
+        project: The Project to update
+        new_status_name: The derived status name ('Todo', 'In Progress', 'Issue', 'Done')
+    """
+    from ..models.task_status import TaskStatus as TaskStatusModel
+
+    # Ensure TaskStatuses exist for this project
+    result = await db.execute(
+        select(func.count(TaskStatusModel.id)).where(
+            TaskStatusModel.project_id == project.id
+        )
+    )
+    existing_count = result.scalar()
+
+    if existing_count == 0:
+        # Create default TaskStatuses for legacy project
+        default_statuses = TaskStatusModel.create_default_statuses(project.id)
+        for status_obj in default_statuses:
+            db.add(status_obj)
+        await db.flush()
+
+    # Find the TaskStatus record for this project with the derived status name
+    result = await db.execute(
+        select(TaskStatusModel).where(
+            TaskStatusModel.project_id == project.id,
+            TaskStatusModel.name == new_status_name,
+        )
+    )
+    task_status = result.scalar_one_or_none()
+
+    if task_status:
+        project.derived_status_id = task_status.id
+    else:
+        # If no matching TaskStatus found (shouldn't happen after creating defaults),
+        # set derived_status_id to None
+        project.derived_status_id = None
+
+
+async def get_current_derived_status_name(
+    db: AsyncSession,
+    project: Project,
+) -> Optional[str]:
+    """
+    Get the current derived status name for a project.
+
+    Args:
+        db: Database session
+        project: The Project to check
+
+    Returns:
+        The current derived status name or None if not set
+    """
+    if project.derived_status_id is None:
+        return None
+
+    from ..models.task_status import TaskStatus as TaskStatusModel
+
+    result = await db.execute(
+        select(TaskStatusModel).where(
+            TaskStatusModel.id == project.derived_status_id
+        )
+    )
+    task_status = result.scalar_one_or_none()
+
+    return task_status.name if task_status else None
+
+
+async def emit_project_status_changed_if_needed(
+    project: Project,
+    old_status: Optional[str],
+    new_status: str,
+    user_id: UUID,
+) -> None:
+    """
+    Emit a project_status_changed WebSocket event if the status actually changed.
+
+    This should be called after db.commit() to ensure the data is persisted
+    before broadcasting to connected clients.
+
+    Args:
+        project: The Project whose status may have changed
+        old_status: The previous derived status name (or None)
+        new_status: The new derived status name
+        user_id: The ID of the user who triggered the change
+    """
+    # Only emit if the status actually changed
+    if old_status == new_status:
+        return
+
+    # Build project data for the WebSocket message
+    project_data = {
+        "id": str(project.id),
+        "application_id": str(project.application_id),
+        "name": project.name,
+        "key": project.key,
+        "derived_status": new_status,
+        "derived_status_id": str(project.derived_status_id) if project.derived_status_id else None,
+    }
+
+    # Emit the WebSocket event
+    await handle_project_status_changed(
+        application_id=project.application_id,
+        project_id=project.id,
+        project_data=project_data,
+        old_status=old_status or "Unknown",
+        new_status=new_status,
+        user_id=user_id,
+    )
+
+
+# ============================================================================
+# Lexorank Helper Functions for Task Ordering
+# ============================================================================
+
+
+# Archive threshold: tasks in done status for 7+ days get archived
+ARCHIVE_THRESHOLD_DAYS = 7
+
+
+async def auto_archive_stale_done_tasks(
+    db: AsyncSession,
+    project_id: UUID,
+) -> int:
+    """
+    Auto-archive tasks that have been in Done status for 7+ days.
+
+    This runs on-read when fetching project tasks to ensure archived tasks
+    are excluded from the main board view without requiring a background job.
+    Archived tasks are also excluded from project status aggregation.
+
+    Args:
+        db: Database session
+        project_id: The project to check for archivable tasks
+
+    Returns:
+        Number of tasks archived
+    """
+    from sqlalchemy import update
+
+    threshold_date = datetime.utcnow() - timedelta(days=ARCHIVE_THRESHOLD_DAYS)
+    now = datetime.utcnow()
+
+    # Update all tasks that:
+    # - Belong to this project
+    # - Are in done status
+    # - Have completed_at older than threshold
+    # - Are not already archived
+    from ..models.task_status import TaskStatus as TaskStatusModel, StatusCategory
+
+    # Get Done status IDs for this project
+    done_result = await db.execute(
+        select(TaskStatusModel.id).where(
+            TaskStatusModel.project_id == project_id,
+            TaskStatusModel.category == StatusCategory.DONE.value,
+        )
+    )
+    done_status_ids = [row[0] for row in done_result.all()]
+
+    result = await db.execute(
+        update(Task)
+        .where(
+            Task.project_id == project_id,
+            Task.task_status_id.in_(done_status_ids),
+            Task.completed_at.isnot(None),
+            Task.completed_at < threshold_date,
+            Task.archived_at.is_(None),
+        )
+        .values(archived_at=now)
+    )
+
+    archived_count = result.rowcount
+
+    # Update aggregation to exclude archived tasks from project stats
+    if archived_count > 0:
+        agg_result = await db.execute(
+            select(ProjectTaskStatusAgg).where(
+                ProjectTaskStatusAgg.project_id == project_id
+            )
+        )
+        agg = agg_result.scalar_one_or_none()
+
+        if agg:
+            # Decrement done_tasks and total_tasks by archived count
+            agg.done_tasks = max(0, agg.done_tasks - archived_count)
+            agg.total_tasks = max(0, agg.total_tasks - archived_count)
+
+    return archived_count
+
+
+def calculate_lexorank_between(
+    before_rank: Optional[str],
+    after_rank: Optional[str],
+) -> str:
+    """
+    Calculate a lexorank string that sorts between before_rank and after_rank.
+
+    Lexorank uses a simple alphabetic midpoint calculation for ordering.
+    This implementation uses lowercase letters 'a'-'z' for simplicity.
+
+    Args:
+        before_rank: The rank of the task that should come before (or None if first)
+        after_rank: The rank of the task that should come after (or None if last)
+
+    Returns:
+        A new rank string that sorts between before_rank and after_rank
+
+    Examples:
+        calculate_lexorank_between(None, None) -> "n" (middle of alphabet)
+        calculate_lexorank_between(None, "n") -> "g" (before n)
+        calculate_lexorank_between("n", None) -> "t" (after n)
+        calculate_lexorank_between("a", "c") -> "b" (between a and c)
+    """
+    # Default boundaries if not provided
+    if before_rank is None:
+        before_rank = ""
+    if after_rank is None:
+        after_rank = ""
+
+    # If both empty, start in the middle
+    if not before_rank and not after_rank:
+        return "n"  # Middle of alphabet
+
+    # If only after_rank exists, create rank before it
+    if not before_rank:
+        # Find a rank before after_rank
+        if after_rank[0] > 'b':
+            # Use character between 'a' and first char of after_rank
+            mid_char = chr((ord('a') + ord(after_rank[0])) // 2)
+            return mid_char if mid_char != 'a' else 'a' + 'n'
+        else:
+            # Need to extend with a character
+            return 'a' + 'n'
+
+    # If only before_rank exists, create rank after it
+    if not after_rank:
+        # Find a rank after before_rank
+        if before_rank[-1] < 'y':
+            # Use character after last char of before_rank
+            return before_rank[:-1] + chr(ord(before_rank[-1]) + 1)
+        else:
+            # Extend the rank with middle character
+            return before_rank + 'n'
+
+    # Both ranks exist - find midpoint
+    return _calculate_midpoint_rank(before_rank, after_rank)
+
+
+def _calculate_midpoint_rank(before_rank: str, after_rank: str) -> str:
+    """
+    Calculate the midpoint rank between two existing ranks.
+
+    Args:
+        before_rank: The lower rank
+        after_rank: The higher rank
+
+    Returns:
+        A rank string that sorts between before_rank and after_rank
+    """
+    # Ensure ranks are comparable by padding to same length
+    max_len = max(len(before_rank), len(after_rank))
+    before_padded = before_rank.ljust(max_len, 'a')
+    after_padded = after_rank.ljust(max_len, 'z')
+
+    result = []
+    carry_needed = False
+
+    for i in range(max_len):
+        before_char = before_padded[i]
+        after_char = after_padded[i]
+
+        if before_char == after_char:
+            result.append(before_char)
+            continue
+
+        # Calculate midpoint character
+        mid_ord = (ord(before_char) + ord(after_char)) // 2
+
+        if mid_ord > ord(before_char):
+            result.append(chr(mid_ord))
+            break
+        else:
+            # Characters are adjacent, need to extend
+            result.append(before_char)
+            carry_needed = True
+            continue
+
+    result_str = ''.join(result)
+
+    # If we couldn't find a midpoint, extend with 'n'
+    if carry_needed or result_str == before_rank:
+        result_str = before_rank + 'n'
+
+    return result_str
+
+
+async def get_rank_for_position(
+    db: AsyncSession,
+    project_id: UUID,
+    target_status_id: Optional[UUID],
+    before_task_id: Optional[UUID],
+    after_task_id: Optional[UUID],
+) -> str:
+    """
+    Calculate the rank for a task being moved to a specific position.
+
+    Args:
+        db: Database session
+        project_id: The project ID
+        target_status_id: The target task_status_id (FK to TaskStatuses)
+        before_task_id: ID of the task to position before (or None)
+        after_task_id: ID of the task to position after (or None)
+
+    Returns:
+        The calculated rank string for the new position
+    """
+    before_rank: Optional[str] = None
+    after_rank: Optional[str] = None
+
+    # Get the rank of the task to position before
+    if before_task_id:
+        result = await db.execute(
+            select(Task).where(
+                Task.id == before_task_id,
+                Task.project_id == project_id,
+            )
+        )
+        before_task = result.scalar_one_or_none()
+        if before_task:
+            before_rank = before_task.task_rank
+
+    # Get the rank of the task to position after
+    if after_task_id:
+        result = await db.execute(
+            select(Task).where(
+                Task.id == after_task_id,
+                Task.project_id == project_id,
+            )
+        )
+        after_task = result.scalar_one_or_none()
+        if after_task:
+            after_rank = after_task.task_rank
+
+    # If neither provided, get the last task in the target status to append
+    if not before_task_id and not after_task_id and target_status_id:
+        result = await db.execute(
+            select(Task)
+            .where(
+                Task.project_id == project_id,
+                Task.task_status_id == target_status_id,
+                Task.task_rank.isnot(None),
+            )
+            .order_by(Task.task_rank.desc())
+            .limit(1)
+        )
+        last_task = result.scalar_one_or_none()
+
+        if last_task and last_task.task_rank:
+            before_rank = last_task.task_rank
+            after_rank = None
+
+    return calculate_lexorank_between(after_rank, before_rank)
+
+
+# ============================================================================
+# Project-nested endpoints (for listing and creating tasks)
+# ============================================================================
+
+
+@router.get(
+    "/api/projects/{project_id}/tasks",
+    response_model=List[TaskWithSubtasks],
+    summary="List all tasks in a project",
+    description="Get all tasks within a specific project. Any member can view tasks.",
+    responses={
+        200: {"description": "List of tasks retrieved successfully"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "Access denied - not a member"},
+        404: {"description": "Project not found"},
+    },
+)
+async def list_tasks(
+    project_id: UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: int = Query(100, ge=1, le=500, description="Maximum number of records to return"),
+    search: Optional[str] = Query(None, description="Search term for task title"),
+    task_type: Optional[TaskType] = Query(None, description="Filter by task type"),
+    task_status_id: Optional[UUID] = Query(None, alias="status_id", description="Filter by task status ID"),
+    priority: Optional[TaskPriority] = Query(None, description="Filter by priority"),
+    assignee_id: Optional[UUID] = Query(None, description="Filter by assignee"),
+) -> List[TaskWithSubtasks]:
+    """
+    List all tasks within a project.
+
+    - **project_id**: ID of the parent project
+    - **skip**: Number of records to skip for pagination
+    - **limit**: Maximum number of records to return (1-500)
+    - **search**: Optional search term to filter by title
+    - **task_type**: Optional filter by task type (story, bug, epic, subtask, task)
+    - **status_id**: Optional filter by task status ID
+    - **priority**: Optional filter by priority (lowest, low, medium, high, highest)
+    - **assignee_id**: Optional filter by assigned user
+
+    Returns tasks with their subtask counts.
+    Any member (owner, editor, viewer) can list tasks.
+    Archived tasks (done for 7+ days) are excluded - use /archived endpoint instead.
+    """
+    # Verify project access (any member can view)
+    await verify_project_access(project_id, current_user, db)
+
+    # Schedule archival as background task (non-blocking)
+    asyncio.ensure_future(_background_auto_archive(project_id))
+
+    # Build query for tasks with subtask count
+    # Use a subquery for counting subtasks
+    subtask_count_subquery = (
+        select(
+            Task.parent_id,
+            func.count(Task.id).label("subtasks_count"),
+        )
+        .where(Task.parent_id.isnot(None))
+        .group_by(Task.parent_id)
+        .subquery()
+    )
+
+    # Query tasks with assignee and reporter eagerly loaded
+    query = (
+        select(
+            Task,
+            func.coalesce(subtask_count_subquery.c.subtasks_count, 0).label("subtasks_count"),
+        )
+        .options(
+            selectinload(Task.assignee),
+            selectinload(Task.reporter),
+            selectinload(Task.task_status),
+        )
+        .outerjoin(
+            subtask_count_subquery,
+            Task.id == subtask_count_subquery.c.parent_id,
+        )
+        .where(
+            Task.project_id == project_id,
+            Task.archived_at.is_(None),  # Exclude archived tasks
+        )
+    )
+
+    # Apply search filter if provided
+    if search:
+        query = query.where(Task.title.ilike(f"%{search}%"))
+
+    # Apply task type filter if provided
+    if task_type:
+        query = query.where(Task.task_type == task_type.value)
+
+    # Apply status filter if provided
+    if task_status_id:
+        query = query.where(Task.task_status_id == task_status_id)
+
+    # Apply priority filter if provided
+    if priority:
+        query = query.where(Task.priority == priority.value)
+
+    # Apply assignee filter if provided
+    if assignee_id:
+        query = query.where(Task.assignee_id == assignee_id)
+
+    # Order by most recently updated
+    query = query.order_by(Task.updated_at.desc())
+
+    # Apply pagination
+    query = query.offset(skip).limit(limit)
+
+    result = await db.execute(query)
+    results = result.all()
+
+    # Convert to response format
+    tasks = []
+    for task, subtasks_count in results:
+        task_response = TaskWithSubtasks(
+            id=task.id,
+            project_id=task.project_id,
+            task_key=task.task_key,
+            title=task.title,
+            description=task.description,
+            task_type=task.task_type,
+            priority=task.priority,
+            story_points=task.story_points,
+            due_date=task.due_date,
+            assignee_id=task.assignee_id,
+            assignee=get_user_info(task.assignee),
+            reporter_id=task.reporter_id,
+            reporter=get_user_info(task.reporter),
+            parent_id=task.parent_id,
+            sprint_id=task.sprint_id,
+            task_status_id=task.task_status_id,
+            task_status=get_task_status_info(task),
+            task_rank=task.task_rank,
+            row_version=task.row_version,
+            checklist_total=task.checklist_total,
+            checklist_done=task.checklist_done,
+            created_at=task.created_at,
+            updated_at=task.updated_at,
+            completed_at=task.completed_at,
+            archived_at=task.archived_at,
+            subtasks_count=subtasks_count,
+        )
+        tasks.append(task_response)
+
+    return tasks
+
+
+@router.post(
+    "/api/projects/{project_id}/tasks",
+    response_model=TaskResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new task",
+    description="Create a new task within a project. Only owners and editors can create tasks.",
+    responses={
+        201: {"description": "Task created successfully"},
+        400: {"description": "Validation error"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "Access denied - not an owner or editor"},
+        404: {"description": "Project not found"},
+    },
+)
+async def create_task(
+    project_id: UUID,
+    task_data: TaskCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+) -> TaskResponse:
+    """
+    Create a new task within a project.
+
+    - **title**: Task title (required, 1-500 characters)
+    - **description**: Detailed task description (optional)
+    - **task_type**: Type of task (default: 'story')
+    - **task_status_id**: Task status ID (optional, defaults to project's 'Todo' status)
+    - **priority**: Task priority (default: 'medium')
+    - **story_points**: Story point estimate (optional, 0-100)
+    - **due_date**: Task due date (optional)
+    - **assignee_id**: ID of assigned user (optional)
+    - **parent_id**: ID of parent task for subtasks (optional)
+    - **sprint_id**: ID of sprint (optional)
+
+    The task will be created under the specified project.
+    Reporter will be set to the current user if not provided.
+    Only owners and editors can create tasks.
+    """
+    # Verify project access (require edit permission)
+    project = await verify_project_access(project_id, current_user, db, require_edit=True)
+
+    # Auto-restore project if it's archived (creating a task restores the project)
+    project_was_restored = False
+    if project.archived_at is not None:
+        project.archived_at = None
+        project.updated_at = datetime.utcnow()
+        project_was_restored = True
+
+    # Validate that project_id in body matches URL (if provided)
+    if task_data.project_id != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Project ID in request body does not match URL parameter",
+        )
+
+    # Validate parent task if provided
+    if task_data.parent_id:
+        result = await db.execute(
+            select(Task).where(
+                Task.id == task_data.parent_id,
+                Task.project_id == project_id,
+            )
+        )
+        parent_task = result.scalar_one_or_none()
+
+        if not parent_task:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Parent task not found or does not belong to this project",
+            )
+
+    # Validate assignee eligibility if provided
+    if task_data.assignee_id:
+        await validate_assignee_eligibility(
+            assignee_id=task_data.assignee_id,
+            project_id=project_id,
+            application_id=project.application_id,
+            db=db,
+        )
+
+    # Resolve task_status_id
+    from ..models.task_status import TaskStatus as TaskStatusModel
+
+    resolved_task_status_id = task_data.task_status_id
+    resolved_status_name: str = "Todo"
+    if resolved_task_status_id is None:
+        # Default to Todo status for this project
+        result = await db.execute(
+            select(TaskStatusModel).where(
+                TaskStatusModel.project_id == project_id,
+                TaskStatusModel.name == "Todo",
+            )
+        )
+        default_status = result.scalar_one_or_none()
+        if default_status:
+            resolved_task_status_id = default_status.id
+            resolved_status_name = default_status.name
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Project has no default 'Todo' status configured. "
+                       "Please provide an explicit task_status_id.",
+            )
+    else:
+        # Explicit task_status_id provided — validate it belongs to this project
+        result = await db.execute(
+            select(TaskStatusModel).where(
+                TaskStatusModel.id == resolved_task_status_id,
+                TaskStatusModel.project_id == project_id,
+            )
+        )
+        explicit_status = result.scalar_one_or_none()
+        if not explicit_status:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid task_status_id: status does not exist or does not belong to this project.",
+            )
+        resolved_status_name = explicit_status.name
+
+    # Business rule: Unassigned tasks can only be created with 'Todo' status
+    if not task_data.assignee_id and resolved_status_name != "Todo":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unassigned tasks can only be created with 'Todo' status. "
+                   "Please assign the task or use 'Todo' status.",
+        )
+
+    # Generate task key with atomic counter increment
+    task_key = await generate_task_key(project_id, project.key, db)
+
+    # Set reporter to current user if not provided
+    reporter_id = task_data.reporter_id or current_user.id
+
+    # Create new task instance
+    task = Task(
+        project_id=project_id,
+        task_key=task_key,
+        title=task_data.title,
+        description=task_data.description,
+        task_type=task_data.task_type.value if task_data.task_type else "story",
+        priority=task_data.priority.value if task_data.priority else "medium",
+        story_points=task_data.story_points,
+        due_date=task_data.due_date,
+        assignee_id=task_data.assignee_id,
+        reporter_id=reporter_id,
+        parent_id=task_data.parent_id,
+        sprint_id=task_data.sprint_id,
+        task_status_id=resolved_task_status_id,
+    )
+
+    # Save to database
+    db.add(task)
+    await db.flush()  # Flush to get task ID before updating aggregation
+
+    # Capture old derived status before update
+    old_derived_status = await get_current_derived_status_name(db, project)
+
+    # Update status aggregation for project status derivation
+    agg = await get_or_create_project_aggregation(db, project_id)
+    new_derived_status = update_aggregation_on_task_create(agg, resolved_status_name)
+
+    # Update project's derived status
+    await update_project_derived_status(db, project, new_derived_status)
+
+    # Commit all changes
+    await db.commit()
+    await db.refresh(task, attribute_names=["task_status", "assignee", "reporter", "project"])
+
+    # Emit WebSocket event if derived status changed (fire-and-forget for performance)
+    asyncio.create_task(
+        emit_project_status_changed_if_needed(
+            project=project,
+            old_status=old_derived_status,
+            new_status=new_derived_status,
+            user_id=current_user.id,
+        )
+    )
+
+    # Broadcast task creation to project room for real-time updates
+    ts_info = get_task_status_info(task)
+    task_data_ws = {
+        "id": str(task.id),
+        "project_id": str(task.project_id),
+        "task_key": task.task_key,
+        "title": task.title,
+        "description": task.description,
+        "task_type": task.task_type,
+        "task_status_id": str(task.task_status_id) if task.task_status_id else None,
+        "task_status": ts_info.model_dump(mode="json") if ts_info else None,
+        "priority": task.priority,
+        "story_points": task.story_points,
+        "due_date": task.due_date.isoformat() if task.due_date else None,
+        "assignee_id": str(task.assignee_id) if task.assignee_id else None,
+        "reporter_id": str(task.reporter_id) if task.reporter_id else None,
+        "assignee": serialize_user_for_ws(task.assignee),
+        "reporter": serialize_user_for_ws(task.reporter),
+        "parent_id": str(task.parent_id) if task.parent_id else None,
+        "sprint_id": str(task.sprint_id) if task.sprint_id else None,
+        "task_rank": task.task_rank,
+        "row_version": task.row_version,
+        "archived_at": task.archived_at.isoformat() if task.archived_at else None,
+        "checklist_total": task.checklist_total,
+        "checklist_done": task.checklist_done,
+        "created_at": task.created_at.isoformat() if task.created_at else None,
+        "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+        "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+    }
+    # Broadcast task creation (fire-and-forget for performance)
+    asyncio.create_task(
+        handle_task_update(
+            project_id=project_id,
+            task_id=task.id,
+            action=UpdateAction.CREATED,
+            task_data=task_data_ws,
+            user_id=current_user.id,
+        )
+    )
+
+    # Broadcast project restoration if it was restored by creating this task
+    if project_was_restored:
+        app_room_id = f"application:{project.application_id}"
+        # Fire-and-forget for performance
+        asyncio.create_task(
+            manager.broadcast_to_room(
+                app_room_id,
+                {
+                    "type": MessageType.PROJECT_UPDATED,
+                    "data": {
+                        "project_id": str(project.id),
+                        "application_id": str(project.application_id),
+                        "name": project.name,
+                        "key": project.key,
+                        "archived_at": None,
+                        "restored_by": str(current_user.id),
+                        "restored_via": "task_created",
+                        "timestamp": datetime.utcnow().isoformat(),
+                    },
+                },
+            )
+        )
+
+    # Send notification to assignee if task is assigned to someone other than self
+    if task.assignee_id and task.assignee_id != current_user.id:
+        result = await db.execute(
+            select(User).where(User.id == task.assignee_id)
+        )
+        assignee = result.scalar_one_or_none()
+        if assignee:
+            await NotificationService.notify_task_assigned(
+                db=db,
+                task=task,
+                assignee=assignee,
+                assigner=current_user,
+            )
+
+    return task
+
+
+# ============================================================================
+# Direct task endpoints (for getting, updating, and deleting individual tasks)
+# ============================================================================
+
+
+@router.get(
+    "/api/tasks/{task_id}",
+    response_model=TaskWithSubtasks,
+    summary="Get a task by ID",
+    description="Get details of a specific task. Any member can view tasks.",
+    responses={
+        200: {"description": "Task retrieved successfully"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "Access denied - not a member"},
+        404: {"description": "Task not found"},
+    },
+)
+async def get_task(
+    task_id: UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+) -> TaskWithSubtasks:
+    """
+    Get a specific task by its ID.
+
+    Returns the task with its subtask count.
+    Any member (owner, editor, viewer) can view tasks.
+    """
+    # Query task with subtask count and user info
+    subtask_count_subquery = (
+        select(
+            Task.parent_id,
+            func.count(Task.id).label("subtasks_count"),
+        )
+        .where(Task.parent_id.isnot(None))
+        .group_by(Task.parent_id)
+        .subquery()
+    )
+
+    query = (
+        select(
+            Task,
+            func.coalesce(subtask_count_subquery.c.subtasks_count, 0).label("subtasks_count"),
+        )
+        .options(
+            selectinload(Task.assignee),
+            selectinload(Task.reporter),
+            selectinload(Task.task_status),
+        )
+        .outerjoin(
+            subtask_count_subquery,
+            Task.id == subtask_count_subquery.c.parent_id,
+        )
+        .where(Task.id == task_id)
+    )
+
+    result = await db.execute(query)
+    row = result.first()
+
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with ID {task_id} not found",
+        )
+
+    task, subtasks_count = row
+
+    # Verify access through project -> application membership chain
+    result = await db.execute(
+        select(Project).where(Project.id == task.project_id)
+    )
+    project = result.scalar_one_or_none()
+
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task's parent project not found",
+        )
+
+    user_role = await get_user_application_role(db, current_user.id, project.application_id)
+
+    if not user_role:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. You are not a member of this task's application.",
+        )
+
+    return TaskWithSubtasks(
+        id=task.id,
+        project_id=task.project_id,
+        task_key=task.task_key,
+        title=task.title,
+        description=task.description,
+        task_type=task.task_type,
+        priority=task.priority,
+        story_points=task.story_points,
+        due_date=task.due_date,
+        assignee_id=task.assignee_id,
+        assignee=get_user_info(task.assignee),
+        reporter_id=task.reporter_id,
+        reporter=get_user_info(task.reporter),
+        parent_id=task.parent_id,
+        sprint_id=task.sprint_id,
+        task_status_id=task.task_status_id,
+        task_status=get_task_status_info(task),
+        task_rank=task.task_rank,
+        row_version=task.row_version,
+        checklist_total=task.checklist_total,
+        checklist_done=task.checklist_done,
+        created_at=task.created_at,
+        updated_at=task.updated_at,
+        completed_at=task.completed_at,
+        archived_at=task.archived_at,
+        subtasks_count=subtasks_count,
+    )
+
+
+@router.put(
+    "/api/tasks/{task_id}",
+    response_model=TaskResponse,
+    summary="Update a task",
+    description="Update an existing task's details. Only owners and editors can update tasks.",
+    responses={
+        200: {"description": "Task updated successfully"},
+        400: {"description": "Validation error"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "Access denied - not an owner or editor"},
+        404: {"description": "Task not found"},
+    },
+)
+async def update_task(
+    task_id: UUID,
+    task_data: TaskUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+) -> TaskResponse:
+    """
+    Update an existing task.
+
+    - **title**: New task title (optional, 1-500 characters)
+    - **description**: New description (optional)
+    - **task_type**: New task type (optional)
+    - **task_status_id**: New task status ID (optional)
+    - **priority**: New priority (optional)
+    - **story_points**: New story points (optional)
+    - **due_date**: New due date (optional)
+    - **assignee_id**: New assignee (optional)
+    - **parent_id**: New parent task (optional)
+    - **sprint_id**: New sprint (optional)
+
+    Note: Task key cannot be changed after creation.
+    Only owners and editors can update tasks.
+    """
+    # Verify access and get task (require edit permission)
+    task = await verify_task_access(task_id, current_user, db, require_edit=True)
+
+    # Business rule: Archived tasks cannot have their status changed
+    if task.archived_at is not None:
+        update_data_check = task_data.model_dump(exclude_unset=True)
+        if "task_status_id" in update_data_check:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot change status of an archived task. Restore the task first.",
+            )
+
+    # Track old task_status for aggregation update
+    old_task_status_name = task.task_status.name if task.task_status else "Todo"
+    old_task_status_category = task.task_status.category if task.task_status else "Todo"
+    old_task_status_id = task.task_status_id
+
+    # Track old assignee for notification
+    old_assignee_id = task.assignee_id
+
+    # Update fields if provided
+    update_data = task_data.model_dump(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No fields to update provided",
+        )
+
+    # Business rule: Done tasks can only have status changed (to reopen) or row_version updated
+    # Attachments and comments are handled by separate endpoints
+    is_done = task.task_status and task.task_status.category == "Done"
+    if is_done:
+        allowed_fields_for_done = {"task_status_id", "row_version"}
+        disallowed_fields = set(update_data.keys()) - allowed_fields_for_done
+        if disallowed_fields:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot update fields {list(disallowed_fields)} on a completed task. "
+                       "Reopen the task first by changing its status.",
+            )
+
+    # Business rule: Unassigned tasks can only be in 'Todo' status
+    is_unassigning = "assignee_id" in update_data and update_data["assignee_id"] is None
+
+    # Determine the effective status name after this update
+    effective_status_name = old_task_status_name
+    if "task_status_id" in update_data and update_data["task_status_id"] is not None:
+        from ..models.task_status import TaskStatus as TaskStatusModel
+        result = await db.execute(
+            select(TaskStatusModel).where(TaskStatusModel.id == update_data["task_status_id"])
+        )
+        new_ts = result.scalar_one_or_none()
+        if new_ts:
+            effective_status_name = new_ts.name
+
+    # Will be unassigned after update?
+    will_be_unassigned = is_unassigning or (
+        task.assignee_id is None and "assignee_id" not in update_data
+    )
+
+    if will_be_unassigned and effective_status_name != "Todo":
+        if is_unassigning:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot unassign a task that is not in 'Todo' status. "
+                       "Move the task back to 'Todo' before unassigning.",
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Unassigned tasks can only have 'Todo' status. "
+                       "Please assign the task before changing its status.",
+            )
+
+    # Validate parent task if being updated
+    if "parent_id" in update_data and update_data["parent_id"]:
+        # Cannot set self as parent
+        if update_data["parent_id"] == task_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Task cannot be its own parent",
+            )
+
+        result = await db.execute(
+            select(Task).where(
+                Task.id == update_data["parent_id"],
+                Task.project_id == task.project_id,
+            )
+        )
+        parent_task = result.scalar_one_or_none()
+
+        if not parent_task:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Parent task not found or does not belong to the same project",
+            )
+
+    # Validate assignee eligibility if being updated
+    if "assignee_id" in update_data and update_data["assignee_id"]:
+        await validate_assignee_eligibility(
+            assignee_id=update_data["assignee_id"],
+            project_id=task.project_id,
+            application_id=task.project.application_id,
+            db=db,
+        )
+
+    # Apply updates, converting enums to their values
+    for field, value in update_data.items():
+        if isinstance(value, (TaskType, TaskPriority)):
+            setattr(task, field, value.value)
+        else:
+            setattr(task, field, value)
+
+    # Update timestamp
+    task.updated_at = datetime.utcnow()
+
+    # Reload task_status relationship if task_status_id changed
+    if "task_status_id" in update_data:
+        from ..models.task_status import TaskStatus as TaskStatusModel
+        ts_result = await db.execute(
+            select(TaskStatusModel).where(TaskStatusModel.id == task.task_status_id)
+        )
+        task_ts_obj = ts_result.scalar_one_or_none()
+    else:
+        task_ts_obj = task.task_status
+
+    # Update completed_at based on status change
+    new_task_status_name = task_ts_obj.name if task_ts_obj else "Todo"
+    new_is_done = task_ts_obj.category == "Done" if task_ts_obj else False
+    old_was_done = old_task_status_category == "Done"
+    if old_task_status_id != task.task_status_id:
+        if new_is_done:
+            # Set completed_at when moving to done
+            task.completed_at = datetime.utcnow()
+        elif old_was_done:
+            # Clear completed_at when moving away from done
+            task.completed_at = None
+
+    # Check if status changed and update aggregation
+    old_derived_status: Optional[str] = None
+    new_derived_status: Optional[str] = None
+    project: Optional[Project] = None
+
+    if old_task_status_id != task.task_status_id:
+        old_status_name = old_task_status_name
+        new_status_name = new_task_status_name
+
+        # Use the already-loaded project from verify_task_access (via selectinload)
+        project = task.project
+
+        # Capture old derived status before update
+        if project:
+            old_derived_status = await get_current_derived_status_name(db, project)
+
+        # Get or create aggregation and update counters
+        agg = await get_or_create_project_aggregation(db, task.project_id)
+        new_derived_status = update_aggregation_on_task_status_change(
+            agg, old_status_name, new_status_name
+        )
+
+        # Update project's derived status
+        if project:
+            await update_project_derived_status(db, project, new_derived_status)
+
+    # Save changes
+    await db.commit()
+    await db.refresh(task, attribute_names=["task_status", "assignee", "reporter"])
+
+    # Emit WebSocket event if derived status changed (after commit)
+    if project and new_derived_status is not None:
+        await emit_project_status_changed_if_needed(
+            project=project,
+            old_status=old_derived_status,
+            new_status=new_derived_status,
+            user_id=current_user.id,
+        )
+
+    # Assignee/reporter are already loaded via eager loading in verify_task_access
+
+    # Broadcast task update to project room for real-time updates
+    ts_info_ws = get_task_status_info(task)
+    task_data_ws = {
+        "id": str(task.id),
+        "project_id": str(task.project_id),
+        "task_key": task.task_key,
+        "title": task.title,
+        "description": task.description,
+        "task_type": task.task_type,
+        "task_status_id": str(task.task_status_id) if task.task_status_id else None,
+        "task_status": ts_info_ws.model_dump(mode="json") if ts_info_ws else None,
+        "priority": task.priority,
+        "story_points": task.story_points,
+        "due_date": task.due_date.isoformat() if task.due_date else None,
+        "assignee_id": str(task.assignee_id) if task.assignee_id else None,
+        "reporter_id": str(task.reporter_id) if task.reporter_id else None,
+        "assignee": serialize_user_for_ws(task.assignee),
+        "reporter": serialize_user_for_ws(task.reporter),
+        "parent_id": str(task.parent_id) if task.parent_id else None,
+        "sprint_id": str(task.sprint_id) if task.sprint_id else None,
+        "task_rank": task.task_rank,
+        "row_version": task.row_version,
+        "archived_at": task.archived_at.isoformat() if task.archived_at else None,
+        "checklist_total": task.checklist_total,
+        "checklist_done": task.checklist_done,
+        "created_at": task.created_at.isoformat() if task.created_at else None,
+        "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+        "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+    }
+    await handle_task_update(
+        project_id=task.project_id,
+        task_id=task.id,
+        action=UpdateAction.UPDATED,
+        task_data=task_data_ws,
+        user_id=current_user.id,
+    )
+
+    # Send notification to new assignee if assignee changed and not self-assigned
+    if (
+        task.assignee_id
+        and task.assignee_id != old_assignee_id
+        and task.assignee_id != current_user.id
+    ):
+        result = await db.execute(
+            select(User).where(User.id == task.assignee_id)
+        )
+        new_assignee = result.scalar_one_or_none()
+        if new_assignee:
+            await NotificationService.notify_task_assigned(
+                db=db,
+                task=task,
+                assignee=new_assignee,
+                assigner=current_user,
+            )
+
+    return task
+
+
+@router.delete(
+    "/api/tasks/{task_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a task",
+    description="Delete a task and all its associated subtasks and attachments. Only owners and editors can delete tasks.",
+    responses={
+        204: {"description": "Task deleted successfully"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "Access denied - not an owner or editor"},
+        404: {"description": "Task not found"},
+    },
+)
+async def delete_task(
+    task_id: UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """
+    Delete a task.
+
+    This will cascade delete all associated:
+    - Subtasks
+    - Attachments linked to this task
+
+    Only the application owner can delete their tasks.
+    This action is irreversible.
+    Only owners and editors can delete tasks.
+    """
+    # Verify access and get task (require edit permission)
+    task = await verify_task_access(task_id, current_user, db, require_edit=True)
+
+    # Store task info for aggregation update before deletion
+    project_id = task.project_id
+    task_status_name_for_agg = task.task_status.name if task.task_status else "Todo"
+
+    # Use the already-loaded project from verify_task_access (via selectinload)
+    project = task.project
+    old_derived_status: Optional[str] = None
+    if project:
+        old_derived_status = await get_current_derived_status_name(db, project)
+
+    # Get subtasks statuses before deletion (for aggregation update)
+    result = await db.execute(
+        select(Task).where(Task.parent_id == task_id)
+    )
+    subtasks = result.scalars().all()
+    subtask_status_names = [
+        subtask.task_status.name if subtask.task_status else "Todo"
+        for subtask in subtasks
+    ]
+
+    # Delete subtasks first (to handle self-referential cascade)
+    await db.execute(
+        select(Task).where(Task.parent_id == task_id)
+    )
+    for subtask in subtasks:
+        await db.delete(subtask)
+
+    # Delete the task (cascade will handle attachments)
+    await db.delete(task)
+
+    # Update status aggregation for the deleted task and subtasks
+    agg = await get_or_create_project_aggregation(db, project_id)
+
+    # Update aggregation for the main task
+    new_derived_status = update_aggregation_on_task_delete(agg, task_status_name_for_agg)
+
+    # Update aggregation for each deleted subtask
+    for subtask_sn in subtask_status_names:
+        new_derived_status = update_aggregation_on_task_delete(agg, subtask_sn)
+
+    # Update project's derived status
+    if project:
+        await update_project_derived_status(db, project, new_derived_status)
+
+    await db.commit()
+
+    # Emit WebSocket event if derived status changed (after commit)
+    if project and new_derived_status is not None:
+        await emit_project_status_changed_if_needed(
+            project=project,
+            old_status=old_derived_status,
+            new_status=new_derived_status,
+            user_id=current_user.id,
+        )
+
+    # Broadcast task deletion to project room for real-time updates
+    await handle_task_update(
+        project_id=project_id,
+        task_id=task_id,
+        action=UpdateAction.DELETED,
+        task_data={"id": str(task_id), "project_id": str(project_id)},
+        user_id=current_user.id,
+    )
+
+    return None
+
+
+@router.put(
+    "/api/tasks/{task_id}/move",
+    response_model=TaskResponse,
+    summary="Move a task to a new status and/or position",
+    description="Move a task between status columns and/or reorder within a column. "
+                "Supports Kanban-style drag-and-drop operations. "
+                "Only owners and editors can move tasks.",
+    responses={
+        200: {"description": "Task moved successfully"},
+        400: {"description": "Validation error or invalid position"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "Access denied - not an owner or editor"},
+        404: {"description": "Task not found"},
+        409: {"description": "Concurrent modification detected (row_version mismatch)"},
+    },
+)
+async def move_task(
+    task_id: UUID,
+    move_data: TaskMove,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+) -> TaskResponse:
+    """
+    Move a task to a new status column and/or reorder within a column.
+
+    This endpoint supports Kanban-style drag-and-drop operations:
+    - **Status change**: Use `target_status_id` to move between columns
+    - **Reordering**: Use `target_rank` directly, or `before_task_id`/`after_task_id` for auto-calculation
+    - **Both**: Change status and position in a single operation
+
+    Rank calculation:
+    - If `target_rank` is provided, it is used directly
+    - If `before_task_id` and/or `after_task_id` are provided, rank is calculated automatically
+    - If neither is provided, task is placed at the end of the target column
+
+    Concurrency control:
+    - Provide `row_version` to enable optimistic locking
+    - If version mismatch, returns 409 Conflict
+
+    Only owners and editors can move tasks.
+    """
+    # Verify access and get task (require edit permission)
+    task = await verify_task_access(task_id, current_user, db, require_edit=True)
+
+    # Business rule: Archived tasks cannot be moved or have status changed
+    if task.archived_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot move or change status of an archived task. Restore the task first.",
+        )
+
+    # Business rule: Done tasks can only be reopened (moved to a different status), not reordered
+    is_task_done = task.task_status and task.task_status.category == "Done"
+    if is_task_done:
+        # Allow if changing status (reopening), block if just reordering within done column
+        if move_data.target_status_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot reorder a completed task. Change its status to reopen it first.",
+            )
+
+    # Check for at least one field to update
+    if (move_data.target_status_id is None and
+        move_data.target_rank is None and
+        move_data.before_task_id is None and
+        move_data.after_task_id is None):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one of target_status_id, target_rank, "
+                   "before_task_id, or after_task_id must be provided",
+        )
+
+    # Optimistic concurrency check
+    if move_data.row_version is not None:
+        if task.row_version != move_data.row_version:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Concurrent modification detected. Expected version {move_data.row_version}, "
+                       f"but current version is {task.row_version}. Please refresh and try again.",
+            )
+
+    # Track old status for aggregation update
+    old_task_status_id = task.task_status_id
+    old_task_status_name = task.task_status.name if task.task_status else "Todo"
+    old_task_status_category = task.task_status.category if task.task_status else "Todo"
+    target_task_status = None  # Will hold the resolved target TaskStatus model
+
+    # Handle task_status_id change
+    if move_data.target_status_id is not None:
+        from ..models.task_status import TaskStatus as TaskStatusModel
+
+        # Verify the target status exists and belongs to this project
+        result = await db.execute(
+            select(TaskStatusModel).where(
+                TaskStatusModel.id == move_data.target_status_id,
+                TaskStatusModel.project_id == task.project_id,
+            )
+        )
+        target_task_status = result.scalar_one_or_none()
+
+        if not target_task_status:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Target task status not found or does not belong to this project",
+            )
+
+        # Business rule: Unassigned tasks can only be moved to 'Todo' status
+        if task.assignee_id is None and target_task_status.name != "Todo":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Unassigned tasks can only have 'Todo' status. "
+                       "Please assign the task before changing its status.",
+            )
+
+        task.task_status_id = move_data.target_status_id
+
+    # Validate: Cannot move from Todo to another status if task is unassigned
+    if (old_task_status_name == "Todo" and
+        target_task_status is not None and
+        target_task_status.name != "Todo" and
+        task.assignee_id is None):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Task must be assigned to someone before moving from Todo",
+        )
+
+    # Validate before_task_id and after_task_id belong to the same project
+    if move_data.before_task_id:
+        result = await db.execute(
+            select(Task).where(
+                Task.id == move_data.before_task_id,
+                Task.project_id == task.project_id,
+            )
+        )
+        before_task = result.scalar_one_or_none()
+        if not before_task:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="before_task_id not found or does not belong to the same project",
+            )
+
+    if move_data.after_task_id:
+        result = await db.execute(
+            select(Task).where(
+                Task.id == move_data.after_task_id,
+                Task.project_id == task.project_id,
+            )
+        )
+        after_task = result.scalar_one_or_none()
+        if not after_task:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="after_task_id not found or does not belong to the same project",
+            )
+
+    # Calculate and set the new rank
+    effective_status_id = task.task_status_id
+    if move_data.target_rank is not None:
+        # Use the explicitly provided rank
+        task.task_rank = move_data.target_rank
+    elif move_data.before_task_id is not None or move_data.after_task_id is not None:
+        # Auto-calculate rank based on neighboring tasks
+        task.task_rank = await get_rank_for_position(
+            db=db,
+            project_id=task.project_id,
+            target_status_id=effective_status_id,
+            before_task_id=move_data.before_task_id,
+            after_task_id=move_data.after_task_id,
+        )
+    else:
+        # Status change only, no position specified - append to end of column
+        task.task_rank = await get_rank_for_position(
+            db=db,
+            project_id=task.project_id,
+            target_status_id=effective_status_id,
+            before_task_id=None,
+            after_task_id=None,
+        )
+
+    # Update timestamp and version
+    task.updated_at = datetime.utcnow()
+    task.row_version = (task.row_version or 0) + 1
+
+    # Determine new status info
+    new_task_status_name = target_task_status.name if target_task_status else old_task_status_name
+    new_task_status_category = target_task_status.category if target_task_status else old_task_status_category
+
+    # Update completed_at based on status change
+    status_changed = old_task_status_id != task.task_status_id
+    if status_changed:
+        if new_task_status_category == "Done":
+            # Set completed_at when moving to done
+            task.completed_at = datetime.utcnow()
+        elif old_task_status_category == "Done":
+            # Clear completed_at when moving away from done
+            task.completed_at = None
+
+    # Check if status changed and update aggregation
+    old_derived_status: Optional[str] = None
+    new_derived_status: Optional[str] = None
+    project: Optional[Project] = None
+
+    if status_changed:
+        old_status_name = old_task_status_name
+        new_status_name = new_task_status_name
+
+        # Use the already-loaded project from verify_task_access (via selectinload)
+        project = task.project
+
+        # Capture old derived status before update
+        if project:
+            old_derived_status = await get_current_derived_status_name(db, project)
+
+        # Get or create aggregation and update counters
+        agg = await get_or_create_project_aggregation(db, task.project_id)
+        new_derived_status = update_aggregation_on_task_status_change(
+            agg, old_status_name, new_status_name
+        )
+
+        # Update project's derived status
+        if project:
+            await update_project_derived_status(db, project, new_derived_status)
+
+    # Save changes
+    await db.commit()
+    await db.refresh(task, attribute_names=["task_status", "assignee", "reporter"])
+
+
+    # Emit WebSocket task_moved event for real-time Kanban updates
+    # Serialize task data for WebSocket broadcast
+    ts_info_move = get_task_status_info(task)
+    task_dict = {
+        "id": str(task.id),
+        "project_id": str(task.project_id),
+        "title": task.title,
+        "description": task.description,
+        "task_type": task.task_type,
+        "task_status_id": str(task.task_status_id) if task.task_status_id else None,
+        "task_status": ts_info_move.model_dump(mode="json") if ts_info_move else None,
+        "priority": task.priority,
+        "task_key": task.task_key,
+        "task_rank": task.task_rank,
+        "assignee_id": str(task.assignee_id) if task.assignee_id else None,
+        "reporter_id": str(task.reporter_id) if task.reporter_id else None,
+        "assignee": serialize_user_for_ws(task.assignee),
+        "reporter": serialize_user_for_ws(task.reporter),
+        "parent_id": str(task.parent_id) if task.parent_id else None,
+        "sprint_id": str(task.sprint_id) if task.sprint_id else None,
+        "story_points": task.story_points,
+        "due_date": task.due_date.isoformat() if task.due_date else None,
+        "row_version": task.row_version,
+        "checklist_total": task.checklist_total,
+        "checklist_done": task.checklist_done,
+        "created_at": task.created_at.isoformat() if task.created_at else None,
+        "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+        "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+        "archived_at": task.archived_at.isoformat() if task.archived_at else None,
+    }
+    await handle_task_moved(
+        project_id=task.project_id,
+        task_id=task.id,
+        old_status_id=old_task_status_id or task.task_status_id or task.project_id,
+        new_status_id=task.task_status_id or task.project_id,
+        new_rank=task.task_rank or "",
+        user_id=current_user.id,
+        task_data=task_dict,
+    )
+
+    # Emit WebSocket event if derived status changed (after commit)
+    if project and new_derived_status is not None:
+        await emit_project_status_changed_if_needed(
+            project=project,
+            old_status=old_derived_status,
+            new_status=new_derived_status,
+            user_id=current_user.id,
+        )
+
+    return task
+
+
+# ============================================================================
+# Archive endpoints
+# ============================================================================
+
+
+@router.get(
+    "/api/projects/{project_id}/tasks/archived",
+    response_model=TaskCursorPage,
+    summary="List archived tasks in a project",
+    description="Get archived tasks (Done for 7+ days) with cursor-based pagination.",
+    responses={
+        200: {"description": "Archived tasks retrieved successfully"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "Access denied - not a member"},
+        404: {"description": "Project not found"},
+    },
+)
+async def list_archived_tasks(
+    project_id: UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+    cursor: Optional[str] = Query(None, description="Cursor for pagination (task ID)"),
+    limit: int = Query(30, ge=1, le=100, description="Maximum number of records to return"),
+    search: Optional[str] = Query(None, description="Search term to filter by title or task key"),
+) -> TaskCursorPage:
+    """
+    List archived tasks within a project with cursor-based pagination.
+
+    Archived tasks are tasks that have been in Done status for 7+ days.
+    They are excluded from the main task list and project status aggregation.
+
+    - **project_id**: ID of the parent project
+    - **cursor**: Optional cursor (task ID) for pagination
+    - **limit**: Maximum number of records to return (1-100, default 30)
+    - **search**: Optional search term to filter by title or task key
+
+    Returns tasks ordered by archived_at descending (most recently archived first).
+    Response includes `can_restore` flag indicating if the user can restore tasks.
+    Only project members, project admins, or application owners can restore tasks.
+    """
+    # Verify project access (any member can view)
+    project = await verify_project_access(project_id, current_user, db)
+
+    # Check if user can restore tasks (project member, admin, or app owner)
+    permission_service = get_permission_service(db)
+    can_restore = await permission_service.check_can_manage_tasks(
+        current_user, project_id, project.application_id
+    )
+
+    # Count total archived tasks (with search filter if provided)
+    count_query = select(func.count(Task.id)).where(
+        Task.project_id == project_id,
+        Task.archived_at.isnot(None),
+    )
+    if search:
+        search_term = f"%{search}%"
+        count_query = count_query.where(
+            (Task.title.ilike(search_term)) | (Task.task_key.ilike(search_term))
+        )
+    count_result = await db.execute(count_query)
+    total_count = count_result.scalar() or 0
+
+    # Build query for archived tasks
+    query = (
+        select(Task)
+        .options(
+            selectinload(Task.assignee),
+            selectinload(Task.reporter),
+            selectinload(Task.task_status),
+        )
+        .where(
+            Task.project_id == project_id,
+            Task.archived_at.isnot(None),
+        )
+        .order_by(Task.archived_at.desc(), Task.id.desc())
+    )
+
+    # Apply search filter if provided
+    if search:
+        search_term = f"%{search}%"
+        query = query.where(
+            (Task.title.ilike(search_term)) | (Task.task_key.ilike(search_term))
+        )
+
+    # Apply cursor if provided
+    if cursor:
+        try:
+            cursor_uuid = UUID(cursor)
+            # Get the archived_at of the cursor task to use for pagination
+            cursor_result = await db.execute(
+                select(Task.archived_at).where(Task.id == cursor_uuid)
+            )
+            cursor_task_archived_at = cursor_result.scalar_one_or_none()
+            if cursor_task_archived_at:
+                # Get tasks archived before or equal to cursor, excluding the cursor task
+                query = query.where(
+                    (Task.archived_at < cursor_task_archived_at) |
+                    ((Task.archived_at == cursor_task_archived_at) & (Task.id < cursor_uuid))
+                )
+        except ValueError:
+            pass  # Invalid cursor, ignore
+
+    # Fetch one extra to determine if there are more results
+    query = query.limit(limit + 1)
+
+    result = await db.execute(query)
+    tasks = list(result.scalars().all())
+
+    # Check if there are more results
+    has_more = len(tasks) > limit
+    if has_more:
+        tasks = tasks[:limit]
+
+    # Convert to response format
+    task_responses = []
+    for task in tasks:
+        task_response = TaskResponse(
+            id=task.id,
+            project_id=task.project_id,
+            task_key=task.task_key,
+            title=task.title,
+            description=task.description,
+            task_type=task.task_type,
+            priority=task.priority,
+            story_points=task.story_points,
+            due_date=task.due_date,
+            assignee_id=task.assignee_id,
+            assignee=get_user_info(task.assignee),
+            reporter_id=task.reporter_id,
+            reporter=get_user_info(task.reporter),
+            parent_id=task.parent_id,
+            sprint_id=task.sprint_id,
+            task_status_id=task.task_status_id,
+            task_status=get_task_status_info(task),
+            task_rank=task.task_rank,
+            row_version=task.row_version,
+            checklist_total=task.checklist_total,
+            checklist_done=task.checklist_done,
+            created_at=task.created_at,
+            updated_at=task.updated_at,
+            completed_at=task.completed_at,
+            archived_at=task.archived_at,
+        )
+        task_responses.append(task_response)
+
+    # Determine next cursor
+    next_cursor = str(tasks[-1].id) if has_more and tasks else None
+
+    return TaskCursorPage(
+        items=task_responses,
+        next_cursor=next_cursor,
+        total=total_count,
+        can_restore=can_restore,
+    )
+
+
+@router.post(
+    "/api/tasks/{task_id}/unarchive",
+    response_model=TaskResponse,
+    summary="Unarchive a task",
+    description="Restore an archived task back to Done status. Only owners and editors can unarchive tasks.",
+    responses={
+        200: {"description": "Task unarchived successfully"},
+        400: {"description": "Task is not archived"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "Access denied - not an owner or editor"},
+        404: {"description": "Task not found"},
+    },
+)
+async def unarchive_task(
+    task_id: UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+) -> TaskResponse:
+    """
+    Unarchive a task, restoring it to the Done column.
+
+    This clears the archived_at timestamp and resets completed_at to the current
+    time, which restarts the 7-day archive timer. The task remains in Done status
+    and becomes visible on the main Kanban board again.
+
+    Only owners and editors can unarchive tasks.
+    """
+    # Verify access and get task (require edit permission)
+    task = await verify_task_access(task_id, current_user, db, require_edit=True)
+
+    if task.archived_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Task is not archived",
+        )
+
+    # Clear archived_at and reset completed_at to current time
+    # This restarts the 7-day archive timer so the task won't be immediately re-archived
+    now = datetime.utcnow()
+    task.archived_at = None
+    task.completed_at = now
+    task.updated_at = now
+
+    # Update aggregation to include this task back in project stats
+    project = task.project
+    old_derived_status: Optional[str] = None
+    new_derived_status: Optional[str] = None
+
+    # Auto-restore project if it's archived (unarchiving a task restores the project)
+    project_was_restored = False
+    if project and project.archived_at is not None:
+        project.archived_at = None
+        project.updated_at = now
+        project_was_restored = True
+
+    if project:
+        old_derived_status = await get_current_derived_status_name(db, project)
+
+        # Task is in Done status, so we need to increment done_tasks and total_tasks counters
+        agg = await get_or_create_project_aggregation(db, task.project_id)
+        agg.done_tasks += 1
+        agg.total_tasks += 1
+
+        # Recalculate derived status
+        new_derived_status = derive_project_status_from_model(agg)
+        await update_project_derived_status(db, project, new_derived_status)
+
+    await db.commit()
+    await db.refresh(task, attribute_names=["task_status", "assignee", "reporter"])
+
+    # Emit WebSocket event if derived status changed
+    if project and new_derived_status is not None:
+        await emit_project_status_changed_if_needed(
+            project=project,
+            old_status=old_derived_status,
+            new_status=new_derived_status,
+            user_id=current_user.id,
+        )
+
+    # Broadcast task update for real-time sync
+    ts_info_unarch = get_task_status_info(task)
+    task_data_ws = {
+        "id": str(task.id),
+        "project_id": str(task.project_id),
+        "task_key": task.task_key,
+        "title": task.title,
+        "description": task.description,
+        "task_type": task.task_type,
+        "task_status_id": str(task.task_status_id) if task.task_status_id else None,
+        "task_status": ts_info_unarch.model_dump(mode="json") if ts_info_unarch else None,
+        "priority": task.priority,
+        "story_points": task.story_points,
+        "due_date": task.due_date.isoformat() if task.due_date else None,
+        "assignee_id": str(task.assignee_id) if task.assignee_id else None,
+        "reporter_id": str(task.reporter_id) if task.reporter_id else None,
+        "assignee": serialize_user_for_ws(task.assignee),
+        "reporter": serialize_user_for_ws(task.reporter),
+        "parent_id": str(task.parent_id) if task.parent_id else None,
+        "sprint_id": str(task.sprint_id) if task.sprint_id else None,
+        "task_rank": task.task_rank,
+        "row_version": task.row_version,
+        "archived_at": None,
+        "checklist_total": task.checklist_total,
+        "checklist_done": task.checklist_done,
+        "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+        "created_at": task.created_at.isoformat() if task.created_at else None,
+        "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+    }
+    await handle_task_update(
+        project_id=task.project_id,
+        task_id=task.id,
+        action=UpdateAction.UPDATED,
+        task_data=task_data_ws,
+        user_id=current_user.id,
+    )
+
+    # Broadcast project restoration if it was restored by unarchiving this task
+    if project_was_restored and project:
+        app_room_id = f"application:{project.application_id}"
+        await manager.broadcast_to_room(
+            app_room_id,
+            {
+                "type": MessageType.PROJECT_UPDATED,
+                "data": {
+                    "project_id": str(project.id),
+                    "application_id": str(project.application_id),
+                    "name": project.name,
+                    "key": project.key,
+                    "archived_at": None,
+                    "restored_by": str(current_user.id),
+                    "restored_via": "task_unarchived",
+                    "timestamp": now.isoformat(),
+                },
+            },
+        )
+
+    return task
+
+
+# ============================================================================
+# Cross-Application Dashboard Endpoints
+# ============================================================================
+
+
+def _get_task_user_info(user) -> Optional[TaskUserInfo]:
+    """Convert a User model to TaskUserInfo, or return None."""
+    if user is None:
+        return None
+    return TaskUserInfo(
+        id=user.id,
+        email=user.email,
+        display_name=user.display_name,
+        avatar_url=user.avatar_url,
+    )
+
+
+@router.get(
+    "/api/me/tasks",
+    response_model=TaskCursorPage,
+    summary="List my pending tasks across all applications",
+    description="Get tasks assigned to the current user that are not completed, across all applications.",
+    responses={
+        200: {"description": "Tasks retrieved successfully"},
+        401: {"description": "Not authenticated"},
+    },
+)
+async def list_my_tasks_cross_app(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+    cursor: Optional[str] = Query(None, description="Cursor for pagination (task ID)"),
+    limit: int = Query(30, ge=1, le=100, description="Maximum number of records to return"),
+    search: Optional[str] = Query(None, description="Search term to filter by title or task key"),
+    sort_by: str = Query("updated_at", description="Sort field: due_date, title, updated_at"),
+    sort_order: str = Query("desc", description="Sort order: asc or desc"),
+    status_filter: Optional[str] = Query(None, alias="status_name", description="Filter by task status name: Todo, In Progress, In Review, Issue, Done"),
+) -> TaskCursorPage:
+    """
+    List all pending tasks assigned to the current user across all applications.
+
+    Returns tasks that are:
+    - Assigned to the current user
+    - Not archived
+    - Optionally filtered by status (defaults to excluding done)
+    """
+    from sqlalchemy import or_ as sa_or
+
+    # Find all application IDs the user has access to
+    owned_apps = select(Application.id.label("app_id")).where(
+        Application.owner_id == current_user.id
+    )
+    member_apps = select(ApplicationMember.application_id.label("app_id")).where(
+        ApplicationMember.user_id == current_user.id
+    )
+    all_app_ids = owned_apps.union(member_apps).subquery()
+
+    # Query tasks assigned to the user in accessible projects only
+    query = (
+        select(Task)
+        .join(Project, Task.project_id == Project.id)
+        .options(
+            selectinload(Task.assignee),
+            selectinload(Task.reporter),
+            selectinload(Task.task_status),
+        )
+        .where(
+            Project.application_id.in_(select(all_app_ids.c.app_id)),
+            Task.assignee_id == current_user.id,
+            Task.archived_at.is_(None),
+        )
+    )
+
+    # Apply status filter: if specific status requested, filter to that; otherwise exclude done
+    from ..models.task_status import TaskStatus as TaskStatusModel, StatusCategory as SC
+
+    if status_filter:
+        query = query.join(TaskStatusModel, Task.task_status_id == TaskStatusModel.id).where(
+            TaskStatusModel.name == status_filter
+        )
+    else:
+        query = query.join(TaskStatusModel, Task.task_status_id == TaskStatusModel.id).where(
+            TaskStatusModel.category != SC.DONE.value
+        )
+
+    # Apply sorting
+    if sort_by == "title":
+        if sort_order == "desc":
+            query = query.order_by(Task.title.desc(), Task.id.desc())
+        else:
+            query = query.order_by(Task.title.asc(), Task.id.asc())
+    elif sort_by == "due_date":
+        if sort_order == "desc":
+            query = query.order_by(Task.due_date.desc().nulls_last(), Task.id.desc())
+        else:
+            query = query.order_by(Task.due_date.asc().nulls_last(), Task.id.asc())
+    else:
+        # Default: sort by updated_at
+        if sort_order == "desc":
+            query = query.order_by(Task.updated_at.desc(), Task.id.desc())
+        else:
+            query = query.order_by(Task.updated_at.asc(), Task.id.asc())
+
+    # Apply search filter if provided
+    if search:
+        search_term = f"%{search}%"
+        query = query.where(
+            sa_or(
+                Task.title.ilike(search_term),
+                Task.task_key.ilike(search_term),
+            )
+        )
+
+    # Apply cursor if provided
+    if cursor:
+        try:
+            from uuid import UUID as UUIDType
+            cursor_uuid = UUIDType(cursor)
+            cursor_result = await db.execute(
+                select(Task.updated_at, Task.due_date, Task.title).where(Task.id == cursor_uuid)
+            )
+            cursor_row = cursor_result.one_or_none()
+            if cursor_row:
+                if sort_by == "title":
+                    cursor_val = cursor_row.title
+                    col = Task.title
+                elif sort_by == "due_date":
+                    cursor_val = cursor_row.due_date
+                    col = Task.due_date
+                else:
+                    cursor_val = cursor_row.updated_at
+                    col = Task.updated_at
+
+                if sort_order == "desc":
+                    query = query.where(
+                        (col < cursor_val) |
+                        ((col == cursor_val) & (Task.id < cursor_uuid))
+                    )
+                else:
+                    query = query.where(
+                        (col > cursor_val) |
+                        ((col == cursor_val) & (Task.id > cursor_uuid))
+                    )
+        except ValueError:
+            pass
+
+    # Fetch one extra to determine if there are more results
+    query = query.limit(limit + 1)
+
+    result = await db.execute(query)
+    tasks = list(result.scalars().all())
+
+    # Check if there are more results
+    has_more = len(tasks) > limit
+    if has_more:
+        tasks = tasks[:limit]
+
+    # Fetch application names for the projects
+    if tasks:
+        project_ids = list({t.project_id for t in tasks})
+        proj_app_result = await db.execute(
+            select(Project.id, Project.application_id).where(Project.id.in_(project_ids))
+        )
+        proj_app_map = {str(row[0]): row[1] for row in proj_app_result.all()}
+
+        app_ids = list({aid for aid in proj_app_map.values() if aid})
+        app_result = await db.execute(
+            select(Application.id, Application.name).where(Application.id.in_(app_ids))
+        )
+        app_names_map = {str(row[0]): row[1] for row in app_result.all()}
+    else:
+        proj_app_map = {}
+        app_names_map = {}
+
+    # Convert to response format
+    task_responses = []
+    for task in tasks:
+        app_id = proj_app_map.get(str(task.project_id))
+        task_response = TaskResponse(
+            id=task.id,
+            project_id=task.project_id,
+            task_key=task.task_key,
+            title=task.title,
+            description=task.description,
+            task_type=task.task_type,
+            priority=task.priority,
+            story_points=task.story_points,
+            due_date=task.due_date,
+            assignee_id=task.assignee_id,
+            assignee=_get_task_user_info(task.assignee),
+            reporter_id=task.reporter_id,
+            reporter=_get_task_user_info(task.reporter),
+            parent_id=task.parent_id,
+            sprint_id=task.sprint_id,
+            task_status_id=task.task_status_id,
+            task_status=get_task_status_info(task),
+            task_rank=task.task_rank,
+            row_version=task.row_version,
+            checklist_total=task.checklist_total,
+            checklist_done=task.checklist_done,
+            created_at=task.created_at,
+            updated_at=task.updated_at,
+            completed_at=task.completed_at,
+            archived_at=task.archived_at,
+            application_id=app_id,
+            application_name=app_names_map.get(str(app_id)) if app_id else None,
+        )
+        task_responses.append(task_response)
+
+    next_cursor = str(tasks[-1].id) if has_more and tasks else None
+
+    return TaskCursorPage(
+        items=task_responses,
+        next_cursor=next_cursor,
+    )

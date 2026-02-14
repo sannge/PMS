@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <!-- CSP is handled by main process for better security -->
+    <meta name="description" content="Desktop Project Management Application" />
+    <meta name="theme-color" content="#0f172a" />
+    <!-- Prevent dragging of the entire page -->
+    <style>
+      html, body {
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      /* Allow text selection in specific areas */
+      .selectable {
+        -webkit-user-select: text;
+        user-select: text;
+      }
+      /* Custom scrollbar styles */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background-color: hsl(var(--muted-foreground) / 0.3);
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background-color: hsl(var(--muted-foreground) / 0.5);
+      }
+      /* Prevent context menu on certain elements */
+      img, a {
+        -webkit-user-drag: none;
+      }
+    </style>
+    <title>PM Desktop</title>
+  </head>
+  <body class="h-full antialiased">
+    <div id="root" class="h-full"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

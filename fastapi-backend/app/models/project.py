@@ -1,0 +1,256 @@
+"""Project SQLAlchemy model for project management."""
+
+import uuid
+from datetime import date, datetime
+from typing import TYPE_CHECKING
+
+from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
+
+from ..database import Base
+
+if TYPE_CHECKING:
+    from .application import Application
+    from .project_assignment import ProjectAssignment
+    from .project_member import ProjectMember
+    from .project_task_status_agg import ProjectTaskStatusAgg
+    from .task import Task
+    from .task_status import TaskStatus
+    from .user import User
+
+
+class Project(Base):
+    """
+    Project model representing projects within an application.
+
+    Projects are part of the hierarchy: Application > Projects > Tasks
+
+    Attributes:
+        id: Unique identifier (UUID)
+        application_id: FK to parent application
+        created_by: FK to the user who created the project
+        project_owner_user_id: FK to the user who owns the project
+        name: Project name
+        key: Short project key for task prefixes (e.g., "PROJ")
+        description: Optional project description
+        project_type: Type of project (scrum, kanban, etc.)
+        derived_status_id: FK to TaskStatus for server-computed project status
+        override_status_id: FK to TaskStatus for manual override (Owner-only)
+        override_reason: Reason for status override
+        override_by_user_id: FK to user who set the override
+        override_expires_at: When the override expires (reverts to derived)
+        row_version: Version for optimistic concurrency control
+        created_at: Timestamp when project was created
+        updated_at: Timestamp when project was last updated
+    """
+
+    __tablename__ = "Projects"
+    __allow_unmapped__ = True
+
+    # Primary key - UUID
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        nullable=False,
+    )
+
+    # Foreign keys
+    application_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("Applications.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    created_by = Column(
+        UUID(as_uuid=True),
+        ForeignKey("Users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    project_owner_user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("Users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    # Status derivation and override
+    # NOTE: These FKs use use_alter=True to handle circular dependency with TaskStatuses
+    # In normal app flow: Project created with NULL status → TaskStatuses created → status updated
+    # No DEFERRABLE needed because derived_status_id is nullable
+    derived_status_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "TaskStatuses.id",
+            ondelete="SET NULL",
+            use_alter=True,
+            name="fk_Projects_derived_status_id",
+        ),
+        nullable=True,
+        index=True,
+    )
+    override_status_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "TaskStatuses.id",
+            ondelete="SET NULL",
+            use_alter=True,
+            name="fk_Projects_override_status_id",
+        ),
+        nullable=True,
+        index=True,
+    )
+    override_reason = Column(
+        String(500),
+        nullable=True,
+    )
+    override_by_user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("Users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    override_expires_at = Column(
+        DateTime,
+        nullable=True,
+    )
+
+    # Project details
+    name = Column(
+        String(255),
+        nullable=False,
+        index=True,
+    )
+    key = Column(
+        String(10),
+        nullable=False,
+        index=True,
+    )
+    description = Column(
+        Text,
+        nullable=True,
+    )
+    project_type = Column(
+        String(50),
+        nullable=True,
+        default="kanban",
+    )
+
+    # Dashboard fields
+    due_date = Column(
+        Date,
+        nullable=False,
+    )
+
+    # Task key counter (for atomic task key generation)
+    next_task_number = Column(
+        Integer,
+        nullable=False,
+        default=1,
+    )
+
+    # Optimistic concurrency control
+    row_version = Column(
+        Integer,
+        nullable=False,
+        default=1,
+    )
+
+    # Timestamps
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    # Archival tracking - set when project has been in done status for 7+ days
+    archived_at = Column(
+        DateTime,
+        nullable=True,
+        index=True,
+    )
+
+    # Relationships
+    application = relationship(
+        "Application",
+        back_populates="projects",
+        lazy="joined",
+    )
+    creator = relationship(
+        "User",
+        foreign_keys=[created_by],
+        lazy="select",  # Don't eagerly join - load only when accessed
+    )
+    tasks = relationship(
+        "Task",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+    assignments = relationship(
+        "ProjectAssignment",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+
+    # Project ownership
+    project_owner = relationship(
+        "User",
+        foreign_keys=[project_owner_user_id],
+        lazy="select",
+    )
+
+    # Status derivation relationships
+    derived_status = relationship(
+        "TaskStatus",
+        foreign_keys=[derived_status_id],
+        lazy="joined",
+    )
+    override_status = relationship(
+        "TaskStatus",
+        foreign_keys=[override_status_id],
+        lazy="select",
+    )
+    override_by_user = relationship(
+        "User",
+        foreign_keys=[override_by_user_id],
+        lazy="select",
+    )
+
+    # TaskStatuses for this project
+    task_statuses = relationship(
+        "TaskStatus",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+        foreign_keys="[TaskStatus.project_id]",
+    )
+
+    # Project membership (for permission gate)
+    members = relationship(
+        "ProjectMember",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+
+    # Status aggregation for derivation
+    status_aggregation = relationship(
+        "ProjectTaskStatusAgg",
+        uselist=False,
+        cascade="all, delete-orphan",
+        lazy="select",
+    )
+
+    def __repr__(self) -> str:
+        """String representation of Project."""
+        return f"<Project(id={self.id}, key={self.key}, name={self.name})>"

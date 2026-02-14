@@ -1,0 +1,137 @@
+"""ProjectMember SQLAlchemy model for project team gate permissions."""
+
+import uuid
+from datetime import datetime
+from enum import Enum
+from typing import TYPE_CHECKING
+
+from sqlalchemy import Column, DateTime, ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
+
+from ..database import Base
+
+if TYPE_CHECKING:
+    from .project import Project
+    from .user import User
+
+
+class ProjectMemberRole(str, Enum):
+    """Enum for project member roles.
+
+    - ADMIN: Full control, can manage project members
+    - MEMBER: Can edit/move tasks but cannot manage members
+    """
+
+    ADMIN = "admin"
+    MEMBER = "member"
+
+
+class ProjectMember(Base):
+    """
+    ProjectMember model representing user membership in project teams.
+
+    ProjectMembers act as a "gate" for project-level permissions. Editors
+    must be ProjectMembers to create, edit, or move tasks within a project.
+    This is separate from ProjectAssignment which tracks work assignments.
+
+    Key differences from ProjectAssignment:
+    - ProjectAssignments: who is assigned to work on the project
+    - ProjectMembers: who has PERMISSION to manage tasks (gate for Editors)
+
+    Attributes:
+        id: Unique identifier (UUID)
+        project_id: FK to the project
+        user_id: FK to the member user
+        role: Member role (admin, member) - admins can manage members
+        added_by_user_id: FK to the user who added this member (optional)
+        created_at: Timestamp when membership was created
+        updated_at: Timestamp when membership was last updated
+    """
+
+    __tablename__ = "ProjectMembers"
+    __allow_unmapped__ = True
+
+    # Unique constraint on project_id + user_id, plus index for role lookups
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "user_id",
+            name="UQ_ProjectMembers_Project_User",
+        ),
+        Index(
+            "ix_ProjectMembers_project_role",
+            "project_id",
+            "role",
+        ),
+    )
+
+    # Primary key - UUID
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        nullable=False,
+    )
+
+    # Foreign keys
+    project_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("Projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("Users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    added_by_user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("Users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    # Role - admin can manage members, member can only edit tasks
+    role = Column(
+        String(20),
+        nullable=False,
+        default=ProjectMemberRole.MEMBER.value,
+    )
+
+    # Timestamps
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+        index=True,
+    )
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    # Relationships
+    project = relationship(
+        "Project",
+        back_populates="members",
+        lazy="joined",
+    )
+    user = relationship(
+        "User",
+        foreign_keys=[user_id],
+        lazy="joined",
+    )
+    added_by = relationship(
+        "User",
+        foreign_keys=[added_by_user_id],
+        lazy="joined",
+    )
+
+    def __repr__(self) -> str:
+        """String representation of ProjectMember."""
+        return f"<ProjectMember(id={self.id}, project_id={self.project_id}, user_id={self.user_id})>"

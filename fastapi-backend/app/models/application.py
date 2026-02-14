@@ -1,0 +1,106 @@
+"""Application SQLAlchemy model for top-level project containers."""
+
+import uuid
+from datetime import datetime
+from typing import TYPE_CHECKING
+
+from sqlalchemy import Column, DateTime, ForeignKey, String, Text
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
+
+from ..database import Base
+
+if TYPE_CHECKING:
+    from .application_member import ApplicationMember
+    from .invitation import Invitation
+    from .project import Project
+    from .user import User
+
+
+class Application(Base):
+    """
+    Application model representing top-level containers for projects.
+
+    Applications serve as the highest level of the hierarchy:
+    Application > Projects > Tasks
+
+    Attributes:
+        id: Unique identifier (UUID)
+        name: Application name
+        description: Optional description of the application
+        owner_id: FK to the user who owns this application
+        created_at: Timestamp when application was created
+        updated_at: Timestamp when application was last updated
+    """
+
+    __tablename__ = "Applications"
+    __allow_unmapped__ = True
+
+    # Primary key - UUID
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        nullable=False,
+    )
+
+    # Application details
+    name = Column(
+        String(255),
+        nullable=False,
+        index=True,
+    )
+    description = Column(
+        Text,
+        nullable=True,
+    )
+
+    # Foreign keys
+    owner_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("Users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    # Timestamps
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    # Relationships
+    owner = relationship(
+        "User",
+        back_populates="owned_applications",
+        lazy="joined",
+    )
+    projects = relationship(
+        "Project",
+        back_populates="application",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+    members = relationship(
+        "ApplicationMember",
+        back_populates="application",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+    invitations = relationship(
+        "Invitation",
+        back_populates="application",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+
+    def __repr__(self) -> str:
+        """String representation of Application."""
+        return f"<Application(id={self.id}, name={self.name})>"
