@@ -11,8 +11,10 @@ The Knowledge Base provides:
 - Rich text editing with TipTap
 - Multi-tab interface for multiple notes
 - Application-level organization
-- Real-time collaborative editing (coming soon)
-- Full-text search (coming soon)
+- Real-time collaborative editing (Yjs CRDT)
+- Full-text search (Meilisearch)
+- Document locking for edit coordination
+- Role-based permissions (Owner/Editor/Viewer)
 
 ---
 
@@ -237,13 +239,13 @@ Currently searches:
 - Note titles
 - Content within current application
 
-### Full-Text Search (Coming Soon)
+### Full-Text Search
 
 Powered by Meilisearch:
-- Fast indexed search
-- Search across all content
-- Highlighted matches
-- Ranked results
+- Fast indexed search across all content
+- Highlighted matches in results
+- Ranked results by relevance
+- Search within the current application scope
 
 ---
 
@@ -296,19 +298,26 @@ The `Cmd/Ctrl + K` shortcut opens a quick selector:
 
 ## Collaborative Features
 
-### Real-Time Editing (Coming Soon)
+### Real-Time Editing
 
-Multiple users editing simultaneously:
-- See each other's cursors
-- Changes merge automatically
+Multiple users can edit simultaneously:
+- See each other's cursors with colored labels
+- Changes merge automatically via Yjs CRDT
 - No conflicts or lost work
-- Powered by Yjs CRDT
+- Document locking prevents accidental overwrites
 
 ### Presence Indicators
 
 - See who's viewing the same note
 - Avatar icons show active users
 - Cursor labels with names
+
+### Permissions
+
+Documents inherit permissions from their application:
+- **Owner**: Full control (edit, delete, manage access)
+- **Editor**: Can create and edit documents
+- **Viewer**: Read-only access
 
 ### Version History (Coming Soon)
 
@@ -332,15 +341,15 @@ Multiple users editing simultaneously:
 
 1. **One topic per note**: Keep notes focused
 2. **Use headings**: Create scannable structure
-3. **Link related notes**: Cross-reference (coming soon)
+3. **Link related notes**: Cross-reference between documents
 4. **Keep updated**: Archive outdated information
 
 ### Collaboration
 
-1. **Communicate edits**: Let others know you're editing
+1. **Use document locking**: Lock documents while editing to prevent conflicts
 2. **Review regularly**: Keep content current
 3. **Assign owners**: Someone responsible for each area
-4. **Use comments**: Discuss changes (coming soon)
+4. **Leverage real-time editing**: Collaborate live with team members
 
 ---
 

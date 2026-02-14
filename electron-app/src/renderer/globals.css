@@ -436,116 +436,116 @@
 }
 
 /* ============================================================================
-   TipTap Rich Text Editor Styles
+   TipTap Rich Text Editor Styles (scoped to task editor)
    ============================================================================ */
 
 /* Table resize handle cursor */
-.ProseMirror .tableWrapper {
+.task-editor .ProseMirror .tableWrapper {
   @apply relative overflow-x-auto my-4;
 }
 
-.ProseMirror table {
+.task-editor .ProseMirror table {
   @apply border-collapse w-full;
 }
 
-.ProseMirror th,
-.ProseMirror td {
+.task-editor .ProseMirror th,
+.task-editor .ProseMirror td {
   @apply border border-border p-2 relative;
   min-width: 50px;
 }
 
-.ProseMirror th {
+.task-editor .ProseMirror th {
   @apply bg-muted font-semibold;
 }
 
 /* Table column resize handle */
-.ProseMirror .column-resize-handle {
+.task-editor .ProseMirror .column-resize-handle {
   @apply absolute -right-0.5 top-0 bottom-0 w-1 bg-primary/50 cursor-col-resize z-20;
 }
 
 /* Selected table cell */
-.ProseMirror .selectedCell {
+.task-editor .ProseMirror .selectedCell {
   @apply bg-primary/10;
 }
 
-.ProseMirror .selectedCell::after {
+.task-editor .ProseMirror .selectedCell::after {
   content: "";
   @apply absolute inset-0 pointer-events-none border-2 border-primary/30;
 }
 
 /* Table resize cursor when hovering between columns */
-.ProseMirror.resize-cursor {
+.task-editor .ProseMirror.resize-cursor {
   cursor: col-resize;
 }
 
 /* Image styles */
-.ProseMirror img {
+.task-editor .ProseMirror img {
   @apply max-w-full h-auto rounded-md my-4;
 }
 
-.ProseMirror img.ProseMirror-selectednode {
+.task-editor .ProseMirror img.ProseMirror-selectednode {
   @apply ring-2 ring-primary/50;
 }
 
 /* Placeholder style */
-.ProseMirror p.is-editor-empty:first-child::before {
+.task-editor .ProseMirror p.is-editor-empty:first-child::before {
   @apply text-muted-foreground pointer-events-none float-left h-0;
   content: attr(data-placeholder);
 }
 
 /* Link styles in editor */
-.ProseMirror a {
+.task-editor .ProseMirror a {
   @apply text-primary underline cursor-pointer;
 }
 
 /* Code block styles */
-.ProseMirror pre {
+.task-editor .ProseMirror pre {
   @apply bg-muted rounded-md p-4 my-4 overflow-x-auto;
 }
 
-.ProseMirror code {
+.task-editor .ProseMirror code {
   @apply bg-muted px-1.5 py-0.5 rounded text-sm font-mono;
 }
 
-.ProseMirror pre code {
+.task-editor .ProseMirror pre code {
   @apply bg-transparent p-0;
 }
 
 /* List styles */
-.ProseMirror ul {
+.task-editor .ProseMirror ul {
   @apply list-disc pl-6 my-2;
 }
 
-.ProseMirror ol {
+.task-editor .ProseMirror ol {
   @apply list-decimal pl-6 my-2;
 }
 
-.ProseMirror li {
+.task-editor .ProseMirror li {
   @apply my-1;
 }
 
 /* Blockquote */
-.ProseMirror blockquote {
+.task-editor .ProseMirror blockquote {
   @apply border-l-4 border-border pl-4 my-4 italic text-muted-foreground;
 }
 
 /* Horizontal rule */
-.ProseMirror hr {
+.task-editor .ProseMirror hr {
   @apply border-t border-border my-6;
 }
 
 /* Selection: preserve text color and highlight while selected */
-.ProseMirror ::selection {
+.task-editor .ProseMirror ::selection {
   background: rgba(59, 130, 246, 0.18);
   color: inherit;
 }
 
-.ProseMirror mark ::selection {
+.task-editor .ProseMirror mark ::selection {
   background: rgba(59, 130, 246, 0.25);
   color: inherit;
 }
 
 /* Focus state */
-.ProseMirror:focus {
+.task-editor .ProseMirror:focus {
   @apply outline-none;
 }

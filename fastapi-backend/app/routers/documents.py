@@ -6,6 +6,7 @@ All endpoints require authentication. Includes trash/restore lifecycle
 and tag assignment with scope compatibility validation.
 """
 
+import asyncio
 from datetime import datetime
 from typing import Literal, Optional
 from uuid import UUID
@@ -512,8 +513,15 @@ async def create_document(
     await db.flush()
     await db.refresh(document)
 
+    # Extract search data BEFORE commit while ORM attributes are still loaded
+    from ..services.search_service import build_search_doc_data, index_document_from_data
+    search_doc_data = build_search_doc_data(document, project_application_id=project_application_id)
+
     # Commit before broadcast so clients re-fetch committed data
     await db.commit()
+
+    # Fire-and-forget: index new document for search (non-blocking)
+    asyncio.create_task(index_document_from_data(search_doc_data))
 
     # Broadcast document created event
     await _broadcast_document_event(
@@ -651,8 +659,15 @@ async def update_document(
         if project:
             project_application_id = project.application_id
 
+    # Extract search data BEFORE commit while ORM attributes are still loaded
+    from ..services.search_service import build_search_doc_data, index_document_from_data
+    search_doc_data = build_search_doc_data(document, project_application_id=project_application_id)
+
     # Commit before broadcast so clients re-fetch committed data
     await db.commit()
+
+    # Fire-and-forget: update search index (non-blocking)
+    asyncio.create_task(index_document_from_data(search_doc_data))
 
     # Broadcast document updated event
     await _broadcast_document_event(
@@ -702,7 +717,7 @@ async def save_content(
             detail="You do not have permission to edit this document",
         )
 
-    document = await save_document_content(
+    document, search_doc_data = await save_document_content(
         document_id=document_id,
         content_json=body.content_json,
         row_version=body.row_version,
@@ -720,6 +735,11 @@ async def save_content(
 
     # Commit before broadcast so clients re-fetch committed data
     await db.commit()
+
+    # Fire-and-forget: update search index AFTER commit (non-blocking)
+    if search_doc_data:
+        from ..services.search_service import index_document_from_data
+        asyncio.create_task(index_document_from_data(search_doc_data))
 
     await _broadcast_document_event(
         MessageType.DOCUMENT_UPDATED,
@@ -775,8 +795,15 @@ async def delete_document(
     document.deleted_at = datetime.utcnow()
     await db.flush()
 
+    # Extract document ID before commit for safe background task usage
+    doc_id_for_search = document.id
+
     # Commit before broadcast so clients re-fetch committed data
     await db.commit()
+
+    # Fire-and-forget: mark document as deleted in search index (non-blocking)
+    from ..services.search_service import index_document_soft_delete
+    asyncio.create_task(index_document_soft_delete(doc_id_for_search))
 
     # Broadcast document deleted event
     await _broadcast_document_event(
@@ -843,8 +870,15 @@ async def restore_document(
         if project:
             project_application_id = project.application_id
 
+    # Extract document ID before commit for safe background task usage
+    doc_id_for_search = document.id
+
     # Commit before broadcast so clients re-fetch committed data
     await db.commit()
+
+    # Fire-and-forget: restore document in search index (non-blocking)
+    from ..services.search_service import index_document_restore
+    asyncio.create_task(index_document_restore(doc_id_for_search))
 
     # Broadcast document restored event (appears as created to other clients)
     await _broadcast_document_event(
@@ -918,6 +952,13 @@ async def permanent_delete_document(
     await db.delete(document)
     await db.flush()
     await db.commit()
+
+    # Synchronous: remove document from search index (ghost results are worse than slow delete)
+    try:
+        from ..services.search_service import remove_document_from_index
+        await remove_document_from_index(document_id)
+    except Exception:
+        logger.warning("Failed to remove document %s from search index", document_id)
 
 
 # ============================================================================

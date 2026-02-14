@@ -55,7 +55,7 @@ PM Desktop follows a layered architecture with clear separation between frontend
          ┌───────────────────────────┼───────────────────────────┐
          │                           │                           │
    ┌─────▼─────┐              ┌──────▼──────┐             ┌──────▼──────┐
-   │SQL Server │              │    Redis    │             │   MinIO     │
+   │PostgreSQL │              │    Redis    │             │   MinIO     │
    │(Database) │              │  (Cache)    │             │  (Files)    │
    └───────────┘              └─────────────┘             └─────────────┘
 ```
@@ -303,6 +303,12 @@ App.tsx
 │                   ├── CommentThread
 │                   ├── ChecklistPanel
 │                   └── AttachmentList
+│               └── NotesPage
+│                   ├── KnowledgeSidebar
+│                   │   └── KnowledgeTree
+│                   └── DocumentEditor
+│                       ├── EditorToolbar
+│                       └── TipTap + Yjs
 ```
 
 ### Component Categories
@@ -345,7 +351,7 @@ Request
                   ▼
 ┌─────────────────────────────────────┐
 │          Database Layer             │
-│  (SQL Server via SQLAlchemy)        │
+│  (PostgreSQL via SQLAlchemy)        │
 │  database.py, alembic migrations    │
 └─────────────────────────────────────┘
 ```
@@ -381,6 +387,10 @@ User
  │               │                   ├──► has ──► TaskStatuses
  │               │                   └──► has ──► ProjectMembers
  │               │
+ │               ├──► has ──► DocumentFolders
+ │               │                   │
+ │               │                   └──► contains ──► Documents
+ │               │
  │               ├──► has ──► ApplicationMembers
  │               └──► has ──► Invitations
  │
@@ -409,7 +419,7 @@ User
 ```
 ┌─────────────────────────────────────┐
 │     Level 1: In-Memory (React)      │
-│  TanStack Query cache (5 min stale) │
+│  TanStack Query cache (30s stale)   │
 │  Fastest access, limited size       │
 └─────────────────┬───────────────────┘
                   │ Cache Miss
@@ -429,16 +439,16 @@ User
                   │ Cache Miss
                   ▼
 ┌─────────────────────────────────────┐
-│     Level 4: SQL Server             │
+│     Level 4: PostgreSQL             │
 │  Source of truth                    │
-│  Connection pooling (20+30)         │
+│  Connection pooling (50+100)        │
 └─────────────────────────────────────┘
 ```
 
 ### Cache Invalidation
 
 Caches are invalidated via:
-1. **Time-based**: Stale time expiration (5 minutes default)
+1. **Time-based**: Stale time expiration (30 seconds default)
 2. **Event-based**: WebSocket events trigger cache invalidation
 3. **Manual**: User actions (create, update, delete) invalidate related queries
 4. **Auth-based**: Logout clears all caches
@@ -511,7 +521,7 @@ Caches are invalidated via:
 
 | Optimization | Technique | Impact |
 |--------------|-----------|--------|
-| Connection Pool | 20 base + 30 overflow | Handle concurrent requests |
+| Connection Pool | 50 base + 100 overflow | Handle concurrent requests |
 | Eager Loading | selectinload | Prevent N+1 queries |
 | Indexes | Composite indexes | Faster query execution |
 | Denormalization | Aggregation tables | Avoid expensive counts |
@@ -540,7 +550,7 @@ Caches are invalidated via:
         ┌────────────────────┼────────────────────┐
         │                    │                    │
    ┌────▼────┐          ┌────▼────┐          ┌────▼────┐
-   │SQL Server│         │  Redis  │          │  MinIO  │
+   │PostgreSQL│         │  Redis  │          │  MinIO  │
    │(Primary) │         │(Shared) │          │(Shared) │
    └──────────┘         └─────────┘          └─────────┘
 ```

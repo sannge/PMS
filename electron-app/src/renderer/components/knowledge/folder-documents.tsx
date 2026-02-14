@@ -5,7 +5,7 @@
  * query so we only fetch data when the folder is expanded. Isolated as its
  * own component to avoid hook-count issues when folders expand/collapse.
  *
- * Shared by KnowledgeTree, FolderTree, and ApplicationTree.
+ * Shared by KnowledgeTree and its ProjectSection sub-component.
  */
 
 import { useDocuments } from '@/hooks/use-documents'
@@ -72,7 +72,7 @@ export function FolderDocuments({
           isSelected={selectedDocumentId === doc.id}
           isRenaming={renamingItemId === doc.id}
           isDragging={activeItemId === doc.id}
-          sortableId={`${sortableIdPrefix}-doc-${doc.id}`}
+          sortableId={sortableIdPrefix ? `${sortableIdPrefix}-doc-${doc.id}` : undefined}
           lockInfo={activeLocks.get(doc.id)}
           onSelect={() => onSelectDocument(doc.id)}
           onContextMenu={(e) => onContextMenu(e, doc.id, 'document', doc.title)}

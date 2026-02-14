@@ -12,7 +12,7 @@
  */
 
 import { compressToUTF16, decompressFromUTF16 } from 'lz-string'
-import { Query, QueryClient, QueryKey, QueryState, dehydrate, hydrate } from '@tanstack/react-query'
+import { Query, QueryClient, QueryKey, QueryState, hydrate } from '@tanstack/react-query'
 import {
   QueryCacheEntry,
   getEntry,

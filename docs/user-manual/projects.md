@@ -297,7 +297,7 @@ The Kanban board updates in real-time:
 
 - **Active users**: Avatar icons show who's viewing
 - **Editing indicators**: See who's working on what
-- **Cursor positions**: Coming soon with collaborative editing
+- **Cursor positions**: Available in Knowledge Base collaborative editing
 
 ### WebSocket Connection
 

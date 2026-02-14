@@ -5,7 +5,7 @@
  */
 
 import '@testing-library/jest-dom/vitest'
-import { vi } from 'vitest'
+import { vi, beforeEach } from 'vitest'
 
 // Mock window.electronAPI
 const mockElectronAPI = {

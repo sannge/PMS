@@ -6,7 +6,7 @@
  * Supports boundary checking to prevent viewport overflow.
  */
 
-import { useMemo, useCallback } from 'react'
+import { useMemo, useCallback, useEffect } from 'react'
 import {
   FolderPlus,
   FilePlus,
@@ -27,6 +27,8 @@ export interface FolderContextMenuProps {
     name: string
   }
   position: { x: number; y: number }
+  /** Whether the user can edit items (when false, only shows view-related options) */
+  canEdit?: boolean
   onClose: () => void
   onNewFolder: (parentId: string) => void
   onNewDocument: (folderId: string) => void
@@ -58,14 +60,18 @@ function isSeparator(entry: MenuEntry): entry is MenuSeparator {
 export function FolderContextMenu({
   target,
   position,
+  canEdit = true,
   onClose,
   onNewFolder,
   onNewDocument,
   onRename,
   onDelete,
 }: FolderContextMenuProps): JSX.Element {
-  // Build menu items based on target type
+  // Build menu items based on target type and permissions
   const menuItems: MenuEntry[] = useMemo(() => {
+    // When user can't edit, don't show any context menu items for CRUD
+    if (!canEdit) return []
+
     if (target.type === 'folder') {
       return [
         { label: 'New Folder', icon: FolderPlus, action: () => onNewFolder(target.id) },
@@ -82,7 +88,15 @@ export function FolderContextMenu({
       { type: 'separator' as const },
       { label: 'Delete', icon: Trash2, action: () => onDelete(target.id, 'document'), destructive: true },
     ]
-  }, [target, onNewFolder, onNewDocument, onRename, onDelete])
+  }, [target, canEdit, onNewFolder, onNewDocument, onRename, onDelete])
+
+  // Auto-close if menu has no items (read-only user)
+  const isEmpty = menuItems.length === 0
+  useEffect(() => {
+    if (isEmpty) onClose()
+  }, [isEmpty, onClose])
+
+  if (isEmpty) return null as unknown as JSX.Element
 
   // Boundary checking -- adjust position so menu stays within viewport
   const adjustedPosition = useMemo(() => {

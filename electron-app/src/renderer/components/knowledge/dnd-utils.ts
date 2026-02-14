@@ -1,8 +1,8 @@
 /**
  * Shared drag-and-drop utility functions for knowledge base tree components.
  *
- * Pure functions with no React dependencies. Used by KnowledgeTree,
- * ApplicationTree, and FolderTree for sortable ID creation and parsing.
+ * Pure functions with no React dependencies. Used by KnowledgeTree
+ * for sortable ID creation and parsing.
  */
 
 /** Build a sortable ID string: `${prefix}-folder-${id}` or `${prefix}-doc-${id}`. */

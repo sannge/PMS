@@ -470,7 +470,7 @@ async def save_document_content(
     user_id: UUID,
     db: AsyncSession,
     minio: MinIOService | None = None,
-) -> Document:
+) -> Tuple[Document, dict | None]:
     """
     Save document content with optimistic concurrency control.
 
@@ -486,7 +486,9 @@ async def save_document_content(
         db: Database session
 
     Returns:
-        The updated Document instance
+        Tuple of (updated Document instance, search_doc_data dict or None).
+        The caller should call asyncio.create_task(index_document_from_data(search_doc_data))
+        AFTER db.commit() to ensure Meilisearch receives data only after PostgreSQL commits.
 
     Raises:
         HTTPException: 404 if document not found, 409 if row_version mismatch
@@ -547,7 +549,19 @@ async def save_document_content(
                 document_id,
             )
 
-    return document
+    # Extract search data BEFORE the caller commits, while ORM attributes are loaded.
+    # The caller (documents.py save_content) will fire the index task AFTER db.commit()
+    # to ensure Meilisearch only receives data that PostgreSQL has committed.
+    project_application_id = None
+    if document.application_id is None and document.project_id is not None:
+        project = await db.get(Project, document.project_id)
+        if project:
+            project_application_id = project.application_id
+
+    from .search_service import build_search_doc_data
+    search_doc_data = build_search_doc_data(document, project_application_id=project_application_id)
+
+    return document, search_doc_data
 
 
 async def validate_tag_scope(

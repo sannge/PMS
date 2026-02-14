@@ -26,7 +26,7 @@ import { queryKeys } from '@/lib/query-client'
 // Types
 // ============================================================================
 
-export type EntityType = 'task' | 'note' | 'comment'
+export type EntityType = 'task' | 'comment' | 'document'
 
 export interface Attachment {
   id: string
@@ -338,8 +338,6 @@ export function useUploadFile(): UseMutationResult<Attachment, Error, UploadFile
         params.append('task_id', taskId)
       } else if (entityType === 'task' && entityId) {
         params.append('task_id', entityId)
-      } else if (entityType === 'note' && entityId) {
-        params.append('note_id', entityId)
       } else if (entityType && entityId) {
         params.append('entity_type', entityType)
         params.append('entity_id', entityId)
@@ -376,7 +374,7 @@ export function useUploadFile(): UseMutationResult<Attachment, Error, UploadFile
 
       return attachment
     },
-    onSuccess: (newAttachment, { entityType, entityId, taskId }) => {
+    onSuccess: (_newAttachment, { entityType, entityId, taskId }) => {
       // Invalidate relevant queries
       if (taskId) {
         queryClient.invalidateQueries({ queryKey: queryKeys.attachments(taskId) })

@@ -11,22 +11,22 @@ This guide covers setting up your development environment and running PM Desktop
 | Python | 3.12+ | Backend runtime |
 | Node.js | 20 LTS+ | Frontend tooling |
 | npm | 10+ | Package management |
-| Microsoft SQL Server | 2019+ | Primary database |
+| PostgreSQL | 14+ | Primary database |
 | Redis | 7+ | Caching and pub/sub |
 | MinIO | Latest | File storage |
+| Meilisearch | 1.6+ | Full-text search engine |
 | Git | 2.40+ | Version control |
 
 ### Optional Software
 
 | Software | Version | Purpose |
 |----------|---------|---------|
-| Meilisearch | 1.6+ | Full-text search |
 | Docker | 24+ | Container runtime for services |
 
 ### Recommended Development Tools
 
 - **VS Code** or **PyCharm** - IDE with Python/TypeScript support
-- **SQL Server Management Studio** or **Azure Data Studio** - Database management
+- **pgAdmin** or **DBeaver** - Database management
 - **Redis Insight** - Redis GUI
 - **Postman** or **Insomnia** - API testing
 
@@ -58,7 +58,7 @@ Key dependencies include:
 - `uvicorn` - ASGI server
 - `sqlalchemy` - ORM
 - `alembic` - Migrations
-- `pyodbc` - SQL Server driver
+- `asyncpg` - PostgreSQL async driver
 - `python-jose` - JWT handling
 - `passlib` - Password hashing
 - `redis` - Redis client
@@ -70,12 +70,16 @@ Key dependencies include:
 Create `fastapi-backend/.env`:
 
 ```env
-# Database (SQL Server)
+# Database (PostgreSQL)
 DB_SERVER=localhost
-DB_NAME=pm_desktop
-DB_USER=sa
+DB_PORT=5432
+DB_NAME=PMDB
+DB_USER=pmdbuser
 DB_PASSWORD=YourSecurePassword123!
-DB_DRIVER=ODBC Driver 18 for SQL Server
+
+# Connection pool
+DB_POOL_SIZE=50
+DB_MAX_OVERFLOW=100
 
 # JWT Authentication
 JWT_SECRET=your-super-secret-jwt-key-change-in-production
@@ -89,38 +93,34 @@ REDIS_URL=redis://localhost:6379/0
 MINIO_ENDPOINT=localhost:9000
 MINIO_ACCESS_KEY=minioadmin
 MINIO_SECRET_KEY=minioadmin
-MINIO_BUCKET=pm-desktop-files
 MINIO_SECURE=false
 
-# Meilisearch (Optional)
+# Meilisearch
 MEILISEARCH_URL=http://localhost:7700
 MEILISEARCH_API_KEY=your-meilisearch-key
 
 # WebSocket Settings
 WS_MAX_CONNECTIONS_PER_USER=50
-WS_MAX_MESSAGE_SIZE=65536
-WS_PING_INTERVAL=30
-WS_TOKEN_REVALIDATION_INTERVAL=1800
 ```
 
-### 4. Set Up SQL Server Database
+### 4. Set Up PostgreSQL Database
 
-#### Option A: Local SQL Server
+#### Option A: Local PostgreSQL
 
-1. Install SQL Server 2019+ (Developer Edition is free)
-2. Create database:
+1. Install PostgreSQL 14+ from https://www.postgresql.org/download/
+2. Create database and user:
 
 ```sql
-CREATE DATABASE pm_desktop;
-GO
+CREATE USER pmdbuser WITH PASSWORD 'YourSecurePassword123!';
+CREATE DATABASE PMDB OWNER pmdbuser;
 ```
 
 #### Option B: Docker
 
 ```bash
-docker run -e "ACCEPT_EULA=Y" -e "SA_PASSWORD=YourSecurePassword123!" \
-  -p 1433:1433 --name sqlserver \
-  -d mcr.microsoft.com/mssql/server:2022-latest
+docker run -e POSTGRES_USER=pmdbuser -e POSTGRES_PASSWORD=YourSecurePassword123! \
+  -e POSTGRES_DB=PMDB -p 5432:5432 --name postgres \
+  -d postgres:16-alpine
 ```
 
 ### 5. Run Database Migrations
@@ -145,6 +145,9 @@ This creates all required tables:
 - `attachments` - File metadata
 - `notifications` - User notifications
 - `invitations` - App invitations
+- `document_folders` - Knowledge base folder hierarchy
+- `documents` - Knowledge base documents
+- `document_snapshots` - Document version history
 
 ### 6. Start Redis
 
@@ -173,7 +176,20 @@ docker run -p 9000:9000 -p 9001:9001 --name minio \
 
 Access MinIO Console at http://localhost:9001 to create the `pm-desktop-files` bucket.
 
-### 8. Start the Backend Server
+### 8. Start Meilisearch
+
+#### Docker (Recommended)
+
+```bash
+docker run -p 7700:7700 --name meilisearch \
+  -e MEILI_ENV=development \
+  -e MEILI_MASTER_KEY=your-meilisearch-key \
+  -d getmeili/meilisearch:v1.6
+```
+
+Access Meilisearch at http://localhost:7700 to verify it's running.
+
+### 9. Start the Backend Server
 
 ```bash
 cd fastapi-backend
@@ -312,15 +328,16 @@ For convenience, you can run all services with Docker Compose:
 # docker-compose.yml
 version: '3.8'
 services:
-  sqlserver:
-    image: mcr.microsoft.com/mssql/server:2022-latest
+  postgres:
+    image: postgres:16-alpine
     environment:
-      ACCEPT_EULA: Y
-      SA_PASSWORD: YourSecurePassword123!
+      POSTGRES_USER: pmdbuser
+      POSTGRES_PASSWORD: YourSecurePassword123!
+      POSTGRES_DB: PMDB
     ports:
-      - "1433:1433"
+      - "5432:5432"
     volumes:
-      - sqlserver_data:/var/opt/mssql
+      - postgres_data:/var/lib/postgresql/data
 
   redis:
     image: redis:7-alpine
@@ -350,7 +367,7 @@ services:
       - meilisearch_data:/meili_data
 
 volumes:
-  sqlserver_data:
+  postgres_data:
   minio_data:
   meilisearch_data:
 ```
@@ -362,14 +379,12 @@ docker-compose up -d
 
 ## Troubleshooting
 
-### SQL Server Connection Issues
+### PostgreSQL Connection Issues
 
-1. Ensure SQL Server is running and accepting TCP connections
-2. Check firewall rules allow port 1433
-3. Verify ODBC driver is installed:
-   - Windows: SQL Server Native Client or ODBC Driver 18
-   - macOS: `brew install microsoft/mssql-release/msodbcsql18`
-   - Linux: Follow [Microsoft's guide](https://learn.microsoft.com/en-us/sql/connect/odbc/linux-mac/installing-the-microsoft-odbc-driver-for-sql-server)
+1. Ensure PostgreSQL is running: `pg_isready -h localhost -p 5432`
+2. Check firewall rules allow port 5432
+3. Verify user credentials and database exist
+4. Check `pg_hba.conf` for authentication settings
 
 ### Redis Connection Issues
 
@@ -410,4 +425,3 @@ alembic stamp head
 - Read [Architecture Overview](./architecture.md) to understand the system design
 - Review [Backend Guide](./backend.md) for API development
 - Check [Frontend Guide](./frontend.md) for UI development
-- Learn about [Real-Time Communication](./websocket.md) for WebSocket features

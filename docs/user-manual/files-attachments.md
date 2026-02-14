@@ -8,7 +8,7 @@ PM Desktop supports file uploads and attachments on comments, allowing teams to 
 
 Files can be attached to:
 - Task comments
-- Note content (coming soon)
+- Note documents (images via editor toolbar)
 
 Supported features:
 - Drag and drop upload
@@ -330,4 +330,4 @@ Uploaded files may be scanned:
 
 - [Comments & Collaboration](./comments-collaboration.md) - Using files in discussions
 - [Tasks & Kanban Board](./tasks.md) - Context for attachments
-- [Notes & Knowledge Base](./notes-knowledge-base.md) - Document embedding (coming soon)
+- [Notes & Knowledge Base](./notes-knowledge-base.md) - Document images and attachments

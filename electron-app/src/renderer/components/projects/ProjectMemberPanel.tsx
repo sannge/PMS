@@ -67,11 +67,6 @@ function getInitials(name: string | null, email?: string): string {
   return '?'
 }
 
-function getDisplayName(user: { display_name?: string | null; email?: string } | null): string {
-  if (!user) return 'Unknown user'
-  return user.display_name || user.email || 'Unknown user'
-}
-
 // ============================================================================
 // Component
 // ============================================================================

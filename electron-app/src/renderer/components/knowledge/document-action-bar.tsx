@@ -26,6 +26,8 @@ export interface DocumentActionBarProps {
   lockHolder: LockHolder | null
   isLockedByOther: boolean
   canForceTake: boolean
+  /** Whether the current user has edit permission */
+  canEdit: boolean
   isDirty: boolean
   isSaving: boolean
   /** True while entering edit mode (refetch + lock acquire) */
@@ -47,6 +49,7 @@ export function DocumentActionBar({
   lockHolder,
   isLockedByOther,
   canForceTake,
+  canEdit,
   isDirty,
   isSaving,
   isEntering,
@@ -84,23 +87,27 @@ export function DocumentActionBar({
       )
     }
 
-    // Unlocked — show Edit button
+    // Unlocked — show Edit button or "View only" indicator
     return (
       <div className="flex items-center justify-end px-4 py-1.5 border-b bg-muted/30">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onEdit}
-          disabled={isEntering}
-          className="h-7 text-xs gap-1.5"
-        >
-          {isEntering ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Pencil className="h-3.5 w-3.5" />
-          )}
-          {isEntering ? 'Opening editor...' : 'Edit'}
-        </Button>
+        {canEdit ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onEdit}
+            disabled={isEntering}
+            className="h-7 text-xs gap-1.5"
+          >
+            {isEntering ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Pencil className="h-3.5 w-3.5" />
+            )}
+            {isEntering ? 'Opening editor...' : 'Edit'}
+          </Button>
+        ) : (
+          <span className="text-xs text-muted-foreground">View only</span>
+        )}
       </div>
     )
   }

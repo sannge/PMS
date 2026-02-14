@@ -49,7 +49,6 @@ import {
 } from 'lucide-react'
 import { isTaskDone, useTaskStatuses, type Task, type TaskUpdate, type TaskPriority, type TaskType } from '@/hooks/use-queries'
 import { useProjectMembers, useAppMembers } from '@/hooks/use-members'
-import { useAuthStore } from '@/contexts/auth-context'
 import { TaskStatusBadge } from './task-status-badge'
 import { FileUpload } from '@/components/files/file-upload'
 import { AttachmentList } from '@/components/files/attachment-list'
@@ -501,9 +500,6 @@ export function TaskDetail({
   const isDone = isTaskDone(task)
   const isArchived = task.archived_at !== null
   const isReadOnly = isDone || isArchived
-
-  // Auth
-  const token = useAuthStore((s) => s.token)
 
   // Project members for assignee selector (auto-fetches when enabled)
   const { data: projectMembers = [] } = useProjectMembers(isOpen ? task.project_id : undefined)

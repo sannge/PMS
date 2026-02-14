@@ -12,7 +12,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/contexts/auth-context'
-import { useWebSocket, MessageType, type MemberAddedEventData, type MemberRemovedEventData, type RoleUpdatedEventData } from '@/hooks/use-websocket'
+import { useWebSocket } from '@/hooks/use-websocket'
 import { WebSocketClient } from '@/lib/websocket'
 import {
   useApplication,
@@ -36,12 +36,6 @@ import {
   type ApplicationRole,
 } from '@/hooks/use-members'
 
-// Define the event data type for project status changed
-interface ProjectStatusChangedEventData {
-  project_id?: string
-  application_id?: string
-  project?: Project
-}
 import { ApplicationForm } from '@/components/applications/application-form'
 import { ProjectCard } from '@/components/projects/project-card'
 import { ProjectForm } from '@/components/projects/project-form'
@@ -482,7 +476,7 @@ export function ApplicationDetailPage({
   const showLoading = isLoading && !application
 
   // Join application room for real-time member updates
-  const { joinRoom, leaveRoom, subscribe, status: wsStatus } = useWebSocket()
+  const { joinRoom, leaveRoom, status: wsStatus } = useWebSocket()
 
   // Store current user ID in ref for WebSocket handlers
   const currentUserIdRef = useRef(currentUserId)
@@ -786,10 +780,10 @@ export function ApplicationDetailPage({
   }
 
   // At this point, application is guaranteed to be non-null due to early returns above
-  if (!application) return null
+  if (!application) return <></>
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col h-full space-y-4">
       {/* Compact Header Bar */}
       <div className="flex items-center justify-between gap-4 pb-3 border-b border-border">
         {/* Left: Breadcrumb + Title */}
@@ -1095,7 +1089,7 @@ export function ApplicationDetailPage({
           <ApplicationForm
             application={application}
             isSubmitting={isUpdating}
-            error={error?.message}
+            error={error}
             onSubmit={handleUpdate}
             onCancel={handleCloseEdit}
           />
@@ -1118,7 +1112,7 @@ export function ApplicationDetailPage({
           <ProjectForm
             project={editingProject}
             isSubmitting={projectModalMode === 'create' ? isCreatingProject : isUpdatingProject}
-            error={projectsError?.message}
+            error={projectsError}
             onSubmit={handleProjectFormSubmit}
             onCancel={handleCloseProjectModal}
           />

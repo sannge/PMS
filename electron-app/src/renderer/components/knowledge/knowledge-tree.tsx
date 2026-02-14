@@ -14,7 +14,7 @@
  */
 
 import { useState, useCallback, useMemo, useEffect } from 'react'
-import { FilePlus, Folder, FileText, FolderKanban, ChevronRight, Loader2 } from 'lucide-react'
+import { FilePlus, Folder, FileText, FolderKanban, ChevronRight } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   DndContext,
@@ -64,6 +64,7 @@ import { FolderContextMenu } from './folder-context-menu'
 import { CreateDialog } from './create-dialog'
 import { DeleteDialog } from './delete-dialog'
 import { matchesSearch, filterFolderTree, findFolderById, isDescendantOf } from './tree-utils'
+import { useProjectPermissionsMap } from '@/hooks/use-knowledge-permissions'
 import { parseSortableId, parsePrefixToScope, type ScopeInfo } from './dnd-utils'
 
 // ============================================================================
@@ -73,6 +74,8 @@ import { parseSortableId, parsePrefixToScope, type ScopeInfo } from './dnd-utils
 interface KnowledgeTreeProps {
   /** Application ID - when provided, shows project sections */
   applicationId?: string
+  /** Whether the current user has edit permission (defaults to true) */
+  canEdit?: boolean
 }
 
 interface ContextMenuTarget {
@@ -109,6 +112,8 @@ interface ProjectSectionProps {
   contextMenuFolderId: string | null
   /** Hide this project section if it has no documents after loading */
   hideIfEmpty?: boolean
+  /** Whether the user can edit items in this project section */
+  canEdit?: boolean
   onToggleFolder: (folderId: string) => void
   onSelectDocument: (documentId: string) => void
   onContextMenu: (
@@ -132,6 +137,7 @@ function ProjectSection({
   dropTargetFolderId,
   contextMenuFolderId,
   hideIfEmpty = false,
+  canEdit = true,
   onToggleFolder,
   onSelectDocument,
   onContextMenu,
@@ -203,7 +209,7 @@ function ProjectSection({
             isRenaming={renamingItemId === node.id}
             isDragging={isDragging}
             isDropTarget={isDropTarget}
-            sortableId={`project-${project.id}-folder-${node.id}`}
+            sortableId={canEdit ? `project-${project.id}-folder-${node.id}` : undefined}
             onToggleExpand={() => onToggleFolder(node.id)}
             onSelect={() => onToggleFolder(node.id)}
             onContextMenu={(e) =>
@@ -222,7 +228,7 @@ function ProjectSection({
                 depth={depth + 1}
                 selectedDocumentId={selectedDocumentId}
                 renamingItemId={renamingItemId}
-                sortableIdPrefix={`project-${project.id}`}
+                sortableIdPrefix={canEdit ? `project-${project.id}` : ''}
                 activeItemId={activeItem?.type === 'document' ? activeItem.id : null}
                 activeLocks={projectActiveLocks}
                 onSelectDocument={onSelectDocument}
@@ -237,7 +243,7 @@ function ProjectSection({
         </div>
       )
     },
-    [expandedFolderIds, contextMenuFolderId, selectedDocumentId, renamingItemId, activeItem, dropTargetFolderId, project.id, projectActiveLocks, onToggleFolder, onSelectDocument, onContextMenu, onRenameSubmit, onRenameCancel]
+    [expandedFolderIds, contextMenuFolderId, selectedDocumentId, renamingItemId, activeItem, dropTargetFolderId, project.id, canEdit, projectActiveLocks, onToggleFolder, onSelectDocument, onContextMenu, onRenameSubmit, onRenameCancel]
   )
 
   const renderDocumentItem = useCallback(
@@ -254,7 +260,7 @@ function ProjectSection({
           isSelected={isSelected}
           isRenaming={renamingItemId === doc.id}
           isDragging={isDragging}
-          sortableId={`project-${project.id}-doc-${doc.id}`}
+          sortableId={canEdit ? `project-${project.id}-doc-${doc.id}` : undefined}
           lockInfo={projectActiveLocks.get(doc.id)}
           onSelect={() => onSelectDocument(doc.id)}
           onContextMenu={(e) =>
@@ -265,7 +271,7 @@ function ProjectSection({
         />
       )
     },
-    [selectedDocumentId, renamingItemId, activeItem, project.id, projectActiveLocks, onSelectDocument, onContextMenu, onRenameSubmit, onRenameCancel]
+    [selectedDocumentId, renamingItemId, activeItem, project.id, canEdit, projectActiveLocks, onSelectDocument, onContextMenu, onRenameSubmit, onRenameCancel]
   )
 
   // Hide section if expanded, loaded, and empty (when hideIfEmpty is true)
@@ -319,7 +325,7 @@ function ProjectSection({
 // Main Component
 // ============================================================================
 
-export function KnowledgeTree({ applicationId }: KnowledgeTreeProps): JSX.Element {
+export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreeProps): JSX.Element {
   const {
     scope: contextScope,
     scopeId: contextScopeId,
@@ -351,6 +357,11 @@ export function KnowledgeTree({ applicationId }: KnowledgeTreeProps): JSX.Elemen
   // Project data (only for application scope)
   const { data: projects } = useProjects(isApplicationScope ? applicationId : undefined)
   const { data: projectsWithContent, isLoading: isProjectsContentLoading } = useProjectsWithContent(isApplicationScope ? applicationId! : null)
+
+  // Per-project permissions (application scope only)
+  const { permissionsMap: projectPermissionsMap } = useProjectPermissionsMap(
+    isApplicationScope ? applicationId : undefined
+  )
 
   // Mutations
   const queryClient = useQueryClient()
@@ -847,7 +858,7 @@ export function KnowledgeTree({ applicationId }: KnowledgeTreeProps): JSX.Elemen
   const renderDocumentItem = useCallback(
     (doc: DocumentListItem, depth: number): JSX.Element => {
       const isSelected = selectedDocumentId === doc.id
-      const prefix = isApplicationScope ? 'app' : 'personal'
+      const prefix = dndPrefix
       const isDragging = activeItem?.id === doc.id && activeItem?.type === 'document' && activeItem?.scope === prefix
 
       return (
@@ -859,7 +870,7 @@ export function KnowledgeTree({ applicationId }: KnowledgeTreeProps): JSX.Elemen
           isSelected={isSelected}
           isRenaming={renamingItemId === doc.id}
           isDragging={isDragging}
-          sortableId={`${prefix}-doc-${doc.id}`}
+          sortableId={canEdit ? `${prefix}-doc-${doc.id}` : undefined}
           lockInfo={activeLocks.get(doc.id)}
           onSelect={() => handleSelectDocument(doc.id)}
           onContextMenu={(e) => handleContextMenu(e, doc.id, 'document', doc.title)}
@@ -868,7 +879,7 @@ export function KnowledgeTree({ applicationId }: KnowledgeTreeProps): JSX.Elemen
         />
       )
     },
-    [isApplicationScope, selectedDocumentId, renamingItemId, activeItem, activeLocks, handleSelectDocument, handleContextMenu, handleRenameSubmit, handleRenameCancel]
+    [dndPrefix, canEdit, selectedDocumentId, renamingItemId, activeItem, activeLocks, handleSelectDocument, handleContextMenu, handleRenameSubmit, handleRenameCancel]
   )
 
   // Stable primitive for context-menu folder highlight (avoids object ref in deps)
@@ -878,7 +889,7 @@ export function KnowledgeTree({ applicationId }: KnowledgeTreeProps): JSX.Elemen
     (node: FolderTreeNode, depth: number): JSX.Element => {
       const isExpanded = expandedFolderIds.has(node.id)
       const isSelected = contextMenuFolderId === node.id
-      const prefix = isApplicationScope ? 'app' : 'personal'
+      const prefix = dndPrefix
       const isDragging = activeItem?.id === node.id && activeItem?.type === 'folder' && activeItem?.scope === prefix
       const isDropTarget = dropTargetFolderId === node.id
 
@@ -893,7 +904,7 @@ export function KnowledgeTree({ applicationId }: KnowledgeTreeProps): JSX.Elemen
             isRenaming={renamingItemId === node.id}
             isDragging={isDragging}
             isDropTarget={isDropTarget}
-            sortableId={`${prefix}-folder-${node.id}`}
+            sortableId={canEdit ? `${prefix}-folder-${node.id}` : undefined}
             onToggleExpand={() => toggleFolder(node.id)}
             onSelect={() => toggleFolder(node.id)}
             onContextMenu={(e) => handleContextMenu(e, node.id, 'folder', node.name)}
@@ -910,7 +921,7 @@ export function KnowledgeTree({ applicationId }: KnowledgeTreeProps): JSX.Elemen
                 depth={depth + 1}
                 selectedDocumentId={selectedDocumentId}
                 renamingItemId={renamingItemId}
-                sortableIdPrefix={prefix}
+                sortableIdPrefix={canEdit ? prefix : ''}
                 activeItemId={activeItem?.type === 'document' ? activeItem.id : null}
                 activeLocks={activeLocks}
                 onSelectDocument={handleSelectDocument}
@@ -923,7 +934,7 @@ export function KnowledgeTree({ applicationId }: KnowledgeTreeProps): JSX.Elemen
         </div>
       )
     },
-    [isApplicationScope, scope, effectiveScopeId, expandedFolderIds, contextMenuFolderId, selectedDocumentId, renamingItemId, activeItem, dropTargetFolderId, activeLocks, toggleFolder, handleSelectDocument, handleContextMenu, handleRenameSubmit, handleRenameCancel]
+    [dndPrefix, canEdit, scope, effectiveScopeId, expandedFolderIds, contextMenuFolderId, selectedDocumentId, renamingItemId, activeItem, dropTargetFolderId, activeLocks, toggleFolder, handleSelectDocument, handleContextMenu, handleRenameSubmit, handleRenameCancel]
   )
 
   // ========================================================================
@@ -943,17 +954,19 @@ export function KnowledgeTree({ applicationId }: KnowledgeTreeProps): JSX.Elemen
       <>
         <div className="flex flex-col items-center justify-center p-6 text-center">
           <p className="text-sm text-muted-foreground mb-3">No documents yet</p>
-          <button
-            onClick={handleCreateFirstDocument}
-            className={cn(
-              'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md',
-              'bg-primary text-primary-foreground hover:bg-primary/90',
-              'transition-colors'
-            )}
-          >
-            <FilePlus className="h-4 w-4" />
-            Create your first document
-          </button>
+          {canEdit && (
+            <button
+              onClick={handleCreateFirstDocument}
+              className={cn(
+                'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md',
+                'bg-primary text-primary-foreground hover:bg-primary/90',
+                'transition-colors'
+              )}
+            >
+              <FilePlus className="h-4 w-4" />
+              Create your first document
+            </button>
+          )}
         </div>
         <CreateDialog open={createDialogOpen} onOpenChange={setCreateDialogOpen} type={createType} onSubmit={handleCreateSubmit} />
       </>
@@ -972,6 +985,15 @@ export function KnowledgeTree({ applicationId }: KnowledgeTreeProps): JSX.Elemen
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragOver={handleDragOver} onDragEnd={handleDragEnd}>
       <div className="py-1" role="tree">
+        {/* Subtle background refresh indicator - thin indeterminate progress bar */}
+        {isFoldersFetching && !isFoldersLoading && (
+          <div className="h-0.5 w-full overflow-hidden bg-primary/10">
+            <div
+              className="h-full w-2/5 rounded-full bg-primary/40 animate-kt-progress"
+            />
+          </div>
+        )}
+
         {/* Main folder tree */}
         <SortableContext items={sortableItems} strategy={noReorderStrategy}>
           {filteredFolders.map((node) => renderFolderNode(node, 0))}
@@ -996,6 +1018,7 @@ export function KnowledgeTree({ applicationId }: KnowledgeTreeProps): JSX.Elemen
                 activeItem={activeItem}
                 dropTargetFolderId={dropTargetFolderId}
                 contextMenuFolderId={contextMenuFolderId}
+                canEdit={projectPermissionsMap.get(project.id) ?? canEdit}
                 onToggleFolder={toggleFolder}
                 onSelectDocument={handleSelectDocument}
                 onContextMenu={handleContextMenu}
@@ -1029,6 +1052,11 @@ export function KnowledgeTree({ applicationId }: KnowledgeTreeProps): JSX.Elemen
         <FolderContextMenu
           target={{ id: contextMenuTarget.id, type: contextMenuTarget.type, name: contextMenuTarget.name }}
           position={{ x: contextMenuTarget.x, y: contextMenuTarget.y }}
+          canEdit={
+            contextMenuTarget.scope === 'project'
+              ? (projectPermissionsMap.get(contextMenuTarget.scopeId) ?? canEdit)
+              : canEdit
+          }
           onClose={handleCloseContextMenu}
           onNewFolder={handleNewFolder}
           onNewDocument={handleNewDocument}

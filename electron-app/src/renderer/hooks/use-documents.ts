@@ -711,6 +711,8 @@ export function useReorderDocument(
 export interface ApplicationWithDocs {
   id: string
   name: string
+  description?: string | null
+  user_role?: string | null
 }
 
 export interface ScopesSummaryResponse {
@@ -751,8 +753,14 @@ export function useApplicationsWithDocs(): UseQueryResult<ScopesSummaryResponse,
 // Projects With Content Hook
 // ============================================================================
 
+export interface ProjectPermissionItem {
+  project_id: string
+  can_edit: boolean
+}
+
 export interface ProjectsWithContentResponse {
   project_ids: string[]
+  project_permissions: ProjectPermissionItem[]
 }
 
 /**

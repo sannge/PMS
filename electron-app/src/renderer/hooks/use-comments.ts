@@ -17,9 +17,8 @@ import {
   useInfiniteQuery,
   UseQueryResult,
   UseMutationResult,
-  UseInfiniteQueryResult,
 } from '@tanstack/react-query'
-import { useAuthStore, User } from '@/contexts/auth-context'
+import { useAuthStore } from '@/contexts/auth-context'
 import { queryKeys } from '@/lib/query-client'
 
 // ============================================================================
@@ -146,7 +145,7 @@ function parseApiError(status: number, data: unknown): ApiError {
  */
 export function useComments(
   taskId: string | undefined
-): UseInfiniteQueryResult<CommentListResponse, Error> {
+) {
   const token = useAuthStore((s) => s.token)
 
   return useInfiniteQuery({

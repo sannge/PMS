@@ -20,6 +20,7 @@ import { toast } from 'sonner'
 import { useDocumentLock, INACTIVITY_TIMEOUT_MS } from './use-document-lock'
 import { useSaveDocumentContent } from './use-queries'
 import { useDocument } from './use-documents'
+import type { Document } from './use-documents'
 import { useKnowledgeBase } from '@/contexts/knowledge-base-context'
 import { useAuthStore } from '@/contexts/auth-context'
 import { useQueryClient } from '@tanstack/react-query'
@@ -39,7 +40,9 @@ const INACTIVITY_CHECK_MS = 30_000           // 30 seconds
 
 export interface UseEditModeOptions {
   documentId: string | null
-  userRole: string | null
+  canEdit: boolean
+  /** Whether the current user is an application owner (for force-take locks) */
+  isOwner?: boolean
 }
 
 export interface UseEditModeReturn {
@@ -57,6 +60,8 @@ export interface UseEditModeReturn {
   lockHolder: ReturnType<typeof useDocumentLock>['lockHolder']
   isLockedByOther: boolean
   canForceTake: boolean
+  /** Whether the current user has edit permission for this scope */
+  canEdit: boolean
   /** Document data from the internal useDocument query */
   document: ReturnType<typeof useDocument>['data']
   /** Whether document query errored (e.g. 404) */
@@ -83,7 +88,8 @@ export interface UseEditModeReturn {
 
 export function useEditMode({
   documentId,
-  userRole,
+  canEdit,
+  isOwner = false,
 }: UseEditModeOptions): UseEditModeReturn {
   const token = useAuthStore((s) => s.token)
   const userId = useAuthStore((s) => s.user?.id ?? '')
@@ -116,6 +122,7 @@ export function useEditMode({
   const documentIdRef = useRef(documentId)
   const tokenRef = useRef(token)
   const isIntentionallyExitingRef = useRef(false)
+  const prevCanEditRef = useRef(canEdit)
 
   // Wrappers that update both state and ref synchronously
   const setMode = useCallback((m: 'view' | 'edit') => {
@@ -147,7 +154,7 @@ export function useEditMode({
     documentId,
     userId,
     userName,
-    userRole,
+    userRole: isOwner ? 'owner' : null,
     lastActivityRef: lastEditRef,
   })
 
@@ -208,6 +215,10 @@ export function useEditMode({
 
   const enterEditMode = useCallback(async () => {
     if (!documentId) return
+    if (!canEdit) {
+      toast.error("You don't have edit permission")
+      return
+    }
 
     setIsEntering(true)
     try {
@@ -243,7 +254,7 @@ export function useEditMode({
     } finally {
       setIsEntering(false)
     }
-  }, [documentId, refetchDoc, lock])
+  }, [documentId, canEdit, refetchDoc, lock])
 
   // ============================================================================
   // Baseline sync (called by editor after setContent normalizes content)
@@ -296,12 +307,25 @@ export function useEditMode({
       // Set flag to prevent automatic lock re-acquisition during intentional exit
       isIntentionallyExitingRef.current = true
 
+      // Optimistically update cached document with saved content so that
+      // switching to view mode shows the just-saved content immediately
+      // instead of flashing stale pre-edit content from the query cache.
+      queryClient.setQueryData<Document>(queryKeys.document(documentId), (old) => {
+        if (!old) return old
+        return {
+          ...old,
+          content_json: localContentRef.current,
+          row_version: result.row_version,
+        }
+      })
+
       // Release lock and go back to view mode
       await lock.releaseLock()
       setMode('view')
       setSaveStatus({ state: 'idle' })
 
-      // Invalidate to refetch latest
+      // Background refetch to sync server-generated fields (updated_at, etc.)
+      // This won't cause flicker because setQueryData above already set content_json.
       queryClient.invalidateQueries({ queryKey: queryKeys.document(documentId) })
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Save failed'
@@ -586,6 +610,24 @@ export function useEditMode({
   }, [lock.isLockedByMe, lock.lockHolder, queryClient, exitEditMode, setMode])
 
   // ============================================================================
+  // Auto-eject from edit mode when permissions are revoked mid-edit
+  // ============================================================================
+
+  useEffect(() => {
+    const wasCanEdit = prevCanEditRef.current
+    prevCanEditRef.current = canEdit
+
+    // Only trigger on true→false transition while in edit mode
+    if (wasCanEdit === true && canEdit === false && modeRef.current === 'edit') {
+      // Force-exit regardless of dirty state — user no longer has permission.
+      // Unlike voluntary cancel (which shows a discard dialog), permission
+      // revocation is non-negotiable: the backend will reject any save attempt.
+      toast.warning('Your edit permission was revoked. Unsaved changes were discarded.')
+      void exitEditModeRef.current()
+    }
+  }, [canEdit])
+
+  // ============================================================================
   // Keyboard shortcuts (Ctrl+S → save, Ctrl+W → cancel)
   // ============================================================================
 
@@ -614,6 +656,10 @@ export function useEditMode({
   // ============================================================================
 
   const forceTake = useCallback(async () => {
+    if (!canEdit) {
+      toast.error("You don't have edit permission")
+      return
+    }
     setIsEntering(true)
     try {
       const taken = await lock.forceTakeLock()
@@ -633,7 +679,7 @@ export function useEditMode({
     } finally {
       setIsEntering(false)
     }
-  }, [lock, refetchDoc])
+  }, [canEdit, lock, refetchDoc])
 
   return {
     mode,
@@ -647,7 +693,8 @@ export function useEditMode({
     showQuitDialog,
     lockHolder: lock.lockHolder,
     isLockedByOther: lock.isLockedByOther,
-    canForceTake: lock.canForceTake,
+    canForceTake: lock.canForceTake && canEdit,
+    canEdit,
     document: doc,
     isDocError,
     enterEditMode,

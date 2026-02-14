@@ -15,6 +15,9 @@
  */
 
 import { useEditor, EditorContent, Editor, Extension, NodeViewWrapper, NodeViewProps, ReactNodeViewRenderer } from '@tiptap/react'
+import type { RawCommands } from '@tiptap/core'
+import type { Transaction, EditorState } from '@tiptap/pm/state'
+import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import StarterKit from '@tiptap/starter-kit'
 import Underline from '@tiptap/extension-underline'
 import TextAlign from '@tiptap/extension-text-align'
@@ -96,11 +99,11 @@ const Indent = Extension.create({
 
   addCommands() {
     return {
-      indent: () => ({ tr, state, dispatch }) => {
+      indent: () => ({ tr, state, dispatch }: { tr: Transaction; state: EditorState; dispatch?: (tr: Transaction) => void }) => {
         const { selection } = state
         const { from, to } = selection
         let changed = false
-        state.doc.nodesBetween(from, to, (node, pos) => {
+        state.doc.nodesBetween(from, to, (node: ProseMirrorNode, pos: number) => {
           if (node.type.name === 'paragraph' || node.type.name === 'heading') {
             const currentIndent = node.attrs.indent || 0
             if (currentIndent < MAX_INDENT_LEVEL) {
@@ -116,11 +119,11 @@ const Indent = Extension.create({
         })
         return changed
       },
-      outdent: () => ({ tr, state, dispatch }) => {
+      outdent: () => ({ tr, state, dispatch }: { tr: Transaction; state: EditorState; dispatch?: (tr: Transaction) => void }) => {
         const { selection } = state
         const { from, to } = selection
         let changed = false
-        state.doc.nodesBetween(from, to, (node, pos) => {
+        state.doc.nodesBetween(from, to, (node: ProseMirrorNode, pos: number) => {
           if (node.type.name === 'paragraph' || node.type.name === 'heading') {
             const currentIndent = node.attrs.indent || 0
             if (currentIndent > 0) {
@@ -136,7 +139,7 @@ const Indent = Extension.create({
         })
         return changed
       },
-    }
+    } as Partial<RawCommands>
   },
 })
 
@@ -248,7 +251,6 @@ import {
   ListOrdered,
   Code,
   Highlighter,
-  Image as ImageIcon,
   Table as TableIcon,
   Link as LinkIcon,
   Undo,
@@ -407,35 +409,10 @@ interface ToolbarProps {
   uploadImage: (file: File) => Promise<string | null>
 }
 
-function Toolbar({ editor, uploadImage }: ToolbarProps) {
-  const [isUploading, setIsUploading] = useState(false)
+function Toolbar({ editor, uploadImage: _uploadImage }: ToolbarProps) {
   const [linkDialogOpen, setLinkDialogOpen] = useState(false)
   const [linkUrl, setLinkUrl] = useState('')
   const linkInputRef = useRef<HTMLInputElement>(null)
-
-  // Image upload handler - opens file picker
-  const handleImageUpload = useCallback(async () => {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = 'image/*'
-    input.onchange = async (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0]
-      if (!file) return
-
-      setIsUploading(true)
-      try {
-        const url = await uploadImage(file)
-        if (url) {
-          editor.chain().focus().setImage({ src: url }).run()
-        }
-      } catch (err) {
-        console.error('Failed to upload image:', err)
-      } finally {
-        setIsUploading(false)
-      }
-    }
-    input.click()
-  }, [editor, uploadImage])
 
   // Table insert handler
   const handleInsertTable = useCallback(() => {
@@ -1198,7 +1175,7 @@ export function RichTextEditor({
   }
 
   return (
-    <div className={cn('border border-input rounded-lg overflow-hidden bg-background', className)}>
+    <div className={cn('task-editor border border-input rounded-lg overflow-hidden bg-background', className)}>
       {/* Toolbar - hidden when read-only */}
       {!readOnly && <Toolbar editor={editor} uploadImage={uploadImage} />}
 

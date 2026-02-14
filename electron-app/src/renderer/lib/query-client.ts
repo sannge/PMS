@@ -137,6 +137,12 @@ export const queryKeys = {
 
   // Active Locks (batch)
   activeLocks: (scope: string, scopeId: string) => ['activeLocks', scope, scopeId] as const,
+
+  // Knowledge Permissions
+  knowledgePermissions: (scope: string, scopeId: string) => ['knowledge-permissions', scope, scopeId] as const,
+
+  // Document Search
+  documentSearch: (query: string) => ['search', 'documents', query] as const,
 }
 
 // ============================================================================

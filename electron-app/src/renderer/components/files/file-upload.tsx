@@ -179,7 +179,6 @@ export function FileUpload({
     completeUpload,
     failUpload,
     removeUpload,
-    clearUploads,
   } = useUploadProgress();
 
   // Handle file selection

@@ -1,8 +1,8 @@
 /**
  * Shared tree utility functions for knowledge base tree components.
  *
- * Pure functions with no React dependencies. Used by KnowledgeTree,
- * ApplicationTree, and FolderTree for search filtering and tree traversal.
+ * Pure functions with no React dependencies. Used by KnowledgeTree
+ * for search filtering and tree traversal.
  */
 
 import type { FolderTreeNode } from '@/hooks/use-document-folders'

@@ -26,9 +26,8 @@ import {
   type Task,
   type TaskCreate,
   type TaskUpdate,
-  type TaskStatus as TaskStatusObject,
 } from '@/hooks/use-queries'
-import { useProjectMembers, type ProjectMember } from '@/hooks/use-members'
+import { useProjectMembers } from '@/hooks/use-members'
 import { ProjectForm } from '@/components/projects/project-form'
 import { KanbanBoard } from '@/components/kanban/KanbanBoard'
 import { TaskForm, type AssigneeOption } from '@/components/tasks/task-form'

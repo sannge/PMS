@@ -26,6 +26,8 @@ import {
 } from 'lucide-react'
 import type { ApplicationMember, ApplicationRole } from '@/hooks/use-members'
 
+type MemberWithUser = ApplicationMember
+
 // ============================================================================
 // Types
 // ============================================================================

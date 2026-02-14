@@ -132,6 +132,11 @@ module.exports = {
         'float': {
           '0%, 100%': { transform: 'translateY(0)' },
           '50%': { transform: 'translateY(-6px)' }
+        },
+        'kt-progress': {
+          '0%': { transform: 'translateX(-100%)' },
+          '50%': { transform: 'translateX(250%)' },
+          '100%': { transform: 'translateX(-100%)' }
         }
       },
       animation: {
@@ -146,7 +151,8 @@ module.exports = {
         'glow': 'glow 2s ease-in-out infinite',
         'shimmer': 'shimmer 1.5s infinite',
         'spin-slow': 'spin-slow 3s linear infinite',
-        'float': 'float 3s ease-in-out infinite'
+        'float': 'float 3s ease-in-out infinite',
+        'kt-progress': 'kt-progress 1.5s ease-in-out infinite'
       },
       transitionTimingFunction: {
         'bounce-in': 'cubic-bezier(0.68, -0.55, 0.265, 1.55)',

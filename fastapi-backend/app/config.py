@@ -85,6 +85,12 @@ class Settings(BaseSettings):
             f"@{self.db_server}:{self.db_port}/{self.db_name}"
         )
 
+    # Meilisearch settings
+    meilisearch_url: str = "http://localhost:7700"
+    meilisearch_api_key: str = ""            # Scoped API key for "documents" index
+    meilisearch_index_name: str = "documents"
+    meilisearch_timeout: float = 5.0         # Client HTTP timeout in seconds
+
     # Test database settings
     test_db_user: str = "pmsdbtestuser"
     test_db_password: str = ""

@@ -3,7 +3,7 @@
  *
  * Main sidebar container that composes all sidebar sections:
  * - Quick creation buttons (new doc / new folder)
- * - Folder tree (FolderTree component)
+ * - Folder tree (KnowledgeTree component)
  * - Tag filter (TagFilterList with click-to-filter)
  *
  * Note: Search bar and tab bar are now at page level.
@@ -18,6 +18,7 @@ import { useKnowledgeBase } from '@/contexts/knowledge-base-context'
 import { useAuthStore } from '@/contexts/auth-context'
 import { useCreateDocument } from '@/hooks/use-documents'
 import { useCreateFolder } from '@/hooks/use-document-folders'
+import { useKnowledgePermissions } from '@/hooks/use-knowledge-permissions'
 import { KnowledgeTree } from './knowledge-tree'
 import { TagFilterList } from './tag-filter-list'
 import { CreateDialog } from './create-dialog'
@@ -37,6 +38,11 @@ export function KnowledgeSidebar(): JSX.Element {
   const userId = useAuthStore((s) => s.user?.id ?? null)
   const createDocument = useCreateDocument()
   const createFolder = useCreateFolder()
+
+  // Permissions
+  const permScope = activeTab === 'personal' ? 'personal' as const : 'application' as const
+  const permScopeId = activeTab === 'personal' ? null : activeTab.slice(4)
+  const { canEdit } = useKnowledgePermissions(permScope, permScopeId)
 
   // Dialog state
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
@@ -166,23 +172,25 @@ export function KnowledgeSidebar(): JSX.Element {
       {/* Sidebar content (hidden when collapsed) */}
       {!isSidebarCollapsed && (
         <>
-          {/* Quick creation buttons */}
-          <div className="flex items-center gap-0.5 px-1.5 py-0.5 border-b border-border">
-            <button
-              onClick={handleCreateDocClick}
-              className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-              title="New document"
-            >
-              <FilePlus className="h-3.5 w-3.5" />
-            </button>
-            <button
-              onClick={handleCreateFolderClick}
-              className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-              title="New folder"
-            >
-              <FolderPlus className="h-3.5 w-3.5" />
-            </button>
-          </div>
+          {/* Quick creation buttons (hidden for read-only users) */}
+          {canEdit && (
+            <div className="flex items-center gap-0.5 px-1.5 py-0.5 border-b border-border">
+              <button
+                onClick={handleCreateDocClick}
+                className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                title="New document"
+              >
+                <FilePlus className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={handleCreateFolderClick}
+                className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                title="New folder"
+              >
+                <FolderPlus className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
 
           {/* Create dialog */}
           <CreateDialog
@@ -196,6 +204,7 @@ export function KnowledgeSidebar(): JSX.Element {
           <ScrollArea className="flex-1">
             <KnowledgeTree
               applicationId={activeTab.startsWith('app:') ? activeTab.slice(4) : undefined}
+              canEdit={canEdit}
             />
           </ScrollArea>
 

@@ -14,184 +14,18 @@
  * then "Save" to persist or "Cancel" to discard.
  */
 
-import { useEffect, useMemo } from 'react'
+import { useEffect, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { FileText, Save, Trash2, AlertTriangle } from 'lucide-react'
 import { KnowledgeBaseProvider, useKnowledgeBase } from '@/contexts/knowledge-base-context'
 import { useAuthStore } from '@/contexts/auth-context'
-import { useApplicationsWithDocs } from '@/hooks/use-documents'
-import { useEditMode } from '@/hooks/use-edit-mode'
+import { useApplicationsWithDocs, useDocument } from '@/hooks/use-documents'
+import { useKnowledgePermissions } from '@/hooks/use-knowledge-permissions'
 import { useWebSocket, WebSocketClient, MessageType } from '@/hooks/use-websocket'
 import { queryKeys } from '@/lib/query-client'
-import { EditorSkeleton } from '@/components/knowledge/knowledge-panel'
 import { KnowledgeSidebar } from '@/components/knowledge/knowledge-sidebar'
 import { KnowledgeTabBar } from '@/components/knowledge/knowledge-tab-bar'
 import { SearchBar } from '@/components/knowledge/search-bar'
-import { DocumentEditor } from '@/components/knowledge/document-editor'
-import { DocumentActionBar } from '@/components/knowledge/document-action-bar'
-import { ensureContentHeading } from '@/components/knowledge/content-utils'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from '@/components/ui/dialog'
-import { Button } from '@/components/ui/button'
-
-/**
- * EditorPanel - Inner component for the document editor area.
- * Must be inside KnowledgeBaseProvider to access selectedDocumentId.
- */
-function EditorPanel() {
-  const { selectedDocumentId } = useKnowledgeBase()
-
-  // Edit mode state machine — owns the document query
-  const editMode = useEditMode({
-    documentId: selectedDocumentId,
-    userRole: null, // Notes page doesn't have role-based access
-  })
-
-  const currentDoc = editMode.document
-  const isDocError = editMode.isDocError
-
-  // Memoize parsed content — ensure it starts with an h1 heading
-  const parsedContent = useMemo(
-    () => currentDoc
-      ? ensureContentHeading(currentDoc.content_json, currentDoc.title)
-      : undefined,
-    [currentDoc?.content_json, currentDoc?.title]
-  )
-
-  // No document selected
-  if (!selectedDocumentId) {
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground gap-3">
-        <FileText className="h-12 w-12 text-muted-foreground/30" />
-        <p className="text-sm">Select a document to start editing</p>
-      </div>
-    )
-  }
-
-  // Document not found (query error)
-  if (!currentDoc && isDocError) {
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground gap-3">
-        <FileText className="h-12 w-12 text-muted-foreground/30" />
-        <p className="text-sm">Document not found</p>
-      </div>
-    )
-  }
-
-  // Document loading skeleton
-  if (!currentDoc) {
-    return <EditorSkeleton />
-  }
-
-  return (
-    <div className="flex-1 flex flex-col min-w-0 min-h-0">
-      {/* Action bar: Edit/Save/Cancel buttons */}
-      <DocumentActionBar
-        mode={editMode.mode}
-        lockHolder={editMode.lockHolder}
-        isLockedByOther={editMode.isLockedByOther}
-        canForceTake={editMode.canForceTake}
-        isDirty={editMode.isDirty}
-        isSaving={editMode.isSaving}
-        isEntering={editMode.isEntering}
-        isExiting={editMode.isExiting}
-        onEdit={() => void editMode.enterEditMode()}
-        onSave={() => void editMode.save()}
-        onCancel={editMode.cancel}
-        onForceTake={() => void editMode.forceTake()}
-      />
-
-      {/* Document editor - keyed by documentId to force remount on switch */}
-      <DocumentEditor
-        key={selectedDocumentId}
-        content={parsedContent}
-        onChange={editMode.handleContentChange}
-        onBaselineSync={editMode.handleBaselineSync}
-        editable={editMode.mode === 'edit'}
-        placeholder="Start writing..."
-        className="flex-1"
-        updatedAt={currentDoc.updated_at}
-      />
-
-      {/* Discard changes dialog */}
-      <Dialog open={editMode.showDiscardDialog} onOpenChange={(open) => { if (!open) editMode.cancelDiscard() }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Discard changes?</DialogTitle>
-            <DialogDescription>
-              You have unsaved changes. Are you sure you want to discard them?
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={editMode.cancelDiscard}>
-              Keep editing
-            </Button>
-            <Button variant="destructive" onClick={editMode.confirmDiscard}>
-              Discard
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Inactivity dialog */}
-      <Dialog open={editMode.showInactivityDialog} onOpenChange={(open) => { if (!open) editMode.inactivityKeepEditing() }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Are you still editing?</DialogTitle>
-            <DialogDescription>
-              Your changes will be auto-saved in 60 seconds.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="destructive" onClick={editMode.inactivityDiscard}>
-              Discard
-            </Button>
-            <Button variant="outline" onClick={() => void editMode.inactivitySave()}>
-              Save
-            </Button>
-            <Button onClick={editMode.inactivityKeepEditing}>
-              Keep Editing
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Quit confirmation dialog */}
-      <Dialog open={editMode.showQuitDialog} onOpenChange={(open) => { if (!open) editMode.quitCancel() }}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-amber-500/10">
-              <AlertTriangle className="h-6 w-6 text-amber-500" />
-            </div>
-            <DialogTitle className="text-center">Unsaved changes</DialogTitle>
-            <DialogDescription className="text-center">
-              You have unsaved changes in your document. What would you like to do before closing?
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex flex-col gap-2 pt-2">
-            <Button onClick={editMode.quitSave} className="w-full gap-2">
-              <Save className="h-4 w-4" />
-              Save and close
-            </Button>
-            <Button variant="destructive" onClick={editMode.quitDiscard} className="w-full gap-2">
-              <Trash2 className="h-4 w-4" />
-              Discard and close
-            </Button>
-            <Button variant="outline" onClick={editMode.quitCancel} className="w-full">
-              Keep editing
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-    </div>
-  )
-}
+import { EditorPanel } from '@/components/knowledge/editor-panel'
 
 /**
  * NotesPageContent - Inner component that needs context access.
@@ -202,6 +36,32 @@ function NotesPageContent(): JSX.Element {
   const userId = useAuthStore((s) => s.user?.id ?? null)
   const { joinRoom, leaveRoom, status: wsStatus, subscribe } = useWebSocket()
   const queryClient = useQueryClient()
+
+  // Read selected document metadata to determine its scope (shared cache with EditorPanel)
+  const { data: selectedDoc } = useDocument(selectedDocumentId)
+
+  // Permissions — scope to the document's actual scope (project-scoped docs need project permissions)
+  const permScope = selectedDoc?.project_id
+    ? 'project' as const
+    : activeTab === 'personal'
+      ? 'personal' as const
+      : 'application' as const
+  const permScopeId = selectedDoc?.project_id
+    ? selectedDoc.project_id
+    : activeTab === 'personal'
+      ? null
+      : activeTab.slice(4)
+  const { canEdit: rawCanEdit, isOwner: rawIsOwner, isLoading: isPermLoading } =
+    useKnowledgePermissions(permScope, permScopeId)
+
+  // Hold previous stable permissions while loading to prevent Edit button flicker
+  // when switching from app-scope → project-scope on first project-doc selection.
+  const stablePermsRef = useRef({ canEdit: false, isOwner: false })
+  if (!isPermLoading) {
+    stablePermsRef.current = { canEdit: rawCanEdit, isOwner: rawIsOwner }
+  }
+  const canEdit = isPermLoading ? stablePermsRef.current.canEdit : rawCanEdit
+  const isOwner = isPermLoading ? stablePermsRef.current.isOwner : rawIsOwner
 
   // Join the appropriate WebSocket room based on active tab
   useEffect(() => {
@@ -287,7 +147,7 @@ function NotesPageContent(): JSX.Element {
       <div className="flex flex-1 min-h-0">
         <KnowledgeSidebar />
         <main className="flex-1 flex flex-col min-h-0">
-          <EditorPanel />
+          <EditorPanel keyByDocumentId canEdit={canEdit} isOwner={isOwner} />
         </main>
       </div>
     </div>

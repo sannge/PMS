@@ -21,6 +21,7 @@ from .models.project import Project
 from .models.task import Task
 from .models.task_status import StatusName, TaskStatus
 from .services.redis_service import redis_service
+from .services.search_service import check_search_index_consistency
 from .services.status_derivation_service import recalculate_aggregation_from_tasks
 
 logger = logging.getLogger(__name__)
@@ -313,12 +314,20 @@ async def startup(ctx: dict[str, Any]) -> None:
     """Initialize resources when worker starts."""
     logger.info("ARQ worker starting up...")
 
-    # Connect to Redis (for presence cleanup jobs)
+    # Connect to Redis (for presence cleanup jobs and consistency checker)
     try:
         await redis_service.connect()
         logger.info("Redis connected for ARQ worker")
     except Exception as e:
         logger.warning(f"Redis connection failed in ARQ worker: {e}")
+
+    # Initialize Meilisearch (for search index consistency checker)
+    try:
+        from .services.search_service import init_meilisearch
+        await init_meilisearch()
+        logger.info("Meilisearch initialized for ARQ worker")
+    except Exception as e:
+        logger.warning(f"Meilisearch init failed in ARQ worker: {e}")
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:
@@ -393,6 +402,7 @@ class WorkerSettings:
     functions = [
         run_archive_jobs,
         cleanup_stale_presence,
+        check_search_index_consistency,
     ]
 
     # Scheduled cron jobs (configured via .env)
@@ -402,6 +412,8 @@ class WorkerSettings:
     cron_jobs = [
         build_archive_cron(),
         cron(cleanup_stale_presence, second=get_presence_cleanup_seconds()),
+        # Search index consistency checker: every 5 minutes (at minute 0,5,10,...,55)
+        cron(check_search_index_consistency, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}, second=0),
     ]
 
     # Lifecycle hooks

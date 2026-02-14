@@ -12,6 +12,7 @@ from .comments import router as comments_router
 from .document_folders import router as document_folders_router
 from .document_tags import router as document_tags_router
 from .document_locks import router as document_locks_router
+from .document_search import router as document_search_router
 from .documents import router as documents_router
 from .files import router as files_router
 from .invitations import router as invitations_router
@@ -32,6 +33,7 @@ __all__ = [
     "document_folders_router",
     "document_tags_router",
     "document_locks_router",
+    "document_search_router",
     "documents_router",
     "files_router",
     "invitations_router",

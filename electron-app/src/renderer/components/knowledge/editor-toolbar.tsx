@@ -35,6 +35,7 @@ import {
   Unlink,
   Palette,
   Highlighter,
+  ImageIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
@@ -74,6 +75,7 @@ function ToolbarButton({
 }: ToolbarButtonProps) {
   return (
     <button
+      type="button"
       onClick={onClick}
       disabled={disabled}
       title={title}
@@ -149,6 +151,7 @@ function HeadingDropdown({ editor }: { editor: Editor }) {
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
+          type="button"
           title="Text style"
           className={cn(
             'flex items-center gap-1 px-2 py-1.5 rounded hover:bg-muted transition-colors text-sm',
@@ -173,6 +176,7 @@ function HeadingDropdown({ editor }: { editor: Editor }) {
 
           return (
             <button
+              type="button"
               key={option.label}
               onClick={() => {
                 if (option.level === null) {
@@ -227,7 +231,7 @@ function LinkPopover({ editor }: { editor: Editor }) {
     if (href === '') {
       editor.chain().focus().extendMarkRange('link').unsetLink().run()
     } else {
-      if (!/^https?:\/\//i.test(href)) {
+      if (!/^(https?:\/\/|mailto:|tel:)/i.test(href)) {
         href = 'https://' + href
       }
       editor.chain().focus().extendMarkRange('link').setLink({ href }).run()
@@ -246,6 +250,7 @@ function LinkPopover({ editor }: { editor: Editor }) {
     <Popover open={open} onOpenChange={handleOpen}>
       <PopoverTrigger asChild>
         <button
+          type="button"
           title="Insert/Edit link"
           className={cn(
             'p-1.5 rounded hover:bg-muted transition-colors',
@@ -277,6 +282,7 @@ function LinkPopover({ editor }: { editor: Editor }) {
           />
           <div className="flex items-center gap-2">
             <button
+              type="button"
               onClick={applyLink}
               className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
             >
@@ -284,6 +290,7 @@ function LinkPopover({ editor }: { editor: Editor }) {
             </button>
             {editor.isActive('link') && (
               <button
+                type="button"
                 onClick={removeLink}
                 className="flex items-center gap-1 rounded-md border border-input px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/10 transition-colors"
               >
@@ -315,6 +322,7 @@ function FontFamilyDropdown({ editor }: { editor: Editor }) {
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
+          type="button"
           title="Font family"
           className="flex items-center gap-1 px-2 py-1.5 rounded hover:bg-muted transition-colors text-xs min-w-[55px]"
         >
@@ -330,6 +338,7 @@ function FontFamilyDropdown({ editor }: { editor: Editor }) {
               (!currentFontFamily && value === DEFAULT_FONT_FAMILY)
             return (
               <button
+                type="button"
                 key={value}
                 onClick={() => {
                   editor.chain().focus().setFontFamily(value).run()
@@ -369,6 +378,7 @@ function FontSizeDropdown({ editor }: { editor: Editor }) {
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
+          type="button"
           title="Font size"
           className="flex items-center gap-1 px-2 py-1.5 rounded hover:bg-muted transition-colors text-xs min-w-[55px]"
         >
@@ -384,6 +394,7 @@ function FontSizeDropdown({ editor }: { editor: Editor }) {
               (!currentFontSize && value === '1rem')
             return (
               <button
+                type="button"
                 key={value}
                 onClick={() => {
                   editor.chain().focus().setMark('textStyle', { fontSize: value }).run()
@@ -418,6 +429,7 @@ function TextColorPicker({ editor }: { editor: Editor }) {
     <Popover>
       <PopoverTrigger asChild>
         <button
+          type="button"
           className="flex flex-col items-center p-1.5 rounded hover:bg-muted transition-colors"
           title="Text color"
         >
@@ -432,6 +444,7 @@ function TextColorPicker({ editor }: { editor: Editor }) {
         <div className="grid grid-cols-6 gap-1">
           {COLORS.map((color) => (
             <button
+              type="button"
               key={color}
               onClick={() => editor.chain().focus().setColor(color).run()}
               className="w-6 h-6 rounded border border-border hover:scale-110 transition-transform"
@@ -441,6 +454,7 @@ function TextColorPicker({ editor }: { editor: Editor }) {
           ))}
         </div>
         <button
+          type="button"
           onClick={() => editor.chain().focus().unsetColor().run()}
           className="mt-2 w-full text-xs text-center py-1 rounded hover:bg-muted text-muted-foreground transition-colors"
         >
@@ -460,6 +474,7 @@ function HighlightColorPicker({ editor }: { editor: Editor }) {
     <Popover>
       <PopoverTrigger asChild>
         <button
+          type="button"
           className={cn(
             'flex items-center p-1.5 rounded hover:bg-muted transition-colors',
             editor.isActive('highlight') && 'bg-muted text-primary'
@@ -474,6 +489,7 @@ function HighlightColorPicker({ editor }: { editor: Editor }) {
         <div className="grid grid-cols-4 gap-1">
           {HIGHLIGHT_COLORS.map((color) => (
             <button
+              type="button"
               key={color}
               onClick={() => editor.chain().focus().toggleHighlight({ color }).run()}
               className="w-6 h-6 rounded border border-border hover:scale-110 transition-transform"
@@ -483,6 +499,7 @@ function HighlightColorPicker({ editor }: { editor: Editor }) {
           ))}
         </div>
         <button
+          type="button"
           onClick={() => editor.chain().focus().unsetHighlight().run()}
           className="mt-2 w-full text-xs text-center py-1 rounded hover:bg-muted text-muted-foreground transition-colors"
         >
@@ -497,7 +514,24 @@ function HighlightColorPicker({ editor }: { editor: Editor }) {
 // EditorToolbar
 // ============================================================================
 
-export function EditorToolbar({ editor }: EditorToolbarProps) {
+export function EditorToolbar({ editor, onImageUpload }: EditorToolbarProps) {
+  const imageInputRef = useRef<HTMLInputElement>(null)
+
+  const handleImageSelect = useCallback(() => {
+    imageInputRef.current?.click()
+  }, [])
+
+  const handleImageChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file && onImageUpload) {
+      onImageUpload(file)
+    }
+    // Reset input to allow re-selecting the same file
+    if (imageInputRef.current) {
+      imageInputRef.current.value = ''
+    }
+  }, [onImageUpload])
+
   return (
     <div className="flex flex-wrap items-center gap-0.5 p-2 border-b bg-muted/30">
       {/* Undo / Redo */}
@@ -684,6 +718,25 @@ export function EditorToolbar({ editor }: EditorToolbarProps) {
 
       {/* Link Insert/Edit */}
       <LinkPopover editor={editor} />
+
+      {/* Image Upload */}
+      {onImageUpload && (
+        <>
+          <ToolbarButton
+            onClick={handleImageSelect}
+            title="Insert image"
+          >
+            <ImageIcon className="h-4 w-4" />
+          </ToolbarButton>
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/gif,image/webp"
+            onChange={handleImageChange}
+            className="hidden"
+          />
+        </>
+      )}
 
       <ToolbarSeparator />
 

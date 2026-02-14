@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useRef, useCallback } from 'react'
-import { Loader2, CheckCircle2, Archive, AlertCircle } from 'lucide-react'
+import { Loader2, CheckCircle2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { Task } from '@/hooks/use-queries'
 import { TaskCard } from './task-card'

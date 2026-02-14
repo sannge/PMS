@@ -2,7 +2,7 @@
  * Tree Skeletons
  *
  * Shared loading skeleton components for knowledge tree views.
- * Used by KnowledgeTree, FolderTree, ApplicationTree, and FolderDocuments.
+ * Used by KnowledgeTree and FolderDocuments.
  */
 
 /**

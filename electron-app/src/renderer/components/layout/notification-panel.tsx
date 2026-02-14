@@ -52,30 +52,6 @@ export interface NotificationPanelProps {
 }
 
 // ============================================================================
-// Types
-// ============================================================================
-
-type NotificationType =
-  | 'task_assigned'
-  | 'task_status_changed'
-  | 'comment_mention'
-  | 'comment_added'
-  | 'member_added'
-  | 'member_removed'
-  | 'role_changed'
-  | 'project_member_added'
-  | 'project_member_removed'
-  | 'project_role_changed'
-  | 'invitation_received'
-  | 'invitation_accepted'
-  | 'invitation_rejected'
-  | 'application_invite'
-  | 'success'
-  | 'warning'
-  | 'error'
-  | 'info'
-
-// ============================================================================
 // Helper Functions
 // ============================================================================
 

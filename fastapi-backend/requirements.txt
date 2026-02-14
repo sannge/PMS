@@ -30,6 +30,9 @@ alembic>=1.14.0
 redis[hiredis]>=5.0.0
 msgpack>=1.0.0
 
+# Full-text search
+meilisearch-python-sdk>=5.5
+
 # Background job processing
 arq>=0.26.0
 

@@ -33,18 +33,19 @@ export interface DocumentEditorProps {
    * (textAlign, indent) that our raw JSON builders don't include.
    */
   onBaselineSync?: (json: object) => void
+  /** Document ID for image upload association */
+  documentId?: string
+  /** Search terms to highlight in the editor via ProseMirror decorations */
+  searchTerms?: string[]
+  /** Which occurrence (0-based) to scroll to after highlights are applied. -1 = no scroll. */
+  scrollToOccurrence?: number
 }
 
 /** Props for the EditorToolbar component */
 export interface EditorToolbarProps {
   /** TipTap Editor instance */
   editor: Editor
+  /** Callback to upload an image file, returns the inserted image src URL */
+  onImageUpload?: (file: File) => void
 }
 
-/** A toolbar section groups related buttons with a separator */
-export type ToolbarSection = {
-  /** Unique key for the section */
-  key: string
-  /** Display label (used for accessibility) */
-  label: string
-}

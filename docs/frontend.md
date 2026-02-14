@@ -158,7 +158,7 @@ import { createQueryPersister } from './per-query-persister';
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 5 * 60 * 1000,      // 5 minutes
+      staleTime: 30 * 1000,              // 30 seconds
       gcTime: 24 * 60 * 60 * 1000,   // 24 hours (garbage collection)
       refetchOnWindowFocus: true,
       retry: 3,
@@ -266,6 +266,13 @@ export const queryKeys = {
 
   // Statuses
   statuses: (projectId: string) => ['statuses', projectId] as const,
+
+  // Knowledge Base
+  folders: (appId: string) => ['folders', appId] as const,
+  documents: (folderId: string) => ['documents', folderId] as const,
+  document: (id: string) => ['document', id] as const,
+  documentSearch: (appId: string, query: string) => ['documentSearch', appId, query] as const,
+  activeLocks: (appId: string) => ['activeLocks', appId] as const,
 };
 ```
 
@@ -333,6 +340,16 @@ export const useNotesStore = create<NotesState>((set) => ({
   })),
 }));
 ```
+
+### Knowledge Base Context
+
+The knowledge base uses a dedicated React context (`KnowledgeBaseContext`) that manages:
+- Active document selection and tab state
+- Document tree expansion state
+- Folder/document CRUD operations
+- Integration with TipTap editor and Yjs collaboration
+
+See `contexts/knowledge-base-context.tsx` for the full implementation.
 
 ### Layer 3: React Context (Cross-Cutting Concerns)
 
@@ -843,6 +860,26 @@ export function usePresence(roomId: string) {
 
   return Array.from(users.values());
 }
+```
+
+### useDocumentLock Hook
+
+```typescript
+// hooks/use-document-lock.ts
+// Manages document locking for edit coordination
+// - Acquires/releases locks when entering/exiting edit mode
+// - WebSocket events push lock status changes in real-time
+// - Prevents conflicts when multiple users try to edit
+```
+
+### useDocumentSearch Hook
+
+```typescript
+// hooks/use-document-search.ts
+// Full-text search across knowledge base documents
+// - Powered by Meilisearch backend
+// - Debounced search input
+// - Highlighted result snippets
 ```
 
 ## IndexedDB Persistence

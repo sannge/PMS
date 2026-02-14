@@ -64,6 +64,7 @@ interface MemberEventData {
 interface ProjectMemberEventData {
   project_id: string
   user_id: string
+  application_id?: string
   [key: string]: unknown
 }
 
@@ -411,6 +412,12 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
     unsubscribers.push(
       wsClient.on<MemberEventData>(MessageType.MEMBER_ADDED, (data) => {
         queryClient.invalidateQueries({ queryKey: queryKeys.appMembers(data.application_id) })
+
+        // New member needs scopesSummary refreshed to show the new app tab
+        const isCurrentUser = data.user_id === currentUserRef.current?.id
+        if (isCurrentUser) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.scopesSummary() })
+        }
       })
     )
 
@@ -449,10 +456,16 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
 
           // Call the callback so the app can redirect if needed
           optionsRef.current.onCurrentUserRemoved?.(data.application_id)
+
+          // Clean up knowledge permission caches (user no longer has access)
+          queryClient.invalidateQueries({ queryKey: queryKeys.scopesSummary() })
+          queryClient.removeQueries({ queryKey: ['projects-with-content', data.application_id] })
+          queryClient.removeQueries({ queryKey: ['knowledge-permissions'] })
         } else {
           // For other users: just invalidate to update member lists
           queryClient.invalidateQueries({ queryKey: queryKeys.applications })
           queryClient.invalidateQueries({ queryKey: queryKeys.application(data.application_id) })
+          // No knowledge cache invalidation needed — other users' permissions unchanged
         }
       })
     )
@@ -462,6 +475,14 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
         queryClient.invalidateQueries({ queryKey: queryKeys.appMembers(data.application_id) })
         // Also invalidate application to refresh user_role for permission checks
         queryClient.invalidateQueries({ queryKey: queryKeys.application(data.application_id) })
+
+        // Invalidate knowledge permission caches only for the affected user
+        const isCurrentUser = data.user_id === currentUserRef.current?.id
+        if (isCurrentUser) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.scopesSummary() })
+          queryClient.invalidateQueries({ queryKey: ['projects-with-content', data.application_id] })
+          queryClient.invalidateQueries({ queryKey: ['knowledge-permissions'] })
+        }
       })
     )
 
@@ -472,6 +493,17 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
     unsubscribers.push(
       wsClient.on<ProjectMemberEventData>(MessageType.PROJECT_MEMBER_ADDED, (data) => {
         queryClient.invalidateQueries({ queryKey: queryKeys.projectMembers(data.project_id) })
+
+        const isCurrentUser = data.user_id === currentUserRef.current?.id
+        if (isCurrentUser) {
+          // Scope to specific app if available, otherwise invalidate all
+          if (data.application_id) {
+            queryClient.invalidateQueries({ queryKey: ['projects-with-content', data.application_id] })
+          } else {
+            queryClient.invalidateQueries({ queryKey: ['projects-with-content'] })
+          }
+          queryClient.invalidateQueries({ queryKey: queryKeys.knowledgePermissions('project', data.project_id) })
+        }
       })
     )
 
@@ -480,6 +512,16 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
         queryClient.invalidateQueries({ queryKey: queryKeys.projectMembers(data.project_id) })
         // Also invalidate tasks since permissions may have changed
         queryClient.invalidateQueries({ queryKey: queryKeys.tasks(data.project_id) })
+
+        const isCurrentUser = data.user_id === currentUserRef.current?.id
+        if (isCurrentUser) {
+          if (data.application_id) {
+            queryClient.invalidateQueries({ queryKey: ['projects-with-content', data.application_id] })
+          } else {
+            queryClient.invalidateQueries({ queryKey: ['projects-with-content'] })
+          }
+          queryClient.invalidateQueries({ queryKey: queryKeys.knowledgePermissions('project', data.project_id) })
+        }
       })
     )
 
@@ -488,6 +530,18 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
         queryClient.invalidateQueries({ queryKey: queryKeys.projectMembers(data.project_id) })
         // Also invalidate tasks since permissions may have changed
         queryClient.invalidateQueries({ queryKey: queryKeys.tasks(data.project_id) })
+
+        // Invalidate knowledge permission caches for the affected user
+        const isCurrentUser = data.user_id === currentUserRef.current?.id
+        if (isCurrentUser) {
+          // projects-with-content returns can_edit per project — stale after role change
+          if (data.application_id) {
+            queryClient.invalidateQueries({ queryKey: ['projects-with-content', data.application_id] })
+          } else {
+            queryClient.invalidateQueries({ queryKey: ['projects-with-content'] })
+          }
+          queryClient.invalidateQueries({ queryKey: queryKeys.knowledgePermissions('project', data.project_id) })
+        }
       })
     )
 
@@ -575,6 +629,7 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
         queryClient.invalidateQueries({ queryKey: queryKeys.documents(data.scope, data.scope_id) })
         queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders(data.scope, data.scope_id) })
         queryClient.invalidateQueries({ queryKey: queryKeys.scopesSummary() })
+        queryClient.invalidateQueries({ queryKey: ['search'] })
         if (data.scope === 'project') {
           queryClient.invalidateQueries({ queryKey: ['projects-with-content'] })
           // Also invalidate application queries for users viewing app tree
@@ -593,6 +648,7 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
 
         queryClient.invalidateQueries({ queryKey: queryKeys.document(data.document_id) })
         queryClient.invalidateQueries({ queryKey: queryKeys.documents(data.scope, data.scope_id) })
+        queryClient.invalidateQueries({ queryKey: ['search'] })
         if (data.folder_id !== undefined) {
           queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders(data.scope, data.scope_id) })
         }
@@ -612,6 +668,7 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
         if (data.actor_id && data.actor_id === currentUserRef.current?.id) return
 
         queryClient.removeQueries({ queryKey: queryKeys.document(data.document_id) })
+        queryClient.invalidateQueries({ queryKey: ['search'] })
         // Directly remove from list caches to avoid race with DB commit
         queryClient.setQueriesData<DocumentListResponse>(
           { queryKey: queryKeys.documents(data.scope, data.scope_id), exact: false },

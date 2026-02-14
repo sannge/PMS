@@ -738,4 +738,12 @@ async def remove_member(
     # Invalidate room auth cache so removed user can no longer join rooms
     invalidate_user_cache(user_id)
 
+    # Invalidate search scope cache so removed user can no longer see docs in search
+    try:
+        from ..services.redis_service import redis_service
+        if redis_service.is_connected:
+            await redis_service.delete(f"search:scope:{user_id}")
+    except Exception:
+        pass  # Best-effort; scope cache has 30s TTL anyway
+
     return None

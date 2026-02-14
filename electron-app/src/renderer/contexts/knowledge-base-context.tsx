@@ -40,6 +40,9 @@ interface KnowledgeBaseUIState {
   selectedFolderId: string | null
   searchQuery: string
   activeTagIds: string[]
+  searchHighlightTerms: string[]
+  /** Which occurrence to scroll to after highlights are applied (0-based). -1 = no scroll. */
+  searchScrollToOccurrence: number
 }
 
 /** Navigation guard callback. Returns true to allow navigation, false to block.
@@ -61,6 +64,7 @@ interface KnowledgeBaseContextValue extends KnowledgeBaseUIState {
   resetSelection: () => void
   registerNavigationGuard: (guard: NavigationGuard) => void
   unregisterNavigationGuard: () => void
+  navigateToDocument: (targetTab: string, documentId: string, searchTerms?: string[], folderId?: string, scrollToOccurrence?: number) => void
 }
 
 // ============================================================================
@@ -190,6 +194,7 @@ type KnowledgeBaseAction =
   | { type: 'TOGGLE_TAG'; tagId: string }
   | { type: 'CLEAR_TAGS' }
   | { type: 'RESET_SELECTION' }
+  | { type: 'NAVIGATE_TO_DOCUMENT'; payload: { targetTab: string; documentId: string; searchTerms: string[]; folderId?: string; scrollToOccurrence?: number } }
 
 function knowledgeBaseReducer(
   state: KnowledgeBaseUIState,
@@ -204,6 +209,8 @@ function knowledgeBaseReducer(
         selectedDocumentId: null,
         selectedFolderId: null,
         activeTagIds: [],
+        searchHighlightTerms: [],
+        searchScrollToOccurrence: -1,
       }
 
     case 'SET_ACTIVE_TAB': {
@@ -216,6 +223,8 @@ function knowledgeBaseReducer(
         selectedDocumentId: null,
         selectedFolderId: null,
         activeTagIds: [],
+        searchHighlightTerms: [],
+        searchScrollToOccurrence: -1,
       }
     }
 
@@ -254,13 +263,17 @@ function knowledgeBaseReducer(
     }
 
     case 'SELECT_DOCUMENT':
-      return { ...state, selectedDocumentId: action.documentId }
+      return { ...state, selectedDocumentId: action.documentId, searchHighlightTerms: [], searchScrollToOccurrence: -1 }
 
     case 'SELECT_FOLDER':
       return { ...state, selectedFolderId: action.folderId }
 
     case 'SET_SEARCH':
-      return { ...state, searchQuery: action.query }
+      return {
+        ...state,
+        searchQuery: action.query,
+        searchHighlightTerms: action.query ? state.searchHighlightTerms : [],
+      }
 
     case 'TOGGLE_TAG': {
       const idx = state.activeTagIds.indexOf(action.tagId)
@@ -279,7 +292,27 @@ function knowledgeBaseReducer(
         ...state,
         selectedDocumentId: null,
         selectedFolderId: null,
+        searchHighlightTerms: [],
+        searchScrollToOccurrence: -1,
       }
+
+    case 'NAVIGATE_TO_DOCUMENT': {
+      const { targetTab, documentId, searchTerms, folderId, scrollToOccurrence } = action.payload
+      const expandedFolderIds = folderId
+        ? new Set([...state.expandedFolderIds, folderId])
+        : state.expandedFolderIds
+      return {
+        ...state,
+        activeTab: targetTab,
+        scope: targetTab === 'personal' ? 'personal' : 'application',
+        scopeId: targetTab.startsWith('app:') ? targetTab.slice(4) : null,
+        selectedDocumentId: documentId,
+        selectedFolderId: null,
+        searchHighlightTerms: searchTerms,
+        searchScrollToOccurrence: scrollToOccurrence ?? 0,
+        expandedFolderIds,
+      }
+    }
 
     default:
       return state
@@ -329,6 +362,8 @@ export function KnowledgeBaseProvider({
       selectedFolderId: null,
       searchQuery: '',
       activeTagIds: [],
+      searchHighlightTerms: [],
+      searchScrollToOccurrence: -1,
     }
   })
 
@@ -412,6 +447,13 @@ export function KnowledgeBaseProvider({
     dispatch({ type: 'RESET_SELECTION' })
   }, [])
 
+  const navigateToDocument = useCallback((targetTab: string, documentId: string, searchTerms?: string[], folderId?: string, scrollToOccurrence?: number) => {
+    const guard = navigationGuardRef.current
+    const payload = { targetTab, documentId, searchTerms: searchTerms ?? [], folderId, scrollToOccurrence }
+    if (guard && !guard(documentId, () => dispatch({ type: 'NAVIGATE_TO_DOCUMENT', payload }))) return
+    dispatch({ type: 'NAVIGATE_TO_DOCUMENT', payload })
+  }, [])
+
   const registerNavigationGuard = useCallback((guard: NavigationGuard) => {
     navigationGuardRef.current = guard
   }, [])
@@ -436,6 +478,7 @@ export function KnowledgeBaseProvider({
     resetSelection,
     registerNavigationGuard,
     unregisterNavigationGuard,
+    navigateToDocument,
   }
 
   return (

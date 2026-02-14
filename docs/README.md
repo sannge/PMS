@@ -18,9 +18,6 @@ Welcome to PM Desktop, a project management application with Jira-like features 
 | [Architecture Overview](./architecture.md) | System design and component interactions |
 | [Backend Guide](./backend.md) | FastAPI, SQLAlchemy, services, and APIs |
 | [Frontend Guide](./frontend.md) | React, Electron, state management, and components |
-| [Real-Time Communication](./websocket.md) | WebSocket implementation and patterns |
-| [Database Guide](./database.md) | Models, migrations, and query patterns |
-| [Deployment Guide](./deployment.md) | Production deployment and configuration |
 
 ## Technology Stack
 
@@ -29,7 +26,7 @@ Welcome to PM Desktop, a project management application with Jira-like features 
 - **FastAPI** - Async web framework with automatic OpenAPI docs
 - **SQLAlchemy 2.0** - ORM with async support
 - **Alembic** - Database migrations
-- **Microsoft SQL Server** - Primary database (via pyodbc)
+- **PostgreSQL** - Primary database
 - **Redis 7+** - Caching and pub/sub
 - **MinIO** - S3-compatible file storage
 - **Meilisearch** - Full-text search engine

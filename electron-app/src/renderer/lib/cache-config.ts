@@ -61,4 +61,7 @@ export const NON_PERSISTENT_KEYS = [
   'downloadUrls',
   'search',
   'presence',
+  'activeLocks',
+  'documentLock',
+  'knowledge-permissions',
 ] as const

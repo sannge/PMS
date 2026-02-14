@@ -492,7 +492,7 @@ export function CommentInput({
               file_name: result.file_name || pa.file.name,
               file_type: result.file_type || pa.file.type || null,
               file_size: result.file_size ?? pa.file.size ?? null,
-            }
+            } as UploadedAttachment
           }
           return null
         })

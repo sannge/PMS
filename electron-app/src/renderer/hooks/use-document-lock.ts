@@ -21,7 +21,7 @@ import React, { useCallback, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/contexts/auth-context";
 import { useWebSocket } from "./use-websocket";
-import { MessageType } from "@/lib/websocket";
+import { MessageType, WebSocketClient } from "@/lib/websocket";
 import { queryKeys } from "@/lib/query-client";
 import { isTempId } from "./use-documents";
 
@@ -501,9 +501,9 @@ export interface ActiveLockInfo {
  * Replaces per-document useDocumentLockStatus calls in tree views.
  * Returns a Map<documentId, ActiveLockInfo> for O(1) lookups.
  *
- * - staleTime: 5 minutes (WS events keep it fresh while mounted)
- * - refetchOnMount: 'always' (catch missed events after screen navigation)
+ * - staleTime: 0 (locks are transient; always refetch on mount)
  * - refetchOnWindowFocus: false (WS handles this while component is mounted)
+ * - Joins scope WS room so lock broadcast events are received
  *
  * Also subscribes to DOCUMENT_LOCKED/UNLOCKED/FORCE_TAKEN WS events to
  * update the cache in-place without refetching.
@@ -519,7 +519,7 @@ export function useActiveLocks(
   const token = useAuthStore((s) => s.token);
   const userId = useAuthStore((s) => s.user?.id ?? null);
   const queryClient = useQueryClient();
-  const { subscribe, status: wsStatus } = useWebSocket();
+  const { subscribe, joinRoom, leaveRoom, status: wsStatus } = useWebSocket();
 
   // For personal scope, use userId as scope_id (same as useDocuments pattern)
   const effectiveScopeId =
@@ -556,11 +556,28 @@ export function useActiveLocks(
       return response.data;
     },
     enabled: !!token && !!scope && (scope === "personal" || !!scopeId),
-    staleTime: 5 * 60 * 1000, // 5 minutes
-    refetchOnMount: "always", // silent background refetch on remount
+    staleTime: 0, // Always stale — locks are transient, refetch on every mount
     refetchOnWindowFocus: false, // WS keeps it fresh while mounted
-    gcTime: 10 * 60 * 1000,
+    gcTime: 5 * 60 * 1000,
   });
+
+  // Join the appropriate WS room so lock broadcast events are received.
+  // The backend broadcasts lock events to scope rooms (project/application/user).
+  useEffect(() => {
+    if (!wsStatus.isConnected || !effectiveScopeId) return;
+
+    let roomId: string;
+    if (scope === "personal") {
+      roomId = WebSocketClient.getUserRoom(effectiveScopeId);
+    } else if (scope === "project") {
+      roomId = WebSocketClient.getProjectRoom(effectiveScopeId);
+    } else {
+      roomId = WebSocketClient.getApplicationRoom(effectiveScopeId);
+    }
+
+    joinRoom(roomId);
+    return () => leaveRoom(roomId);
+  }, [scope, effectiveScopeId, wsStatus.isConnected, joinRoom, leaveRoom]);
 
   // Invalidate on WS reconnect to catch events missed during disconnect.
   // Track the previous connected state with a ref to detect false→true transitions.

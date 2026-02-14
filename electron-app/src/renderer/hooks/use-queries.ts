@@ -18,7 +18,7 @@ import {
   InfiniteData,
 } from '@tanstack/react-query'
 import { useAuthStore } from '@/contexts/auth-context'
-import { queryKeys, queryClient } from '@/lib/query-client'
+import { queryKeys } from '@/lib/query-client'
 
 // ============================================================================
 // Types

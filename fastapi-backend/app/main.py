@@ -27,7 +27,7 @@ print("=" * 60 + "\n", flush=True)
 from contextlib import asynccontextmanager
 
 from .database import warmup_connection_pool
-from .routers import application_members_router, applications_router, auth_router, checklists_router, comments_router, document_folders_router, document_locks_router, document_tags_router, documents_router, files_router, invitations_router, notifications_router, project_assignments_router, project_members_router, projects_router, tasks_router, users_router
+from .routers import application_members_router, applications_router, auth_router, checklists_router, comments_router, document_folders_router, document_locks_router, document_search_router, document_tags_router, documents_router, files_router, invitations_router, notifications_router, project_assignments_router, project_members_router, projects_router, tasks_router, users_router
 from .websocket import manager, route_incoming_message, check_room_access
 from .services.auth_service import decode_access_token
 from .services.redis_service import redis_service
@@ -64,6 +64,14 @@ async def lifespan(app: FastAPI):
 
     # Note: Background jobs (archive, presence cleanup) are handled by ARQ worker
     # Run separately with: arq app.worker.WorkerSettings
+
+    # Initialize Meilisearch (non-critical -- app starts even if Meilisearch is down)
+    try:
+        from .services.search_service import init_meilisearch
+        await init_meilisearch()
+        logger.info("Meilisearch initialized")
+    except Exception as e:
+        logger.warning(f"Meilisearch initialization failed (search degraded): {e}")
 
     yield
 
@@ -139,6 +147,7 @@ app.include_router(users_router)
 app.include_router(comments_router)
 app.include_router(checklists_router)
 app.include_router(document_locks_router, tags=["document-locks"])
+app.include_router(document_search_router, tags=["document-search"])
 app.include_router(documents_router, prefix="/api", tags=["documents"])
 app.include_router(document_tags_router, prefix="/api", tags=["document-tags"])
 app.include_router(document_folders_router, prefix="/api", tags=["document-folders"])

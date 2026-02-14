@@ -79,15 +79,24 @@ async def health_check():
 Environment configuration using Pydantic Settings:
 
 ```python
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
-    # Database
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    # Database (PostgreSQL)
     db_server: str
     db_name: str
     db_user: str
     db_password: str
-    db_driver: str = "ODBC Driver 18 for SQL Server"
+    db_port: int = 5432
+    db_pool_size: int = 50
+    db_max_overflow: int = 100
 
     # JWT
     jwt_secret: str
@@ -96,20 +105,32 @@ class Settings(BaseSettings):
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
+    redis_max_connections: int = 50
+    redis_socket_timeout: float = 5.0
+    redis_retry_on_timeout: bool = True
+    redis_required: bool = False
 
     # MinIO
     minio_endpoint: str
     minio_access_key: str
     minio_secret_key: str
-    minio_bucket: str = "pm-desktop-files"
     minio_secure: bool = False
+
+    # Meilisearch
+    meilisearch_url: str = "http://localhost:7700"
+    meilisearch_api_key: str = ""
 
     # WebSocket
     ws_max_connections_per_user: int = 50
     ws_max_message_size: int = 65536
 
-    class Config:
-        env_file = ".env"
+    @property
+    def database_url(self) -> str:
+        from urllib.parse import quote_plus
+        return (
+            f"postgresql+asyncpg://{self.db_user}:{quote_plus(self.db_password)}"
+            f"@{self.db_server}:{self.db_port}/{self.db_name}"
+        )
 
 settings = Settings()
 ```
@@ -118,43 +139,38 @@ settings = Settings()
 
 ### database.py
 
-SQLAlchemy async configuration with connection pooling:
+SQLAlchemy async configuration with PostgreSQL connection pooling:
 
 ```python
-from sqlalchemy import create_engine
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-# SQL Server connection string
-DATABASE_URL = (
-    f"mssql+pyodbc://{settings.db_user}:{settings.db_password}"
-    f"@{settings.db_server}/{settings.db_name}"
-    f"?driver={settings.db_driver}"
+from app.config import settings
+
+engine = create_async_engine(
+    settings.database_url,
+    pool_size=settings.db_pool_size,      # 50 base connections
+    max_overflow=settings.db_max_overflow,  # 100 additional when needed
+    pool_timeout=60,
+    pool_pre_ping=True,
+    pool_recycle=3600,
 )
 
-engine = create_engine(
-    DATABASE_URL,
-    pool_size=20,           # Base pool connections
-    max_overflow=30,        # Additional connections when needed
-    pool_timeout=60,        # Wait timeout for connection
-    pool_pre_ping=True,     # Verify connection before use
-    pool_recycle=3600,      # Recycle connections after 1 hour
-)
-
-SessionLocal = sessionmaker(
-    autocommit=False,
-    autoflush=False,
-    bind=engine
+AsyncSessionLocal = sessionmaker(
+    engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
 )
 
 Base = declarative_base()
 
 # Dependency for database session
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+async def get_db():
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+        finally:
+            await session.close()
 ```
 
 ## Models Layer
@@ -167,7 +183,7 @@ Models define the database schema using SQLAlchemy ORM.
 # app/models/task.py
 from sqlalchemy import Column, String, Integer, ForeignKey, DateTime, Text
 from sqlalchemy.orm import relationship
-from sqlalchemy.dialects.mssql import UNIQUEIDENTIFIER
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from datetime import datetime
 import uuid
 
@@ -176,7 +192,7 @@ from app.database import Base
 class Task(Base):
     __tablename__ = "tasks"
 
-    id = Column(UNIQUEIDENTIFIER, primary_key=True, default=uuid.uuid4)
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     title = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     task_type = Column(String(50), default="story")  # story, bug, epic, subtask
@@ -188,11 +204,11 @@ class Task(Base):
     checklist_done = Column(Integer, default=0)
 
     # Foreign keys
-    project_id = Column(UNIQUEIDENTIFIER, ForeignKey("projects.id"), nullable=False)
-    task_status_id = Column(UNIQUEIDENTIFIER, ForeignKey("task_statuses.id"), nullable=True)
-    assignee_id = Column(UNIQUEIDENTIFIER, ForeignKey("users.id"), nullable=True)
-    reporter_id = Column(UNIQUEIDENTIFIER, ForeignKey("users.id"), nullable=False)
-    parent_id = Column(UNIQUEIDENTIFIER, ForeignKey("tasks.id"), nullable=True)
+    project_id = Column(PG_UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    task_status_id = Column(PG_UUID(as_uuid=True), ForeignKey("task_statuses.id"), nullable=True)
+    assignee_id = Column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    reporter_id = Column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    parent_id = Column(PG_UUID(as_uuid=True), ForeignKey("tasks.id"), nullable=True)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -228,6 +244,9 @@ class Task(Base):
 | Attachment | `models/attachment.py` | File attachments |
 | Notification | `models/notification.py` | User notifications |
 | Invitation | `models/invitation.py` | App invitations |
+| DocumentFolder | `models/document_folder.py` | Knowledge base folder hierarchy |
+| Document | `models/document.py` | Knowledge base documents |
+| DocumentSnapshot | `models/document_snapshot.py` | Document version snapshots |
 
 ## Schemas Layer
 
@@ -304,7 +323,9 @@ Routers define API endpoints and route handling.
 ```python
 # app/routers/tasks.py
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
 from typing import List
 from uuid import UUID
 
@@ -320,28 +341,30 @@ router = APIRouter()
 @router.get("/{project_id}", response_model=List[TaskResponse])
 async def get_tasks(
     project_id: UUID,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Get all tasks for a project."""
     # Check user has access to project
     await check_project_access(db, project_id, current_user.id)
 
-    tasks = db.query(Task)\
-        .filter(Task.project_id == project_id)\
+    result = await db.execute(
+        select(Task)
+        .filter(Task.project_id == project_id)
         .options(
             selectinload(Task.assignee),
             selectinload(Task.task_status)
-        )\
-        .order_by(Task.task_rank)\
-        .all()
+        )
+        .order_by(Task.task_rank)
+    )
+    tasks = result.scalars().all()
 
     return tasks
 
 @router.post("/", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
 async def create_task(
     task_data: TaskCreate,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Create a new task."""
@@ -354,8 +377,8 @@ async def create_task(
         reporter_id=current_user.id
     )
     db.add(task)
-    db.commit()
-    db.refresh(task)
+    await db.commit()
+    await db.refresh(task)
 
     # Broadcast via WebSocket
     await handle_task_created(task)
@@ -366,11 +389,12 @@ async def create_task(
 async def update_task(
     task_id: UUID,
     task_data: TaskUpdate,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Update an existing task."""
-    task = db.query(Task).filter(Task.id == task_id).first()
+    result = await db.execute(select(Task).filter(Task.id == task_id))
+    task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
@@ -381,8 +405,8 @@ async def update_task(
     for field, value in task_data.dict(exclude_unset=True).items():
         setattr(task, field, value)
 
-    db.commit()
-    db.refresh(task)
+    await db.commit()
+    await db.refresh(task)
 
     # Broadcast via WebSocket
     await handle_task_updated(task)
@@ -392,11 +416,12 @@ async def update_task(
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_task(
     task_id: UUID,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Delete a task."""
-    task = db.query(Task).filter(Task.id == task_id).first()
+    result = await db.execute(select(Task).filter(Task.id == task_id))
+    task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
@@ -404,8 +429,8 @@ async def delete_task(
     await check_project_access(db, task.project_id, current_user.id)
 
     project_id = task.project_id
-    db.delete(task)
-    db.commit()
+    await db.delete(task)
+    await db.commit()
 
     # Broadcast via WebSocket
     await handle_task_deleted(task_id, project_id)
@@ -428,6 +453,8 @@ async def delete_task(
 | `invitations.py` | `/invitations` | App invitations |
 | `users.py` | `/users` | User lookup |
 | `notes.py` | `/notes` | Knowledge base notes |
+| `documents.py` | `/documents` | Knowledge base document CRUD |
+| `document_search.py` | `/documents/search` | Full-text search via Meilisearch |
 
 ## Services Layer
 
@@ -479,13 +506,14 @@ def decode_token(token: str) -> dict:
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ) -> User:
     """Dependency to get the current authenticated user."""
     payload = decode_token(token)
     user_id = payload.get("sub")
 
-    user = db.query(User).filter(User.id == user_id).first()
+    result = await db.execute(select(User).filter(User.id == user_id))
+    user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
 
@@ -498,24 +526,27 @@ async def get_current_user(
 # app/services/permission_service.py
 from uuid import UUID
 from fastapi import HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
 
 from app.models.application_member import ApplicationMember
 from app.models.project_member import ProjectMember
 
 async def check_app_member(
-    db: Session,
+    db: AsyncSession,
     application_id: UUID,
     user_id: UUID,
     required_role: str = None
 ) -> ApplicationMember:
     """Check if user is a member of the application."""
-    member = db.query(ApplicationMember)\
-        .filter(
+    result = await db.execute(
+        select(ApplicationMember).filter(
             ApplicationMember.application_id == application_id,
             ApplicationMember.user_id == user_id
-        )\
-        .first()
+        )
+    )
+    member = result.scalar_one_or_none()
 
     if not member:
         raise HTTPException(
@@ -534,15 +565,17 @@ async def check_app_member(
     return member
 
 async def check_project_access(
-    db: Session,
+    db: AsyncSession,
     project_id: UUID,
     user_id: UUID
 ) -> bool:
     """Check if user has access to a project."""
-    project = db.query(Project)\
-        .options(selectinload(Project.application))\
-        .filter(Project.id == project_id)\
-        .first()
+    result = await db.execute(
+        select(Project)
+        .options(selectinload(Project.application))
+        .filter(Project.id == project_id)
+    )
+    project = result.scalar_one_or_none()
 
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -558,27 +591,28 @@ async def check_project_access(
 ```python
 # app/services/status_derivation_service.py
 from uuid import UUID
-from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy import func, delete
 
 from app.models.task import Task
 from app.models.project_task_status_agg import ProjectTaskStatusAgg
 
-async def update_status_aggregation(db: Session, project_id: UUID):
+async def update_status_aggregation(db: AsyncSession, project_id: UUID):
     """Recalculate task status counts for a project."""
     # Clear existing aggregation
-    db.query(ProjectTaskStatusAgg)\
-        .filter(ProjectTaskStatusAgg.project_id == project_id)\
-        .delete()
+    await db.execute(
+        delete(ProjectTaskStatusAgg)
+        .where(ProjectTaskStatusAgg.project_id == project_id)
+    )
 
     # Count tasks per status
-    counts = db.query(
-        Task.task_status_id,
-        func.count(Task.id).label("count")
-    )\
-        .filter(Task.project_id == project_id)\
-        .group_by(Task.task_status_id)\
-        .all()
+    result = await db.execute(
+        select(Task.task_status_id, func.count(Task.id).label("count"))
+        .filter(Task.project_id == project_id)
+        .group_by(Task.task_status_id)
+    )
+    counts = result.all()
 
     # Insert new aggregations
     for status_id, count in counts:
@@ -589,11 +623,12 @@ async def update_status_aggregation(db: Session, project_id: UUID):
         )
         db.add(agg)
 
-    db.commit()
+    await db.commit()
 
-async def derive_project_status(db: Session, project_id: UUID) -> str:
+async def derive_project_status(db: AsyncSession, project_id: UUID) -> str:
     """Derive overall project status from task distribution."""
-    project = db.query(Project).filter(Project.id == project_id).first()
+    result = await db.execute(select(Project).filter(Project.id == project_id))
+    project = result.scalar_one_or_none()
 
     # Check for manual override
     if project.override_status_id and project.override_expires_at:
@@ -672,32 +707,35 @@ tests/
 # tests/conftest.py
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
 from app.main import app
+from app.config import settings
 from app.database import Base, get_db
 
-# Test database
-TEST_DATABASE_URL = "sqlite:///./test.db"
-engine = create_engine(TEST_DATABASE_URL)
-TestingSessionLocal = sessionmaker(bind=engine)
+# Test database (PostgreSQL)
+TEST_DATABASE_URL = settings.test_database_url
+engine = create_async_engine(TEST_DATABASE_URL)
+TestingSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 @pytest.fixture(scope="function")
-def db():
+async def db():
     """Create a fresh database for each test."""
-    Base.metadata.create_all(bind=engine)
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-        Base.metadata.drop_all(bind=engine)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    async with TestingSessionLocal() as session:
+        try:
+            yield session
+        finally:
+            await session.close()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
 
 @pytest.fixture(scope="function")
 def client(db):
     """Create a test client with database override."""
-    def override_get_db():
+    async def override_get_db():
         yield db
 
     app.dependency_overrides[get_db] = override_get_db
@@ -706,7 +744,7 @@ def client(db):
     app.dependency_overrides.clear()
 
 @pytest.fixture
-def test_user(db):
+async def test_user(db):
     """Create a test user."""
     user = User(
         email="test@example.com",
@@ -714,7 +752,7 @@ def test_user(db):
         display_name="Test User"
     )
     db.add(user)
-    db.commit()
+    await db.commit()
     return user
 
 @pytest.fixture
@@ -792,7 +830,7 @@ pytest tests/test_tasks.py::test_create_task -v
 @router.get("/tasks/{id}")
 async def get_task(
     task_id: UUID,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     pass
@@ -800,7 +838,7 @@ async def get_task(
 # Bad: Creating dependencies inside function
 @router.get("/tasks/{id}")
 async def get_task(task_id: UUID):
-    db = SessionLocal()  # Don't do this
+    db = AsyncSessionLocal()  # Don't do this
     pass
 ```
 
@@ -808,16 +846,19 @@ async def get_task(task_id: UUID):
 
 ```python
 # Good: Load related objects in one query
-tasks = db.query(Task)\
+result = await db.execute(
+    select(Task)
     .options(
         selectinload(Task.assignee),
         selectinload(Task.comments)
-    )\
-    .filter(Task.project_id == project_id)\
-    .all()
+    )
+    .filter(Task.project_id == project_id)
+)
+tasks = result.scalars().all()
 
 # Bad: N+1 query problem
-tasks = db.query(Task).filter(Task.project_id == project_id).all()
+result = await db.execute(select(Task).filter(Task.project_id == project_id))
+tasks = result.scalars().all()
 for task in tasks:
     print(task.assignee.name)  # Extra query for each task
 ```
@@ -860,8 +901,8 @@ try:
     notification = Notification(...)
     db.add(notification)
 
-    db.commit()
+    await db.commit()
 except Exception:
-    db.rollback()
+    await db.rollback()
     raise
 ```

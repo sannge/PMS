@@ -253,7 +253,7 @@ Maximize your productivity with PM Desktop using these power-user features, keyb
 
 - Tasks between columns
 - Notes to reorganize hierarchy
-- Files to upload (coming soon)
+- Files to upload
 
 ### Real-Time Everything
 
