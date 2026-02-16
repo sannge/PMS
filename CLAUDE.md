@@ -9,13 +9,12 @@ PM Desktop is a project management application with Jira-like features and OneNo
 ## Active Technologies
 
 - Python 3.12 + FastAPI, SQLAlchemy, Pydantic, Alembic
-- TypeScript 5.5 + React 18, Electron 30, Zustand, Radix UI, TailwindCSS, TipTap
+- TypeScript 5.5 + React 18, Electron 30, Radix UI, TailwindCSS, TipTap
 - Postgres SQL
 - Redis 7+ (WebSocket pub/sub and caching)
 - @dnd-kit (drag-and-drop)
-- pycrdt (Python CRDT for Yjs compatibility)
 - Meilisearch (full-text search engine)
-- @tiptap/extension-collaboration + y-websocket (real-time collaborative editing)
+- arq (background job scheduler)
 
 ## Project Structure
 
@@ -35,7 +34,7 @@ electron-app/
 │   └── renderer/
 │       ├── components/  # React components
 │       ├── pages/       # Page components
-│       ├── stores/      # Zustand stores
+│       ├── contexts/    # React contexts (auth, theme, knowledge base)
 │       └── hooks/       # Custom hooks
 └── tests/               # E2E tests
 ```
@@ -70,7 +69,7 @@ npm run lint
 
 - Strict mode enabled
 - Radix UI + TailwindCSS for components (shadcn/ui pattern)
-- Zustand for state management
+- React Context for client state management (auth, theme, knowledge base UI)
 - TipTap for rich text editing
 - State-based routing (NOT react-router) - navigation via callbacks and state in DashboardPage
 - ESLint with zero warnings policy
@@ -79,13 +78,14 @@ npm run lint
 
 ### Scope
 
-Real-time collaborative knowledge system with:
+Knowledge base system with:
 
-- Google Docs-like collaborative rich-text editing
-- Hierarchical folder/document structure for Applications, Projects, Tasks
-- Real-time cursor sharing and co-editing using Yjs CRDT
+- Rich-text editing with TipTap and document locking (one editor at a time)
+- Hierarchical folder/document structure for Applications, Projects, and Personal scope
 - Full-text search via Meilisearch
 - Unified "Notes" screen showing all knowledge organized by Application → Projects
+- Document tags for organization
+- Soft delete with trash and restore
 - Role-based permissions (Owner/Editor can edit, Viewers read-only)
 
 ### Scale Target

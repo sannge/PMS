@@ -120,7 +120,7 @@ When you mention someone:
 
 - You can delete your own comments
 - Admins/Owners can delete any comment
-- Deleted comments are permanently removed
+- Deleted comments are soft-deleted (hidden from view but retained in database)
 
 ---
 
@@ -240,7 +240,7 @@ PM Desktop shows who's currently viewing and working on the same content.
 Look for avatar icons showing active users:
 - **Project board**: See who's viewing the project
 - **Task detail**: See who's looking at the same task
-- **Notes**: See real-time collaborators
+- **Notes**: See who's viewing the same document
 
 ### What Presence Shows
 

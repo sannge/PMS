@@ -20,8 +20,8 @@ PM Desktop follows a layered architecture with clear separation between frontend
 │  │  └──────┬─────────────────┬─────────────────┬───────────────────┘  │ │
 │  │         │                 │                 │                       │ │
 │  │  ┌──────▼──────┐  ┌───────▼───────┐  ┌──────▼──────┐               │ │
-│  │  │   Zustand   │  │ TanStack Query│  │  WebSocket  │               │ │
-│  │  │   Stores    │  │    Client     │  │   Client    │               │ │
+│  │  │React Context│  │ TanStack Query│  │  WebSocket  │               │ │
+│  │  │  Providers  │  │    Client     │  │   Client    │               │ │
 │  │  │(Client State)│ │(Server State) │  │ (Real-time) │               │ │
 │  │  └──────┬──────┘  └───────┬───────┘  └──────┬──────┘               │ │
 │  │         │                 │                 │                       │ │
@@ -54,10 +54,10 @@ PM Desktop follows a layered architecture with clear separation between frontend
                                      │
          ┌───────────────────────────┼───────────────────────────┐
          │                           │                           │
-   ┌─────▼─────┐              ┌──────▼──────┐             ┌──────▼──────┐
-   │PostgreSQL │              │    Redis    │             │   MinIO     │
-   │(Database) │              │  (Cache)    │             │  (Files)    │
-   └───────────┘              └─────────────┘             └─────────────┘
+   ┌─────▼─────┐         ┌──────▼──────┐       ┌──────▼──────┐    ┌─────────────┐
+   │PostgreSQL │         │    Redis    │       │   MinIO     │    │ Meilisearch │
+   │(Database) │         │  (Cache)    │       │  (Files)    │    │  (Search)   │
+   └───────────┘         └─────────────┘       └─────────────┘    └─────────────┘
 ```
 
 ## Data Flow Patterns
@@ -223,28 +223,22 @@ const createTask = useMutation({
 });
 ```
 
-### Layer 2: Client State (Zustand)
+### Layer 2: Client State (React Context)
 
 **Purpose**: Manage UI state that doesn't need server persistence
 
-**Stores**:
-- `auth-store.ts` - User session, JWT token
-- `notes-store.ts` - Active note, open tabs
-- `notification-ui-store.ts` - Toast queue, banner state
+**Contexts**:
+- `auth-context.tsx` - User session, JWT token, login/logout
+- `knowledge-base-context.tsx` - Active document, tree state, search, tabs
+- `notification-ui-context.tsx` - Toast queue, notification display
 
 **Example**:
 ```typescript
-// Zustand store definition
-const useAuthStore = create((set) => ({
-  user: null,
-  token: null,
-  setUser: (user) => set({ user }),
-  setToken: (token) => set({ token }),
-  logout: () => set({ user: null, token: null }),
-}));
+// Context-based auth state
+const { user, login, logout } = useAuth();
 
-// Usage in component
-const { user, logout } = useAuthStore();
+// Knowledge base UI state
+const { selectedDocumentId, searchQuery, expandedFolders } = useKnowledgeBase();
 ```
 
 ### Layer 3: React Context (Cross-cutting Concerns)
@@ -252,22 +246,25 @@ const { user, logout } = useAuthStore();
 **Purpose**: Provide app-wide access to authentication, theme, and UI utilities
 
 **Contexts**:
-- `AuthContext` - Login/logout, user fetching
+- `AuthContext` - Login/logout, user fetching, token management
 - `NotificationUIContext` - Toast notifications
-- `NotesContext` - Notes panel state
+- `KnowledgeBaseContext` - Knowledge base UI state (selection, tree, search)
 - `ThemeContext` - Dark/light mode
 
 **Example**:
 ```typescript
-// Context provider
-<AuthProvider>
-  <ThemeProvider>
-    <App />
-  </ThemeProvider>
-</AuthProvider>
-
-// Usage in component
-const { user, login, logout } = useAuth();
+// Provider hierarchy in App.tsx
+<QueryClientProvider client={queryClient}>
+  <AuthProvider>
+    <NotificationUIProvider>
+      <ThemeProvider>
+        <ErrorBoundary>
+          {/* App content */}
+        </ErrorBoundary>
+      </ThemeProvider>
+    </NotificationUIProvider>
+  </AuthProvider>
+</QueryClientProvider>
 ```
 
 ## Component Architecture
@@ -276,11 +273,10 @@ const { user, login, logout } = useAuth();
 
 ```
 App.tsx
-├── Providers (Theme, Auth, Query, Notifications)
-│   └── Router
-│       ├── LoginPage
-│       ├── RegisterPage
-│       └── DashboardPage
+├── Providers (Query, Auth, Notifications, Theme)
+│   └── AuthGate (state-based routing)
+│       ├── LoginPage / RegisterPage (unauthenticated)
+│       └── DashboardPage (authenticated)
 │           ├── Sidebar
 │           │   ├── ApplicationList
 │           │   └── Navigation
@@ -308,7 +304,7 @@ App.tsx
 │                   │   └── KnowledgeTree
 │                   └── DocumentEditor
 │                       ├── EditorToolbar
-│                       └── TipTap + Yjs
+│                       └── TipTap (with document locking)
 ```
 
 ### Component Categories
@@ -477,7 +473,7 @@ Caches are invalidated via:
 │          │                                                        │
 │  3. Token Storage                                                 │
 │          │ Store in:                                              │
-│          ├─► Zustand (memory)                                     │
+│          ├─► AuthContext (memory)                                  │
 │          └─► localStorage (persistence)                           │
 │                                                                   │
 │  4. Authenticated Requests                                        │
@@ -547,12 +543,12 @@ Caches are invalidated via:
         │                    │                    │
         └────────────────────┼────────────────────┘
                              │
-        ┌────────────────────┼────────────────────┐
-        │                    │                    │
-   ┌────▼────┐          ┌────▼────┐          ┌────▼────┐
-   │PostgreSQL│         │  Redis  │          │  MinIO  │
-   │(Primary) │         │(Shared) │          │(Shared) │
-   └──────────┘         └─────────┘          └─────────┘
+        ┌──────────────┼──────────────┼──────────────┐
+        │              │              │              │
+   ┌────▼────┐    ┌────▼────┐   ┌────▼────┐   ┌────▼──────┐
+   │PostgreSQL│   │  Redis  │   │  MinIO  │   │Meilisearch│
+   │(Primary) │   │(Shared) │   │(Shared) │   │ (Search)  │
+   └──────────┘   └─────────┘   └─────────┘   └───────────┘
 ```
 
 ### Scale Considerations

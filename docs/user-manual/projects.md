@@ -96,9 +96,10 @@ The main workspace showing tasks organized by status columns:
 - **To Do**: Tasks not yet started
 - **In Progress**: Active work
 - **In Review**: Awaiting review
+- **Issue**: Tasks with blockers or problems
 - **Done**: Completed tasks
 
-(Columns may vary based on configuration)
+Each project is created with these 5 default status columns.
 
 ### Side Panels
 
@@ -297,7 +298,6 @@ The Kanban board updates in real-time:
 
 - **Active users**: Avatar icons show who's viewing
 - **Editing indicators**: See who's working on what
-- **Cursor positions**: Available in Knowledge Base collaborative editing
 
 ### WebSocket Connection
 

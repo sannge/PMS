@@ -30,12 +30,13 @@ Each task contains:
 
 The Kanban board organizes tasks into status columns:
 
-| Column | Purpose |
-|--------|---------|
-| **To Do** | Tasks ready to start but not yet in progress |
-| **In Progress** | Currently being worked on |
-| **In Review** | Completed work awaiting review |
-| **Done** | Finished and approved tasks |
+| Column | Category | Purpose |
+|--------|----------|---------|
+| **To Do** | Todo | Tasks ready to start but not yet in progress |
+| **In Progress** | Active | Currently being worked on |
+| **In Review** | Active | Completed work awaiting review |
+| **Issue** | Issue | Tasks with blockers or problems |
+| **Done** | Done | Finished and approved tasks |
 
 ### Board Navigation
 
@@ -65,11 +66,11 @@ The task appears immediately on the board.
 |-------|----------|-------------|
 | Title | Yes | Clear, action-oriented name |
 | Description | No | Detailed requirements and context |
-| Assignees | No | Who will work on this task |
-| Priority | No | Low, Medium, High, or Critical |
-| Type | No | Bug, Feature, Task, Epic, Story |
+| Assignee | No | Who will work on this task (single assignee) |
+| Priority | No | Lowest, Low, Medium, High, or Highest |
+| Type | No | Story, Bug, Epic, or Subtask |
 | Due Date | No | Deadline for completion |
-| Estimated Hours | No | Expected time to complete |
+| Story Points | No | Effort estimation |
 | Parent Task | No | Link to parent for subtasks |
 
 3. Click **Create**
@@ -107,11 +108,11 @@ Quick access to task properties:
 | Property | Description |
 |----------|-------------|
 | Status | Current workflow state |
-| Assignees | Team members responsible |
+| Assignee | Team member responsible (single) |
 | Priority | Urgency level |
 | Type | Category of work |
 | Due Date | Target completion date |
-| Estimated Hours | Time budget |
+| Story Points | Effort estimation |
 
 ### Tabs
 
@@ -177,39 +178,39 @@ When a task is selected:
 
 Available statuses (may vary by configuration):
 
-| Status | Color | Meaning |
-|--------|-------|---------|
-| To Do | Gray | Not started |
-| In Progress | Blue | Currently working |
-| In Review | Yellow | Awaiting review |
-| Done | Green | Completed |
-| Blocked | Red | Cannot proceed |
+| Status | Category | Meaning |
+|--------|----------|---------|
+| To Do | Todo | Not started |
+| In Progress | Active | Currently working |
+| In Review | Active | Awaiting review |
+| Issue | Issue | Blocked or has problems |
+| Done | Done | Completed |
 
 ### Priority
 
 | Priority | Icon | Use When |
 |----------|------|----------|
+| Lowest | Double down arrow | Lowest urgency |
 | Low | Down arrow | Nice to have, no urgency |
 | Medium | Dash | Normal priority |
 | High | Up arrow | Important, needs attention soon |
-| Critical | Double up arrow | Urgent, blocking others |
+| Highest | Double up arrow | Urgent, blocking others |
 
 ### Type
 
 | Type | Description |
 |------|-------------|
-| Task | General work item |
+| Story | User story or feature requirement |
 | Bug | Defect or issue to fix |
-| Feature | New functionality |
-| Story | User story or requirement |
 | Epic | Large initiative containing multiple tasks |
+| Subtask | Child task linked to a parent task |
 
-### Assignees
+### Assignee
 
-- **Multiple assignees**: Tasks can have several owners
-- **Avatar display**: Assignees show as avatars on cards
+- **Single assignee**: Each task has one assignee
+- **Avatar display**: Assignee shows as avatar on cards
 - **Search**: Find team members by name
-- **Unassign**: Click X to remove someone
+- **Unassign**: Click X to remove the assignee
 
 ### Due Date
 
@@ -217,11 +218,10 @@ Available statuses (may vary by configuration):
 - Overdue tasks highlight in red
 - Due soon (within 3 days) shows warning color
 
-### Estimated Hours
+### Story Points
 
-- Enter expected hours to complete
-- Helps with planning and capacity
-- Track against actual time (coming soon)
+- Enter story points for effort estimation
+- Helps with sprint planning and capacity
 
 ---
 
@@ -231,7 +231,7 @@ Available statuses (may vary by configuration):
 2. Click the **Delete** button (trash icon)
 3. Confirm deletion in the dialog
 
-**Warning**: Deleted tasks cannot be recovered. All comments, checklists, and attachments are also removed.
+**Note**: Tasks are archived (soft deleted) and can be restored. Use the "Archived Tasks" view to see and unarchive tasks.
 
 ---
 
@@ -327,7 +327,6 @@ Click **Clear Filters** to show all tasks again.
 
 - Active viewers show as avatars
 - See who's looking at the same task
-- Real-time cursor positions (notes only)
 
 ### Conflict Prevention
 

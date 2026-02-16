@@ -16,7 +16,6 @@ electron-app/
 │       ├── App.tsx              # Root component with providers
 │       ├── components/          # React components
 │       ├── pages/               # Page-level components
-│       ├── stores/              # Zustand state stores
 │       ├── hooks/               # Custom React hooks
 │       ├── contexts/            # React context providers
 │       └── lib/                 # Utilities and clients
@@ -24,7 +23,7 @@ electron-app/
 ├── package.json                 # Dependencies
 ├── tailwind.config.js           # Tailwind configuration
 ├── tsconfig.json                # TypeScript configuration
-└── vite.config.ts               # Vite bundler configuration
+└── electron.vite.config.ts      # Electron Vite bundler configuration
 ```
 
 ## Electron Architecture
@@ -76,23 +75,29 @@ app.on('activate', () => {
 
 ### Preload Script (preload/index.ts)
 
-The preload script exposes safe APIs to the renderer:
+The preload script exposes safe APIs to the renderer via `contextBridge`:
 
 ```typescript
 import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  // File system operations
-  readFile: (path: string) => ipcRenderer.invoke('read-file', path),
-  writeFile: (path: string, data: string) => ipcRenderer.invoke('write-file', path, data),
+  // API methods
+  fetch: (...) => ipcRenderer.invoke('api-fetch', ...),
+  get: (...) => ipcRenderer.invoke('api-get', ...),
+  post: (...) => ipcRenderer.invoke('api-post', ...),
+
+  // File operations
+  uploadFile: (...) => ipcRenderer.invoke('upload-file', ...),
+  downloadFile: (...) => ipcRenderer.invoke('download-file', ...),
+  getFileUrl: (...) => ipcRenderer.invoke('get-file-url', ...),
 
   // Window controls
   minimize: () => ipcRenderer.send('window-minimize'),
   maximize: () => ipcRenderer.send('window-maximize'),
   close: () => ipcRenderer.send('window-close'),
 
-  // App info
-  getVersion: () => ipcRenderer.invoke('get-version'),
+  // Notifications, dialogs, clipboard, WebSocket messaging,
+  // and before-quit save coordination also exposed
 });
 ```
 
@@ -115,7 +120,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 
 ### Root Component (App.tsx)
 
-The App component sets up all providers and the router:
+The App component sets up all providers and state-based auth routing:
 
 ```typescript
 import { QueryClientProvider } from '@tanstack/react-query';
@@ -123,28 +128,30 @@ import { queryClient } from './lib/query-client';
 import { AuthProvider } from './contexts/auth-context';
 import { NotificationUIProvider } from './contexts/notification-ui-context';
 import { ThemeProvider } from './contexts/theme-context';
-import { Router } from './Router';
 
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider>
-        <AuthProvider>
-          <NotificationUIProvider>
+      <AuthProvider>
+        <NotificationUIProvider>
+          <ThemeProvider>
             <ErrorBoundary>
-              <Router />
+              {/* AuthGate: shows LoginPage/RegisterPage or DashboardPage */}
+              <AuthGate />
             </ErrorBoundary>
-          </NotificationUIProvider>
-        </AuthProvider>
-      </ThemeProvider>
+          </ThemeProvider>
+        </NotificationUIProvider>
+      </AuthProvider>
     </QueryClientProvider>
   );
 }
 ```
 
+Note: There is no react-router. Navigation is state-based via callbacks and state in DashboardPage.
+
 ## State Management
 
-PM Desktop uses a three-layer state management approach.
+PM Desktop uses a two-layer state management approach.
 
 ### Layer 1: TanStack Query (Server State)
 
@@ -276,151 +283,52 @@ export const queryKeys = {
 };
 ```
 
-### Layer 2: Zustand (Client State)
+### Layer 2: React Context (Client State + Cross-Cutting Concerns)
 
-For UI state that doesn't need server persistence:
+For UI state that doesn't need server persistence and app-wide functionality:
 
-```typescript
-// stores/auth-store.ts
-import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-
-interface AuthState {
-  user: User | null;
-  token: string | null;
-  setUser: (user: User | null) => void;
-  setToken: (token: string | null) => void;
-  logout: () => void;
-}
-
-export const useAuthStore = create<AuthState>()(
-  persist(
-    (set) => ({
-      user: null,
-      token: null,
-      setUser: (user) => set({ user }),
-      setToken: (token) => set({ token }),
-      logout: () => set({ user: null, token: null }),
-    }),
-    {
-      name: 'auth-storage',
-      partialize: (state) => ({ token: state.token }),
-    }
-  )
-);
-```
-
-```typescript
-// stores/notes-store.ts
-import { create } from 'zustand';
-
-interface NotesState {
-  activeNoteId: string | null;
-  openTabs: string[];
-  setActiveNote: (id: string | null) => void;
-  openTab: (id: string) => void;
-  closeTab: (id: string) => void;
-}
-
-export const useNotesStore = create<NotesState>((set) => ({
-  activeNoteId: null,
-  openTabs: [],
-  setActiveNote: (id) => set({ activeNoteId: id }),
-  openTab: (id) => set((state) => ({
-    openTabs: state.openTabs.includes(id)
-      ? state.openTabs
-      : [...state.openTabs, id],
-    activeNoteId: id,
-  })),
-  closeTab: (id) => set((state) => ({
-    openTabs: state.openTabs.filter((tabId) => tabId !== id),
-    activeNoteId: state.activeNoteId === id
-      ? state.openTabs[0] || null
-      : state.activeNoteId,
-  })),
-}));
-```
-
-### Knowledge Base Context
-
-The knowledge base uses a dedicated React context (`KnowledgeBaseContext`) that manages:
-- Active document selection and tab state
-- Document tree expansion state
-- Folder/document CRUD operations
-- Integration with TipTap editor and Yjs collaboration
-
-See `contexts/knowledge-base-context.tsx` for the full implementation.
-
-### Layer 3: React Context (Cross-Cutting Concerns)
-
-For app-wide functionality that needs to be accessible everywhere:
+**AuthContext** (`contexts/auth-context.tsx`):
+Manages user session, JWT token, login/register/logout operations with localStorage persistence.
 
 ```typescript
 // contexts/auth-context.tsx
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { useAuthStore } from '../stores/auth-store';
-import { api } from '../lib/api';
-
-interface AuthContextValue {
+// Uses useReducer for state management (not Zustand)
+interface AuthState {
   user: User | null;
+  token: string | null;
+  isAuthenticated: boolean;
   isLoading: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  register: (data: RegisterData) => Promise<void>;
-  logout: () => void;
+  isInitialized: boolean;
+  error: string | null;
 }
 
-const AuthContext = createContext<AuthContextValue | null>(null);
+// Usage in components:
+const { user, login, logout, isLoading } = useAuth();
+```
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const { user, token, setUser, setToken, logout: storeLogout } = useAuthStore();
-  const [isLoading, setIsLoading] = useState(true);
+**KnowledgeBaseContext** (`contexts/knowledge-base-context.tsx`):
+Manages knowledge base UI state with localStorage persistence per scope.
 
-  useEffect(() => {
-    // Fetch user on mount if token exists
-    if (token && !user) {
-      api.getCurrentUser()
-        .then(setUser)
-        .catch(() => storeLogout())
-        .finally(() => setIsLoading(false));
-    } else {
-      setIsLoading(false);
-    }
-  }, []);
-
-  const login = async (email: string, password: string) => {
-    const { access_token } = await api.login(email, password);
-    setToken(access_token);
-    const user = await api.getCurrentUser();
-    setUser(user);
-  };
-
-  const register = async (data: RegisterData) => {
-    await api.register(data);
-    await login(data.email, data.password);
-  };
-
-  const logout = () => {
-    storeLogout();
-    // Clear all caches
-    queryClient.clear();
-    clearIndexedDB();
-  };
-
-  return (
-    <AuthContext.Provider value={{ user, isLoading, login, register, logout }}>
-      {children}
-    </AuthContext.Provider>
-  );
-}
-
-export function useAuth() {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within AuthProvider');
-  }
-  return context;
+```typescript
+// contexts/knowledge-base-context.tsx
+// UI-only state (no server sync beyond document CRUD)
+interface KnowledgeBaseContextValue {
+  selectedDocumentId: string | null;
+  selectedFolderId: string | null;
+  expandedFolderIds: Set<string>;
+  searchQuery: string;
+  activeTab: string;
+  // Navigation guard for unsaved edits
+  setSelectedDocument: (id: string | null) => void;
+  // ...
 }
 ```
+
+**NotificationUIContext** (`contexts/notification-ui-context.tsx`):
+Manages desktop notification display and toast queue.
+
+**ThemeContext** (in `App.tsx`):
+Dark/light mode toggle with system preference detection and localStorage persistence.
 
 ## Routing (State-Based)
 
@@ -731,10 +639,10 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
 // hooks/use-websocket.ts
 import { useEffect, useRef, useCallback } from 'react';
 import { WebSocketClient, MessageType } from '../lib/websocket';
-import { useAuthStore } from '../stores/auth-store';
+import { useAuth } from '../contexts/auth-context';
 
 export function useWebSocket() {
-  const { token } = useAuthStore();
+  const { token } = useAuth();
   const clientRef = useRef<WebSocketClient | null>(null);
 
   useEffect(() => {

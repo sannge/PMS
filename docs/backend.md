@@ -14,8 +14,8 @@ fastapi-backend/
 │   ├── schemas/             # Pydantic request/response schemas
 │   ├── routers/             # API endpoint definitions
 │   ├── services/            # Business logic layer
-│   ├── utils/               # Utility functions
-│   └── websocket/           # WebSocket handlers
+│   ├── websocket/           # WebSocket handlers
+│   └── worker.py            # ARQ background job worker
 ├── alembic/                 # Database migrations
 │   ├── versions/            # Migration scripts
 │   └── env.py               # Alembic configuration
@@ -151,7 +151,7 @@ engine = create_async_engine(
     settings.database_url,
     pool_size=settings.db_pool_size,      # 50 base connections
     max_overflow=settings.db_max_overflow,  # 100 additional when needed
-    pool_timeout=60,
+    pool_timeout=15,                      # Fail fast (15s timeout)
     pool_pre_ping=True,
     pool_recycle=3600,
 )
@@ -162,7 +162,8 @@ AsyncSessionLocal = sessionmaker(
     expire_on_commit=False,
 )
 
-Base = declarative_base()
+class Base(DeclarativeBase):
+    pass
 
 # Dependency for database session
 async def get_db():
@@ -246,7 +247,11 @@ class Task(Base):
 | Invitation | `models/invitation.py` | App invitations |
 | DocumentFolder | `models/document_folder.py` | Knowledge base folder hierarchy |
 | Document | `models/document.py` | Knowledge base documents |
-| DocumentSnapshot | `models/document_snapshot.py` | Document version snapshots |
+| DocumentSnapshot | `models/document_snapshot.py` | Document version snapshots (placeholder) |
+| DocumentTag | `models/document_tag.py` | Custom tags for documents |
+| DocumentTagAssignment | `models/document_tag_assignment.py` | Document-to-tag associations |
+| ProjectAssignment | `models/project_assignment.py` | User work assignments to projects |
+| ProjectTaskStatusAgg | `models/project_task_status_agg.py` | Aggregated task status counts per project |
 
 ## Schemas Layer
 
@@ -441,20 +446,23 @@ async def delete_task(
 | Router | Prefix | Purpose |
 |--------|--------|---------|
 | `auth.py` | `/auth` | Login, register, logout, current user |
-| `applications.py` | `/applications` | Application CRUD |
-| `application_members.py` | `/applications/{id}/members` | App membership |
-| `projects.py` | `/projects` | Project CRUD |
-| `project_members.py` | `/projects/{id}/members` | Project membership |
-| `tasks.py` | `/tasks` | Task CRUD and Kanban operations |
-| `comments.py` | `/comments` | Comment threads |
-| `checklists.py` | `/checklists` | Checklist management |
-| `files.py` | `/files` | File upload/download |
-| `notifications.py` | `/notifications` | User notifications |
-| `invitations.py` | `/invitations` | App invitations |
-| `users.py` | `/users` | User lookup |
-| `notes.py` | `/notes` | Knowledge base notes |
-| `documents.py` | `/documents` | Knowledge base document CRUD |
-| `document_search.py` | `/documents/search` | Full-text search via Meilisearch |
+| `applications.py` | `/api/applications` | Application CRUD |
+| `application_members.py` | `/api/applications/{id}/members` | App membership |
+| `projects.py` | `/api/projects` | Project CRUD and status override |
+| `project_members.py` | `/api/projects/{id}/members` | Project membership |
+| `project_assignments.py` | `/api/projects/{id}/assignments` | Work assignments |
+| `tasks.py` | `/api/tasks` | Task CRUD, Kanban operations, archiving |
+| `comments.py` | `/api/comments` | Comment threads with @mentions |
+| `checklists.py` | `/api/checklists` | Checklist and item management |
+| `files.py` | `/api/files` | File upload/download via MinIO |
+| `notifications.py` | `/api/notifications` | User notifications |
+| `invitations.py` | `/api/invitations` | App invitations |
+| `users.py` | `/api/users` | User search/lookup |
+| `documents.py` | `/api` | Knowledge base document CRUD |
+| `document_folders.py` | `/api` | Folder hierarchy management |
+| `document_tags.py` | `/api` | Document tag management |
+| `document_locks.py` | `/document-locks` | Document lock acquire/release |
+| `document_search.py` | `/document-search` | Full-text search via Meilisearch |
 
 ## Services Layer
 
@@ -590,54 +598,27 @@ async def check_project_access(
 
 ```python
 # app/services/status_derivation_service.py
-from uuid import UUID
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
-from sqlalchemy import func, delete
-
-from app.models.task import Task
-from app.models.project_task_status_agg import ProjectTaskStatusAgg
-
-async def update_status_aggregation(db: AsyncSession, project_id: UUID):
-    """Recalculate task status counts for a project."""
-    # Clear existing aggregation
-    await db.execute(
-        delete(ProjectTaskStatusAgg)
-        .where(ProjectTaskStatusAgg.project_id == project_id)
-    )
-
-    # Count tasks per status
-    result = await db.execute(
-        select(Task.task_status_id, func.count(Task.id).label("count"))
-        .filter(Task.project_id == project_id)
-        .group_by(Task.task_status_id)
-    )
-    counts = result.all()
-
-    # Insert new aggregations
-    for status_id, count in counts:
-        agg = ProjectTaskStatusAgg(
-            project_id=project_id,
-            task_status_id=status_id,
-            task_count=count
-        )
-        db.add(agg)
-
-    await db.commit()
+# ProjectTaskStatusAgg uses a single row per project with category-based counters:
+#   total_tasks, todo_tasks, active_tasks, review_tasks, issue_tasks, done_tasks
+# Counters are updated incrementally when tasks change status.
 
 async def derive_project_status(db: AsyncSession, project_id: UUID) -> str:
-    """Derive overall project status from task distribution."""
+    """Derive overall project status from task aggregation counters."""
     result = await db.execute(select(Project).filter(Project.id == project_id))
     project = result.scalar_one_or_none()
 
-    # Check for manual override
+    # Check for manual override (with expiration)
     if project.override_status_id and project.override_expires_at:
         if project.override_expires_at > datetime.utcnow():
             return project.override_status_id
 
-    # Calculate from aggregation
-    # Logic: If all tasks done → "Done", if any in progress → "In Progress", else "To Do"
-    # Implementation depends on business rules
+    # Read pre-computed aggregation (single row per project)
+    agg = await db.execute(
+        select(ProjectTaskStatusAgg)
+        .filter(ProjectTaskStatusAgg.project_id == project_id)
+    )
+    # Derive status from category counts (todo, active, review, issue, done)
+    # Logic uses category-based rules to determine overall project health
     pass
 ```
 
@@ -692,13 +673,23 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 ```
 tests/
-├── conftest.py          # Shared fixtures
-├── test_auth.py         # Authentication tests
-├── test_applications.py # Application CRUD tests
-├── test_projects.py     # Project tests
-├── test_tasks.py        # Task tests
-├── test_websocket.py    # WebSocket tests
-└── test_services/       # Service unit tests
+├── conftest.py                # Shared fixtures (test DB, auth, sample data)
+├── test_auth.py               # Authentication and user creation
+├── test_applications.py       # Application CRUD and members
+├── test_projects.py           # Project CRUD, status derivation, archiving
+├── test_tasks.py              # Task CRUD, subtasks, status moves, archiving
+├── test_permissions.py        # Role-based access control
+├── test_files.py              # MinIO file upload/download
+├── test_minio.py              # MinIO service integration
+├── test_websocket.py          # WebSocket connections and message routing
+├── test_notifications.py      # Notification creation and delivery
+├── test_comments.py           # Comment CRUD with mentions
+├── test_content_converter.py  # TipTap JSON to Markdown/plain text
+├── test_status_derivation.py  # Project status from task aggregations
+├── test_user_cache.py         # Role caching and invalidation
+├── test_arq_worker.py         # Background job scheduling
+├── test_arq_multiworker.py    # Multi-worker Redis pub/sub
+└── load/                      # Load testing utilities
 ```
 
 ### Test Fixtures
