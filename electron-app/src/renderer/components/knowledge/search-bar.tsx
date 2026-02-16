@@ -12,7 +12,7 @@
  * continues to work alongside full-text search.
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Search, X } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
@@ -22,6 +22,8 @@ import { SearchResultsPanel } from './search-results-panel'
 
 export interface SearchBarProps {
   className?: string
+  /** Scope search to the current context (application/project). Default: global search. */
+  scopeToContext?: boolean
 }
 
 /**
@@ -33,7 +35,7 @@ export interface SearchBarProps {
 function getTargetTab(hit: SearchResultHit): string {
   if (hit.user_id) return 'personal'
   if (hit.application_id) return `app:${hit.application_id}`
-  if (hit.project_id) {
+  if (import.meta.env.DEV && hit.project_id) {
     console.warn('[SearchBar] Project-scoped document missing application_id:', hit.id)
   }
   return 'personal'
@@ -50,15 +52,24 @@ function extractSearchTerms(query: string): string[] {
     .filter((term) => term.length >= 2)
 }
 
-export function SearchBar({ className }: SearchBarProps = {}): JSX.Element {
-  const { searchQuery, setSearch, navigateToDocument } = useKnowledgeBase()
+export function SearchBar({ className, scopeToContext }: SearchBarProps = {}): JSX.Element {
+  const { searchQuery, setSearch, navigateToDocument, revealDocument, scope, scopeId } = useKnowledgeBase()
   const [localValue, setLocalValue] = useState(searchQuery)
   const [showResults, setShowResults] = useState(false)
   const [selectedResultIndex, setSelectedResultIndex] = useState(-1)
   const containerRef = useRef<HTMLDivElement>(null)
 
+  // Derive scope filtering for search: when scopeToContext is set, narrow results
+  // to the current application/project. Otherwise search globally.
+  const searchOptions = useMemo(() => {
+    if (!scopeToContext) return undefined
+    if (scope === 'application' && scopeId) return { applicationId: scopeId }
+    if (scope === 'project' && scopeId) return { projectId: scopeId }
+    return undefined
+  }, [scopeToContext, scope, scopeId])
+
   // Full-text search hook
-  const { data: searchResults, isLoading, isFetching, error: searchError, debouncedQuery, hasMore, loadMore } = useDocumentSearch(localValue)
+  const { data: searchResults, isLoading, isFetching, isFetchingNextPage, error: searchError, debouncedQuery, hasMore, loadMore } = useDocumentSearch(localValue, searchOptions)
 
   // Show results panel when we have a debounced query
   useEffect(() => {
@@ -100,12 +111,18 @@ export function SearchBar({ className }: SearchBarProps = {}): JSX.Element {
   }, [setSearch])
 
   const handleResultClick = useCallback((hit: SearchResultHit) => {
-    const targetTab = getTargetTab(hit)
     // Prefer actual matched terms from backend (handles fuzzy/typo matches correctly)
     const terms = hit.matchedTerms?.length ? hit.matchedTerms : extractSearchTerms(debouncedQuery)
-    navigateToDocument(targetTab, hit.id, terms, hit.folder_id ?? undefined, hit.occurrenceIndex ?? 0)
+    if (scopeToContext) {
+      // Scoped panel: select document without changing scope/tab
+      revealDocument(hit.id, terms, hit.folder_id ?? undefined, hit.occurrenceIndex ?? 0, hit.project_id ?? undefined)
+    } else {
+      // Notes page: full navigation with tab/scope switch
+      const targetTab = getTargetTab(hit)
+      navigateToDocument(targetTab, hit.id, terms, hit.folder_id ?? undefined, hit.occurrenceIndex ?? 0, hit.project_id ?? undefined)
+    }
     setShowResults(false)
-  }, [debouncedQuery, navigateToDocument])
+  }, [scopeToContext, debouncedQuery, navigateToDocument, revealDocument])
 
   const handleCloseResults = useCallback(() => {
     setShowResults(false)
@@ -150,6 +167,7 @@ export function SearchBar({ className }: SearchBarProps = {}): JSX.Element {
           results={searchResults}
           isLoading={isLoading}
           isFetching={isFetching}
+          isFetchingNextPage={isFetchingNextPage}
           error={searchError as (Error & { status?: number }) | undefined}
           containerRef={containerRef}
           onResultClick={handleResultClick}

@@ -140,7 +140,7 @@ function InnerPanel({ scope, scopeId, showProjectFolders, className }: InnerPane
       >
         {/* Search */}
         <div className="p-2 border-b border-border">
-          <SearchBar />
+          <SearchBar scopeToContext />
         </div>
 
         {/* Quick creation buttons (hidden for read-only users) */}

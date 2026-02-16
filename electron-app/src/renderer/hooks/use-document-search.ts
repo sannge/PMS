@@ -50,8 +50,17 @@ export interface SearchResponse {
   fallback?: boolean // true when PostgreSQL FTS fallback was used
 }
 
-export function useDocumentSearch(query: string) {
+export interface DocumentSearchOptions {
+  /** Narrow results to a specific application */
+  applicationId?: string
+  /** Narrow results to a specific project */
+  projectId?: string
+}
+
+export function useDocumentSearch(query: string, options?: DocumentSearchOptions) {
   const token = useAuthStore((s) => s.token)
+  const applicationId = options?.applicationId
+  const projectId = options?.projectId
 
   // Debounce the search query
   const [debouncedQuery, setDebouncedQuery] = useState('')
@@ -68,10 +77,18 @@ export function useDocumentSearch(query: string) {
   }, [query])
 
   const result = useInfiniteQuery({
-    queryKey: queryKeys.documentSearch(debouncedQuery),
+    queryKey: queryKeys.documentSearch(debouncedQuery, applicationId, projectId),
     queryFn: async ({ pageParam }) => {
+      const params = new URLSearchParams({
+        q: debouncedQuery,
+        limit: String(PAGE_SIZE),
+        offset: String(pageParam),
+      })
+      if (applicationId) params.set('application_id', applicationId)
+      if (projectId) params.set('project_id', projectId)
+
       const response = await window.electronAPI.get<SearchResponse>(
-        `/api/documents/search?q=${encodeURIComponent(debouncedQuery)}&limit=${PAGE_SIZE}&offset=${pageParam}`,
+        `/api/documents/search?${params.toString()}`,
         { Authorization: `Bearer ${token}` },
       )
       if (response.status !== 200) {
@@ -118,13 +135,16 @@ export function useDocumentSearch(query: string) {
   }, [result.data, debouncedQuery])
 
   const loadMore = useCallback(() => {
-    result.fetchNextPage()
-  }, [result.fetchNextPage])
+    if (result.hasNextPage && !result.isFetchingNextPage) {
+      result.fetchNextPage()
+    }
+  }, [result.fetchNextPage, result.hasNextPage, result.isFetchingNextPage])
 
   return {
     data,
     isLoading: result.isLoading,
     isFetching: result.isFetching,
+    isFetchingNextPage: result.isFetchingNextPage,
     error: result.error,
     debouncedQuery,
     hasMore: result.hasNextPage ?? false,
