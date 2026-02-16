@@ -6,7 +6,11 @@
 # Claude / Auto-Claude
 # --------------------------------
 .auto-claude/
-.claude/
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+.claude/hooks/*
+!.claude/hooks/session-start.sh
 .worktrees/
 
 # --------------------------------
