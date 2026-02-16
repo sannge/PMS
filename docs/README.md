@@ -36,16 +36,15 @@ Welcome to PM Desktop, a project management application with Jira-like features 
 - **React 18** - UI library with concurrent features
 - **TypeScript 5.5** - Type-safe JavaScript
 - **TanStack Query** - Server state management with caching
-- **Zustand** - Client state management
+- **React Context** - Client state management (auth, theme, knowledge base UI)
 - **Radix UI + shadcn/ui** - Component library
 - **TailwindCSS** - Utility-first styling
-- **TipTap** - Rich text editor with collaborative editing
+- **TipTap** - Rich text editor with document locking
 - **@dnd-kit** - Drag-and-drop for Kanban boards
 
 ### Real-Time
-- **WebSocket** - Bidirectional communication
-- **Yjs (pycrdt)** - CRDT for collaborative editing
-- **y-websocket** - Yjs WebSocket provider
+- **WebSocket** - Bidirectional communication with room-based broadcasting
+- **Redis Pub/Sub** - Cross-worker event distribution
 
 ## Project Structure
 
@@ -72,9 +71,8 @@ pm-project/
 │   │   └── renderer/          # React application
 │   │       ├── components/    # UI components
 │   │       ├── pages/         # Page components
-│   │       ├── stores/        # Zustand stores
 │   │       ├── hooks/         # Custom React hooks
-│   │       ├── contexts/      # React contexts
+│   │       ├── contexts/      # React contexts (auth, theme, knowledge base)
 │   │       └── lib/           # Utilities and clients
 │   ├── tests/                 # Frontend tests
 │   └── package.json           # Node dependencies
@@ -105,7 +103,7 @@ PM Desktop is designed to support **5,000 concurrent users** per server instance
 8. **Invitations** - Invite users to applications
 9. **Notifications** - Real-time notifications for mentions and assignments
 10. **Presence Indicators** - See who's viewing tasks in real-time
-11. **Knowledge Base** - Collaborative notes with real-time editing
+11. **Knowledge Base** - Rich-text notes with document locking, full-text search, and folder organization
 
 ## Getting Started
 

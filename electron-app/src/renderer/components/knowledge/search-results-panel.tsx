@@ -44,6 +44,7 @@ interface SearchResultsPanelProps {
   results: SearchResponse | undefined
   isLoading: boolean
   isFetching: boolean
+  isFetchingNextPage?: boolean
   error?: Error & { status?: number }
   containerRef?: React.RefObject<HTMLElement>
   onResultClick: (hit: SearchResultHit) => void
@@ -58,6 +59,7 @@ export function SearchResultsPanel({
   results,
   isLoading,
   isFetching,
+  isFetchingNextPage,
   error,
   containerRef,
   onResultClick,
@@ -220,11 +222,11 @@ export function SearchResultsPanel({
       {hasMore && onLoadMore && (
         <button
           onClick={onLoadMore}
-          disabled={isFetching}
+          disabled={isFetchingNextPage}
           className="w-full px-3 py-2 text-xs text-center text-muted-foreground
                      hover:text-foreground hover:bg-accent transition-colors border-t"
         >
-          {isFetching ? 'Loading...' : 'Load more results'}
+          {isFetchingNextPage ? 'Loading...' : 'Load more results'}
         </button>
       )}
     </div>

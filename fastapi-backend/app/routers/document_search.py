@@ -5,6 +5,7 @@ Redis-backed rate limiting, and RBAC scope filtering.
 """
 
 import logging
+from uuid import UUID
 from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,11 +38,16 @@ async def search_documents_endpoint(
     q: str = Query(..., min_length=2, max_length=200),
     limit: int = Query(default=20, ge=1, le=50),
     offset: int = Query(default=0, ge=0),
+    application_id: UUID | None = Query(default=None),
+    project_id: UUID | None = Query(default=None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     redis: RedisService = Depends(get_redis),
 ):
     """Search documents with RBAC filtering via Meilisearch.
+
+    Optional scope narrowing: pass application_id or project_id to restrict
+    results to a specific application or project (still enforces RBAC).
 
     Falls back to PostgreSQL FTS when Meilisearch is unavailable.
     """
@@ -74,7 +80,14 @@ async def search_documents_endpoint(
     # 3. Get RBAC filter (cached in Redis for 30s)
     filter_expr = await get_cached_scope_filter(redis, db, current_user.id)
 
-    # 4. Try Meilisearch first, fall back to PostgreSQL FTS
+    # 4. Narrow scope if application_id or project_id provided
+    #    Append to existing RBAC filter (AND logic) — never bypasses RBAC
+    if application_id:
+        filter_expr.append(f"application_id = '{str(application_id)}'")
+    if project_id:
+        filter_expr.append(f"project_id = '{str(project_id)}'")
+
+    # 5. Try Meilisearch first, fall back to PostgreSQL FTS
     fallback = False
     try:
         results = await search_documents(q_clean, filter_expr, limit, offset)
@@ -86,13 +99,15 @@ async def search_documents_endpoint(
         try:
             app_ids, project_ids = await get_fallback_scope_ids(db, current_user.id)
             results = await search_documents_pg_fallback(
-                db, q_clean, app_ids, project_ids, current_user.id, limit, offset
+                db, q_clean, app_ids, project_ids, current_user.id, limit, offset,
+                scope_application_id=str(application_id) if application_id else None,
+                scope_project_id=str(project_id) if project_id else None,
             )
         except Exception as pg_exc:
             logger.error("PostgreSQL FTS fallback also failed: %s", pg_exc)
             raise HTTPException(503, "Search temporarily unavailable")
 
-    # 5. Log successful search
+    # 6. Log successful search
     logger.info(
         "Search: query=%r user_id=%s hits=%d processingTimeMs=%s fallback=%s",
         q_clean,

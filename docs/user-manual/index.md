@@ -41,7 +41,7 @@ Applications (Top Level)
 | Real-time Collaboration | See team members' presence and get instant updates |
 | Rich Comments | Formatted text with @mentions and file attachments |
 | Checklists | Track sub-tasks and requirements within tasks |
-| Knowledge Base | Collaborative notes with real-time editing, full-text search, and document locking |
+| Knowledge Base | Rich-text notes with document locking, full-text search, and folder organization |
 | Role-based Access | Owner, Editor, and Viewer permission levels |
 
 ### Navigation

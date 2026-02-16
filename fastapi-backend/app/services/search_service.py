@@ -589,19 +589,42 @@ async def search_documents_pg_fallback(
     user_id: UUID,
     limit: int = 20,
     offset: int = 0,
+    scope_application_id: str | None = None,
+    scope_project_id: str | None = None,
 ) -> dict:
     """PostgreSQL FTS fallback when Meilisearch is unavailable.
 
     Uses tsvector + ts_headline for full-text search with highlighting.
     Lacks prefix search and per-word typo tolerance, but provides ~80%
     of search functionality.
+
+    Optional scope_application_id / scope_project_id narrow results to a
+    specific application or project (still within RBAC bounds).
     """
     from sqlalchemy import text
 
     all_scope_ids = [str(uid) for uid in accessible_app_ids]
     all_project_ids = [str(uid) for uid in project_ids]
 
-    sql = text("""
+    # Build optional scope narrowing clause
+    # For application scope: include both direct app docs AND project-scoped docs
+    # under that application (project docs have application_id=NULL in DB but
+    # belong to a project whose application_id matches).
+    scope_clause = ""
+    scope_params: dict[str, str] = {}
+    if scope_application_id:
+        scope_clause += (
+            " AND (d.application_id = :scope_app_id"
+            " OR d.project_id IN ("
+            '   SELECT p.id FROM "Projects" p WHERE p.application_id = :scope_app_id'
+            " ))"
+        )
+        scope_params["scope_app_id"] = scope_application_id
+    if scope_project_id:
+        scope_clause += " AND d.project_id = :scope_proj_id"
+        scope_params["scope_proj_id"] = scope_project_id
+
+    sql = text(f"""
         SELECT
             d.id,
             d.title,
@@ -633,6 +656,7 @@ async def search_documents_pg_fallback(
                 OR d.user_id = :user_id
             )
             AND d.search_vector @@ plainto_tsquery('english', :query)
+            {scope_clause}
         ORDER BY rank DESC
         LIMIT :limit OFFSET :offset
     """)
@@ -644,6 +668,7 @@ async def search_documents_pg_fallback(
         "user_id": str(user_id),
         "limit": limit,
         "offset": offset,
+        **scope_params,
     })
 
     rows = result.fetchall()
@@ -658,12 +683,15 @@ async def search_documents_pg_fallback(
             "project_id": str(row.project_id) if row.project_id else None,
             "user_id": str(row.user_id) if row.user_id else None,
             "folder_id": str(row.folder_id) if row.folder_id else None,
-            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            "updated_at": int(row.updated_at.replace(tzinfo=timezone.utc).timestamp()) if row.updated_at else None,
             "created_by": str(row.created_by) if row.created_by else None,
             "_formatted": {
                 "title": row.title_highlighted,
                 "content_plain": row.snippet,
             },
+            "snippet": row.snippet,
+            "occurrenceIndex": 0,
+            "matchedTerms": [t for t in query.lower().split() if len(t) >= 2],
         })
 
     return {

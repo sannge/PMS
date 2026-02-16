@@ -10,10 +10,11 @@ The Knowledge Base provides:
 - Hierarchical note organization (folders and documents)
 - Rich text editing with TipTap
 - Multi-tab interface for multiple notes
-- Application-level organization
-- Real-time collaborative editing (Yjs CRDT)
+- Multi-scope organization (application, project, or personal)
+- Document locking for exclusive edit access
 - Full-text search (Meilisearch)
-- Document locking for edit coordination
+- Soft delete with trash and restore
+- Tag-based document organization
 - Role-based permissions (Owner/Editor/Viewer)
 
 ---
@@ -25,12 +26,13 @@ The Knowledge Base provides:
 1. Click **Notes** in the left sidebar
 2. Notes page opens with the tree view and editor
 
-### Application Context
+### Document Scopes
 
-Notes are organized by application:
-- Each application has its own knowledge base
-- Use the Application Selector to switch between applications
-- Press `Cmd/Ctrl + K` for quick application search
+Notes are organized by scope:
+- **Application scope**: Shared knowledge base for an entire application
+- **Project scope**: Documentation specific to a project
+- **Personal scope**: Private notes for the current user
+- Use the tab bar to switch between scopes
 
 ---
 
@@ -128,12 +130,15 @@ The editor toolbar provides:
 - Link insertion
 - Code block toggle
 
-### Auto-Save
+### Edit Mode and Saving
 
-Changes save automatically:
-- Saves as you type (debounced)
-- No save button needed
-- Last saved indicator shown
+Documents use a lock-based editing workflow:
+1. Click **Edit** to acquire a document lock
+2. Make your changes in the editor
+3. Click **Save** to persist changes and release the lock
+4. Or click **Discard** to abandon changes
+- Local drafts auto-save to IndexedDB every 2 seconds (for crash recovery)
+- Only one user can edit a document at a time (lock-based)
 
 ---
 
@@ -236,8 +241,8 @@ Create hierarchy by:
 ### Search Scope
 
 Currently searches:
-- Note titles
-- Content within current application
+- Document titles and content
+- Within the current scope (application, project, or personal)
 
 ### Full-Text Search
 
@@ -267,50 +272,48 @@ Powered by Meilisearch:
 
 All contents are permanently removed.
 
-### Undo Delete
+### Trash and Restore
 
-- Currently not supported
-- Consider exporting important notes
-- Future: Trash/recovery feature
+Deleted documents are moved to trash (soft delete):
+- View trashed documents via the trash view
+- **Restore**: Right-click a trashed document and select **Restore**
+- **Permanent Delete**: Remove a trashed document permanently
+- Soft-deleted documents are excluded from search results
 
 ---
 
-## Application Selector
+## Scope Selector
 
-### Switching Applications
+### Switching Scopes
 
-The Knowledge Base is application-specific. To switch:
+The Knowledge Base supports multiple scopes. Use the tab bar to switch:
 
-1. Click the application name in the header
-2. Or press `Cmd/Ctrl + K`
-3. Search for the target application
-4. Click or press Enter to switch
+- **Personal**: Your private notes
+- **Application tabs**: Click an application to view its shared knowledge base
+- **Project scope**: Access project-specific documentation from the project view
 
-### Command Palette
+### Navigation
 
-The `Cmd/Ctrl + K` shortcut opens a quick selector:
-- Search by application name
-- See project counts
-- View last updated time
-- Quick keyboard navigation
+- Click tabs to switch between scopes
+- Each scope maintains its own tree of folders and documents
+- Search is scoped to the currently active tab
 
 ---
 
 ## Collaborative Features
 
-### Real-Time Editing
+### Document Locking
 
-Multiple users can edit simultaneously:
-- See each other's cursors with colored labels
-- Changes merge automatically via Yjs CRDT
-- No conflicts or lost work
-- Document locking prevents accidental overwrites
+Documents use exclusive locking for edit coordination:
+- Only one user can edit a document at a time
+- Other users see a "locked by [user]" indicator
+- Lock is released when the editor saves or discards changes
+- Locks can be force-released by document owners if needed
 
 ### Presence Indicators
 
 - See who's viewing the same note
 - Avatar icons show active users
-- Cursor labels with names
 
 ### Permissions
 
@@ -346,10 +349,10 @@ Documents inherit permissions from their application:
 
 ### Collaboration
 
-1. **Use document locking**: Lock documents while editing to prevent conflicts
+1. **Respect document locks**: Wait for others to finish editing before acquiring the lock
 2. **Review regularly**: Keep content current
 3. **Assign owners**: Someone responsible for each area
-4. **Leverage real-time editing**: Collaborate live with team members
+4. **Use tags**: Organize documents with custom tags for easy discovery
 
 ---
 

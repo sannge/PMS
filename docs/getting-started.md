@@ -63,6 +63,8 @@ Key dependencies include:
 - `passlib` - Password hashing
 - `redis` - Redis client
 - `minio` - MinIO client
+- `meilisearch-python-sdk` - Full-text search
+- `arq` - Background job scheduler
 - `pytest` - Testing framework
 
 ### 3. Configure Environment Variables
@@ -136,8 +138,10 @@ This creates all required tables:
 - `application_members` - App membership
 - `projects` - Project boards
 - `project_members` - Project membership
+- `project_assignments` - User work assignments
+- `project_task_status_agg` - Aggregated task status counts
 - `tasks` - Task/issue tracking
-- `task_statuses` - Status columns
+- `task_statuses` - Status columns per project
 - `comments` - Task comments
 - `mentions` - @mention tracking
 - `checklists` - Task checklists
@@ -147,7 +151,9 @@ This creates all required tables:
 - `invitations` - App invitations
 - `document_folders` - Knowledge base folder hierarchy
 - `documents` - Knowledge base documents
-- `document_snapshots` - Document version history
+- `document_snapshots` - Document version snapshots (placeholder for future)
+- `document_tags` - Custom tags for documents
+- `document_tag_assignments` - Document-to-tag associations
 
 ### 6. Start Redis
 
@@ -213,8 +219,7 @@ npm install
 Key dependencies include:
 - `electron` - Desktop framework
 - `react` - UI library
-- `@tanstack/react-query` - Server state
-- `zustand` - Client state
+- `@tanstack/react-query` - Server state with IndexedDB persistence
 - `@radix-ui/*` - UI primitives
 - `tailwindcss` - Styling
 - `@tiptap/*` - Rich text editor
