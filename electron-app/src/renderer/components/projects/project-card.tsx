@@ -82,7 +82,7 @@ function formatDate(dateString: string): string {
     return `${weeks}w`
   }
 
-  return date.toLocaleDateString(undefined, {
+  return date.toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
   })

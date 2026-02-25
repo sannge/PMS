@@ -22,6 +22,7 @@ import { useKnowledgePermissions } from '@/hooks/use-knowledge-permissions'
 import { KnowledgeTree } from './knowledge-tree'
 import { TagFilterList } from './tag-filter-list'
 import { CreateDialog } from './create-dialog'
+import { createEmptyCanvas } from './canvas-types'
 
 const SIDEBAR_WIDTH_KEY = 'knowledge-sidebar-width'
 const DEFAULT_WIDTH = 256
@@ -113,7 +114,7 @@ export function KnowledgeSidebar(): JSX.Element {
     setCreateDialogOpen(true)
   }
 
-  const handleCreateSubmit = async (name: string) => {
+  const handleCreateSubmit = async (name: string, format?: 'document' | 'canvas') => {
     const { scope, scopeId } = resolveScope()
     if (!scopeId) return
 
@@ -123,6 +124,7 @@ export function KnowledgeSidebar(): JSX.Element {
         scope,
         scope_id: scopeId,
         folder_id: selectedFolderId || null, // Use selected folder
+        content_json: format === 'canvas' ? JSON.stringify(createEmptyCanvas()) : undefined,
       })
     } else {
       await createFolder.mutateAsync({

@@ -67,7 +67,10 @@ export const queryKeys = {
   application: (id: string) => ['application', id] as const,
 
   // Projects
-  projects: (appId: string) => ['projects', appId] as const,
+  projects: (appId: string, includeArchived?: boolean) =>
+    includeArchived
+      ? (['projects', appId, 'withArchived'] as const)
+      : (['projects', appId] as const),
   project: (id: string) => ['project', id] as const,
   archivedProjects: (appId: string) => ['projects', appId, 'archived'] as const,
 
@@ -88,6 +91,9 @@ export const queryKeys = {
   // Cross-app dashboard
   myProjectsCrossApp: ['myProjects', 'cross-app'] as const,
   myTasksCrossApp: ['myTasks', 'cross-app'] as const,
+
+  // Dashboard
+  dashboard: ['dashboard'] as const,
 
   // Comments
   comments: (taskId: string) => ['comments', taskId] as const,

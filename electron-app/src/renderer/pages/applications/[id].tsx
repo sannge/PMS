@@ -11,6 +11,7 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { cn } from '@/lib/utils'
+import { parseBackendDate } from '@/lib/time-utils'
 import { useAuthStore } from '@/contexts/auth-context'
 import { useWebSocket } from '@/hooks/use-websocket'
 import { WebSocketClient } from '@/lib/websocket'
@@ -98,7 +99,7 @@ export interface ApplicationDetailPageProps {
  * Format a date string to a readable format
  */
 function formatDate(dateString: string): string {
-  return new Date(dateString).toLocaleDateString(undefined, {
+  return parseBackendDate(dateString).toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
@@ -631,9 +632,10 @@ export function ApplicationDetailPage({
     setProjectModalMode('create')
   }, [])
 
-  // Handle edit project
+  // Handle edit project (block archived projects)
   const handleEditProject = useCallback(
     (project: Project) => {
+      if (project.archived_at) return
       setMutationError(null)
       setEditingProject(project)
       setEditingProjectId(project.id)

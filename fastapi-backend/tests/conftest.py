@@ -5,6 +5,8 @@ import os
 import sys
 from datetime import datetime, timedelta
 from typing import AsyncGenerator, Generator
+
+from app.utils.timezone import utc_now
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -310,7 +312,7 @@ def mock_minio_service():
         mock_instance.get_file_info.return_value = {
             "size": 1024,
             "content_type": "text/plain",
-            "last_modified": datetime.utcnow(),
+            "last_modified": utc_now(),
             "etag": "abc123",
         }
         mock_instance.generate_object_name.return_value = "task/uuid/12345678_file.txt"

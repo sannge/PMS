@@ -11,7 +11,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 from uuid import UUID
@@ -20,6 +20,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from ..config import settings
 from ..services.redis_service import redis_service
+from ..utils.timezone import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +126,7 @@ class WebSocketConnection:
 
     websocket: WebSocket
     user_id: UUID
-    connected_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    connected_at: datetime = field(default_factory=lambda: utc_now())
     rooms: set[str] = field(default_factory=set)
 
     def __hash__(self) -> int:

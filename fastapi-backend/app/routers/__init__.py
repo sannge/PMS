@@ -9,6 +9,7 @@ from .applications import router as applications_router
 from .auth import router as auth_router
 from .checklists import router as checklists_router
 from .comments import router as comments_router
+from .dashboard import router as dashboard_router
 from .document_folders import router as document_folders_router
 from .document_tags import router as document_tags_router
 from .document_locks import router as document_locks_router
@@ -30,6 +31,7 @@ __all__ = [
     "auth_router",
     "checklists_router",
     "comments_router",
+    "dashboard_router",
     "document_folders_router",
     "document_tags_router",
     "document_locks_router",

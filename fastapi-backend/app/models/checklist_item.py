@@ -4,6 +4,8 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
+from ..utils.timezone import utc_now
+
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -70,7 +72,7 @@ class ChecklistItem(Base):
         default=False,
     )
     completed_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=True,
     )
 
@@ -82,12 +84,12 @@ class ChecklistItem(Base):
 
     # Timestamps
     created_at = Column(
-        DateTime,
-        default=datetime.utcnow,
+        DateTime(timezone=True),
+        default=utc_now,
         nullable=False,
     )
     updated_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=True,
     )
 
@@ -116,8 +118,8 @@ class ChecklistItem(Base):
         else:
             self.is_done = True
             self.completed_by = user_id
-            self.completed_at = datetime.utcnow()
-        self.updated_at = datetime.utcnow()
+            self.completed_at = utc_now()
+        self.updated_at = utc_now()
 
     def __repr__(self) -> str:
         """String representation of ChecklistItem."""

@@ -13,7 +13,7 @@
  * | Edit, saving        | "Saving..."            | "Cancel" + "Save" (disabled)   |
  */
 
-import { Pencil, Lock, Save, X, Loader2 } from 'lucide-react'
+import { Pencil, Lock, Save, X, Loader2, LayoutGrid } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import type { LockHolder } from '@/hooks/use-document-lock'
 
@@ -34,10 +34,14 @@ export interface DocumentActionBarProps {
   isEntering: boolean
   /** True while exiting edit mode (save + lock release) */
   isExiting: boolean
+  /** Whether the document is in canvas format */
+  isCanvas?: boolean
   onEdit: () => void
   onSave: () => void
   onCancel: () => void
   onForceTake: () => void
+  /** Callback to convert this document to canvas format */
+  onConvertToCanvas?: () => void
 }
 
 // ============================================================================
@@ -54,10 +58,12 @@ export function DocumentActionBar({
   isSaving,
   isEntering,
   isExiting,
+  isCanvas,
   onEdit,
   onSave,
   onCancel,
   onForceTake,
+  onConvertToCanvas,
 }: DocumentActionBarProps) {
   // View mode
   if (mode === 'view') {
@@ -66,7 +72,7 @@ export function DocumentActionBar({
       return (
         <div className="flex items-center justify-between px-4 py-1.5 border-b bg-amber-500/10">
           <div className="flex items-center gap-2 text-sm text-amber-700 dark:text-amber-400">
-            <Lock className="h-3.5 w-3.5" />
+            <Lock className="h-3.5 w-3.5" aria-hidden="true" />
             <span>Being edited by {lockHolder.user_name}</span>
           </div>
           {canForceTake && (
@@ -78,7 +84,7 @@ export function DocumentActionBar({
               className="h-7 text-xs gap-1.5"
             >
               {isEntering ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
               ) : null}
               {isEntering ? 'Taking over...' : 'Take over'}
             </Button>
@@ -89,22 +95,37 @@ export function DocumentActionBar({
 
     // Unlocked — show Edit button or "View only" indicator
     return (
-      <div className="flex items-center justify-end px-4 py-1.5 border-b bg-muted/30">
+      <div className="flex items-center justify-end gap-2 px-4 py-1.5 border-b bg-muted/30 shrink-0 min-w-0 overflow-hidden">
         {canEdit ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onEdit}
-            disabled={isEntering}
-            className="h-7 text-xs gap-1.5"
-          >
-            {isEntering ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Pencil className="h-3.5 w-3.5" />
+          <>
+            {!isCanvas && onConvertToCanvas && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onConvertToCanvas}
+                disabled={isEntering}
+                className="h-7 text-xs gap-1.5 text-muted-foreground"
+                aria-label="Convert document to canvas format"
+              >
+                <LayoutGrid className="h-3.5 w-3.5" aria-hidden="true" />
+                Canvas
+              </Button>
             )}
-            {isEntering ? 'Opening editor...' : 'Edit'}
-          </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onEdit}
+              disabled={isEntering}
+              className="h-7 text-xs gap-1.5"
+            >
+              {isEntering ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+              {isEntering ? 'Opening editor...' : 'Edit'}
+            </Button>
+          </>
         ) : (
           <span className="text-xs text-muted-foreground">View only</span>
         )}
@@ -121,12 +142,12 @@ export function DocumentActionBar({
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         {isSaving ? (
           <>
-            <Loader2 className="h-3 w-3 animate-spin" />
+            <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
             <span>Saving...</span>
           </>
         ) : isExiting ? (
           <>
-            <Loader2 className="h-3 w-3 animate-spin" />
+            <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
             <span>Closing editor...</span>
           </>
         ) : isDirty ? (
@@ -143,7 +164,7 @@ export function DocumentActionBar({
           disabled={busy}
           className="h-7 text-xs gap-1.5"
         >
-          <X className="h-3.5 w-3.5" />
+          <X className="h-3.5 w-3.5" aria-hidden="true" />
           Cancel
         </Button>
         <Button
@@ -154,9 +175,9 @@ export function DocumentActionBar({
           className="h-7 text-xs gap-1.5"
         >
           {isSaving ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
           ) : (
-            <Save className="h-3.5 w-3.5" />
+            <Save className="h-3.5 w-3.5" aria-hidden="true" />
           )}
           {isSaving ? 'Saving...' : 'Save'}
         </Button>

@@ -1,7 +1,8 @@
 """ProjectTaskStatusAgg SQLAlchemy model for incremental status aggregation."""
 
-from datetime import datetime
 from typing import TYPE_CHECKING
+
+from ..utils.timezone import utc_now
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer
 from sqlalchemy.dialects.postgresql import UUID
@@ -77,9 +78,9 @@ class ProjectTaskStatusAgg(Base):
 
     # Timestamp
     updated_at = Column(
-        DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
         nullable=False,
     )
 
@@ -111,7 +112,7 @@ class ProjectTaskStatusAgg(Base):
         self.review_tasks = 0
         self.issue_tasks = 0
         self.done_tasks = 0
-        self.updated_at = datetime.utcnow()
+        self.updated_at = utc_now()
 
     def to_dict(self) -> dict:
         """Convert aggregation to dictionary for status derivation."""

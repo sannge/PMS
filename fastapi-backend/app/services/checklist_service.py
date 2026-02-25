@@ -7,7 +7,6 @@ Provides business logic for:
 - Maintaining denormalized counts on tasks
 """
 
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
@@ -15,6 +14,7 @@ from sqlalchemy import func, select, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from ..utils.timezone import utc_now
 from ..models.checklist import Checklist
 from ..models.checklist_item import ChecklistItem
 from ..models.task import Task
@@ -87,7 +87,7 @@ async def create_checklist(
         rank=new_rank,
         total_items=0,
         completed_items=0,
-        created_at=datetime.utcnow(),
+        created_at=utc_now(),
     )
     db.add(checklist)
     await db.commit()
@@ -122,7 +122,7 @@ async def update_checklist(
     if checklist_data.title is not None:
         checklist.title = checklist_data.title
 
-    checklist.updated_at = datetime.utcnow()
+    checklist.updated_at = utc_now()
     await db.commit()
     await db.refresh(checklist)
 
@@ -264,7 +264,7 @@ async def create_checklist_item(
         content=item_data.content,
         is_done=False,
         rank=new_rank,
-        created_at=datetime.utcnow(),
+        created_at=utc_now(),
     )
     db.add(item)
 
@@ -323,12 +323,12 @@ async def update_checklist_item(
         item.is_done = item_data.is_done
         if item.is_done and not was_done:
             item.completed_by = user_id
-            item.completed_at = datetime.utcnow()
+            item.completed_at = utc_now()
         elif not item.is_done and was_done:
             item.completed_by = None
             item.completed_at = None
 
-    item.updated_at = datetime.utcnow()
+    item.updated_at = utc_now()
 
     # Update checklist completed count if status changed
     if item_data.is_done is not None and was_done != item.is_done:
@@ -378,11 +378,11 @@ async def toggle_checklist_item(
 
     # Toggle
     item.is_done = not item.is_done
-    item.updated_at = datetime.utcnow()
+    item.updated_at = utc_now()
 
     if item.is_done:
         item.completed_by = user_id
-        item.completed_at = datetime.utcnow()
+        item.completed_at = utc_now()
     else:
         item.completed_by = None
         item.completed_at = None

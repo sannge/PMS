@@ -148,7 +148,7 @@ function NotesPageContent(): JSX.Element {
       {/* Main content area */}
       <div className="flex flex-1 min-h-0">
         <KnowledgeSidebar />
-        <main className="flex-1 flex flex-col min-h-0">
+        <main className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
           <EditorPanel keyByDocumentId canEdit={canEdit} isOwner={isOwner} />
         </main>
       </div>

@@ -13,6 +13,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import lazyload, selectinload
 
+from ..utils.timezone import utc_now
 from ..database import get_db
 from ..models.application import Application
 from ..models.application_member import ApplicationMember
@@ -431,7 +432,7 @@ async def update_application(
         setattr(application, field, value)
 
     # Update timestamp
-    application.updated_at = datetime.utcnow()
+    application.updated_at = utc_now()
 
     # Save changes
     await db.commit()
@@ -709,7 +710,7 @@ async def list_my_completed_tasks(
         return TaskCursorPage(items=[], next_cursor=None)
 
     # Calculate threshold date (7 days ago)
-    threshold_date = datetime.utcnow() - timedelta(days=MY_TASKS_ARCHIVE_THRESHOLD_DAYS)
+    threshold_date = utc_now() - timedelta(days=MY_TASKS_ARCHIVE_THRESHOLD_DAYS)
 
     # Query tasks assigned to the user that are done and completed within threshold
     query = (

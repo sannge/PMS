@@ -17,6 +17,7 @@
 
 import { useState, useCallback, useEffect, useMemo } from 'react'
 import { cn } from '@/lib/utils'
+import { formatDateForInput } from '@/lib/time-utils'
 import {
   CheckCircle2,
   Loader2,
@@ -160,16 +161,6 @@ function validateForm(data: FormData): FormErrors {
   }
 
   return errors
-}
-
-/**
- * Format date for input
- */
-function formatDateForInput(dateString: string | null): string {
-  if (!dateString) return ''
-  const date = new Date(dateString)
-  if (isNaN(date.getTime())) return ''
-  return date.toISOString().split('T')[0]
 }
 
 // ============================================================================

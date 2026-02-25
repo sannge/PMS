@@ -107,6 +107,47 @@ interface FolderEventData {
 }
 
 // ============================================================================
+// Event Deduplication
+// ============================================================================
+//
+// For project-scoped documents/folders, the backend broadcasts the same event
+// to both the project room AND the application room so users viewing either
+// scope receive updates. When a client is subscribed to both rooms (e.g.,
+// viewing a project within an application), it receives the same event twice.
+//
+// This deduplicator filters out duplicate events by fingerprint within a short
+// time window so each handler runs only once per unique event.
+
+const DEDUP_WINDOW_MS = 1000
+const DEDUP_CLEANUP_THRESHOLD = 50
+const DEDUP_CLEANUP_INTERVAL_MS = 5000
+
+/** Tracks recently seen event fingerprints with their arrival timestamps. */
+const recentEvents = new Map<string, number>()
+let lastCleanupTime = 0
+
+/**
+ * Returns true if this event fingerprint was already seen within DEDUP_WINDOW_MS.
+ * Otherwise records it and returns false (first occurrence).
+ */
+function isDuplicateEvent(fingerprint: string): boolean {
+  const now = Date.now()
+  const lastSeen = recentEvents.get(fingerprint)
+  if (lastSeen !== undefined && now - lastSeen < DEDUP_WINDOW_MS) {
+    return true
+  }
+  recentEvents.set(fingerprint, now)
+  // Periodic cleanup of stale entries (time-guarded to avoid running on every call)
+  if (recentEvents.size > DEDUP_CLEANUP_THRESHOLD && now - lastCleanupTime > DEDUP_CLEANUP_INTERVAL_MS) {
+    lastCleanupTime = now
+    for (const [key, time] of recentEvents) {
+      if (now - time > DEDUP_WINDOW_MS) recentEvents.delete(key)
+    }
+  }
+  return false
+}
+
+// ============================================================================
 // Hook
 // ============================================================================
 
@@ -593,14 +634,15 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
 
     // ========================================================================
     // Document Events (Knowledge Base)
-    // Skip own actions - optimistic updates already handled the local cache
+    // Own actions: always run setQueriesData for IndexedDB consistency,
+    // skip redundant invalidateQueries (onSuccess handles those).
     // ========================================================================
 
     unsubscribers.push(
       wsClient.on<DocumentEventData>(MessageType.DOCUMENT_CREATED, (data) => {
-        // Skip own actions - already handled by optimistic update
-        if (data.actor_id && data.actor_id === currentUserRef.current?.id) return
-
+        if (isDuplicateEvent(`doc_created:${data.document_id}:${data.timestamp}`)) return
+        // NOTE: Do NOT skip own actions. Invalidation ensures IndexedDB persisted cache
+        // is updated with server-confirmed data (real ID replacing temp ID, accurate timestamps).
         queryClient.invalidateQueries({ queryKey: queryKeys.documents(data.scope, data.scope_id) })
         queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders(data.scope, data.scope_id) })
         queryClient.invalidateQueries({ queryKey: queryKeys.scopesSummary() })
@@ -618,10 +660,17 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
 
     unsubscribers.push(
       wsClient.on<DocumentEventData>(MessageType.DOCUMENT_UPDATED, (data) => {
-        // Skip own actions - already handled by optimistic update
-        if (data.actor_id && data.actor_id === currentUserRef.current?.id) return
+        if (isDuplicateEvent(`doc_updated:${data.document_id}:${data.timestamp}`)) return
+        const isOwnAction = data.actor_id && data.actor_id === currentUserRef.current?.id
 
-        queryClient.invalidateQueries({ queryKey: queryKeys.document(data.document_id) })
+        // For own actions, the save mutation already updates the individual document
+        // cache via setQueryData + invalidateQueries (use-edit-mode.ts:313,329).
+        // Only refetch for OTHER users' changes.
+        if (!isOwnAction) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.document(data.document_id) })
+        }
+        // Document list queries are NOT handled by the save mutation,
+        // so always invalidate them to keep tree/list views in sync.
         queryClient.invalidateQueries({ queryKey: queryKeys.documents(data.scope, data.scope_id) })
         queryClient.invalidateQueries({ queryKey: ['search'] })
         if (data.folder_id !== undefined) {
@@ -639,21 +688,29 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
 
     unsubscribers.push(
       wsClient.on<DocumentEventData>(MessageType.DOCUMENT_DELETED, (data) => {
-        // Skip own actions - already handled by optimistic update
-        if (data.actor_id && data.actor_id === currentUserRef.current?.id) return
+        if (isDuplicateEvent(`doc_deleted:${data.document_id}:${data.timestamp}`)) return
+        // NOTE: Do NOT skip own actions here. Same IndexedDB rehydration issue
+        // as FOLDER_DELETED — optimistic update only touches in-memory cache,
+        // but stale data in IndexedDB can cause deleted documents to reappear.
+        const isOwnAction = data.actor_id && data.actor_id === currentUserRef.current?.id
 
         queryClient.removeQueries({ queryKey: queryKeys.document(data.document_id) })
-        queryClient.invalidateQueries({ queryKey: ['search'] })
         // Directly remove from list caches to avoid race with DB commit
         queryClient.setQueriesData<DocumentListResponse>(
           { queryKey: queryKeys.documents(data.scope, data.scope_id), exact: false },
           (old) => old ? { ...old, items: old.items.filter(i => i.id !== data.document_id) } : old
         )
-        // Folder tree needs refresh for document_count
-        queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders(data.scope, data.scope_id) })
-        queryClient.invalidateQueries({ queryKey: queryKeys.scopesSummary() })
+
+        // Skip invalidations that onSuccess already handles for own actions
+        if (!isOwnAction) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders(data.scope, data.scope_id) })
+          queryClient.invalidateQueries({ queryKey: queryKeys.scopesSummary() })
+          queryClient.invalidateQueries({ queryKey: ['search'] })
+        }
         if (data.scope === 'project') {
-          queryClient.invalidateQueries({ queryKey: ['projects-with-content'] })
+          if (!isOwnAction) {
+            queryClient.invalidateQueries({ queryKey: ['projects-with-content'] })
+          }
           if (data.application_id) {
             queryClient.setQueriesData<DocumentListResponse>(
               { queryKey: queryKeys.documents('application', data.application_id), exact: false },
@@ -667,14 +724,17 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
 
     // ========================================================================
     // Folder Events (Knowledge Base)
-    // Skip own actions - optimistic updates already handled the local cache
+    // Own actions: always run setQueriesData for IndexedDB consistency,
+    // skip redundant invalidateQueries (onSuccess handles those).
     // ========================================================================
 
     unsubscribers.push(
       wsClient.on<FolderEventData>(MessageType.FOLDER_CREATED, (data) => {
-        // Skip own actions - already handled by optimistic update
-        if (data.actor_id && data.actor_id === currentUserRef.current?.id) return
-
+        if (isDuplicateEvent(`folder_created:${data.folder_id}:${data.timestamp}`)) return
+        // NOTE: Do NOT skip own actions. The optimistic update adds the folder
+        // to in-memory cache, but without running this handler the invalidation
+        // that fetches accurate server data (materialized_path, depth, document_count)
+        // would be skipped, and stale IndexedDB data could omit the new folder on remount.
         queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders(data.scope, data.scope_id) })
         if (data.scope === 'project') {
           queryClient.invalidateQueries({ queryKey: ['projects-with-content'] })
@@ -687,9 +747,9 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
 
     unsubscribers.push(
       wsClient.on<FolderEventData>(MessageType.FOLDER_UPDATED, (data) => {
-        // Skip own actions - already handled by optimistic update
-        if (data.actor_id && data.actor_id === currentUserRef.current?.id) return
-
+        if (isDuplicateEvent(`folder_updated:${data.folder_id}:${data.timestamp}`)) return
+        // NOTE: Do NOT skip own actions. Same IndexedDB consistency rationale:
+        // invalidation ensures the persisted cache is updated with server-confirmed data.
         queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders(data.scope, data.scope_id) })
         if (data.scope === 'project' && data.application_id) {
           queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders('application', data.application_id) })
@@ -699,8 +759,13 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
 
     unsubscribers.push(
       wsClient.on<FolderEventData>(MessageType.FOLDER_DELETED, (data) => {
-        // Skip own actions - already handled by optimistic update
-        if (data.actor_id && data.actor_id === currentUserRef.current?.id) return
+        if (isDuplicateEvent(`folder_deleted:${data.folder_id}:${data.timestamp}`)) return
+        // NOTE: Do NOT skip own actions here. The optimistic update in useDeleteFolder
+        // only updates the in-memory TanStack Query cache, but IndexedDB persistence
+        // still holds stale data. If we skip, the debounced persister writes stale data
+        // to IndexedDB, and on remount/rehydration the deleted folder reappears.
+        // Always run this handler to ensure the cache (and persisted state) stays consistent.
+        const isOwnAction = data.actor_id && data.actor_id === currentUserRef.current?.id
 
         // Directly remove from tree cache to avoid race with DB commit
         const removeFolder = (nodes: FolderTreeNode[]): FolderTreeNode[] =>
@@ -712,13 +777,17 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
           { queryKey: queryKeys.documentFolders(data.scope, data.scope_id) },
           (old) => old ? removeFolder(old) : old
         )
-        // Documents in deleted folder are soft-deleted; folder counts may change
-        queryClient.invalidateQueries({ queryKey: queryKeys.documents(data.scope, data.scope_id) })
-        queryClient.invalidateQueries({ queryKey: queryKeys.scopesSummary() })
-        // Invalidate search cache so deleted documents don't appear in results
-        queryClient.invalidateQueries({ queryKey: ['search'] })
+
+        // Skip invalidations that onSuccess already handles for own actions
+        if (!isOwnAction) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.documents(data.scope, data.scope_id) })
+          queryClient.invalidateQueries({ queryKey: queryKeys.scopesSummary() })
+          queryClient.invalidateQueries({ queryKey: ['search'] })
+        }
         if (data.scope === 'project') {
-          queryClient.invalidateQueries({ queryKey: ['projects-with-content'] })
+          if (!isOwnAction) {
+            queryClient.invalidateQueries({ queryKey: ['projects-with-content'] })
+          }
           if (data.application_id) {
             queryClient.setQueriesData<FolderTreeNode[]>(
               { queryKey: queryKeys.documentFolders('application', data.application_id) },

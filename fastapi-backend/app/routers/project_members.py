@@ -14,7 +14,6 @@ Project Member Roles:
 - Member: Can edit/move tasks only
 """
 
-from datetime import datetime
 from typing import Annotated, List, Optional
 from uuid import UUID
 
@@ -23,6 +22,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from ..utils.timezone import utc_now
 from ..database import get_db
 from ..models.application import Application
 from ..models.application_member import ApplicationMember
@@ -741,7 +741,7 @@ async def change_project_member_role(
 
     # Update the role
     member.role = new_role
-    member.updated_at = datetime.utcnow()
+    member.updated_at = utc_now()
     await db.commit()
     await db.refresh(member)
 

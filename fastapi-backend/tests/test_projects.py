@@ -1,6 +1,9 @@
 """Unit tests for Projects CRUD API endpoints."""
 
+from datetime import datetime
 from uuid import uuid4
+
+from app.utils.timezone import utc_now
 
 import pytest
 from httpx import AsyncClient
@@ -434,3 +437,66 @@ class TestDeleteProject:
         result = await db_session.execute(select(Task).filter(Task.id == task_id))
         task = result.scalar_one_or_none()
         assert task is None
+
+
+@pytest.mark.asyncio
+class TestArchivedProjectGuard:
+    """Tests for archived project modification guards (409 Conflict)."""
+
+    async def test_update_archived_project_returns_409(
+        self, client: AsyncClient, auth_headers: dict, test_project: Project, db_session: AsyncSession
+    ):
+        """Test that updating an archived project returns 409."""
+        test_project.archived_at = utc_now()
+        await db_session.commit()
+
+        response = await client.put(
+            f"/api/projects/{test_project.id}",
+            headers=auth_headers,
+            json={"name": "Should Fail"},
+        )
+
+        assert response.status_code == 409
+        assert "archived" in response.json()["detail"].lower()
+
+    async def test_update_non_archived_project_succeeds(
+        self, client: AsyncClient, auth_headers: dict, test_project: Project
+    ):
+        """Test that updating a non-archived project still works."""
+        response = await client.put(
+            f"/api/projects/{test_project.id}",
+            headers=auth_headers,
+            json={"name": "Not Archived"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["name"] == "Not Archived"
+
+    async def test_restore_then_update_succeeds(
+        self, client: AsyncClient, auth_headers: dict, test_project: Project, db_session: AsyncSession
+    ):
+        """Test that restoring an archived project allows updates again."""
+        # Archive
+        test_project.archived_at = utc_now()
+        await db_session.commit()
+
+        # Verify blocked
+        response = await client.put(
+            f"/api/projects/{test_project.id}",
+            headers=auth_headers,
+            json={"name": "Blocked"},
+        )
+        assert response.status_code == 409
+
+        # Restore
+        test_project.archived_at = None
+        await db_session.commit()
+
+        # Verify allowed
+        response = await client.put(
+            f"/api/projects/{test_project.id}",
+            headers=auth_headers,
+            json={"name": "Restored Project"},
+        )
+        assert response.status_code == 200
+        assert response.json()["name"] == "Restored Project"

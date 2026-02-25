@@ -1,6 +1,6 @@
 """Authentication service with JWT token generation and user management."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Optional
 from uuid import UUID
 
@@ -17,6 +17,7 @@ from ..database import get_db
 from ..models.user import User
 from ..schemas.user import UserCreate
 from ..utils.security import get_password_hash, verify_password
+from ..utils.timezone import utc_now
 from .user_cache_service import CachedUser, get_cached_user, set_cached_user
 
 # OAuth2 scheme for token-based authentication
@@ -55,9 +56,9 @@ def create_access_token(
 
     # Set expiration time
     if expires_delta:
-        expire = datetime.now(timezone.utc) + expires_delta
+        expire = utc_now() + expires_delta
     else:
-        expire = datetime.now(timezone.utc) + timedelta(
+        expire = utc_now() + timedelta(
             minutes=settings.jwt_expiration_minutes
         )
 

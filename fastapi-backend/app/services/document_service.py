@@ -8,7 +8,7 @@ content conversion stubs.
 import base64
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any, Optional, Set, Tuple
 from uuid import UUID
 
@@ -16,6 +16,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..utils.timezone import utc_now
 from ..models.application import Application
 from ..models.attachment import Attachment
 from ..models.document import Document
@@ -369,10 +370,10 @@ CLEANUP_GRACE_PERIOD = timedelta(minutes=5)
 def extract_attachment_ids(content_json: str) -> Set[str]:
     """
     Recursively walk TipTap JSON and collect all attachmentId values
-    from image nodes.
+    from image and drawio nodes.
 
     NOTE: Update this function if new attachment-bearing node types are added
-    (e.g., video, audio, file embed). Currently only 'image' nodes use attachmentId.
+    (e.g., video, audio, file embed). Currently 'image' and 'drawio' nodes use attachmentId.
     """
     try:
         content = json.loads(content_json)
@@ -382,7 +383,8 @@ def extract_attachment_ids(content_json: str) -> Set[str]:
     ids: Set[str] = set()
 
     def walk(node: dict) -> None:
-        if node.get("type") == "image":
+        node_type = node.get("type")
+        if node_type in ("image", "drawio"):
             attachment_id = node.get("attrs", {}).get("attachmentId")
             if attachment_id:
                 ids.add(attachment_id)
@@ -391,7 +393,16 @@ def extract_attachment_ids(content_json: str) -> Set[str]:
                 walk(child)
 
     if isinstance(content, dict):
-        walk(content)
+        if content.get("format") == "canvas":
+            containers = content.get("containers")
+            if isinstance(containers, list):
+                for container in containers:
+                    if isinstance(container, dict):
+                        container_content = container.get("content")
+                        if isinstance(container_content, dict) and container_content.get("type") == "doc":
+                            walk(container_content)
+        else:
+            walk(content)
 
     return ids
 
@@ -421,9 +432,12 @@ async def cleanup_orphaned_attachments(
     )
     all_attachments = result.scalars().all()
 
+    if not all_attachments:
+        return 0
+
     # 3. Find orphans: attachments whose ID is NOT in the content
     # Grace period: skip recently created attachments (may be in-flight uploads)
-    cutoff = datetime.utcnow() - CLEANUP_GRACE_PERIOD
+    cutoff = utc_now() - CLEANUP_GRACE_PERIOD
     orphans = [
         a for a in all_attachments
         if str(a.id) not in referenced_ids
@@ -433,6 +447,11 @@ async def cleanup_orphaned_attachments(
 
     if not orphans:
         return 0
+
+    logger.debug(
+        "cleanup_orphaned_attachments: document=%s, referenced=%d, db=%d, orphans=%d",
+        document_id, len(referenced_ids), len(all_attachments), len(orphans),
+    )
 
     # 4. Delete MinIO files (best-effort, log failures but continue)
     for orphan in orphans:
@@ -510,7 +529,7 @@ async def save_document_content(
             content_markdown=content_markdown,
             content_plain=content_plain,
             row_version=Document.row_version + 1,
-            updated_at=datetime.utcnow(),
+            updated_at=utc_now(),
         )
         .returning(Document)
     )

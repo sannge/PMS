@@ -224,7 +224,7 @@ function formatRelativeTime(dateString: string): string {
     return `${diffWeek}w ago`
   }
 
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
 // ============================================================================

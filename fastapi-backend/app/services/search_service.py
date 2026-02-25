@@ -345,7 +345,7 @@ def build_search_doc_data(
         "user_id": str(doc.user_id) if doc.user_id else None,
         "folder_id": str(doc.folder_id) if doc.folder_id else None,
         "created_by": str(doc.created_by) if doc.created_by else None,
-        "updated_at": int(doc.updated_at.replace(tzinfo=timezone.utc).timestamp()),
+        "updated_at": int(doc.updated_at.timestamp()),
         "deleted_at": None,
     }
 
@@ -683,7 +683,7 @@ async def search_documents_pg_fallback(
             "project_id": str(row.project_id) if row.project_id else None,
             "user_id": str(row.user_id) if row.user_id else None,
             "folder_id": str(row.folder_id) if row.folder_id else None,
-            "updated_at": int(row.updated_at.replace(tzinfo=timezone.utc).timestamp()) if row.updated_at else None,
+            "updated_at": int(row.updated_at.timestamp()) if row.updated_at else None,
             "created_by": str(row.created_by) if row.created_by else None,
             "_formatted": {
                 "title": row.title_highlighted,
@@ -834,7 +834,7 @@ async def check_search_index_consistency(ctx: dict) -> None:
                             "user_id": str(row.user_id) if row.user_id else None,
                             "folder_id": str(row.folder_id) if row.folder_id else None,
                             "created_by": str(row.created_by) if row.created_by else None,
-                            "updated_at": int(row.updated_at.replace(tzinfo=timezone.utc).timestamp()),
+                            "updated_at": int(row.updated_at.timestamp()),
                             "deleted_at": None,
                         }])
                     except Exception as exc:
@@ -934,7 +934,7 @@ async def full_reindex(db: AsyncSession) -> dict:
             "user_id": str(row.user_id) if row.user_id else None,
             "folder_id": str(row.folder_id) if row.folder_id else None,
             "created_by": str(row.created_by) if row.created_by else None,
-            "updated_at": int(row.updated_at.replace(tzinfo=timezone.utc).timestamp()),
+            "updated_at": int(row.updated_at.timestamp()),
             "deleted_at": None,
         } for row in rows]
 

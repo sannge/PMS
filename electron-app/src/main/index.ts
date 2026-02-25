@@ -147,6 +147,12 @@ function setupContentSecurityPolicy(): void {
   console.log('[CSP] MinIO URL:', minioUrl)
 
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    // Don't override CSP for draw.io iframe — it manages its own security headers
+    if (details.url.includes('.diagrams.net')) {
+      callback({ responseHeaders: details.responseHeaders })
+      return
+    }
+
     callback({
       responseHeaders: {
         ...details.responseHeaders,
@@ -160,7 +166,8 @@ function setupContentSecurityPolicy(): void {
               "font-src 'self' data:; " +
               `connect-src 'self' http://localhost:* ws://localhost:* ${minioUrl}; ` +
               `media-src 'self' blob: ${minioUrl}; ` +
-              "worker-src 'self' blob:;"
+              "worker-src 'self' blob:; " +
+              "frame-src https://embed.diagrams.net;"
             : // Production CSP - more restrictive
               "default-src 'self'; " +
               "script-src 'self'; " +
@@ -168,7 +175,8 @@ function setupContentSecurityPolicy(): void {
               `img-src 'self' data: blob: ${minioUrl}; ` +
               "font-src 'self' data:; " +
               `connect-src 'self' ${apiUrl} ${wsUrl} ${minioUrl}; ` +
-              `media-src 'self' blob: ${minioUrl};`
+              `media-src 'self' blob: ${minioUrl}; ` +
+              "frame-src https://embed.diagrams.net;"
         ]
       }
     })

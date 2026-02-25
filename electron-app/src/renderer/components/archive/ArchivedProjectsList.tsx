@@ -23,6 +23,7 @@ import {
   ListTodo,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { parseBackendDate } from '@/lib/time-utils'
 import {
   useArchivedProjects,
   Project,
@@ -121,7 +122,7 @@ function formatArchivedDate(dateString: string): string {
   if (diffDays < 7) return `${diffDays} days ago`
   if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`
 
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
 // ============================================================================
@@ -190,7 +191,7 @@ const ArchivedProjectItem = memo(function ArchivedProjectItem({
           {project.archived_at && (
             <span
               className="flex items-center gap-1 text-amber-600 dark:text-amber-500"
-              title={`Archived: ${new Date(project.archived_at).toLocaleString()}`}
+              title={`Archived: ${parseBackendDate(project.archived_at).toLocaleString('en-US')}`}
             >
               <Calendar className="h-3 w-3" />
               <span>{formatArchivedDate(project.archived_at)}</span>

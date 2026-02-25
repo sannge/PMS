@@ -486,6 +486,10 @@ export function useDeleteFolder(): UseMutationResult<void, Error, { folderId: st
       queryClient.invalidateQueries({
         queryKey: queryKeys.scopesSummary(),
       })
+      // Invalidate search results (deleted folder's documents should disappear)
+      queryClient.invalidateQueries({
+        queryKey: ['search'],
+      })
       queryClient.invalidateQueries({
         queryKey: ['projects-with-content'],
       })

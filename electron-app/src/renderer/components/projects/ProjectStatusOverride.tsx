@@ -11,6 +11,7 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import { cn } from '@/lib/utils'
+import { parseBackendDate } from '@/lib/time-utils'
 import {
   AlertTriangle,
   Shield,
@@ -93,7 +94,7 @@ export function ProjectStatusOverride({
   const overrideStatus = statuses.find((s) => s.id === project.override_status_id)
   const hasOverride = !!project.override_status_id
   const isExpired = project.override_expires_at
-    ? new Date(project.override_expires_at) < new Date()
+    ? parseBackendDate(project.override_expires_at) < new Date()
     : false
 
   // Reset form when editing state changes
@@ -226,7 +227,7 @@ export function ProjectStatusOverride({
                   <Clock className="h-3 w-3" />
                   <span>
                     {isExpired ? 'Expired' : 'Expires'}:{' '}
-                    {new Date(project.override_expires_at).toLocaleDateString()}
+                    {parseBackendDate(project.override_expires_at).toLocaleDateString('en-US')}
                   </span>
                 </div>
               )}
@@ -339,7 +340,10 @@ export function ProjectStatusOverride({
                     type="datetime-local"
                     value={expiresAt}
                     onChange={(e) => setExpiresAt(e.target.value)}
-                    min={new Date().toISOString().slice(0, 16)}
+                    min={new Intl.DateTimeFormat('sv-SE', {
+                      year: 'numeric', month: '2-digit', day: '2-digit',
+                      hour: '2-digit', minute: '2-digit',
+                    }).format(new Date()).replace(' ', 'T')}
                     className={cn(
                       'w-full pl-9 pr-3 py-2 rounded-md',
                       'border border-border bg-background',

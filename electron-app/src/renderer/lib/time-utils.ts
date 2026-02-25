@@ -7,6 +7,19 @@
 import { useState, useEffect } from 'react'
 
 /**
+ * Parse a backend ISO date string, treating bare strings (without timezone) as UTC.
+ * Backend sends ISO strings without timezone (e.g., "2024-01-15T10:30:00.123456")
+ * which should be interpreted as UTC.
+ */
+export function parseBackendDate(dateString: string): Date {
+  let s = dateString
+  if (!s.endsWith('Z') && !s.includes('+') && !s.includes('-', 10)) {
+    s = s + 'Z'
+  }
+  return new Date(s)
+}
+
+/**
  * Format an ISO date string as relative time (e.g., "5 minutes ago").
  *
  * @param isoDate - ISO date string or null/undefined
@@ -15,7 +28,7 @@ import { useState, useEffect } from 'react'
 export function formatRelativeTime(isoDate?: string | null): string {
   if (!isoDate) return 'Never saved'
 
-  const date = new Date(isoDate)
+  const date = parseBackendDate(isoDate)
   const now = new Date()
   const diffMs = now.getTime() - date.getTime()
   const diffSecs = Math.floor(diffMs / 1000)
@@ -32,7 +45,7 @@ export function formatRelativeTime(isoDate?: string | null): string {
   if (diffDays === 1) return 'Yesterday'
   if (diffDays < 7) return `${diffDays} days ago`
 
-  // For older dates, show the actual date
+  // For older dates, show the actual date in local time
   return date.toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
@@ -73,7 +86,7 @@ export function useRelativeTime(isoDate?: string | null): string {
 export function formatAbsoluteTime(isoDate?: string | null): string {
   if (!isoDate) return 'Unknown'
 
-  const date = new Date(isoDate)
+  const date = parseBackendDate(isoDate)
   return date.toLocaleString('en-US', {
     month: 'short',
     day: 'numeric',
@@ -81,4 +94,53 @@ export function formatAbsoluteTime(isoDate?: string | null): string {
     hour: 'numeric',
     minute: '2-digit',
   })
+}
+
+/**
+ * Get the local timezone abbreviation (e.g., "CST", "EST", "PST") for a given date.
+ */
+export function getLocalTimezoneAbbr(d: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZoneName: 'short',
+  }).formatToParts(d)
+  return parts.find((p) => p.type === 'timeZoneName')?.value ?? 'LT'
+}
+
+/**
+ * Format an ISO date string as a date in local time (e.g., "Feb 24, 2026").
+ */
+export function formatLocalDate(isoDate: string): string {
+  const date = parseBackendDate(isoDate)
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+}
+
+/**
+ * Get today's date string in local time (YYYY-MM-DD format).
+ */
+export function getLocalToday(): string {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+/**
+ * Format a date string for an HTML date input (YYYY-MM-DD).
+ * Uses string manipulation to avoid UTC date-only parsing bugs.
+ */
+export function formatDateForInput(dateString: string | null): string {
+  if (!dateString) return ''
+  // Extract date part only (handle both "YYYY-MM-DD" and "YYYY-MM-DDTHH:mm:ss" formats)
+  const datePart = dateString.split('T')[0]
+  const parts = datePart.split('-')
+  if (parts.length !== 3) return ''
+  // Validate it's a real date
+  const [year, month, day] = parts.map(Number)
+  if (isNaN(year) || isNaN(month) || isNaN(day)) return ''
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
 }

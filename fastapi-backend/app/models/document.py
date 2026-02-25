@@ -11,6 +11,8 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from ..utils.timezone import utc_now
+
 from sqlalchemy import (
     CheckConstraint,
     Column,
@@ -155,22 +157,22 @@ class Document(Base):
 
     # Soft delete
     deleted_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=True,
         index=True,
     )
 
     # Timestamps
     created_at = Column(
-        DateTime,
-        default=datetime.utcnow,
+        DateTime(timezone=True),
+        default=utc_now,
         nullable=False,
     )
 
     updated_at = Column(
-        DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
         nullable=False,
     )
 

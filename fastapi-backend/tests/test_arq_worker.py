@@ -4,6 +4,8 @@ import time
 from datetime import datetime, timedelta
 from uuid import uuid4
 
+from app.utils.timezone import utc_now
+
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
@@ -135,7 +137,7 @@ async def archivable_task(
         task_status_id=done_status.id,
         priority="medium",
         reporter_id=arq_test_user.id,
-        completed_at=datetime.utcnow() - timedelta(days=ARCHIVE_AFTER_DAYS + 1),
+        completed_at=utc_now() - timedelta(days=ARCHIVE_AFTER_DAYS + 1),
     )
     db_session.add(task)
     await db_session.commit()
@@ -161,7 +163,7 @@ async def recent_done_task(
         task_status_id=done_status.id,
         priority="medium",
         reporter_id=arq_test_user.id,
-        completed_at=datetime.utcnow() - timedelta(days=1),
+        completed_at=utc_now() - timedelta(days=1),
     )
     db_session.add(task)
     await db_session.commit()

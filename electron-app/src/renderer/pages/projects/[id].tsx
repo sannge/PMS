@@ -10,6 +10,7 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { cn } from '@/lib/utils'
+import { parseBackendDate } from '@/lib/time-utils'
 import { useAuthStore } from '@/contexts/auth-context'
 import {
   useProject,
@@ -100,7 +101,7 @@ export interface ProjectDetailPageProps {
  * Format a date string to a readable format
  */
 function formatDate(dateString: string): string {
-  return new Date(dateString).toLocaleDateString(undefined, {
+  return parseBackendDate(dateString).toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
@@ -297,7 +298,7 @@ function InfoTooltip({ project }: InfoTooltipProps): JSX.Element {
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Due Date</span>
                 <span className="text-foreground">
-                  {new Date(project.due_date + 'T00:00:00').toLocaleDateString()}
+                  {new Date(project.due_date + 'T00:00:00').toLocaleDateString('en-US')}
                 </span>
               </div>
             )}
@@ -477,7 +478,9 @@ export function ProjectDetailPage({
 
   // Permission checks:
   // - Edit project: App owner can edit any project, OR (app editor AND project member)
-  const canEditProject = isAppOwner || (isAppEditor && isProjectMember)
+  //   BUT archived projects cannot be modified (knowledge CRUD still allowed)
+  const isArchived = !!project?.archived_at
+  const canEditProject = !isArchived && (isAppOwner || (isAppEditor && isProjectMember))
   // - Delete project: Only app owner or project admin can delete
   const canDeleteProject = isAppOwner || isProjectAdmin
 
@@ -802,7 +805,7 @@ export function ProjectDetailPage({
             </span>
             {project.due_date && (
               <span className="text-xs text-muted-foreground flex-shrink-0 flex items-center gap-1">
-                Due {new Date(project.due_date + 'T00:00:00').toLocaleDateString()}
+                Due {new Date(project.due_date + 'T00:00:00').toLocaleDateString('en-US')}
               </span>
             )}
           </div>
@@ -835,8 +838,8 @@ export function ProjectDetailPage({
             </button>
           )}
 
-          {/* Status Button (Owners only) */}
-          {userRole === 'owner' && (
+          {/* Status Button (Owners only, not archived) */}
+          {userRole === 'owner' && !isArchived && (
             <button
               onClick={() => setShowStatusPanel(true)}
               className={cn(

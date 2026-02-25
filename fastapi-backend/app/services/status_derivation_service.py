@@ -13,10 +13,10 @@ status derivation without requiring full table scans.
 """
 
 from dataclasses import dataclass
-from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
 from ..models.task_status import StatusCategory, StatusName
+from ..utils.timezone import utc_now
 
 if TYPE_CHECKING:
     from ..models.project_task_status_agg import ProjectTaskStatusAgg
@@ -246,7 +246,7 @@ def update_aggregation_on_task_create(
     agg.total_tasks = (agg.total_tasks or 0) + 1
 
     # Update timestamp
-    agg.updated_at = datetime.utcnow()
+    agg.updated_at = utc_now()
 
     # Return the new derived status
     return derive_project_status_from_model(agg)
@@ -298,7 +298,7 @@ def update_aggregation_on_task_status_change(
     setattr(agg, new_counter_field, new_value + 1)
 
     # Update timestamp
-    agg.updated_at = datetime.utcnow()
+    agg.updated_at = utc_now()
 
     # Return the new derived status
     return derive_project_status_from_model(agg)
@@ -338,7 +338,7 @@ def update_aggregation_on_task_delete(
     agg.total_tasks = max(0, (agg.total_tasks or 0) - 1)
 
     # Update timestamp
-    agg.updated_at = datetime.utcnow()
+    agg.updated_at = utc_now()
 
     # Return the new derived status
     return derive_project_status_from_model(agg)
@@ -396,7 +396,7 @@ def recalculate_aggregation_from_tasks(
             agg.total_tasks += 1
 
     # Update timestamp
-    agg.updated_at = datetime.utcnow()
+    agg.updated_at = utc_now()
 
     # Return the new derived status
     return derive_project_status_from_model(agg)

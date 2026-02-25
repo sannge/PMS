@@ -10,7 +10,6 @@ Role-based permissions:
 - Owner: Full access - can invite with any role, update any role, remove members.
 """
 
-from datetime import datetime
 from typing import Annotated, List, Optional
 from uuid import UUID
 
@@ -18,6 +17,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+
+from ..utils.timezone import utc_now
 
 from ..database import get_db
 from ..models.application import Application
@@ -532,7 +533,7 @@ async def update_member_role(
                 )
 
     member.role = new_role
-    member.updated_at = datetime.utcnow()
+    member.updated_at = utc_now()
     await db.commit()
     await db.refresh(member)
 

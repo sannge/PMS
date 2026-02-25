@@ -14,7 +14,7 @@
  */
 
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
-import { FilePlus, Folder, FileText, FolderKanban, ChevronRight } from 'lucide-react'
+import { FilePlus, Folder, FileText, FolderKanban, ChevronRight, Archive } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   DndContext,
@@ -63,6 +63,7 @@ import { RootDropZone, ROOT_DROP_ZONE_ID } from './root-drop-zone'
 import { FolderContextMenu } from './folder-context-menu'
 import { CreateDialog } from './create-dialog'
 import { DeleteDialog } from './delete-dialog'
+import { createEmptyCanvas } from './canvas-types'
 import { matchesSearch, filterFolderTree, findFolderById, isDescendantOf, collectAncestorIds } from './tree-utils'
 import { useProjectPermissionsMap } from '@/hooks/use-knowledge-permissions'
 import { parseSortableId, parsePrefixToScope, type ScopeInfo } from './dnd-utils'
@@ -319,8 +320,10 @@ function ProjectSection({
     return null
   }
 
+  const isArchived = project.archived_at !== null
+
   return (
-    <div className="border-l-2 border-primary/20 ml-2 mt-1">
+    <div className={cn('border-l-2 border-primary/20 ml-2 mt-1', isArchived && 'opacity-70')}>
       <button
         onClick={toggleExpanded}
         className={cn(
@@ -337,6 +340,12 @@ function ProjectSection({
         />
         <FolderKanban className="h-4 w-4 shrink-0" />
         <span className="truncate">{project.name}</span>
+        {isArchived && (
+          <span className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground/70 shrink-0">
+            <Archive className="h-3 w-3" />
+            Archived
+          </span>
+        )}
       </button>
 
       {isExpanded && (
@@ -398,7 +407,7 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
   const activeLocks = useActiveLocks(scope, effectiveScopeId)
 
   // Project data (only for application scope)
-  const { data: projects } = useProjects(isApplicationScope ? applicationId : undefined)
+  const { data: projects } = useProjects(isApplicationScope ? applicationId : undefined, { includeArchived: true })
   const { data: projectsWithContent, isLoading: isProjectsContentLoading } = useProjectsWithContent(isApplicationScope ? applicationId! : null)
 
   // Per-project permissions (application scope only)
@@ -494,10 +503,18 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
 
   const filteredProjects = useMemo(() => {
     if (!isApplicationScope) return []
+    let filtered: Project[]
     if (searchQuery) {
-      return projectList.filter(project => matchesSearch(project.name, searchQuery))
+      filtered = projectList.filter(project => matchesSearch(project.name, searchQuery))
+    } else {
+      filtered = projectList.filter(project => projectIdsWithContent.has(project.id))
     }
-    return projectList.filter(project => projectIdsWithContent.has(project.id))
+    // Sort archived projects to the end, preserving backend order within each group
+    return filtered.sort((a, b) => {
+      const aArchived = a.archived_at !== null ? 1 : 0
+      const bArchived = b.archived_at !== null ? 1 : 0
+      return aArchived - bArchived
+    })
   }, [isApplicationScope, projectList, projectIdsWithContent, searchQuery])
 
   // Auto-expand folders with matching children when searching (batch dispatch)
@@ -838,7 +855,7 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
     setCreateDialogOpen(true)
   }, [contextMenuTarget, scope, effectiveScopeId, handleCloseContextMenu])
 
-  const handleCreateSubmit = useCallback(async (name: string) => {
+  const handleCreateSubmit = useCallback(async (name: string, format?: 'document' | 'canvas') => {
     const resolvedScopeId = createScope === 'personal' ? (userId ?? '') : createScopeId
 
     if (createType === 'document') {
@@ -847,6 +864,7 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
         scope: createScope,
         scope_id: resolvedScopeId,
         folder_id: createParentId,
+        content_json: format === 'canvas' ? JSON.stringify(createEmptyCanvas()) : undefined,
       })
       selectDocument(doc.id)
       if (createParentId) expandFolder(createParentId)

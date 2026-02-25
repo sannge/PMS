@@ -16,6 +16,7 @@ from sqlalchemy import select, or_, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import lazyload, noload
 
+from ..utils.timezone import utc_now
 from ..database import get_db
 from ..models.application import Application
 from ..models.application_member import ApplicationMember
@@ -102,7 +103,7 @@ async def _broadcast_document_event(
         "scope_id": scope_id,
         "folder_id": str(doc.folder_id) if doc.folder_id else None,
         "actor_id": str(actor_id) if actor_id else None,
-        "timestamp": doc.updated_at.isoformat() if doc.updated_at else datetime.utcnow().isoformat(),
+        "timestamp": doc.updated_at.isoformat() if doc.updated_at else utc_now().isoformat(),
         # Include application_id for project-scoped items so frontend can invalidate app queries
         "application_id": str(project_application_id) if project_application_id else None,
     }
@@ -636,7 +637,7 @@ async def update_document(
 
     # Increment version
     document.row_version += 1
-    document.updated_at = datetime.utcnow()
+    document.updated_at = utc_now()
 
     await db.flush()
 
@@ -792,7 +793,7 @@ async def delete_document(
         if project:
             project_application_id = project.application_id
 
-    document.deleted_at = datetime.utcnow()
+    document.deleted_at = utc_now()
     await db.flush()
 
     # Extract document ID before commit for safe background task usage

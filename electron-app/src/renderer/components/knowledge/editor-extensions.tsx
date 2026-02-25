@@ -6,11 +6,12 @@
  * the extensions themselves are already registered here.
  */
 
-import { Extension, RawCommands } from '@tiptap/core'
+import { Extension, Node, RawCommands, mergeAttributes } from '@tiptap/core'
 import { ReactNodeViewRenderer, NodeViewWrapper } from '@tiptap/react'
 import type { NodeViewProps } from '@tiptap/react'
 import Image from '@tiptap/extension-image'
 import type { Transaction, EditorState } from '@tiptap/pm/state'
+import type { EditorView } from '@tiptap/pm/view'
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import StarterKit from '@tiptap/starter-kit'
 import Underline from '@tiptap/extension-underline'
@@ -30,6 +31,7 @@ import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
 import CharacterCount from '@tiptap/extension-character-count'
 import Placeholder from '@tiptap/extension-placeholder'
 import { SearchHighlight } from './search-highlight-extension'
+import { DrawioNode } from './drawio-node'
 import { common, createLowlight } from 'lowlight'
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { useGetDownloadUrls } from '@/hooks/use-attachments'
@@ -45,7 +47,7 @@ let pendingIds = new Set<string>()
 let pendingResolvers: Array<{ resolve: (urls: Record<string, string>) => void }> = []
 let batchTimer: ReturnType<typeof setTimeout> | null = null
 
-function requestBatchUrl(
+export function requestBatchUrl(
   attachmentId: string,
   fetchBatch: (ids: string[]) => Promise<Record<string, string>>
 ): Promise<string | null> {
@@ -71,7 +73,7 @@ function requestBatchUrl(
           r.resolve(urls)
         }
       } catch (err) {
-        console.error('[ResizableImageView] Batch URL fetch failed:', err)
+        console.error('[BatchUrlResolver] Batch URL fetch failed:', err)
         for (const r of resolvers) {
           r.resolve({})
         }
@@ -94,6 +96,8 @@ export type SetImageAttrs = {
   title?: string
   attachmentId?: string
   width?: number
+  loading?: boolean
+  placeholderId?: string
 }
 
 // ============================================================================
@@ -122,8 +126,13 @@ const FontSize = Extension.create({
               if (!attributes.fontSize) {
                 return {}
               }
+              // Sanitize: only allow valid CSS font-size values
+              const fs = String(attributes.fontSize)
+              if (!/^\d+(\.\d+)?(px|rem|em|%)$/.test(fs)) {
+                return {}
+              }
               return {
-                style: `font-size: ${attributes.fontSize}`,
+                style: `font-size: ${fs}`,
               }
             },
           },
@@ -216,24 +225,53 @@ const Indent = Extension.create({
 
 function ResizableImageView({ node, updateAttributes, selected, editor }: NodeViewProps) {
   const [isResizing, setIsResizing] = useState(false)
-  const [resolvedSrc, setResolvedSrc] = useState<string>(node.attrs.src || '')
+  const [freshUrl, setFreshUrl] = useState<string | null>(null)
+  // Show skeleton on initial mount when attachmentId is present (document switch).
+  // After upload, attachmentId is set mid-lifecycle — we don't want a skeleton flash then.
+  const [isUrlLoading, setIsUrlLoading] = useState(!!node.attrs.attachmentId)
+  const isFirstMountRef = useRef(true)
   const imageRef = useRef<HTMLImageElement>(null)
   const startXRef = useRef(0)
   const startWidthRef = useRef(0)
   const getDownloadUrls = useGetDownloadUrls()
+  const isUploading = node.attrs.loading === true
+  // Tracks active document listeners for cleanup on unmount (prevents leak during mid-drag unmount)
+  const resizeCleanupRef = useRef<(() => void) | null>(null)
+
+  // Cleanup document-level mouse listeners on unmount
+  useEffect(() => {
+    return () => { resizeCleanupRef.current?.() }
+  }, [])
+
+  // Derive resolvedSrc: prefer batch-resolved presigned URL, fall back to node attr
+  const resolvedSrc = freshUrl || node.attrs.src || ''
 
   // Refresh presigned URL on mount when attachmentId is present.
   // Uses batch collector to coalesce concurrent mounts into a single API call.
   // Only updates local display state -- does NOT call updateAttributes to avoid
   // marking the document as dirty when the user has made no edits.
   useEffect(() => {
+    setFreshUrl(null) // Reset when attachment changes
     const attachmentId = node.attrs.attachmentId
-    if (!attachmentId) return
+    if (!attachmentId) {
+      isFirstMountRef.current = false
+      return
+    }
+
+    // Only show skeleton on initial mount (document switch where images have
+    // possibly-expired presigned URLs). When attachmentId is set after upload,
+    // node.attrs.src already contains a fresh URL — skip the skeleton to avoid
+    // a flash: image → skeleton → image.
+    if (isFirstMountRef.current) {
+      setIsUrlLoading(true)
+    }
+    isFirstMountRef.current = false
 
     let cancelled = false
-    requestBatchUrl(attachmentId, getDownloadUrls).then((freshUrl) => {
-      if (cancelled || !freshUrl) return
-      setResolvedSrc(freshUrl)
+    requestBatchUrl(attachmentId, getDownloadUrls).then((url) => {
+      if (cancelled) return
+      if (url) setFreshUrl(url)
+      setIsUrlLoading(false)
     })
 
     return () => { cancelled = true }
@@ -259,17 +297,47 @@ function ResizableImageView({ node, updateAttributes, selected, editor }: NodeVi
       }
     }
 
+    const cleanup = () => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+      resizeCleanupRef.current = null
+    }
+
     const handleMouseUp = () => {
       setIsResizing(false)
       // Single ProseMirror transaction = single undo step
       updateAttributes({ width: currentWidthRef.current })
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
+      cleanup()
     }
 
     document.addEventListener('mousemove', handleMouseMove)
     document.addEventListener('mouseup', handleMouseUp)
+    resizeCleanupRef.current = cleanup
   }, [updateAttributes])
+
+  // Show skeleton while uploading or while resolving presigned URL for attachment images.
+  // This prevents a flash of broken/expired image src during document switch.
+  if (isUploading || (isUrlLoading && node.attrs.attachmentId)) {
+    return (
+      <NodeViewWrapper className="inline-block relative" data-drag-handle>
+        <div className="image-skeleton" style={{ width: node.attrs.width || 300, height: 200 }}>
+          <svg
+            className="w-8 h-8 text-muted-foreground/40"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <circle cx="8.5" cy="8.5" r="1.5" />
+            <path d="M21 15l-5-5L5 21" />
+          </svg>
+        </div>
+      </NodeViewWrapper>
+    )
+  }
 
   return (
     <NodeViewWrapper className="inline-block relative" data-drag-handle>
@@ -293,6 +361,8 @@ function ResizableImageView({ node, updateAttributes, selected, editor }: NodeVi
               'bg-primary/60 rounded-tl-sm opacity-0 group-hover:opacity-100 transition-opacity',
               isResizing && 'opacity-100'
             )}
+            role="separator"
+            aria-label="Drag to resize image"
             title="Drag to resize"
           />
         )}
@@ -327,6 +397,16 @@ const ResizableImage = Image.extend({
           return { 'data-attachment-id': attributes.attachmentId }
         },
       },
+      loading: {
+        default: false,
+        parseHTML: () => false,
+        renderHTML: () => ({}),
+      },
+      placeholderId: {
+        default: null,
+        parseHTML: () => null,
+        renderHTML: () => ({}),
+      },
     }
   },
 
@@ -334,6 +414,50 @@ const ResizableImage = Image.extend({
     return ReactNodeViewRenderer(ResizableImageView)
   },
 })
+
+// ============================================================================
+// Image Placeholder Helpers
+// ============================================================================
+
+/** Update a loading placeholder image with the real URL and attachment ID. */
+export function updateImagePlaceholder(
+  view: EditorView,
+  placeholderId: string,
+  attrs: Partial<SetImageAttrs>
+): void {
+  let found = false
+  view.state.doc.descendants((node: ProseMirrorNode, pos: number) => {
+    if (found) return false
+    if (node.type.name === 'image' && node.attrs.placeholderId === placeholderId) {
+      const tr = view.state.tr.setNodeMarkup(pos, undefined, {
+        ...node.attrs,
+        ...attrs,
+        loading: false,
+        placeholderId: null,
+      })
+      view.dispatch(tr)
+      found = true
+      return false
+    }
+  })
+}
+
+/** Remove a loading placeholder image (e.g. on upload failure). */
+export function removeImagePlaceholder(
+  view: EditorView,
+  placeholderId: string
+): void {
+  let found = false
+  view.state.doc.descendants((node: ProseMirrorNode, pos: number) => {
+    if (found) return false
+    if (node.type.name === 'image' && node.attrs.placeholderId === placeholderId) {
+      const tr = view.state.tr.delete(pos, pos + node.nodeSize)
+      view.dispatch(tr)
+      found = true
+      return false
+    }
+  })
+}
 
 // ============================================================================
 // Constants
@@ -408,6 +532,104 @@ export const FONT_FAMILIES = [
 export const DEFAULT_FONT_FAMILY = 'Arial, sans-serif'
 
 // ============================================================================
+// Static Image Extension (for generateHTML — no ReactNodeViewRenderer)
+// ============================================================================
+
+const StaticImage = Image.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      width: {
+        default: null,
+        parseHTML: element => {
+          const width = element.getAttribute('width') || element.style.width
+          if (!width) return null
+          const parsed = parseInt(String(width), 10)
+          return Number.isNaN(parsed) ? null : parsed
+        },
+        renderHTML: attributes => {
+          if (!attributes.width) return {}
+          return { width: attributes.width, style: `width: ${attributes.width}px` }
+        },
+      },
+      attachmentId: {
+        default: null,
+        parseHTML: element => element.getAttribute('data-attachment-id'),
+        renderHTML: attributes => {
+          if (!attributes.attachmentId) return {}
+          return { 'data-attachment-id': attributes.attachmentId }
+        },
+      },
+      loading: {
+        default: false,
+        parseHTML: () => false,
+        renderHTML: () => ({}),
+      },
+      placeholderId: {
+        default: null,
+        parseHTML: () => null,
+        renderHTML: () => ({}),
+      },
+    }
+  },
+})
+
+// Static DrawioNode — no ReactNodeViewRenderer, uses renderHTML only
+const StaticDrawioNode = Node.create({
+  name: 'drawio',
+  group: 'block',
+  atom: true,
+  draggable: true,
+
+  addAttributes() {
+    return {
+      data: {
+        default: null,
+        parseHTML: element => element.getAttribute('data-drawio-xml'),
+        renderHTML: attributes => {
+          if (!attributes.data) return {}
+          return { 'data-drawio-xml': attributes.data }
+        },
+      },
+      width: {
+        default: null,
+        parseHTML: element => {
+          const w = element.getAttribute('width') || element.style.width
+          if (!w) return null
+          const parsed = parseInt(String(w), 10)
+          return Number.isNaN(parsed) ? null : parsed
+        },
+        renderHTML: attributes => {
+          if (!attributes.width) return {}
+          return { width: attributes.width, style: `width: ${attributes.width}px` }
+        },
+      },
+      attachmentId: {
+        default: null,
+        parseHTML: element => element.getAttribute('data-attachment-id'),
+        renderHTML: attributes => {
+          if (!attributes.attachmentId) return {}
+          return { 'data-attachment-id': attributes.attachmentId }
+        },
+      },
+      previewPng: {
+        default: null,
+        parseHTML: element => element.getAttribute('data-preview-png'),
+        renderHTML: () => ({}),  // Legacy read-only; never re-serialize base64
+      },
+    }
+  },
+
+  parseHTML() {
+    return [{ tag: 'div[data-type="drawio"]' }]
+  },
+
+  renderHTML({ HTMLAttributes }) {
+    return ['div', mergeAttributes({ 'data-type': 'drawio' }, HTMLAttributes)]
+  },
+})
+
+// ============================================================================
 // Extension Factory
 // ============================================================================
 
@@ -415,7 +637,7 @@ export const DEFAULT_FONT_FAMILY = 'Arial, sans-serif'
  * Creates the complete set of TipTap extensions for the knowledge base editor.
  * All extensions are configured upfront; subsequent plans only add toolbar UI.
  */
-export function createDocumentExtensions(options?: { placeholder?: string }) {
+export function createDocumentExtensions(options?: { placeholder?: string; documentId?: string }) {
   const lowlight = createLowlight(common)
 
   return [
@@ -483,10 +705,88 @@ export function createDocumentExtensions(options?: { placeholder?: string }) {
         class: 'max-w-full h-auto rounded-md',
       },
     }),
+    DrawioNode.configure({ documentId: options?.documentId }),
     CharacterCount,
     Placeholder.configure({
       placeholder: options?.placeholder || 'Start writing...',
     }),
     SearchHighlight,
+  ]
+}
+
+/**
+ * Creates a schema-only extension list for use with generateHTML().
+ * Excludes Placeholder, CharacterCount, SearchHighlight, and uses
+ * static node definitions (no ReactNodeViewRenderer) for Image and DrawioNode.
+ */
+export function createStaticExtensions() {
+  const lowlight = createLowlight(common)
+
+  return [
+    StarterKit.configure({
+      heading: { levels: [1, 2, 3, 4, 5, 6] },
+      codeBlock: false,
+    }),
+    Underline,
+    TextStyle,
+    FontFamily,
+    FontSize,
+    Indent,
+    Color,
+    Highlight.configure({
+      multicolor: true,
+    }),
+    TextAlign.configure({
+      types: ['heading', 'paragraph'],
+    }),
+    Link.configure({
+      openOnClick: false,
+      autolink: true,
+      linkOnPaste: true,
+      defaultProtocol: 'https',
+      HTMLAttributes: {
+        class: 'text-primary underline cursor-pointer',
+        rel: 'noopener noreferrer',
+      },
+    }),
+    Table.configure({
+      resizable: false,
+      HTMLAttributes: {
+        class: 'border-collapse border border-border w-full',
+      },
+    }),
+    TableRow,
+    TableCell.configure({
+      HTMLAttributes: {
+        class: 'border border-border p-2',
+      },
+    }),
+    TableHeader.configure({
+      HTMLAttributes: {
+        class: 'border border-border p-2 bg-muted font-semibold',
+      },
+    }),
+    TaskList.configure({
+      HTMLAttributes: {
+        class: 'not-prose',
+      },
+    }),
+    TaskItem.configure({
+      nested: true,
+    }),
+    CodeBlockLowlight.configure({
+      lowlight,
+      defaultLanguage: 'plaintext',
+      HTMLAttributes: {
+        class: 'rounded-md bg-muted p-4 font-mono text-sm overflow-x-auto',
+      },
+    }),
+    StaticImage.configure({
+      inline: true,
+      HTMLAttributes: {
+        class: 'max-w-full h-auto rounded-md',
+      },
+    }),
+    StaticDrawioNode,
   ]
 }

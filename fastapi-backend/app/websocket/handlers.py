@@ -3,11 +3,11 @@
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
+from ..utils.timezone import utc_now
 from .manager import ConnectionManager, MessageType, WebSocketConnection, manager
 
 logger = logging.getLogger(__name__)
@@ -176,7 +176,7 @@ async def handle_document_lock_change(
     payload: dict[str, Any] = {
         "document_id": document_id,
         "lock_holder": lock_holder,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": utc_now().isoformat(),
     }
 
     if triggered_by:
@@ -271,7 +271,7 @@ async def handle_task_update(
         "project_id": str(project_id),
         "action": action.value,
         "task": task_data,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": utc_now().isoformat(),
     }
 
     if user_id:
@@ -344,7 +344,7 @@ async def handle_project_update(
         "application_id": str(application_id),
         "action": action.value,
         "project": project_data,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": utc_now().isoformat(),
     }
 
     if user_id:
@@ -412,7 +412,7 @@ async def handle_project_status_changed(
         "project": project_data,
         "old_status": old_status,
         "new_status": new_status,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": utc_now().isoformat(),
     }
 
     if user_id:
@@ -488,7 +488,7 @@ async def handle_application_update(
         "application_id": str(application_id),
         "action": action.value,
         "application": application_data,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": utc_now().isoformat(),
     }
 
     if user_id:
@@ -545,7 +545,7 @@ async def handle_user_presence(
         "room_id": room_id,
         "user_id": str(user_id),
         "action": action,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": utc_now().isoformat(),
     }
 
     if metadata:
@@ -593,7 +593,7 @@ async def handle_notification(
         "type": MessageType.NOTIFICATION.value,
         "data": {
             **notification_data,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": utc_now().isoformat(),
         },
     }
 
@@ -631,7 +631,7 @@ async def handle_notification_read(
         "data": {
             "notification_id": str(notification_id),
             "user_id": str(user_id),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": utc_now().isoformat(),
         },
     }
 
@@ -744,7 +744,7 @@ async def handle_invitation_notification(
         "type": MessageType.INVITATION_RECEIVED.value,
         "data": {
             **invitation_data,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": utc_now().isoformat(),
         },
     }
 
@@ -791,7 +791,7 @@ async def handle_invitation_response(
         "data": {
             "application_id": str(application_id),
             **response_data,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": utc_now().isoformat(),
         },
     }
 
@@ -845,7 +845,7 @@ async def handle_member_added(
         "message_id": str(uuid4()),
         "application_id": str(application_id),
         **member_data,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": utc_now().isoformat(),
     }
 
     message = {
@@ -918,7 +918,7 @@ async def handle_member_removed(
         "message_id": str(uuid4()),
         "application_id": str(application_id),
         **member_data,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": utc_now().isoformat(),
     }
 
     message = {
@@ -982,7 +982,7 @@ async def handle_role_updated(
         "message_id": str(uuid4()),
         "application_id": str(application_id),
         **role_data,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": utc_now().isoformat(),
     }
 
     message = {
@@ -1048,7 +1048,7 @@ async def handle_project_member_added(
         "message_id": str(uuid4()),
         "project_id": str(project_id),
         **member_data,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": utc_now().isoformat(),
     }
 
     message = {
@@ -1119,7 +1119,7 @@ async def handle_project_member_removed(
         "project_id": str(project_id),
         "user_id": str(removed_user_id),
         **member_data,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": utc_now().isoformat(),
     }
 
     message = {
@@ -1182,7 +1182,7 @@ async def handle_project_member_role_changed(
         "project_id": str(project_id),
         "user_id": str(user_id),
         **role_data,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": utc_now().isoformat(),
     }
 
     message = {
@@ -1247,7 +1247,7 @@ async def handle_comment_added(
         "task_id": str(task_id),
         "comment": comment_data,  # Full comment data
         "mentioned_user_ids": [str(uid) for uid in (mentioned_user_ids or [])],
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": utc_now().isoformat(),
     }
 
     message = {
@@ -1298,7 +1298,7 @@ async def handle_comment_updated(
         "task_id": str(task_id),
         "comment_id": str(comment_id),
         "comment": comment_data,  # Full comment data
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": utc_now().isoformat(),
     }
 
     message = {
@@ -1343,7 +1343,7 @@ async def handle_comment_deleted(
         "task_id": str(task_id),
         "comment_id": str(comment_id),
         "attachment_ids": attachment_ids or [],
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": utc_now().isoformat(),
     }
 
     message = {
@@ -1396,7 +1396,7 @@ async def handle_checklist_created(
             "tid": str(task_id),
             "title": checklist_data.get("title", ""),
             "by": str(user_id),
-            "ts": int(datetime.now(timezone.utc).timestamp()),
+            "ts": int(utc_now().timestamp()),
         },
     }
 
@@ -1449,7 +1449,7 @@ async def handle_checklist_updated(
         "d": {
             "id": str(checklist_id),
             "title": checklist_data.get("title", ""),
-            "ts": int(datetime.now(timezone.utc).timestamp()),
+            "ts": int(utc_now().timestamp()),
         },
     }
 
@@ -1495,7 +1495,7 @@ async def handle_checklist_deleted(
         "t": "cld",
         "d": {
             "id": str(checklist_id),
-            "ts": int(datetime.now(timezone.utc).timestamp()),
+            "ts": int(utc_now().timestamp()),
         },
     }
 
@@ -1555,7 +1555,7 @@ async def handle_checklist_item_toggled(
             "clid": str(checklist_id),
             "done": is_done,
             "by": str(user_id),
-            "ts": int(datetime.now(timezone.utc).timestamp()),
+            "ts": int(utc_now().timestamp()),
         },
     }
 
@@ -1611,7 +1611,7 @@ async def handle_checklist_item_added(
             "clid": str(checklist_id),
             "content": item_data.get("content", ""),
             "done": item_data.get("is_done", False),
-            "ts": int(datetime.now(timezone.utc).timestamp()),
+            "ts": int(utc_now().timestamp()),
         },
     }
 
@@ -1658,7 +1658,7 @@ async def handle_checklist_item_updated(
         "d": {
             "id": str(item_id),
             "content": item_data.get("content", ""),
-            "ts": int(datetime.now(timezone.utc).timestamp()),
+            "ts": int(utc_now().timestamp()),
         },
     }
 
@@ -1705,7 +1705,7 @@ async def handle_checklist_item_deleted(
         "d": {
             "id": str(item_id),
             "clid": str(checklist_id),
-            "ts": int(datetime.now(timezone.utc).timestamp()),
+            "ts": int(utc_now().timestamp()),
         },
     }
 
@@ -1752,7 +1752,7 @@ async def handle_checklist_items_reordered(
         "d": {
             "clid": str(checklist_id),
             "ids": [str(item_id) for item_id in item_ids],
-            "ts": int(datetime.now(timezone.utc).timestamp()),
+            "ts": int(utc_now().timestamp()),
         },
     }
 
@@ -1796,7 +1796,7 @@ async def handle_checklists_reordered(
         "t": "clr",
         "d": {
             "ids": [str(checklist_id) for checklist_id in checklist_ids],
-            "ts": int(datetime.now(timezone.utc).timestamp()),
+            "ts": int(utc_now().timestamp()),
         },
     }
 
@@ -1989,7 +1989,7 @@ async def handle_task_moved(
         "old_rank": None,
         "new_rank": new_rank,
         "task": task_data or {},
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": utc_now().isoformat(),
         "changed_by": str(user_id),
     }
 
@@ -2058,7 +2058,7 @@ async def handle_attachment_uploaded(
         "task_id": str(task_id),
         "attachment": attachment_data,
         "uploaded_by": str(user_id),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": utc_now().isoformat(),
     }
 
     message = {
@@ -2107,7 +2107,7 @@ async def handle_attachment_deleted(
         "task_id": str(task_id),
         "attachment_id": str(attachment_id),
         "deleted_by": str(user_id),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": utc_now().isoformat(),
     }
 
     message = {

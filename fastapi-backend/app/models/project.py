@@ -4,6 +4,8 @@ import uuid
 from datetime import date, datetime
 from typing import TYPE_CHECKING
 
+from ..utils.timezone import utc_now
+
 from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -113,7 +115,7 @@ class Project(Base):
         index=True,
     )
     override_expires_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=True,
     )
 
@@ -141,7 +143,7 @@ class Project(Base):
     # Dashboard fields
     due_date = Column(
         Date,
-        nullable=False,
+        nullable=True,
     )
 
     # Task key counter (for atomic task key generation)
@@ -160,20 +162,20 @@ class Project(Base):
 
     # Timestamps
     created_at = Column(
-        DateTime,
-        default=datetime.utcnow,
+        DateTime(timezone=True),
+        default=utc_now,
         nullable=False,
     )
     updated_at = Column(
-        DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
         nullable=False,
     )
 
     # Archival tracking - set when project has been in done status for 7+ days
     archived_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=True,
         index=True,
     )

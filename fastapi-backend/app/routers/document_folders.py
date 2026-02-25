@@ -6,7 +6,6 @@ support nesting up to 5 levels deep. All endpoints require authentication.
 """
 
 import logging
-from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
@@ -17,6 +16,7 @@ from sqlalchemy.orm import lazyload
 
 logger = logging.getLogger(__name__)
 
+from ..utils.timezone import utc_now
 from ..database import get_db
 from ..models.document import Document
 from ..models.document_folder import DocumentFolder
@@ -75,7 +75,7 @@ def _build_folder_broadcast(
         "scope_id": scope_id,
         "parent_id": str(folder.parent_id) if folder.parent_id else None,
         "actor_id": str(actor_id),
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": utc_now().isoformat(),
         "application_id": str(project_application_id) if project_application_id else None,
     }
     rooms: list[str] = []
@@ -344,7 +344,7 @@ async def update_folder(
         if field in update_data:
             setattr(folder, field, update_data[field])
 
-    folder.updated_at = datetime.utcnow()
+    folder.updated_at = utc_now()
     await db.flush()
     await db.refresh(folder)
 
@@ -415,7 +415,7 @@ async def delete_folder(
     all_folder_ids = [row[0] for row in descendant_result.all()]
 
     if all_folder_ids:
-        now = datetime.utcnow()
+        now = utc_now()
         soft_delete_result = await db.execute(
             update(Document)
             .where(Document.folder_id.in_(all_folder_ids))

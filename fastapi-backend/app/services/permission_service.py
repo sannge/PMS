@@ -252,9 +252,6 @@ class PermissionService:
             project = await self.get_project_with_application(scope_id)
             if not project:
                 return False
-            # Archived projects are read-only
-            if project.archived_at is not None:
-                return False
             app_role = await self.get_user_application_role(
                 user_id, project.application_id
             )

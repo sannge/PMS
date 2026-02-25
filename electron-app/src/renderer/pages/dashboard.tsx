@@ -9,7 +9,7 @@
  * - Smooth staggered animations
  */
 
-import { useState, useCallback, useEffect, useRef, useMemo, ReactNode } from 'react'
+import React, { useState, useCallback, useEffect, useRef, useMemo, ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { Sidebar, type NavItem } from '@/components/layout/sidebar'
 import { WindowTitleBar } from '@/components/layout/window-title-bar'
@@ -28,8 +28,24 @@ import { requestNotificationPermission } from '@/lib/notifications'
 import { useAuthStore } from '@/contexts/auth-context'
 import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '@/lib/query-client'
-import { useApplications } from '@/hooks/use-queries'
+import { useDashboardStats } from '@/hooks/use-queries'
+import { useDashboardWebSocket } from '@/hooks/use-dashboard-websocket'
+import { DashboardSkeleton } from '@/components/dashboard/DashboardSkeleton'
+import { TaskDistributionChart } from '@/components/dashboard/TaskDistributionChart'
+import { CompletionTrendChart } from '@/components/dashboard/CompletionTrendChart'
+import { ProjectHealthChart } from '@/components/dashboard/ProjectHealthChart'
+import { OverdueTasksList } from '@/components/dashboard/OverdueTasksList'
+import { RecentlyCompletedList } from '@/components/dashboard/RecentlyCompletedList'
+import { PulseIndicator } from '@/components/ui/skeleton'
 import type { Project, Application, Task } from '@/hooks/use-queries'
+
+// Narrow navigation types to avoid unsafe `as Project`/`as Task` casts
+type ProjectNavTarget = Pick<Project, 'id' | 'application_id'> & { application_name?: string | null }
+type TaskNavTarget = Pick<Task, 'id'> & {
+  application_id?: string | null
+  application_name?: string | null
+  project_id: string
+}
 import {
   FolderKanban,
   ListTodo,
@@ -42,6 +58,7 @@ import {
   Zap,
   Target,
   Activity,
+  AlertTriangle,
 } from 'lucide-react'
 
 // ============================================================================
@@ -63,7 +80,7 @@ interface StatCardProps {
     value: number
     isPositive: boolean
   }
-  color: 'amber' | 'violet' | 'emerald' | 'blue'
+  color: 'amber' | 'violet' | 'emerald' | 'blue' | 'red' | 'slate'
   index?: number
 }
 
@@ -105,6 +122,18 @@ const colorClasses = {
     ring: 'ring-blue-500/20',
     shadow: 'group-hover:shadow-blue-500/20',
   },
+  red: {
+    bg: 'bg-gradient-to-br from-red-400/20 via-rose-500/15 to-red-600/10',
+    icon: 'text-red-600 dark:text-red-400',
+    ring: 'ring-red-500/20',
+    shadow: 'group-hover:shadow-red-500/20',
+  },
+  slate: {
+    bg: 'bg-gradient-to-br from-slate-400/20 via-slate-500/15 to-slate-600/10',
+    icon: 'text-slate-600 dark:text-slate-400',
+    ring: 'ring-slate-500/20',
+    shadow: 'group-hover:shadow-slate-500/20',
+  },
 }
 
 function StatCard({ icon, label, value, trend, color, index = 0 }: StatCardProps): JSX.Element {
@@ -112,11 +141,13 @@ function StatCard({ icon, label, value, trend, color, index = 0 }: StatCardProps
 
   return (
     <div
+      role="figure"
+      aria-label={label}
       className={cn(
         'group relative rounded-2xl border border-border bg-card p-5',
         'transition-all duration-300 ease-out',
         'hover:-translate-y-1 hover:shadow-xl hover:shadow-black/5',
-        'animate-fade-in opacity-0'
+        'animate-fade-in'
       )}
       style={{ animationDelay: `${index * 100}ms` }}
     >
@@ -143,13 +174,16 @@ function StatCard({ icon, label, value, trend, color, index = 0 }: StatCardProps
         </div>
 
         {trend && (
-          <div className={cn(
-            'flex items-center gap-1 rounded-full px-2.5 py-1',
-            'text-xs font-semibold',
-            trend.isPositive
-              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-              : 'bg-red-500/10 text-red-600 dark:text-red-400'
-          )}>
+          <div
+            className={cn(
+              'flex items-center gap-1 rounded-full px-2.5 py-1',
+              'text-xs font-semibold',
+              trend.isPositive
+                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                : 'bg-red-500/10 text-red-600 dark:text-red-400'
+            )}
+            aria-label={`${trend.isPositive ? 'Up' : 'Down'} ${trend.value}%`}
+          >
             {trend.isPositive ? (
               <TrendingUp className="h-3.5 w-3.5" />
             ) : (
@@ -180,7 +214,7 @@ function QuickAction({ icon, label, description, color, onClick, index = 0 }: Qu
         'hover:-translate-y-1 hover:shadow-xl hover:shadow-black/5',
         'hover:border-accent/30',
         'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
-        'animate-fade-in opacity-0'
+        'animate-fade-in'
       )}
       style={{ animationDelay: `${index * 75 + 200}ms` }}
     >
@@ -224,6 +258,31 @@ function QuickAction({ icon, label, description, color, onClick, index = 0 }: Qu
 }
 
 // ============================================================================
+// Chart Error Boundary
+// ============================================================================
+
+class ChartErrorBoundary extends React.Component<
+  { children: React.ReactNode; fallback?: React.ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false }
+  static getDerivedStateFromError() { return { hasError: true } }
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error('[ChartErrorBoundary]', error, info)
+  }
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback || (
+        <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+          Unable to display chart
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
+// ============================================================================
 // Dashboard Content Component
 // ============================================================================
 
@@ -231,8 +290,8 @@ interface DashboardContentProps {
   applicationId?: string | null
   onNavigateToApplications?: () => void
   onNavigateToTasks?: () => void
-  onProjectClick?: (project: Project) => void
-  onTaskClick?: (task: Task) => void
+  onProjectClick?: (project: ProjectNavTarget) => void
+  onTaskClick?: (task: TaskNavTarget) => void
 }
 
 function DashboardContent({
@@ -242,12 +301,77 @@ function DashboardContent({
   onProjectClick,
   onTaskClick,
 }: DashboardContentProps): JSX.Element {
-  const { data: applications } = useApplications()
-  const appCount = applications?.length ?? 0
-  const projectCount = applications?.reduce((sum, app) => sum + app.projects_count, 0) ?? 0
+  const { data, isLoading, isFetching, isError, refetch } = useDashboardStats()
+
+  // Component-level WS invalidation (only active while dashboard is mounted)
+  useDashboardWebSocket()
+
+  // Stabilize inline handlers to avoid re-renders of chart/list children
+  const handleHealthProjectClick = useCallback(
+    (projectId: string, applicationId: string, applicationName: string) => {
+      onProjectClick?.({
+        id: projectId,
+        application_id: applicationId,
+        application_name: applicationName,
+      })
+    },
+    [onProjectClick]
+  )
+
+  const handleListTaskClick = useCallback(
+    (task: { id: string; project_id: string; application_id: string; application_name: string }) => {
+      onTaskClick?.({
+        id: task.id,
+        project_id: task.project_id,
+        application_id: task.application_id,
+        application_name: task.application_name,
+      })
+    },
+    [onTaskClick]
+  )
+
+  // Dynamic time-of-day greeting (local time)
+  const greeting = (() => {
+    const hour = new Date().getHours()
+    if (hour < 12) return 'Good morning!'
+    if (hour < 17) return 'Good afternoon!'
+    return 'Good evening!'
+  })()
+
+  // Show skeleton on initial load (no cached data)
+  if (isLoading && !data) return <DashboardSkeleton />
+
+  // Show error state only if query failed and no cached data
+  if (isError && !data) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 space-y-4">
+        <div className="text-muted-foreground text-sm">Failed to load dashboard data</div>
+        <button
+          onClick={() => refetch()}
+          className="px-4 py-2 text-sm font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
+        >
+          Try Again
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-8">
+      {/* Stale data banner when background refetch failed */}
+      {isError && data && (
+        <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-600 dark:text-amber-400">
+          <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+          <span>Unable to refresh data. Showing cached results.</span>
+          <button
+            onClick={() => refetch()}
+            className="ml-auto text-xs font-medium underline hover:no-underline"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Welcome Section */}
       <div className={cn(
         'relative overflow-hidden rounded-2xl p-8',
@@ -263,45 +387,92 @@ function DashboardContent({
           <div className="flex items-center gap-3 mb-2">
             <Sparkles className="h-6 w-6 text-amber-400" />
             <span className="text-sm font-medium text-amber-400">Dashboard</span>
+            {isFetching && data && (
+              <PulseIndicator color="primary" className="ml-2" />
+            )}
           </div>
-          <h2 className="text-3xl font-bold tracking-tight text-white">
-            Good morning!
+          <h2 className="text-3xl font-bold tracking-tight text-foreground">
+            {greeting}
           </h2>
-          <p className="mt-2 text-slate-400 max-w-lg">
+          <p className="mt-2 text-muted-foreground max-w-lg">
             Here's an overview of your projects and recent activity. Let's make today productive.
           </p>
         </div>
       </div>
 
       {/* Stats Grid */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <StatCard
           icon={<FolderKanban className="h-6 w-6" />}
           label="Applications"
-          value={appCount}
+          value={data?.applications_count ?? 0}
           color="amber"
           index={0}
         />
         <StatCard
           icon={<LayoutDashboard className="h-6 w-6" />}
           label="Projects"
-          value={projectCount}
+          value={data?.projects_count ?? 0}
           color="violet"
           index={1}
         />
         <StatCard
           icon={<Target className="h-6 w-6" />}
           label="Active Tasks"
-          value={0}
+          value={data?.active_tasks_count ?? 0}
+          trend={data?.active_tasks_trend ? { value: data.active_tasks_trend.value, isPositive: data.active_tasks_trend.is_positive } : undefined}
           color="blue"
           index={2}
         />
         <StatCard
           icon={<CheckCircle2 className="h-6 w-6" />}
-          label="Completed"
-          value={0}
+          label="Completed This Week"
+          value={data?.completed_this_week ?? 0}
+          trend={data?.completed_trend ? { value: data.completed_trend.value, isPositive: data.completed_trend.is_positive } : undefined}
           color="emerald"
           index={3}
+        />
+        <StatCard
+          icon={<AlertTriangle className="h-6 w-6" />}
+          label="Overdue"
+          value={data?.overdue_tasks_count ?? 0}
+          color={(data?.overdue_tasks_count ?? 0) > 0 ? 'red' : 'slate'}
+          index={4}
+        />
+      </div>
+
+      {/* Charts */}
+      <div
+        className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 animate-fade-in"
+        style={{ animationDelay: '200ms' }}
+      >
+        <ChartErrorBoundary>
+          <TaskDistributionChart data={data?.task_status_breakdown ?? { todo: 0, in_progress: 0, in_review: 0, issue: 0, done: 0 }} />
+        </ChartErrorBoundary>
+        <ChartErrorBoundary>
+          <CompletionTrendChart data={data?.completion_trend ?? []} />
+        </ChartErrorBoundary>
+        <ChartErrorBoundary>
+          <ProjectHealthChart
+            data={data?.project_health ?? []}
+            onProjectClick={handleHealthProjectClick}
+          />
+        </ChartErrorBoundary>
+      </div>
+
+      {/* Actionable Lists */}
+      <div
+        className="grid gap-6 lg:grid-cols-2 animate-fade-in"
+        style={{ animationDelay: '400ms' }}
+      >
+        <OverdueTasksList
+          overdueTasks={data?.overdue_tasks ?? []}
+          upcomingTasks={data?.upcoming_tasks ?? []}
+          onTaskClick={handleListTaskClick}
+        />
+        <RecentlyCompletedList
+          tasks={data?.recently_completed ?? []}
+          onTaskClick={handleListTaskClick}
         />
       </div>
 
@@ -354,7 +525,7 @@ function DashboardContent({
           </div>
           <div className={cn(
             'rounded-2xl border border-border bg-card overflow-hidden',
-            'animate-fade-in opacity-0'
+            'animate-fade-in'
           )} style={{ animationDelay: '400ms' }}>
             <div className="p-6">
               <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -500,6 +671,7 @@ export function DashboardPage({
 
       fetchTimeoutRef.current = setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: queryKeys.notifications })
+        queryClient.invalidateQueries({ queryKey: queryKeys.dashboard })
         fetchTimeoutRef.current = null
       }, 500) // 500ms debounce
     }
@@ -619,15 +791,16 @@ export function DashboardPage({
             applicationId={selectedApplicationId}
             onNavigateToApplications={() => handleNavigate('applications')}
             onNavigateToTasks={() => handleNavigate('tasks')}
-            onProjectClick={(project) => {
+            onProjectClick={(project: ProjectNavTarget) => {
               setSelectedApplicationId(project.application_id)
+              setSelectedApplicationName(project.application_name ?? null)
               setSelectedProjectId(project.id)
               setActiveItem('applications')
             }}
-            onTaskClick={(task) => {
+            onTaskClick={(task: TaskNavTarget) => {
               if (task.project_id) {
-                setSelectedApplicationId(task.application_id || null)
-                setSelectedApplicationName(task.application_name || null)
+                setSelectedApplicationId(task.application_id ?? null)
+                setSelectedApplicationName(task.application_name ?? null)
                 setSelectedProjectId(task.project_id)
                 setInitialTaskId(task.id)
                 setActiveItem('projects')

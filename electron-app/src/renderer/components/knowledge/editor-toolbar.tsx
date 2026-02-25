@@ -36,6 +36,7 @@ import {
   Palette,
   Highlighter,
   ImageIcon,
+  PenTool,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
@@ -737,6 +738,14 @@ export function EditorToolbar({ editor, onImageUpload }: EditorToolbarProps) {
           />
         </>
       )}
+
+      {/* Insert Diagram */}
+      <ToolbarButton
+        onClick={() => editor.chain().focus().insertDrawio().run()}
+        title="Insert diagram"
+      >
+        <PenTool className="h-4 w-4" />
+      </ToolbarButton>
 
       <ToolbarSeparator />
 

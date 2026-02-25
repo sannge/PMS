@@ -238,10 +238,12 @@ If an upload fails:
 
 ### File Storage
 
-Files are stored securely:
-- Encrypted at rest
-- Backed up regularly
-- Available as long as task exists
+Files are stored in MinIO object storage (S3-compatible):
+- Images (PNG, JPEG, GIF, WebP) are stored in a dedicated `pm-images` bucket
+- All other files (PDF, DOCX, ZIP, etc.) are stored in a `pm-attachments` bucket
+- Files are organized by entity: `{entity_type}/{entity_id}/{unique_id}_{filename}`
+- Download links are temporary (expire after 1 hour) and regenerated on demand
+- Draw.io diagram previews are stored as PNG images alongside document attachments
 
 ### Quotas
 

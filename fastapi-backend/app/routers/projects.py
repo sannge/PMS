@@ -18,6 +18,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..utils.timezone import utc_now
 from sqlalchemy.orm import lazyload, selectinload
 
 from ..database import get_db
@@ -271,6 +273,7 @@ async def list_projects(
     limit: int = Query(100, ge=1, le=500, description="Maximum number of records to return"),
     search: Optional[str] = Query(None, description="Search term for project name"),
     project_type: Optional[str] = Query(None, description="Filter by project type"),
+    include_archived: bool = Query(default=False, description="Include archived projects in results"),
 ) -> List[ProjectWithTasks]:
     """
     List all projects within an application.
@@ -280,6 +283,7 @@ async def list_projects(
     - **limit**: Maximum number of records to return (1-500)
     - **search**: Optional search term to filter by name
     - **project_type**: Optional filter by project type (scrum, kanban, etc.)
+    - **include_archived**: If true, include archived projects (default false)
 
     Returns projects with their task counts.
     Any member (owner, editor, viewer) can list projects.
@@ -288,14 +292,14 @@ async def list_projects(
     await verify_application_access(application_id, current_user, db)
 
     # Build query for projects (SQL Server compatible - no GROUP BY with eager loading)
-    # Exclude archived projects from the main list
+    conditions = [Project.application_id == application_id]
+    if not include_archived:
+        conditions.append(Project.archived_at.is_(None))  # Exclude archived projects
+
     query = (
         select(Project)
         .options(lazyload(Project.application))
-        .where(
-            Project.application_id == application_id,
-            Project.archived_at.is_(None),  # Exclude archived projects
-        )
+        .where(*conditions)
     )
 
     # Apply search filter if provided
@@ -489,7 +493,7 @@ async def create_project(
                     "project_type": project.project_type,
                     "created_by": str(current_user.id),
                     "created_at": project.created_at.isoformat() if project.created_at else None,
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": utc_now().isoformat(),
                 },
             },
         )
@@ -746,6 +750,7 @@ async def list_project_statuses(
         401: {"description": "Not authenticated"},
         403: {"description": "Access denied - not an owner or editor"},
         404: {"description": "Project not found"},
+        409: {"description": "Project is archived and cannot be modified"},
     },
 )
 async def update_project(
@@ -767,6 +772,13 @@ async def update_project(
     # Verify edit access (owner or editor) and get project
     project = await verify_project_access(project_id, current_user, db, require_edit=True)
 
+    # Block modifications on archived projects (knowledge CRUD is still allowed)
+    if project.archived_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot modify an archived project. Restore the project first.",
+        )
+
     # Update fields if provided
     update_data = project_data.model_dump(exclude_unset=True)
     if not update_data:
@@ -779,7 +791,7 @@ async def update_project(
         setattr(project, field, value)
 
     # Update timestamp
-    project.updated_at = datetime.utcnow()
+    project.updated_at = utc_now()
 
     # Save changes
     await db.commit()
@@ -787,7 +799,7 @@ async def update_project(
 
     # Broadcast project update to both application and project rooms for real-time updates
     # Use same timestamp for deduplication (frontend filters duplicates by project_id + timestamp)
-    broadcast_timestamp = datetime.utcnow().isoformat()
+    broadcast_timestamp = utc_now().isoformat()
     project_update_data = {
         "type": MessageType.PROJECT_UPDATED,
         "data": {
@@ -970,7 +982,7 @@ async def delete_project(
     # Broadcast project deletion to application room for real-time updates
     # (for users viewing the dashboard/project list)
     # Use same timestamp for both room and user broadcasts for deduplication
-    delete_timestamp = datetime.utcnow().isoformat()
+    delete_timestamp = utc_now().isoformat()
     delete_broadcast_data = {
         "project_id": str(project_id),
         "application_id": str(application_id),
@@ -1028,6 +1040,7 @@ async def delete_project(
         401: {"description": "Not authenticated"},
         403: {"description": "Access denied - not an owner"},
         404: {"description": "Project not found"},
+        409: {"description": "Project is archived and cannot be modified"},
     },
 )
 async def override_project_status(
@@ -1055,6 +1068,13 @@ async def override_project_status(
     # Verify owner access and get project
     project = await verify_project_access(project_id, current_user, db, require_owner=True)
 
+    # Block modifications on archived projects
+    if project.archived_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot modify an archived project. Restore the project first.",
+        )
+
     # Validate that the override_status_id belongs to this project
     result = await db.execute(
         select(TaskStatus).where(
@@ -1077,7 +1097,7 @@ async def override_project_status(
     project.override_expires_at = override_data.override_expires_at
 
     # Update timestamp and row version
-    project.updated_at = datetime.utcnow()
+    project.updated_at = utc_now()
     project.row_version += 1
 
     # Save changes
@@ -1126,6 +1146,7 @@ async def override_project_status(
         401: {"description": "Not authenticated"},
         403: {"description": "Access denied - not an owner"},
         404: {"description": "Project not found"},
+        409: {"description": "Project is archived and cannot be modified"},
     },
 )
 async def clear_project_status_override(
@@ -1144,6 +1165,13 @@ async def clear_project_status_override(
     # Verify owner access and get project
     project = await verify_project_access(project_id, current_user, db, require_owner=True)
 
+    # Block modifications on archived projects
+    if project.archived_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot modify an archived project. Restore the project first.",
+        )
+
     # Clear the override fields
     project.override_status_id = None
     project.override_reason = None
@@ -1151,7 +1179,7 @@ async def clear_project_status_override(
     project.override_expires_at = None
 
     # Update timestamp and row version
-    project.updated_at = datetime.utcnow()
+    project.updated_at = utc_now()
     project.row_version += 1
 
     # Save changes
@@ -1210,7 +1238,7 @@ async def auto_archive_eligible_projects(
     """
     # Throttle: only run if not run recently for this application
     app_id_str = str(application_id)
-    now = datetime.utcnow()
+    now = utc_now()
     last_run = _auto_archive_last_run.get(app_id_str)
 
     if last_run and (now - last_run).total_seconds() < _AUTO_ARCHIVE_THROTTLE_SECONDS:

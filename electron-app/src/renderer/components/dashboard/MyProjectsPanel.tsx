@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { cn } from '@/lib/utils'
+import { getLocalToday } from '@/lib/time-utils'
 import { useMyProjects, useMyProjectsCrossApp } from '@/hooks/use-queries'
 import type { Project } from '@/hooks/use-queries'
 import {
@@ -45,10 +46,12 @@ const PROJECT_STATUS_OPTIONS = [
 // ============================================================================
 
 function getDueDateInfo(dueDateStr: string) {
-  const dueDate = new Date(dueDateStr + 'T00:00:00')
-  const now = new Date()
-  now.setHours(0, 0, 0, 0)
-  const diffMs = dueDate.getTime() - now.getTime()
+  const [year, month, day] = dueDateStr.split('-').map(Number)
+  const dueDate = new Date(year, month - 1, day)
+  const localToday = getLocalToday()
+  const [tY, tM, tD] = localToday.split('-').map(Number)
+  const today = new Date(tY, tM - 1, tD)
+  const diffMs = dueDate.getTime() - today.getTime()
   const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24))
 
   if (diffDays < 0) {

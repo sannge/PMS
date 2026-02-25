@@ -135,6 +135,112 @@ class Settings(BaseSettings):
 settings = Settings()
 ```
 
+## MinIO File Storage
+
+PM Desktop uses MinIO for all file and image storage. Files are never stored in PostgreSQL — only metadata (bucket, key, size) is persisted in the `Attachments` table, while the binary content lives in MinIO.
+
+### Buckets
+
+| Bucket | Purpose | Routing Rule |
+|--------|---------|-------------|
+| `pm-images` | Image files (PNG, JPEG, GIF, WebP) | `content_type.startswith("image/")` |
+| `pm-attachments` | All non-image files (PDF, DOCX, ZIP, etc.) | Everything else |
+
+Buckets are created automatically on service initialization via `ensure_buckets_exist()` in `minio_service.py`. Creation is idempotent.
+
+### Object Path Pattern
+
+All objects follow the path structure:
+
+```
+{entity_type}/{entity_id}/{uuid8}_{filename}
+```
+
+- `entity_type` — one of: `task`, `comment`, `document`
+- `entity_id` — UUID of the parent entity
+- `uuid8` — first 8 characters of a `uuid4()` for uniqueness
+- `filename` — original filename with `/` and `\` replaced by `_`
+
+### Storage Paths by Operation
+
+| Operation | Entity Type | Bucket | Example Path |
+|-----------|-------------|--------|-------------|
+| Task attachment upload | `task` | `pm-attachments` or `pm-images` | `task/{task_id}/a1b2c3d4_report.pdf` |
+| Comment attachment upload | `comment` | `pm-attachments` or `pm-images` | `comment/{comment_id}/5f6e7d8c_screenshot.png` |
+| Document editor image | `document` | `pm-images` | `document/{document_id}/9a8b7c6d_photo.jpg` |
+| Draw.io diagram preview | `document` | `pm-images` | `document/{document_id}/e3f4a5b6_diagram.png` |
+
+### Size Limits
+
+| File Category | Max Size | Constant |
+|---------------|----------|----------|
+| General files | 100 MB (104,857,600 bytes) | `MAX_FILE_SIZE` |
+| Image files | 10 MB (10,485,760 bytes) | `MAX_IMAGE_SIZE` |
+| Draw.io diagram previews | 10 MB (10,485,760 bytes) | `MAX_DRAWIO_PNG_SIZE` (frontend) |
+
+### Allowed Image MIME Types
+
+Only these image types are accepted (others return `415`):
+
+- `image/png`
+- `image/jpeg`
+- `image/gif`
+- `image/webp`
+
+### Presigned URL Expiry
+
+| URL Type | Expiry | Constant |
+|----------|--------|----------|
+| Download URLs | 1 hour | `DEFAULT_URL_EXPIRY` |
+| Upload URLs | 2 hours | `UPLOAD_URL_EXPIRY` |
+
+Frontend caches download URLs with a 5-minute `staleTime` and 15-minute `gcTime` (URLs are never persisted to IndexedDB since they expire).
+
+### API Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/api/files/upload` | Upload file (multipart form) |
+| `GET` | `/api/files` | List user's attachments |
+| `GET` | `/api/files/{id}` | Get file metadata + download URL |
+| `GET` | `/api/files/{id}/info` | Get metadata only |
+| `GET` | `/api/files/{id}/download-url` | Generate fresh presigned URL |
+| `POST` | `/api/files/download-urls` | Batch presigned URLs (max 50 IDs) |
+| `PUT` | `/api/files/{id}` | Update attachment metadata |
+| `DELETE` | `/api/files/{id}` | Delete file from MinIO + DB |
+| `GET` | `/api/files/entity/{type}/{id}` | List attachments for an entity |
+
+### Orphan Cleanup
+
+Document attachments use content-aware orphan cleanup (not just CASCADE deletes):
+
+1. `extract_attachment_ids()` walks the TipTap JSON tree and collects all `attachmentId` values from `image` and `drawio` nodes
+2. `cleanup_orphaned_attachments()` runs on document save — compares DB attachment records against content references
+3. Attachments not referenced in content AND older than the **5-minute grace period** (`CLEANUP_GRACE_PERIOD`) are deleted from both MinIO and the database
+4. The grace period protects in-flight uploads that haven't been saved to content yet
+
+Task and comment attachments rely on PostgreSQL CASCADE DELETE — when a task or comment is deleted, its attachment records are automatically removed.
+
+### Error Responses
+
+| Code | Scenario |
+|------|----------|
+| `400` | Missing filename or invalid request |
+| `400` | Task is completed (cannot modify attachments) |
+| `413` | File exceeds 100 MB limit |
+| `413` | Image exceeds 10 MB limit |
+| `415` | Unsupported image MIME type |
+| `422` | Batch request exceeds 50 IDs |
+
+### WebSocket Events
+
+| Event | Trigger |
+|-------|---------|
+| `ATTACHMENT_UPLOADED` | File upload succeeds |
+| `ATTACHMENT_DELETED` | File deletion succeeds |
+
+Events are broadcast to the entity room (`{entity_type}:{entity_id}`).
+
 ## Database Layer
 
 ### database.py

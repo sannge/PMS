@@ -72,6 +72,7 @@ interface CreateDocumentParams {
   scope: string
   scope_id: string
   folder_id?: string | null
+  content_json?: string | null
 }
 
 interface RenameDocumentParams {
@@ -287,6 +288,7 @@ export function useCreateDocument(): UseMutationResult<Document, Error, CreateDo
           scope: params.scope,
           scope_id: params.scope_id,
           folder_id: params.folder_id ?? null,
+          content_json: params.content_json ?? null,
         },
         getAuthHeaders(token)
       )
@@ -616,7 +618,14 @@ export function useDeleteDocument(): UseMutationResult<void, Error, { documentId
 
       return { previousLists, documentId }
     },
-    onSuccess: () => {
+    onSuccess: (_data, { scope, scopeId }) => {
+      const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
+      // Invalidate folder tree (document counts change when a document is deleted)
+      queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders(scope, effectiveScopeId) })
+      // Invalidate scopes summary (document counts per scope)
+      queryClient.invalidateQueries({ queryKey: queryKeys.scopesSummary() })
+      // Invalidate search results (deleted document should disappear)
+      queryClient.invalidateQueries({ queryKey: ['search'] })
       // Invalidate projects-with-content to update project section visibility
       queryClient.invalidateQueries({ queryKey: ['projects-with-content'] })
     },

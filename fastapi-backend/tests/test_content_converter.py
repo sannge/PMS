@@ -454,3 +454,299 @@ class TestPlainTextBlocks:
         assert "done" in result
         assert "pending" in result
         assert "[" not in result
+
+
+# ===========================================================================
+# Canvas Markdown Tests
+# ===========================================================================
+
+class TestCanvasMarkdown:
+    def test_canvas_single_container(self):
+        canvas = {
+            "format": "canvas", "version": 1,
+            "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
+            "containers": [{
+                "id": "c1", "x": 50, "y": 50, "width": 600, "minWidth": 200, "zIndex": 1,
+                "content": doc(paragraph(text("Hello canvas")))
+            }]
+        }
+        result = tiptap_json_to_markdown(canvas)
+        assert "## Section 1" in result
+        assert "Hello canvas" in result
+
+    def test_canvas_multi_container(self):
+        canvas = {
+            "format": "canvas", "version": 1,
+            "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
+            "containers": [
+                {"id": "c1", "x": 50, "y": 50, "width": 600, "minWidth": 200, "zIndex": 1,
+                 "content": doc(paragraph(text("First")))},
+                {"id": "c2", "x": 700, "y": 50, "width": 600, "minWidth": 200, "zIndex": 2,
+                 "content": doc(paragraph(text("Second")))},
+            ]
+        }
+        result = tiptap_json_to_markdown(canvas)
+        assert "## Section 1" in result
+        assert "First" in result
+        assert "## Section 2" in result
+        assert "Second" in result
+
+    def test_canvas_empty_containers(self):
+        canvas = {"format": "canvas", "version": 1,
+                  "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1}, "containers": []}
+        assert tiptap_json_to_markdown(canvas) == ""
+
+    def test_canvas_container_empty_content(self):
+        canvas = {
+            "format": "canvas", "version": 1,
+            "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
+            "containers": [{"id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1,
+                           "content": doc()}]
+        }
+        assert tiptap_json_to_markdown(canvas) == ""
+
+    def test_canvas_skips_non_doc_content(self):
+        canvas = {
+            "format": "canvas", "version": 1,
+            "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
+            "containers": [{"id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1,
+                           "content": {"type": "not-a-doc"}}]
+        }
+        assert tiptap_json_to_markdown(canvas) == ""
+
+    def test_canvas_container_missing_content(self):
+        """Container without content field should be skipped gracefully."""
+        canvas = {
+            "format": "canvas", "version": 1,
+            "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
+            "containers": [{"id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1}]
+        }
+        assert tiptap_json_to_markdown(canvas) == ""
+
+    def test_canvas_container_null_content(self):
+        """Container with content=None should be skipped."""
+        canvas = {
+            "format": "canvas", "version": 1,
+            "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
+            "containers": [{"id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1, "content": None}]
+        }
+        assert tiptap_json_to_markdown(canvas) == ""
+
+    def test_canvas_with_formatting_marks(self):
+        """Bold/italic text in canvas containers should be preserved in markdown."""
+        canvas = {
+            "format": "canvas", "version": 1,
+            "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
+            "containers": [{
+                "id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1,
+                "content": doc(paragraph(text("bold", [bold()])))
+            }]
+        }
+        result = tiptap_json_to_markdown(canvas)
+        assert "**bold**" in result
+
+    def test_canvas_containers_not_a_list(self):
+        """Canvas with containers as non-list should return empty."""
+        canvas = {"format": "canvas", "version": 1,
+                  "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
+                  "containers": "not-a-list"}
+        assert tiptap_json_to_markdown(canvas) == ""
+
+    def test_canvas_container_non_dict_items(self):
+        """Non-dict items in containers list should be skipped gracefully."""
+        canvas = {
+            "format": "canvas", "version": 1,
+            "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
+            "containers": [42, "not-a-dict", None, {
+                "id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1,
+                "content": doc(paragraph(text("valid")))
+            }]
+        }
+        result = tiptap_json_to_markdown(canvas)
+        assert "valid" in result
+
+
+# ===========================================================================
+# Canvas Plain Text Tests
+# ===========================================================================
+
+class TestCanvasPlainText:
+    def test_canvas_single_container(self):
+        canvas = {
+            "format": "canvas", "version": 1,
+            "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
+            "containers": [{
+                "id": "c1", "x": 50, "y": 50, "width": 600, "minWidth": 200, "zIndex": 1,
+                "content": doc(paragraph(text("Hello")))
+            }]
+        }
+        result = tiptap_json_to_plain_text(canvas)
+        assert result == "Hello"
+
+    def test_canvas_multi_container_joined(self):
+        canvas = {
+            "format": "canvas", "version": 1,
+            "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
+            "containers": [
+                {"id": "c1", "x": 50, "y": 50, "width": 600, "minWidth": 200, "zIndex": 1,
+                 "content": doc(paragraph(text("Hello")))},
+                {"id": "c2", "x": 700, "y": 50, "width": 600, "minWidth": 200, "zIndex": 2,
+                 "content": doc(paragraph(text("World")))},
+            ]
+        }
+        result = tiptap_json_to_plain_text(canvas)
+        assert "Hello" in result
+        assert "World" in result
+        assert "Section" not in result
+
+    def test_canvas_empty(self):
+        canvas = {"format": "canvas", "version": 1,
+                  "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1}, "containers": []}
+        assert tiptap_json_to_plain_text(canvas) == ""
+
+    def test_canvas_container_missing_content_plain(self):
+        """Container without content field should be skipped in plain text."""
+        canvas = {
+            "format": "canvas", "version": 1,
+            "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
+            "containers": [{"id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1}]
+        }
+        assert tiptap_json_to_plain_text(canvas) == ""
+
+    def test_canvas_container_null_content_plain(self):
+        """Container with content=None should be skipped in plain text."""
+        canvas = {
+            "format": "canvas", "version": 1,
+            "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
+            "containers": [{"id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1, "content": None}]
+        }
+        assert tiptap_json_to_plain_text(canvas) == ""
+
+    def test_canvas_containers_not_a_list_plain(self):
+        """Canvas with containers as non-list should return empty in plain text."""
+        canvas = {"format": "canvas", "version": 1,
+                  "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
+                  "containers": "not-a-list"}
+        assert tiptap_json_to_plain_text(canvas) == ""
+
+    def test_canvas_container_non_dict_items_plain(self):
+        """Non-dict items in containers list should be skipped in plain text."""
+        canvas = {
+            "format": "canvas", "version": 1,
+            "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
+            "containers": [42, "not-a-dict", None, {
+                "id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1,
+                "content": doc(paragraph(text("valid")))
+            }]
+        }
+        result = tiptap_json_to_plain_text(canvas)
+        assert result == "valid"
+
+    def test_legacy_doc_unchanged(self):
+        """Canvas changes must NOT affect legacy document processing."""
+        result = tiptap_json_to_markdown(doc(paragraph(text("Legacy"))))
+        assert "Legacy" in result
+        assert "Section" not in result
+
+        result_plain = tiptap_json_to_plain_text(doc(paragraph(text("Legacy"))))
+        assert result_plain == "Legacy"
+
+
+# ===========================================================================
+# Canvas Attachment ID Extraction Tests
+# ===========================================================================
+
+import json
+
+from app.services.document_service import extract_attachment_ids
+
+
+class TestCanvasAttachmentIds:
+    def test_extract_attachment_ids_canvas(self):
+        canvas = {
+            "format": "canvas", "version": 1,
+            "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
+            "containers": [{
+                "id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1,
+                "content": {"type": "doc", "content": [
+                    {"type": "image", "attrs": {"src": "...", "attachmentId": "att-123"}}
+                ]}
+            }]
+        }
+        ids = extract_attachment_ids(json.dumps(canvas))
+        assert ids == {"att-123"}
+
+    def test_extract_attachment_ids_canvas_no_images(self):
+        canvas = {
+            "format": "canvas", "version": 1,
+            "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
+            "containers": [{
+                "id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1,
+                "content": {"type": "doc", "content": [
+                    {"type": "paragraph", "content": [{"type": "text", "text": "No images"}]}
+                ]}
+            }]
+        }
+        ids = extract_attachment_ids(json.dumps(canvas))
+        assert ids == set()
+
+    def test_extract_attachment_ids_canvas_malformed(self):
+        """Malformed canvas containers should return empty set without errors."""
+        for canvas in [
+            {"format": "canvas", "containers": "not-a-list"},
+            {"format": "canvas", "containers": [42]},
+            {"format": "canvas", "containers": [{"content": "not-a-dict"}]},
+            {"format": "canvas", "containers": [{"content": {"type": "not-doc"}}]},
+        ]:
+            assert extract_attachment_ids(json.dumps(canvas)) == set()
+
+    def test_extract_attachment_ids_drawio_node(self):
+        """Drawio nodes with attachmentId should be collected."""
+        doc = {
+            "type": "doc",
+            "content": [
+                {"type": "drawio", "attrs": {"data": "<xml/>", "attachmentId": "drawio-001"}},
+            ],
+        }
+        ids = extract_attachment_ids(json.dumps(doc))
+        assert ids == {"drawio-001"}
+
+    def test_extract_attachment_ids_mixed_image_and_drawio(self):
+        """Both image and drawio attachmentIds should be collected."""
+        doc = {
+            "type": "doc",
+            "content": [
+                {"type": "image", "attrs": {"src": "...", "attachmentId": "img-001"}},
+                {"type": "paragraph", "content": [{"type": "text", "text": "text"}]},
+                {"type": "drawio", "attrs": {"data": "<xml/>", "attachmentId": "drawio-001"}},
+            ],
+        }
+        ids = extract_attachment_ids(json.dumps(doc))
+        assert ids == {"img-001", "drawio-001"}
+
+    def test_extract_attachment_ids_drawio_no_attachment(self):
+        """Legacy drawio nodes without attachmentId should not produce entries."""
+        doc = {
+            "type": "doc",
+            "content": [
+                {"type": "drawio", "attrs": {"data": "<xml/>", "previewPng": "data:image/png;base64,abc"}},
+            ],
+        }
+        ids = extract_attachment_ids(json.dumps(doc))
+        assert ids == set()
+
+    def test_extract_attachment_ids_drawio_in_canvas(self):
+        """Drawio nodes inside canvas containers should be collected."""
+        canvas = {
+            "format": "canvas", "version": 1,
+            "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
+            "containers": [{
+                "id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1,
+                "content": {"type": "doc", "content": [
+                    {"type": "drawio", "attrs": {"data": "<xml/>", "attachmentId": "drawio-canvas-001"}},
+                    {"type": "image", "attrs": {"src": "...", "attachmentId": "img-canvas-001"}},
+                ]}
+            }]
+        }
+        ids = extract_attachment_ids(json.dumps(canvas))
+        assert ids == {"drawio-canvas-001", "img-canvas-001"}

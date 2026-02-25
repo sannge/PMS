@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from ..utils.timezone import utc_now
 from ..database import async_session_maker, get_db
 from ..models.application import Application
 from ..models.application_member import ApplicationMember
@@ -636,8 +637,8 @@ async def auto_archive_stale_done_tasks(
     """
     from sqlalchemy import update
 
-    threshold_date = datetime.utcnow() - timedelta(days=ARCHIVE_THRESHOLD_DAYS)
-    now = datetime.utcnow()
+    threshold_date = utc_now() - timedelta(days=ARCHIVE_THRESHOLD_DAYS)
+    now = utc_now()
 
     # Update all tasks that:
     # - Belong to this project
@@ -1054,7 +1055,7 @@ async def create_task(
     project_was_restored = False
     if project.archived_at is not None:
         project.archived_at = None
-        project.updated_at = datetime.utcnow()
+        project.updated_at = utc_now()
         project_was_restored = True
 
     # Validate that project_id in body matches URL (if provided)
@@ -1244,7 +1245,7 @@ async def create_task(
                         "archived_at": None,
                         "restored_by": str(current_user.id),
                         "restored_via": "task_created",
-                        "timestamp": datetime.utcnow().isoformat(),
+                        "timestamp": utc_now().isoformat(),
                     },
                 },
             )
@@ -1534,7 +1535,7 @@ async def update_task(
             setattr(task, field, value)
 
     # Update timestamp
-    task.updated_at = datetime.utcnow()
+    task.updated_at = utc_now()
 
     # Reload task_status relationship if task_status_id changed
     if "task_status_id" in update_data:
@@ -1553,7 +1554,7 @@ async def update_task(
     if old_task_status_id != task.task_status_id:
         if new_is_done:
             # Set completed_at when moving to done
-            task.completed_at = datetime.utcnow()
+            task.completed_at = utc_now()
         elif old_was_done:
             # Clear completed_at when moving away from done
             task.completed_at = None
@@ -1935,7 +1936,7 @@ async def move_task(
         )
 
     # Update timestamp and version
-    task.updated_at = datetime.utcnow()
+    task.updated_at = utc_now()
     task.row_version = (task.row_version or 0) + 1
 
     # Determine new status info
@@ -1947,7 +1948,7 @@ async def move_task(
     if status_changed:
         if new_task_status_category == "Done":
             # Set completed_at when moving to done
-            task.completed_at = datetime.utcnow()
+            task.completed_at = utc_now()
         elif old_task_status_category == "Done":
             # Clear completed_at when moving away from done
             task.completed_at = None
@@ -2229,7 +2230,7 @@ async def unarchive_task(
 
     # Clear archived_at and reset completed_at to current time
     # This restarts the 7-day archive timer so the task won't be immediately re-archived
-    now = datetime.utcnow()
+    now = utc_now()
     task.archived_at = None
     task.completed_at = now
     task.updated_at = now

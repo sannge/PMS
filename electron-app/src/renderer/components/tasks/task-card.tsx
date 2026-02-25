@@ -31,6 +31,7 @@ import {
   History,
 } from 'lucide-react'
 import { isTaskDone, type Task, type TaskType, type TaskPriority } from '@/hooks/use-queries'
+import { getLocalToday, parseBackendDate } from '@/lib/time-utils'
 import { TaskViewerDots } from './TaskViewerDots'
 import type { TaskViewer } from '@/hooks/use-task-viewers'
 
@@ -139,8 +140,10 @@ function formatDueDate(dateString: string): { text: string; isOverdue: boolean; 
 
   const dueDate = new Date(year, month - 1, day) // month is 0-indexed
 
-  const now = new Date()
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  // Use local time for "today" comparison
+  const localToday = getLocalToday() // "YYYY-MM-DD"
+  const [tYear, tMonth, tDay] = localToday.split('-').map(Number)
+  const today = new Date(tYear, tMonth - 1, tDay)
   // Use Math.round for robustness against floating point edge cases
   const diffDays = Math.round((dueDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
 
@@ -158,7 +161,7 @@ function formatDueDate(dateString: string): { text: string; isOverdue: boolean; 
   }
 
   return {
-    text: dueDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+    text: dueDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
     isOverdue: false,
     isSoon: false,
   }
@@ -168,11 +171,11 @@ function formatDueDate(dateString: string): { text: string; isOverdue: boolean; 
  * Format completed date for done tasks
  */
 function formatCompletedDate(dateString: string): string {
-  const date = new Date(dateString)
+  const date = parseBackendDate(dateString)
   if (isNaN(date.getTime())) {
     return 'Completed'
   }
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
 /**
@@ -499,7 +502,7 @@ export function TaskCard({
                 ? 'text-yellow-600 dark:text-yellow-500'
                 : 'text-muted-foreground'
           )}
-          title={new Date(task.due_date!).toLocaleDateString()}
+          title={new Date(task.due_date! + 'T00:00:00').toLocaleDateString('en-US')}
         >
           <Clock className="h-2.5 w-2.5" />
           {dueInfo.text}
@@ -510,7 +513,7 @@ export function TaskCard({
       {completedInfo && (
         <span
           className="flex-shrink-0 flex items-center gap-0.5 text-[10px] text-green-600 dark:text-green-500"
-          title={`Completed: ${new Date(task.completed_at!).toLocaleString()}`}
+          title={`Completed: ${parseBackendDate(task.completed_at!).toLocaleString('en-US')}`}
         >
           <CheckCircle2 className="h-2.5 w-2.5" />
           {completedInfo}
@@ -547,7 +550,7 @@ export function TaskCard({
       {task.updated_at && (
         <span
           className="flex-shrink-0 flex items-center gap-0.5 text-[9px] text-muted-foreground/70"
-          title={`Updated ${new Date(task.updated_at).toLocaleString()}`}
+          title={`Updated ${parseBackendDate(task.updated_at).toLocaleString('en-US')}`}
         >
           <History className="h-2.5 w-2.5" />
           {formatRelativeTime(task.updated_at)}

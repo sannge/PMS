@@ -13,6 +13,7 @@
 import { useState, useCallback, useEffect } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
+import { parseBackendDate } from '@/lib/time-utils'
 import { User, Edit2, Trash2, Check, X, FileText, FileImage, File, Download, Maximize2 } from 'lucide-react'
 import type { Comment, CommentAttachment } from '@/hooks/use-comments'
 import { useAuthStore } from '@/contexts/auth-context'
@@ -45,19 +46,6 @@ function getAuthHeaders(token: string | null): Record<string, string> {
 // ============================================================================
 
 /**
- * Parse date string from backend, handling UTC correctly.
- * Backend sends ISO strings without timezone (e.g., "2024-01-15T10:30:00.123456")
- * which should be interpreted as UTC.
- */
-function parseDate(dateString: string): Date {
-  // If the date string doesn't have timezone info, treat it as UTC
-  if (!dateString.endsWith('Z') && !dateString.includes('+') && !/[+-]\d{2}:\d{2}$/.test(dateString)) {
-    return new Date(dateString + 'Z')
-  }
-  return new Date(dateString)
-}
-
-/**
  * Format timestamp with relative time for recent dates, absolute for older ones.
  * - < 1 minute: "Just now"
  * - < 60 minutes: "Xm ago"
@@ -65,7 +53,7 @@ function parseDate(dateString: string): Date {
  * - >= 24 hours: absolute date/time
  */
 function formatTimestamp(dateString: string): string {
-  const date = parseDate(dateString)
+  const date = parseBackendDate(dateString)
   const now = new Date()
   const diffMs = now.getTime() - date.getTime()
   const diffMins = Math.floor(diffMs / 60000)
@@ -81,23 +69,25 @@ function formatTimestamp(dateString: string): string {
   if (diffMins < 60) return `${diffMins}m ago`
   if (diffHours < 24) return `${diffHours}h ago`
 
-  // Show absolute time for older comments
-  const isToday = date.toDateString() === now.toDateString()
+  // Show absolute time for older comments (use local time for day boundaries)
+  const localDateStr = (d: Date) =>
+    new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(d)
+  const isToday = localDateStr(date) === localDateStr(now)
   const yesterday = new Date(now)
   yesterday.setDate(yesterday.getDate() - 1)
-  const isYesterday = date.toDateString() === yesterday.toDateString()
+  const isYesterday = localDateStr(date) === localDateStr(yesterday)
 
   if (isToday) {
-    return `Today at ${date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
+    return `Today at ${date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`
   }
 
   if (isYesterday) {
-    return `Yesterday at ${date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
+    return `Yesterday at ${date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`
   }
 
   // Older than yesterday - show full date
   const sameYear = date.getFullYear() === now.getFullYear()
-  return date.toLocaleDateString(undefined, {
+  return date.toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
     year: sameYear ? undefined : 'numeric',
@@ -125,7 +115,7 @@ function useRelativeTime(dateString: string | null | undefined): string | null {
     setFormattedTime(formatTimestamp(dateString))
 
     // Calculate when we need to update next
-    const date = parseDate(dateString)
+    const date = parseBackendDate(dateString)
     const now = new Date()
     const diffMs = now.getTime() - date.getTime()
     const diffMins = Math.floor(diffMs / 60000)

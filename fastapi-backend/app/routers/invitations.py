@@ -10,7 +10,6 @@ Role-based permissions for creating invitations:
 - Owner: Can invite with any role (owner, editor, viewer)
 """
 
-from datetime import datetime
 from typing import Annotated, List, Optional
 from uuid import UUID
 
@@ -18,6 +17,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import lazyload
+
+from ..utils.timezone import utc_now
 
 from ..database import get_db
 from ..models.application import Application
@@ -414,7 +415,7 @@ async def accept_invitation(
 
     # Update invitation status
     invitation.status = InvitationStatus.ACCEPTED.value
-    invitation.responded_at = datetime.utcnow()
+    invitation.responded_at = utc_now()
 
     # Create membership
     member = ApplicationMember(
@@ -536,7 +537,7 @@ async def reject_invitation(
 
     # Update invitation status
     invitation.status = InvitationStatus.REJECTED.value
-    invitation.responded_at = datetime.utcnow()
+    invitation.responded_at = utc_now()
     await db.commit()
     await db.refresh(invitation)
 
@@ -625,7 +626,7 @@ async def cancel_invitation(
 
     # Update status to cancelled
     invitation.status = InvitationStatus.CANCELLED.value
-    invitation.responded_at = datetime.utcnow()
+    invitation.responded_at = utc_now()
 
     await db.commit()
 

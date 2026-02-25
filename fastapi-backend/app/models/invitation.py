@@ -4,6 +4,8 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from ..utils.timezone import utc_now
+
 from sqlalchemy import Column, DateTime, ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -90,13 +92,13 @@ class Invitation(Base):
 
     # Timestamps
     created_at = Column(
-        DateTime,
-        default=datetime.utcnow,
+        DateTime(timezone=True),
+        default=utc_now,
         nullable=False,
         index=True,
     )
     responded_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=True,
     )
 

@@ -285,7 +285,7 @@ function TaskCard({ task, onClick, viewers = [] }: TaskCardProps): JSX.Element {
           {task.due_date && (
             <span className="flex items-center gap-1 text-xs text-muted-foreground">
               <Clock className="h-3 w-3" />
-              {new Date(task.due_date).toLocaleDateString(undefined, {
+              {new Date(task.due_date + 'T00:00:00').toLocaleDateString('en-US', {
                 month: 'short',
                 day: 'numeric',
               })}

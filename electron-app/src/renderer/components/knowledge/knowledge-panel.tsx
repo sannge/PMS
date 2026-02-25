@@ -20,10 +20,12 @@ import {
 } from '@/contexts/knowledge-base-context'
 import { useCreateDocument } from '@/hooks/use-documents'
 import { useCreateFolder } from '@/hooks/use-document-folders'
+import { createEmptyCanvas } from './canvas-types'
 import { useKnowledgePermissions } from '@/hooks/use-knowledge-permissions'
 import { SearchBar } from './search-bar'
 import { KnowledgeTree } from './knowledge-tree'
 import { EditorPanel } from './editor-panel'
+import { CreateDialog } from './create-dialog'
 
 // ============================================================================
 // Types
@@ -68,32 +70,40 @@ function InnerPanel({ scope, scopeId, showProjectFolders, className }: InnerPane
   const createDocument = useCreateDocument()
   const createFolder = useCreateFolder()
 
-  const handleCreateDoc = useCallback(() => {
+  // Dialog state for name prompt
+  const [createDialogOpen, setCreateDialogOpen] = useState(false)
+  const [createType, setCreateType] = useState<'document' | 'folder'>('document')
+
+  const handleCreateDocClick = useCallback(() => {
+    setCreateType('document')
+    setCreateDialogOpen(true)
+  }, [])
+
+  const handleCreateFolderClick = useCallback(() => {
+    setCreateType('folder')
+    setCreateDialogOpen(true)
+  }, [])
+
+  const handleCreateSubmit = useCallback(async (name: string, format?: 'document' | 'canvas') => {
     if (!scopeId) return
-    createDocument.mutate(
-      {
-        title: 'Untitled',
+    if (createType === 'document') {
+      const doc = await createDocument.mutateAsync({
+        title: name,
         scope,
         scope_id: scopeId,
         folder_id: null,
-      },
-      {
-        onSuccess: (data) => {
-          selectDocument(data.id)
-        },
-      }
-    )
-  }, [scope, scopeId, createDocument, selectDocument])
-
-  const handleCreateFolder = useCallback(() => {
-    if (!scopeId) return
-    createFolder.mutate({
-      name: 'New Folder',
-      scope,
-      scope_id: scopeId,
-      parent_id: null,
-    })
-  }, [scope, scopeId, createFolder])
+        content_json: format === 'canvas' ? JSON.stringify(createEmptyCanvas()) : undefined,
+      })
+      selectDocument(doc.id)
+    } else {
+      await createFolder.mutateAsync({
+        name,
+        scope,
+        scope_id: scopeId,
+        parent_id: null,
+      })
+    }
+  }, [createType, scope, scopeId, createDocument, createFolder, selectDocument])
 
   // Resize handlers for tree panel
   const handleResizeMouseMove = useCallback((e: MouseEvent) => {
@@ -147,14 +157,14 @@ function InnerPanel({ scope, scopeId, showProjectFolders, className }: InnerPane
         {canEdit && (
           <div className="flex items-center gap-1 px-2 py-1 border-b border-border">
             <button
-              onClick={handleCreateDoc}
+              onClick={handleCreateDocClick}
               className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
               title="New document"
             >
               <FilePlus className="h-4 w-4" />
             </button>
             <button
-              onClick={handleCreateFolder}
+              onClick={handleCreateFolderClick}
               className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
               title="New folder"
             >
@@ -180,6 +190,9 @@ function InnerPanel({ scope, scopeId, showProjectFolders, className }: InnerPane
 
       {/* Right panel: editor */}
       <EditorPanel canEdit={canEdit} isOwner={isOwner} />
+
+      {/* Create dialog */}
+      <CreateDialog open={createDialogOpen} onOpenChange={setCreateDialogOpen} type={createType} onSubmit={handleCreateSubmit} />
     </div>
   )
 }

@@ -561,3 +561,59 @@ Caches are invalidated via:
 2. **Redis Pub/Sub**: Cross-server event distribution (when needed)
 3. **Database Replica**: Read replicas for query distribution
 4. **File Storage**: MinIO clusters for high availability
+
+## File Storage (MinIO)
+
+MinIO provides S3-compatible object storage for all file uploads. Binary content is stored in MinIO; only metadata lives in PostgreSQL.
+
+### Storage Layout
+
+```
+MinIO
+├── pm-images/                          # Image files (PNG, JPEG, GIF, WebP)
+│   ├── task/{task_id}/
+│   │   └── {uuid8}_{filename}          # Task image attachments
+│   ├── comment/{comment_id}/
+│   │   └── {uuid8}_{filename}          # Comment image attachments
+│   └── document/{document_id}/
+│       ├── {uuid8}_{filename}          # Editor inline images
+│       └── {uuid8}_diagram.png         # Draw.io diagram previews
+│
+└── pm-attachments/                     # Non-image files (PDF, DOCX, ZIP, etc.)
+    ├── task/{task_id}/
+    │   └── {uuid8}_{filename}          # Task file attachments
+    ├── comment/{comment_id}/
+    │   └── {uuid8}_{filename}          # Comment file attachments
+    └── document/{document_id}/
+        └── {uuid8}_{filename}          # Document file attachments
+```
+
+### Access Pattern
+
+```
+Upload Flow:
+  Client ──POST /api/files/upload──► FastAPI ──put_object──► MinIO
+                                        │
+                                        └──► Attachment record ──► PostgreSQL
+
+Download Flow:
+  Client ──GET /api/files/{id}/download-url──► FastAPI ──presigned_get──► MinIO
+    │                                             │
+    │◄──── presigned URL (1hr expiry) ────────────┘
+    │
+    └──── GET presigned URL ──────────────────────────────────────────► MinIO
+```
+
+### Key Constraints
+
+| Constraint | Value |
+|-----------|-------|
+| Max file size | 100 MB |
+| Max image size | 10 MB |
+| Allowed image types | PNG, JPEG, GIF, WebP |
+| Download URL expiry | 1 hour |
+| Upload URL expiry | 2 hours |
+| Batch URL limit | 50 IDs per request |
+| Orphan cleanup grace | 5 minutes |
+
+For full implementation details, see the [Backend Guide — MinIO File Storage](./backend.md#minio-file-storage) section.

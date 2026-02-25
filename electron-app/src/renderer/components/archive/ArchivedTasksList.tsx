@@ -29,6 +29,7 @@ import {
   Undo2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { parseBackendDate } from '@/lib/time-utils'
 import {
   useArchivedTasks,
   useUnarchiveTask,
@@ -325,7 +326,7 @@ const PRIORITY_CONFIG: Record<TaskPriority, { color: string; label: string }> = 
 }
 
 function formatCompletedDate(dateString: string): string {
-  const date = new Date(dateString)
+  const date = parseBackendDate(dateString)
   if (isNaN(date.getTime())) return 'Completed'
 
   const now = new Date()
@@ -336,7 +337,7 @@ function formatCompletedDate(dateString: string): string {
   if (diffDays < 7) return `${diffDays} days ago`
   if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`
 
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
 function getInitials(displayName: string | null, email: string): string {
@@ -437,7 +438,7 @@ const ArchivedTaskItem = memo(function ArchivedTaskItem({
           {task.completed_at && (
             <span
               className="flex items-center gap-1 text-green-600 dark:text-green-500"
-              title={`Completed: ${new Date(task.completed_at).toLocaleString()}`}
+              title={`Completed: ${parseBackendDate(task.completed_at).toLocaleString('en-US')}`}
             >
               <Calendar className="h-3 w-3" />
               <span>{formatCompletedDate(task.completed_at)}</span>

@@ -463,18 +463,25 @@ export function useDeleteApplication(id: string): UseMutationResult<void, Error,
  * Fetch projects for an application.
  * Uses 1 min stale time to keep task counts relatively fresh.
  */
-export function useProjects(applicationId: string | undefined): UseQueryResult<Project[], Error> {
+export function useProjects(
+  applicationId: string | undefined,
+  options?: { includeArchived?: boolean }
+): UseQueryResult<Project[], Error> {
   const token = useAuthStore((s) => s.token)
 
   return useQuery({
-    queryKey: queryKeys.projects(applicationId || ''),
+    queryKey: queryKeys.projects(applicationId || '', options?.includeArchived),
     queryFn: async () => {
       if (!window.electronAPI) {
         throw new Error('Electron API not available')
       }
 
+      const url = options?.includeArchived
+        ? `/api/applications/${applicationId}/projects?include_archived=true`
+        : `/api/applications/${applicationId}/projects`
+
       const response = await window.electronAPI.get<Project[]>(
-        `/api/applications/${applicationId}/projects`,
+        url,
         getAuthHeaders(token)
       )
 
@@ -549,6 +556,8 @@ export function useCreateProject(
       queryClient.setQueryData<Project[]>(queryKeys.projects(applicationId), (old) =>
         old ? [newProject, ...old] : [newProject]
       )
+      // Refresh the withArchived variant used by KnowledgeTree
+      queryClient.invalidateQueries({ queryKey: queryKeys.projects(applicationId, true) })
       // Increment projects_count in application
       queryClient.setQueryData<Application[]>(queryKeys.applications, (old) =>
         old?.map((app) =>
@@ -592,6 +601,8 @@ export function useUpdateProject(
       queryClient.setQueryData<Project[]>(queryKeys.projects(applicationId), (old) =>
         old?.map((p) => (p.id === id ? updatedProject : p))
       )
+      // Refresh the withArchived variant used by KnowledgeTree
+      queryClient.invalidateQueries({ queryKey: queryKeys.projects(applicationId, true) })
       // Update individual project
       queryClient.setQueryData(queryKeys.project(id), updatedProject)
     },
@@ -628,6 +639,8 @@ export function useDeleteProject(
       queryClient.setQueryData<Project[]>(queryKeys.projects(applicationId), (old) =>
         old?.filter((p) => p.id !== id)
       )
+      // Refresh the withArchived variant used by KnowledgeTree
+      queryClient.invalidateQueries({ queryKey: queryKeys.projects(applicationId, true) })
       // Decrement projects_count in application
       queryClient.setQueryData<Application[]>(queryKeys.applications, (old) =>
         old?.map((app) =>
@@ -1710,5 +1723,110 @@ export function useMyTasksCrossApp(
     enabled: !!token,
     staleTime: 30 * 1000,
     gcTime: 24 * 60 * 60 * 1000,
+  })
+}
+
+// ============================================================================
+// Dashboard
+// ============================================================================
+
+export interface TaskStatusBreakdown {
+  todo: number
+  in_progress: number
+  in_review: number
+  issue: number
+  done: number
+}
+
+export interface ProjectHealthItem {
+  id: string
+  name: string
+  key: string
+  application_id: string
+  application_name: string
+  derived_status: string | null
+  due_date: string | null
+  total_tasks: number
+  done_tasks: number
+  issue_tasks: number
+  review_tasks: number
+  active_tasks: number
+  completion_pct: number
+}
+
+export interface UpcomingTaskItem {
+  id: string
+  task_key: string
+  title: string
+  priority: string
+  due_date: string | null
+  status_name: string
+  status_category: string
+  project_id: string
+  project_name: string
+  project_key: string
+  application_id: string
+  application_name: string
+}
+
+export interface CompletionDataPoint {
+  date: string
+  count: number
+}
+
+export interface TrendData {
+  value: number
+  is_positive: boolean
+}
+
+export interface DashboardData {
+  applications_count: number
+  projects_count: number
+  active_tasks_count: number
+  completed_this_week: number
+  overdue_tasks_count: number
+  active_tasks_trend: TrendData | null
+  completed_trend: TrendData | null
+  task_status_breakdown: TaskStatusBreakdown
+  project_health: ProjectHealthItem[]
+  completion_trend: CompletionDataPoint[]
+  overdue_tasks: UpcomingTaskItem[]
+  upcoming_tasks: UpcomingTaskItem[]
+  recently_completed: UpcomingTaskItem[]
+  generated_at: string
+}
+
+/**
+ * Fetch aggregated dashboard data.
+ * - staleTime 60s (dashboard is aggregated, no need for aggressive revalidation)
+ * - refetchOnMount 'always' (state-based routing unmounts on tab switch)
+ * - gcTime 24h for IndexedDB persistence
+ */
+export function useDashboardStats(): UseQueryResult<DashboardData> {
+  const token = useAuthStore((state) => state.token)
+
+  return useQuery<DashboardData>({
+    queryKey: queryKeys.dashboard,
+    queryFn: async () => {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      const response = await window.electronAPI.get<DashboardData>(
+        '/api/me/dashboard',
+        getAuthHeaders(token)
+      )
+
+      if (response.status !== 200) {
+        throw new Error(parseApiError(response.status, response.data).message)
+      }
+
+      return response.data
+    },
+    enabled: !!token,
+    staleTime: 60_000,
+    gcTime: 24 * 60 * 60 * 1000,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: false,
   })
 }

@@ -14,9 +14,12 @@
 
 .ProseMirror {
   outline: none;
-  height: 100%;
+  min-height: 100%;
+  max-width: 100%;
   padding: 1rem;
   font-family: Arial, sans-serif;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 /* Enable text selection in view mode (when contenteditable="false") */
@@ -89,14 +92,14 @@
 }
 
 .ProseMirror .tableWrapper table {
-  table-layout: fixed;
-  width: 100%;
+  table-layout: auto;
+  min-width: 100%;
 }
 
 .ProseMirror th,
 .ProseMirror td {
   position: relative;
-  min-width: 50px;
+  min-width: 80px;
   overflow: hidden;
   word-wrap: break-word;
 }
@@ -249,6 +252,51 @@ ul[data-type="taskList"] li > div > p:first-child {
   display: inline-block;
   vertical-align: top;
   margin: 0.25rem;
+}
+
+/* ============================================================================
+   Image Skeleton (upload placeholder)
+   ============================================================================ */
+
+.image-skeleton {
+  background: hsl(var(--muted));
+  border-radius: 0.375rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.image-skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    hsl(var(--muted-foreground) / 0.08) 50%,
+    transparent 100%
+  );
+  animation: image-skeleton-shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes image-skeleton-shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+/* ============================================================================
+   Draw.io Diagram Node
+   ============================================================================ */
+
+.node-drawio {
+  display: block;
+  margin: 0.5rem 0;
+}
+
+.ProseMirror[contenteditable="false"] .node-drawio {
+  cursor: default;
 }
 
 /* ============================================================================

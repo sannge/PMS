@@ -10,9 +10,9 @@ Archives:
 """
 
 import logging
-from datetime import datetime
 
 from ..database import async_session_maker
+from ..utils.timezone import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ class ArchiveService:
         return {
             "tasks_archived": tasks_archived,
             "projects_archived": projects_archived,
-            "run_at": datetime.utcnow().isoformat(),
+            "run_at": utc_now().isoformat(),
         }
 
 

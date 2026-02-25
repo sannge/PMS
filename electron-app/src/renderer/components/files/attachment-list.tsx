@@ -15,6 +15,7 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import { cn } from '@/lib/utils'
+import { parseBackendDate } from '@/lib/time-utils'
 import {
   File,
   FileImage,
@@ -120,8 +121,8 @@ function getFileIcon(fileType: string | null, fileName: string, size: 'sm' | 'md
  * Format date for display
  */
 function formatDate(dateString: string): string {
-  const date = new Date(dateString)
-  return date.toLocaleDateString(undefined, {
+  const date = parseBackendDate(dateString)
+  return date.toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
     year: 'numeric',

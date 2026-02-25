@@ -22,6 +22,7 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { cn } from '@/lib/utils'
+import { formatDateForInput, parseBackendDate } from '@/lib/time-utils'
 import {
   X,
   ExternalLink,
@@ -190,22 +191,12 @@ function getTaskTypeLabel(taskType: TaskType): string {
  * Format date for display
  */
 function formatDate(dateString: string): string {
-  const date = new Date(dateString)
-  return date.toLocaleDateString(undefined, {
+  const date = parseBackendDate(dateString)
+  return date.toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'long',
     day: 'numeric',
   })
-}
-
-/**
- * Format date for input
- */
-function formatDateForInput(dateString: string | null): string {
-  if (!dateString) return ''
-  const date = new Date(dateString)
-  if (isNaN(date.getTime())) return ''
-  return date.toISOString().split('T')[0]
 }
 
 // ============================================================================
@@ -920,7 +911,7 @@ export function TaskDetail({
                     Completed
                   </label>
                   <div className="rounded-md border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 px-2 py-1.5 text-sm text-green-700 dark:text-green-400">
-                    {new Date(task.completed_at).toLocaleDateString(undefined, {
+                    {parseBackendDate(task.completed_at).toLocaleDateString('en-US', {
                       month: 'short',
                       day: 'numeric',
                     })}

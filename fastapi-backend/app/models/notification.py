@@ -4,6 +4,8 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from ..utils.timezone import utc_now
+
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -87,8 +89,8 @@ class Notification(Base):
 
     # Timestamps
     created_at = Column(
-        DateTime,
-        default=datetime.utcnow,
+        DateTime(timezone=True),
+        default=utc_now,
         nullable=False,
         index=True,
     )

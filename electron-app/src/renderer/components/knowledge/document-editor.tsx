@@ -17,7 +17,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/contexts/auth-context'
-import { createDocumentExtensions, type SetImageAttrs } from './editor-extensions'
+import { createDocumentExtensions, type SetImageAttrs, updateImagePlaceholder, removeImagePlaceholder } from './editor-extensions'
 import { EditorToolbar } from './editor-toolbar'
 import { DocumentTimestamp } from './document-header'
 import type { DocumentEditorProps } from './editor-types'
@@ -72,7 +72,6 @@ export function DocumentEditor({
   searchTerms,
   scrollToOccurrence,
 }: DocumentEditorProps) {
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const onChangeRef = useRef(onChange)
   const editableRef = useRef(editable)
   const onBaselineSyncRef = useRef(onBaselineSync)
@@ -152,14 +151,12 @@ export function DocumentEditor({
     }
   }, [token, documentId])
 
-  // Stable onUpdate handler using ref-based debounce
+  // Stable onUpdate handler — immediately captures editor state for save.
+  // No debounce: handleContentChange is just JSON.stringify + ref compare (fast),
+  // and debouncing caused a race where resize width could be lost if the user
+  // clicked Save before the debounce flushed.
   const handleUpdate = useCallback(({ editor: ed }: { editor: ReturnType<typeof useEditor> extends infer E ? NonNullable<E> : never }) => {
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current)
-    }
-    debounceRef.current = setTimeout(() => {
-      onChangeRef.current?.(ed.getJSON())
-    }, 300)
+    onChangeRef.current?.(ed.getJSON())
   }, [])
 
   // Ref to hold uploadImage for use in editorProps closures
@@ -167,7 +164,7 @@ export function DocumentEditor({
   useEffect(() => { uploadImageRef.current = uploadImage }, [uploadImage])
 
   const editor = useEditor({
-    extensions: createDocumentExtensions({ placeholder }),
+    extensions: createDocumentExtensions({ placeholder, documentId }),
     content: content || undefined,
     editable,
     onUpdate: handleUpdate,
@@ -180,14 +177,18 @@ export function DocumentEditor({
             !html.includes('google-sheets-html-origin')) {
           return html
         }
-        return html
+        // Extract just the <table> to skip <head>/<style>/<meta> blocks
+        const tableMatch = html.match(/<table[\s\S]*<\/table>/i)
+        if (!tableMatch) return html
+        return tableMatch[0]
           .replace(/<!--[\s\S]*?-->/g, '')
-          .replace(/mso-[^;:"]+:[^;:"]+;?/gi, '')
-          .replace(/class="[^"]*"/gi, '')
-          .replace(/<col[^>]*>/gi, '')
+          .replace(/<col[^>]*\/?>/gi, '')
           .replace(/<colgroup[^>]*>[\s\S]*?<\/colgroup>/gi, '')
-          .replace(/width:\s*[\d.]+pt;?/gi, '')
-          .replace(/height:\s*[\d.]+pt;?/gi, '')
+          .replace(/<\/?(?:font|span)[^>]*>/gi, '')
+          .replace(/\s*class="[^"]*"/gi, '')
+          .replace(/\s*style="[^"]*"/gi, '')
+          .replace(/\s*(?:width|height|border|cellpadding|cellspacing|align|valign)="[^"]*"/gi, '')
+          .replace(/\s*xmlns:[a-z]+="[^"]*"/gi, '')
       },
       handleClick: (_view, _pos, event) => {
         // In view mode, allow link clicks to open in new tab
@@ -208,59 +209,111 @@ export function DocumentEditor({
       },
       // Handle paste for spreadsheet data and images
       handlePaste: (view, event) => {
-        // TSV fallback for spreadsheet data (when no HTML is available)
         const htmlData = event.clipboardData?.getData('text/html') || ''
         const textData = event.clipboardData?.getData('text/plain') || ''
-        if (!htmlData && textData && textData.includes('\t') && textData.includes('\n')) {
-          const MAX_ROWS = 100
-          const MAX_COLS = 50
-          const allRows = textData.trim().split('\n')
-          const rows = allRows.slice(0, MAX_ROWS).map(row => row.split('\t').slice(0, MAX_COLS))
-          if (rows.length > 1 || (rows[0] && rows[0].length > 1)) {
-            const rowsTruncated = allRows.length > MAX_ROWS
-            const colsTruncated = allRows.some(row => row.split('\t').length > MAX_COLS)
-            if (rowsTruncated || colsTruncated) {
-              toast.info(`Table truncated to ${MAX_ROWS} rows × ${MAX_COLS} columns`)
-            }
+
+        // ---- Spreadsheet HTML paste (Excel / Google Sheets) ----
+        // Excel/Sheets put BOTH an HTML table AND a PNG screenshot on the
+        // clipboard.  We must handle the table explicitly and return true,
+        // otherwise the Image extension's plugin-level handlePaste fires
+        // next and inserts the screenshot image instead.
+        const isSpreadsheetHtml =
+          htmlData.includes('xmlns:x="urn:schemas-microsoft-com:office:excel"') ||
+          htmlData.includes('ProgId="Excel') ||
+          htmlData.includes('google-sheets-html-origin')
+
+        if (isSpreadsheetHtml) {
+          const tableMatch = htmlData.match(/<table[\s\S]*<\/table>/i)
+          if (tableMatch) {
             event.preventDefault()
-            const tableHtml = '<table>' +
-              rows.map((row, i) =>
-                '<tr>' + row.map(cell =>
-                  `<${i === 0 ? 'th' : 'td'}>${escapeHtml(cell.trim())}</${i === 0 ? 'th' : 'td'}>`
-                ).join('') + '</tr>'
-              ).join('') + '</table>'
-            // Use the schema to parse and insert the table
+            const cleanHtml = tableMatch[0]
+              .replace(/<!--[\s\S]*?-->/g, '')
+              .replace(/<col[^>]*\/?>/gi, '')
+              .replace(/<colgroup[^>]*>[\s\S]*?<\/colgroup>/gi, '')
+              .replace(/<\/?(?:font|span)[^>]*>/gi, '')
+              .replace(/\s*class="[^"]*"/gi, '')
+              .replace(/\s*style="[^"]*"/gi, '')
+              .replace(/\s*(?:width|height|border|cellpadding|cellspacing|align|valign)="[^"]*"/gi, '')
+              .replace(/\s*xmlns:[a-z]+="[^"]*"/gi, '')
             const parser = DOMParser.fromSchema(view.state.schema)
-            const doc = document.implementation.createHTMLDocument()
-            doc.body.innerHTML = tableHtml
-            const slice = parser.parseSlice(doc.body)
+            const tmpDoc = document.implementation.createHTMLDocument()
+            tmpDoc.body.innerHTML = cleanHtml
+            const slice = parser.parseSlice(tmpDoc.body)
             const tr = view.state.tr.replaceSelection(slice)
             view.dispatch(tr)
             return true
           }
         }
 
+        // ---- TSV fallback (no usable HTML, but tab-separated text) ----
+        // Catches cases where Excel HTML is missing/garbled but TSV is available,
+        // AND plain tab-separated data from other sources.
+        if (textData.includes('\t') && textData.includes('\n')) {
+          const MAX_ROWS = 100
+          const MAX_COLS = 50
+          const allRows = textData.trim().split('\n')
+          const rows = allRows.slice(0, MAX_ROWS).map(row => row.split('\t').slice(0, MAX_COLS))
+          if (rows.length > 1 || (rows[0] && rows[0].length > 1)) {
+            // Only use TSV when there's no non-spreadsheet HTML (otherwise we'd
+            // clobber rich content like formatted text with tabs from other apps)
+            const hasNonSpreadsheetHtml = htmlData && !isSpreadsheetHtml
+            if (!hasNonSpreadsheetHtml) {
+              const rowsTruncated = allRows.length > MAX_ROWS
+              const colsTruncated = allRows.some(row => row.split('\t').length > MAX_COLS)
+              if (rowsTruncated || colsTruncated) {
+                toast.info(`Table truncated to ${MAX_ROWS} rows × ${MAX_COLS} columns`)
+              }
+              event.preventDefault()
+              const tableHtml = '<table>' +
+                rows.map((row, i) =>
+                  '<tr>' + row.map(cell =>
+                    `<${i === 0 ? 'th' : 'td'}>${escapeHtml(cell.trim())}</${i === 0 ? 'th' : 'td'}>`
+                  ).join('') + '</tr>'
+                ).join('') + '</table>'
+              const parser = DOMParser.fromSchema(view.state.schema)
+              const tmpDoc = document.implementation.createHTMLDocument()
+              tmpDoc.body.innerHTML = tableHtml
+              const slice = parser.parseSlice(tmpDoc.body)
+              const tr = view.state.tr.replaceSelection(slice)
+              view.dispatch(tr)
+              return true
+            }
+          }
+        }
+
         const items = event.clipboardData?.items
         if (!items) return false
 
+        // Image paste — only when clipboard has NO HTML content.
+        // (Spreadsheet HTML was already handled above.)
+        const hasHtml = !!htmlData
         for (const item of items) {
-          if (item.type.startsWith('image/')) {
+          if (item.type.startsWith('image/') && !hasHtml) {
             event.preventDefault()
             const file = item.getAsFile()
             if (file) {
-              const insertPos = view.state.selection.from
+              const placeholderId = crypto.randomUUID()
+              const placeholderNode = view.state.schema.nodes.image?.create({
+                src: '',
+                loading: true,
+                placeholderId,
+              })
+              if (placeholderNode) {
+                const pos = Math.min(view.state.selection.from, view.state.doc.content.size)
+                view.dispatch(view.state.tr.insert(pos, placeholderNode))
+              }
               uploadImageRef.current(file).then((result) => {
-                if (!result || view.isDestroyed) return
-                const node = view.state.schema.nodes.image?.create({
+                if (view.isDestroyed) return
+                if (!result) {
+                  removeImagePlaceholder(view, placeholderId)
+                  return
+                }
+                updateImagePlaceholder(view, placeholderId, {
                   src: result.url,
                   attachmentId: result.attachmentId,
                 })
-                if (node) {
-                  const pos = Math.min(insertPos, view.state.doc.content.size)
-                  const tr = view.state.tr.insert(pos, node)
-                  view.dispatch(tr)
-                }
               }).catch((err) => {
+                if (!view.isDestroyed) removeImagePlaceholder(view, placeholderId)
                 toast.error('Failed to paste image')
                 console.error('[DocumentEditor] Failed to paste image:', err)
               })
@@ -270,24 +323,34 @@ export function DocumentEditor({
         }
 
         // Fallback: check clipboardData.files (File Explorer paste)
+        // Also skip when HTML is present (same Excel/Sheets guard as above)
         const clipFiles = event.clipboardData?.files
-        if (clipFiles && clipFiles.length > 0) {
+        if (clipFiles && clipFiles.length > 0 && !hasHtml) {
           const clipFile = clipFiles[0]
           if (clipFile.type.startsWith('image/')) {
             event.preventDefault()
-            const insertPos = view.state.selection.from
+            const placeholderId = crypto.randomUUID()
+            const placeholderNode = view.state.schema.nodes.image?.create({
+              src: '',
+              loading: true,
+              placeholderId,
+            })
+            if (placeholderNode) {
+              const pos = Math.min(view.state.selection.from, view.state.doc.content.size)
+              view.dispatch(view.state.tr.insert(pos, placeholderNode))
+            }
             uploadImageRef.current(clipFile).then((result) => {
-              if (!result || view.isDestroyed) return
-              const node = view.state.schema.nodes.image?.create({
+              if (view.isDestroyed) return
+              if (!result) {
+                removeImagePlaceholder(view, placeholderId)
+                return
+              }
+              updateImagePlaceholder(view, placeholderId, {
                 src: result.url,
                 attachmentId: result.attachmentId,
               })
-              if (node) {
-                const pos = Math.min(insertPos, view.state.doc.content.size)
-                const tr = view.state.tr.insert(pos, node)
-                view.dispatch(tr)
-              }
             }).catch((err) => {
+              if (!view.isDestroyed) removeImagePlaceholder(view, placeholderId)
               toast.error('Failed to paste image')
               console.error('[DocumentEditor] File explorer paste failed:', err)
             })
@@ -309,41 +372,49 @@ export function DocumentEditor({
         const dropCoords = view.posAtCoords({ left: event.clientX, top: event.clientY })
         if (!dropCoords) return true
 
-        let nextPos = dropCoords.pos
-        let chain = Promise.resolve()
+        // Insert all placeholders immediately in a single transaction
+        let tr = view.state.tr
+        let offset = 0
+        const placeholders: Array<{ file: File; id: string }> = []
         for (const file of imageFiles) {
-          chain = chain.then(() =>
-            uploadImageRef.current(file).then((result) => {
-              if (!result || view.isDestroyed) return
-              const node = view.state.schema.nodes.image?.create({
-                src: result.url,
-                attachmentId: result.attachmentId,
-              })
-              if (node) {
-                const pos = Math.min(nextPos, view.state.doc.content.size)
-                const tr = view.state.tr.insert(pos, node)
-                view.dispatch(tr)
-                nextPos = pos + node.nodeSize
-              }
-            }).catch((err) => {
-              toast.error('Failed to upload image')
-              console.error('[DocumentEditor] Drop image failed:', err)
+          const placeholderId = crypto.randomUUID()
+          const node = view.state.schema.nodes.image?.create({
+            src: '',
+            loading: true,
+            placeholderId,
+          })
+          if (node) {
+            const pos = Math.min(dropCoords.pos + offset, tr.doc.content.size)
+            tr = tr.insert(pos, node)
+            offset += node.nodeSize
+          }
+          placeholders.push({ file, id: placeholderId })
+        }
+        view.dispatch(tr)
+
+        // Upload each file and update its placeholder
+        for (const { file, id } of placeholders) {
+          uploadImageRef.current(file).then((result) => {
+            if (view.isDestroyed) return
+            if (!result) {
+              removeImagePlaceholder(view, id)
+              return
+            }
+            updateImagePlaceholder(view, id, {
+              src: result.url,
+              attachmentId: result.attachmentId,
             })
-          )
+          }).catch((err) => {
+            if (!view.isDestroyed) removeImagePlaceholder(view, id)
+            toast.error('Failed to upload image')
+            console.error('[DocumentEditor] Drop image failed:', err)
+          })
         }
         return true
       },
     },
   })
 
-  // Cleanup debounce timer on unmount
-  useEffect(() => {
-    return () => {
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current)
-      }
-    }
-  }, [])
 
   // Sync editable state — emitUpdate: false prevents onUpdate from firing
   // during the view→edit transition, which would otherwise cause a false
@@ -405,26 +476,45 @@ export function DocumentEditor({
   // Handle image upload from toolbar button (must be above early return for hooks rules)
   const handleToolbarImageUpload = useCallback((file: File) => {
     if (!editor || editor.isDestroyed) return
+    const placeholderId = crypto.randomUUID()
+    editor.chain().focus().setImage({
+      src: '',
+      loading: true,
+      placeholderId,
+    } as SetImageAttrs).run()
     uploadImage(file).then((result) => {
-      if (!result || !editor || editor.isDestroyed) return
-      editor.chain().focus().setImage({
+      if (!editor || editor.isDestroyed) return
+      if (!result) {
+        removeImagePlaceholder(editor.view, placeholderId)
+        return
+      }
+      updateImagePlaceholder(editor.view, placeholderId, {
         src: result.url,
         attachmentId: result.attachmentId,
-      } as SetImageAttrs).run()
+      })
     }).catch((err) => {
+      if (editor && !editor.isDestroyed) {
+        removeImagePlaceholder(editor.view, placeholderId)
+      }
       toast.error('Failed to upload image')
       console.error('[DocumentEditor] Toolbar image upload failed:', err)
     })
   }, [uploadImage, editor])
 
   if (!editor) {
-    return null
+    // Return a placeholder that matches the editor layout to prevent flash on document switch.
+    // useEditor is async and returns null briefly during initialization.
+    return (
+      <div className={cn('overflow-hidden bg-background flex flex-col min-h-0', className)}>
+        <div className="h-0 flex-grow overflow-y-auto overflow-x-hidden" />
+      </div>
+    )
   }
 
   return (
     <div className={cn('overflow-hidden bg-background flex flex-col min-h-0', className)}>
       {editable && <EditorToolbar editor={editor} onImageUpload={handleToolbarImageUpload} />}
-      <div className="flex-1 overflow-y-auto min-h-0">
+      <div className="h-0 flex-grow overflow-y-auto overflow-x-hidden">
         {updatedAt && <DocumentTimestamp updatedAt={updatedAt} />}
         <EditorContent editor={editor} className="prose prose-sm max-w-none" />
       </div>

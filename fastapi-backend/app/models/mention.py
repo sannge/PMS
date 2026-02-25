@@ -1,8 +1,9 @@
 """Mention SQLAlchemy model for @mentions in comments."""
 
 import uuid
-from datetime import datetime
 from typing import TYPE_CHECKING
+
+from ..utils.timezone import utc_now
 
 from sqlalchemy import Column, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
@@ -59,8 +60,8 @@ class Mention(Base):
 
     # Timestamps
     created_at = Column(
-        DateTime,
-        default=datetime.utcnow,
+        DateTime(timezone=True),
+        default=utc_now,
         nullable=False,
     )
 

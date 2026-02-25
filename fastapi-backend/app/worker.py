@@ -9,7 +9,7 @@ Run with:
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from arq import cron
@@ -17,6 +17,7 @@ from arq.connections import RedisSettings
 
 from .config import settings
 from .database import async_session_maker
+from .utils.timezone import utc_now
 from .models.project import Project
 from .models.task import Task
 from .models.task_status import StatusName, TaskStatus
@@ -79,7 +80,7 @@ async def run_archive_jobs(ctx: dict[str, Any]) -> dict[str, Any]:
     return {
         "tasks_archived": tasks_archived,
         "projects_archived": projects_archived,
-        "run_at": datetime.utcnow().isoformat(),
+        "run_at": utc_now().isoformat(),
     }
 
 
@@ -89,7 +90,7 @@ async def archive_stale_done_tasks(db) -> int:
     from sqlalchemy.ext.asyncio import AsyncSession
     from .models.project_task_status_agg import ProjectTaskStatusAgg
 
-    now = datetime.utcnow()
+    now = utc_now()
     cutoff_date = now - timedelta(days=ARCHIVE_AFTER_DAYS)
 
     # Find all "Done" status IDs
@@ -145,7 +146,7 @@ async def archive_eligible_projects(db) -> int:
     """Archive projects where all tasks are archived."""
     from sqlalchemy import select, update
 
-    now = datetime.utcnow()
+    now = utc_now()
 
     # Subquery: projects with at least one task
     has_tasks = (

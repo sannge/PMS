@@ -8,6 +8,8 @@ model implements the many-to-many relationship between documents and tags.
 
 import uuid
 from datetime import datetime
+
+from ..utils.timezone import utc_now
 from sqlalchemy import (
     CheckConstraint,
     Column,
@@ -80,8 +82,8 @@ class DocumentTag(Base):
 
     # Timestamps
     created_at = Column(
-        DateTime,
-        default=datetime.utcnow,
+        DateTime(timezone=True),
+        default=utc_now,
         nullable=False,
     )
 
@@ -166,8 +168,8 @@ class DocumentTagAssignment(Base):
 
     # Timestamps
     created_at = Column(
-        DateTime,
-        default=datetime.utcnow,
+        DateTime(timezone=True),
+        default=utc_now,
         nullable=False,
     )
 

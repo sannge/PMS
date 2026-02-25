@@ -17,11 +17,19 @@ interface TipTapDoc {
 }
 
 /**
+ * Check if a parsed content object is in canvas format.
+ */
+export function isCanvasFormat(content: object | null): boolean {
+  return content !== null && typeof content === 'object' && (content as Record<string, unknown>).format === 'canvas'
+}
+
+/**
  * Ensure TipTap content starts with an h1 heading.
  *
  * - If content is null/empty: returns a doc with h1 (= title) + empty paragraph
  * - If content already starts with h1: returns it unchanged
  * - If content has content but no leading h1: prepends one with the title
+ * - If content is canvas format: returns it unchanged (canvas docs don't have heading structure)
  *
  * The heading becomes part of the editor content — editable in edit mode,
  * read-only in view mode, saved/cancelled with the rest of the content.
@@ -45,17 +53,36 @@ export function ensureContentHeading(
     }
   }
 
-  const doc = JSON.parse(contentJson) as TipTapDoc
-
-  if (!doc.content?.length) {
-    return { ...doc, content: [heading, rule, { type: 'paragraph' }] }
+  let doc: Record<string, unknown>
+  try {
+    const parsed: unknown = JSON.parse(contentJson)
+    if (typeof parsed !== 'object' || parsed === null) {
+      return { type: 'doc', content: [heading, rule, { type: 'paragraph' }] }
+    }
+    doc = parsed as Record<string, unknown>
+  } catch {
+    return {
+      type: 'doc',
+      content: [heading, rule, { type: 'paragraph' }],
+    }
   }
 
-  const first = doc.content[0]
+  // Canvas documents don't have heading structure — return unchanged
+  if (isCanvasFormat(doc)) {
+    return doc as unknown as TipTapDoc
+  }
+
+  const typedDoc = doc as unknown as TipTapDoc
+
+  if (!typedDoc.content?.length) {
+    return { ...typedDoc, content: [heading, rule, { type: 'paragraph' }] }
+  }
+
+  const first = typedDoc.content[0]
   if (first.type === 'heading' && first.attrs?.level === 1) {
-    return doc
+    return typedDoc
   }
 
-  return { ...doc, content: [heading, rule, ...doc.content] }
+  return { ...typedDoc, content: [heading, rule, ...typedDoc.content] }
 }
 

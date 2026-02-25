@@ -256,7 +256,7 @@ export function FolderTreeItem({
           onBlur={handleRenameBlur}
           className={cn(
             'flex-1 min-w-0 text-[13px] leading-[22px] bg-background text-foreground border border-border px-1 rounded-sm',
-            'outline-none focus:ring-1 focus:ring-ring'
+            'outline-none'
           )}
           onClick={(e) => e.stopPropagation()}
         />

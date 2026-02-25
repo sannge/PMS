@@ -1,0 +1,300 @@
+/**
+ * Canvas Editor Styles
+ *
+ * Dot grid background, container borders/shadows, drag handle,
+ * resize handle, delete button, and static preview styling.
+ */
+
+/* ============================================================================
+   Dot Grid Background
+   ============================================================================ */
+
+.canvas-dot-grid {
+  background-image: radial-gradient(circle, hsl(var(--border)) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* ============================================================================
+   Canvas Container
+   ============================================================================ */
+
+.canvas-container {
+  background: hsl(var(--background));
+  border: 1.5px dashed hsl(var(--border));
+  border-radius: 0.375rem;
+  box-shadow:
+    0 1px 3px 0 rgb(0 0 0 / 0.1),
+    0 1px 2px -1px rgb(0 0 0 / 0.1);
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+  overflow: hidden;
+}
+
+.canvas-container:hover {
+  border-color: hsl(var(--muted-foreground) / 0.5);
+  box-shadow:
+    0 4px 6px -1px rgb(0 0 0 / 0.1),
+    0 2px 4px -2px rgb(0 0 0 / 0.1);
+}
+
+.canvas-container--active {
+  border-color: hsl(var(--muted-foreground) / 0.5);
+}
+
+/* Editable-but-not-active containers: solid border to signal interactivity */
+.canvas-container--editable {
+  border-style: solid;
+  cursor: pointer;
+}
+
+/* No focus-visible ring — active border-color change is the visual indicator */
+
+/* ============================================================================
+   Drag Handle
+   ============================================================================ */
+
+.canvas-drag-handle {
+  height: 8px;
+  cursor: grab;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-top-left-radius: 0.375rem;
+  border-top-right-radius: 0.375rem;
+  background: hsl(var(--muted) / 0.5);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.canvas-container:hover .canvas-drag-handle {
+  opacity: 1;
+}
+
+.canvas-container--active .canvas-drag-handle {
+  opacity: 1;
+}
+
+.canvas-drag-handle:active {
+  cursor: grabbing;
+}
+
+.canvas-drag-handle-dots {
+  display: flex;
+  gap: 3px;
+}
+
+.canvas-drag-handle-dots::before,
+.canvas-drag-handle-dots::after {
+  content: '';
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: hsl(var(--muted-foreground) / 0.5);
+}
+
+.canvas-drag-handle-dots::before {
+  box-shadow:
+    6px 0 0 hsl(var(--muted-foreground) / 0.5),
+    12px 0 0 hsl(var(--muted-foreground) / 0.5);
+}
+
+/* ============================================================================
+   Resize Handle
+   ============================================================================ */
+
+.canvas-resize-handle {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  cursor: ew-resize;
+  opacity: 0;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+  border-top-right-radius: 0.375rem;
+  border-bottom-right-radius: 0.375rem;
+}
+
+.canvas-container--active .canvas-resize-handle {
+  opacity: 1;
+  background: hsl(var(--muted-foreground) / 0.2);
+}
+
+.canvas-resize-handle:hover {
+  background: hsl(var(--muted-foreground) / 0.4) !important;
+}
+
+/* ============================================================================
+   Corner Resize Handle (bottom-right, diagonal)
+   ============================================================================ */
+
+.canvas-corner-resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 12px;
+  height: 12px;
+  cursor: nwse-resize;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  border-bottom-right-radius: 0.375rem;
+  z-index: 2;
+}
+
+.canvas-corner-resize-handle::after {
+  content: '';
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid hsl(var(--muted-foreground) / 0.4);
+  border-bottom: 2px solid hsl(var(--muted-foreground) / 0.4);
+}
+
+.canvas-container--active .canvas-corner-resize-handle {
+  opacity: 1;
+}
+
+.canvas-corner-resize-handle:hover::after {
+  border-color: hsl(var(--muted-foreground) / 0.8);
+}
+
+/* ============================================================================
+   Delete Button
+   ============================================================================ */
+
+.canvas-delete-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: hsl(var(--destructive));
+  color: hsl(var(--destructive-foreground));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 10;
+  border: none;
+  padding: 0;
+}
+
+.canvas-container:hover .canvas-delete-btn {
+  opacity: 1;
+}
+
+.canvas-delete-btn:hover {
+  transform: scale(1.1);
+}
+
+/* ============================================================================
+   Static Preview Styling
+
+   The static preview wraps generated HTML inside a .ProseMirror div so it
+   receives the exact same CSS as the active TipTap editor (injected styles,
+   editor-styles.css rules, and canvas overrides). This guarantees pixel-
+   perfect matching and eliminates text size jumps on focus/defocus.
+   ============================================================================ */
+
+.canvas-static-preview {
+  overflow: hidden;
+  cursor: text;
+}
+
+/* ============================================================================
+   Canvas Editor Content Area
+   ============================================================================ */
+
+.canvas-editor-content {
+  overflow: hidden;
+}
+
+/* Shared .ProseMirror overrides for both active editor and static preview.
+   The base .ProseMirror rules (padding:1rem, max-width:100%) from
+   editor-styles.css are overridden for canvas context. */
+.canvas-editor-content .ProseMirror,
+.canvas-static-preview .ProseMirror {
+  padding: 0.5rem;
+  min-height: 1.5rem;
+  max-width: none;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+/* ============================================================================
+   Canvas Content Auto-Expand
+
+   Tables and images should expand the container instead of creating
+   internal scrollbars. Override the global editor overflow rules.
+   ============================================================================ */
+
+.canvas-editor-content .ProseMirror .tableWrapper,
+.canvas-static-preview .ProseMirror .tableWrapper {
+  overflow-x: visible;
+}
+
+/* ============================================================================
+   Context Menu
+   ============================================================================ */
+
+.canvas-context-menu {
+  position: absolute;
+  z-index: 50;
+  min-width: 160px;
+  border-radius: 0.375rem;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  box-shadow:
+    0 4px 6px -1px rgb(0 0 0 / 0.1),
+    0 2px 4px -2px rgb(0 0 0 / 0.1);
+  padding: 4px;
+}
+
+.canvas-context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: background-color 0.1s ease;
+}
+
+.canvas-context-menu-item:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+}
+
+/* ============================================================================
+   Focus Outline Removal for Canvas Editors
+   ============================================================================ */
+
+.canvas-editor-content .ProseMirror:focus,
+.canvas-editor-content .ProseMirror:focus-visible,
+.canvas-static-preview:focus,
+.canvas-static-preview:focus-visible,
+.canvas-static-preview .ProseMirror:focus,
+.canvas-static-preview .ProseMirror:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* Override global *:focus-visible ring for canvas containers.
+   The active border-color change is the visual indicator instead. */
+.canvas-container:focus,
+.canvas-container:focus-visible {
+  outline: none;
+  border-color: hsl(var(--muted-foreground) / 0.5);
+  --tw-ring-shadow: 0 0 #0000;
+  --tw-ring-offset-shadow: 0 0 #0000;
+}

@@ -8,11 +8,12 @@ Provides business logic for:
 
 import json
 import re
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
 from sqlalchemy import select, update, delete
+
+from ..utils.timezone import utc_now
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -163,7 +164,7 @@ async def create_comment(
         author_id=author_id,
         body_json=body_json_str,
         body_text=body_text,
-        created_at=datetime.utcnow(),
+        created_at=utc_now(),
     )
     db.add(comment)
     await db.flush()  # Get comment ID
@@ -173,7 +174,7 @@ async def create_comment(
         mention = Mention(
             comment_id=comment.id,
             user_id=user_id,
-            created_at=datetime.utcnow(),
+            created_at=utc_now(),
         )
         db.add(mention)
 
@@ -253,7 +254,7 @@ async def update_comment(
     elif comment_data.body_text is not None:
         comment.body_text = comment_data.body_text
 
-    comment.updated_at = datetime.utcnow()
+    comment.updated_at = utc_now()
 
     # Update mention records
     added_mentions = new_mentions - original_mentions
@@ -273,7 +274,7 @@ async def update_comment(
         mention = Mention(
             comment_id=comment.id,
             user_id=user_id,
-            created_at=datetime.utcnow(),
+            created_at=utc_now(),
         )
         db.add(mention)
 
@@ -315,7 +316,7 @@ async def delete_comment(
 
     if soft_delete:
         comment.is_deleted = True
-        comment.updated_at = datetime.utcnow()
+        comment.updated_at = utc_now()
         await db.commit()
         await db.refresh(comment)
         return comment

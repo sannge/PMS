@@ -8,13 +8,15 @@
  * editor content itself (see ensureContentHeading in content-utils.ts).
  */
 
+import { parseBackendDate } from '@/lib/time-utils'
+
 export interface DocumentTimestampProps {
   updatedAt: string
 }
 
 /** Format an ISO timestamp as "Feb 8, 2026 3:45 PM" */
 function formatTimestamp(iso: string): string {
-  const date = new Date(iso)
+  const date = parseBackendDate(iso)
   return new Intl.DateTimeFormat('en-US', {
     month: 'short',
     day: 'numeric',

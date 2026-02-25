@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { parseBackendDate } from '@/lib/time-utils'
 import { X } from 'lucide-react'
 import DOMPurify from 'dompurify'
 import type { SearchResultHit, SearchResponse } from '@/hooks/use-document-search'
@@ -19,13 +20,12 @@ function SearchResultSnippet({ html }: { html: string }) {
 }
 
 function formatRelativeTime(isoOrTimestamp: string | number): string {
-  const date = new Date(
+  const date =
     typeof isoOrTimestamp === 'number'
-      ? isoOrTimestamp * 1000
+      ? new Date(isoOrTimestamp * 1000)
       : /^\d+$/.test(isoOrTimestamp)
-        ? Number(isoOrTimestamp) * 1000
-        : isoOrTimestamp
-  )
+        ? new Date(Number(isoOrTimestamp) * 1000)
+        : parseBackendDate(isoOrTimestamp)
   if (isNaN(date.getTime())) return ''
   const now = new Date()
   const diffMs = now.getTime() - date.getTime()
@@ -36,7 +36,7 @@ function formatRelativeTime(isoOrTimestamp: string | number): string {
   if (diffHr < 24) return `${diffHr}h ago`
   const diffDay = Math.floor(diffHr / 24)
   if (diffDay < 30) return `${diffDay}d ago`
-  return date.toLocaleDateString()
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
 interface SearchResultsPanelProps {

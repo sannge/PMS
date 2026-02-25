@@ -10,6 +10,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { cn } from '@/lib/utils'
+import { parseBackendDate } from '@/lib/time-utils'
 import { useAuthStore, getAuthHeaders } from '@/contexts/auth-context'
 import { useNotificationUIStore } from '@/contexts/notification-ui-context'
 import {
@@ -327,7 +328,7 @@ function InvitationDetailPopup({ notification, onClose, onSuccess }: InvitationP
   const isPending = invitation?.status === 'pending'
 
   const formatDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleDateString(undefined, {
+    return parseBackendDate(dateStr).toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
