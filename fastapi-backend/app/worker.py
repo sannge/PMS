@@ -24,6 +24,7 @@ from .models.task_status import StatusName, TaskStatus
 from .services.redis_service import redis_service
 from .services.search_service import check_search_index_consistency
 from .services.status_derivation_service import recalculate_aggregation_from_tasks
+from .models.document import Document
 
 logger = logging.getLogger(__name__)
 
@@ -308,6 +309,101 @@ async def cleanup_stale_presence(ctx: dict[str, Any]) -> dict[str, int]:
 
 
 # =============================================================================
+# Embedding Jobs
+# =============================================================================
+
+
+async def embed_document_job(ctx: dict[str, Any], document_id: str) -> dict[str, Any]:
+    """
+    Background job to embed a single document.
+
+    ARQ deduplication (_job_id) ensures only one pending embed job exists
+    per document. The job reads current content from DB at execution time,
+    so it always embeds the latest version regardless of when it was enqueued.
+
+    Args:
+        ctx: ARQ context dict.
+        document_id: UUID string of the document to embed.
+
+    Returns:
+        dict with chunk_count and token_count on success, or error info.
+    """
+    import json
+    from uuid import UUID as _UUID
+
+    from sqlalchemy import select
+
+    doc_uuid = _UUID(document_id)
+
+    try:
+        async with async_session_maker() as db:
+            result = await db.execute(
+                select(Document).where(
+                    Document.id == doc_uuid,
+                    Document.deleted_at.is_(None),
+                )
+            )
+            doc = result.scalar_one_or_none()
+
+            if doc is None:
+                logger.warning("embed_document_job: document %s not found or deleted", document_id)
+                return {"status": "skipped", "reason": "not_found"}
+
+            if not doc.content_json:
+                logger.debug("embed_document_job: document %s has no content", document_id)
+                return {"status": "skipped", "reason": "no_content"}
+
+            content = json.loads(doc.content_json)
+            scope_ids = {
+                "application_id": doc.application_id,
+                "project_id": doc.project_id,
+                "user_id": doc.user_id,
+            }
+
+            from .ai.chunking_service import SemanticChunker
+            from .ai.embedding_normalizer import EmbeddingNormalizer
+            from .ai.embedding_service import EmbeddingService
+            from .ai.provider_registry import ProviderRegistry
+
+            registry = ProviderRegistry()
+            chunker = SemanticChunker()
+            normalizer = EmbeddingNormalizer()
+
+            service = EmbeddingService(
+                provider_registry=registry,
+                chunker=chunker,
+                normalizer=normalizer,
+                db=db,
+            )
+
+            embed_result = await service.embed_document(
+                document_id=doc_uuid,
+                content_json=content,
+                title=doc.title,
+                scope_ids=scope_ids,
+            )
+
+            await db.commit()
+
+            logger.info(
+                "embed_document_job: document %s embedded — %d chunks, %d tokens, %dms",
+                document_id, embed_result.chunk_count, embed_result.token_count, embed_result.duration_ms,
+            )
+
+            return {
+                "status": "success",
+                "chunk_count": embed_result.chunk_count,
+                "token_count": embed_result.token_count,
+                "duration_ms": embed_result.duration_ms,
+            }
+
+    except Exception as e:
+        logger.error("embed_document_job failed for document %s: %s", document_id, e, exc_info=True)
+        # Return type name only (not str(e)) to avoid leaking sensitive context
+        return {"status": "error", "error": type(e).__name__}
+
+
+# =============================================================================
 # Startup/Shutdown Hooks
 # =============================================================================
 
@@ -404,6 +500,7 @@ class WorkerSettings:
         run_archive_jobs,
         cleanup_stale_presence,
         check_search_index_consistency,
+        embed_document_job,
     ]
 
     # Scheduled cron jobs (configured via .env)

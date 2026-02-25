@@ -27,7 +27,7 @@ print("=" * 60 + "\n", flush=True)
 from contextlib import asynccontextmanager
 
 from .database import warmup_connection_pool
-from .routers import application_members_router, applications_router, auth_router, checklists_router, comments_router, dashboard_router, document_folders_router, document_locks_router, document_search_router, document_tags_router, documents_router, files_router, invitations_router, notifications_router, project_assignments_router, project_members_router, projects_router, tasks_router, users_router
+from .routers import ai_config_router, application_members_router, applications_router, auth_router, checklists_router, comments_router, dashboard_router, document_folders_router, document_locks_router, document_search_router, document_tags_router, documents_router, files_router, invitations_router, notifications_router, project_assignments_router, project_members_router, projects_router, tasks_router, users_router
 from .websocket import manager, route_incoming_message, check_room_access
 from .services.auth_service import decode_access_token
 from .services.redis_service import redis_service
@@ -152,6 +152,7 @@ app.include_router(document_search_router, tags=["document-search"])
 app.include_router(documents_router, prefix="/api", tags=["documents"])
 app.include_router(document_tags_router, prefix="/api", tags=["document-tags"])
 app.include_router(document_folders_router, prefix="/api", tags=["document-folders"])
+app.include_router(ai_config_router)
 
 
 @app.get("/")

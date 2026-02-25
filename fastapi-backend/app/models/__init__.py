@@ -1,5 +1,7 @@
 """SQLAlchemy ORM models package."""
 
+from .ai_model import AiModel
+from .ai_provider import AiProvider
 from .application import Application
 from .application_member import ApplicationMember
 from .attachment import Attachment
@@ -7,6 +9,7 @@ from .checklist import Checklist
 from .checklist_item import ChecklistItem
 from .comment import Comment
 from .document import Document
+from .document_chunk import DocumentChunk
 from .document_folder import DocumentFolder
 from .document_snapshot import DocumentSnapshot
 from .document_tag import DocumentTag, DocumentTagAssignment
@@ -23,6 +26,8 @@ from .task_status import TaskStatus
 from .user import User
 
 __all__ = [
+    "AiModel",
+    "AiProvider",
     "Application",
     "ApplicationMember",
     "Attachment",
@@ -30,6 +35,7 @@ __all__ = [
     "ChecklistItem",
     "Comment",
     "Document",
+    "DocumentChunk",
     "DocumentFolder",
     "DocumentSnapshot",
     "DocumentTag",

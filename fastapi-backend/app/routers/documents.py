@@ -7,7 +7,7 @@ and tag assignment with scope compatibility validation.
 """
 
 import asyncio
-from datetime import datetime
+from datetime import timedelta
 from typing import Literal, Optional
 from uuid import UUID
 
@@ -741,6 +741,26 @@ async def save_content(
     if search_doc_data:
         from ..services.search_service import index_document_from_data
         asyncio.create_task(index_document_from_data(search_doc_data))
+
+    # Enqueue embedding job (deferred 120s to reduce churn during active editing)
+    try:
+        from ..services.redis_service import redis_service
+        if redis_service.is_connected:
+            from arq.connections import ArqRedis
+            pool = redis_service.client
+            # Reuse ArqRedis wrapper cached on the redis_service client
+            arq_redis: ArqRedis | None = getattr(pool, "_arq_redis", None)
+            if arq_redis is None:
+                arq_redis = ArqRedis(pool_or_conn=pool.connection_pool)
+                pool._arq_redis = arq_redis  # type: ignore[attr-defined]
+            await arq_redis.enqueue_job(
+                "embed_document_job",
+                str(document_id),
+                _job_id=f"embed:{document_id}",
+                _defer_by=timedelta(seconds=120),
+            )
+    except Exception:
+        logger.exception("Failed to enqueue embed_document_job for %s", document_id)
 
     await _broadcast_document_event(
         MessageType.DOCUMENT_UPDATED,

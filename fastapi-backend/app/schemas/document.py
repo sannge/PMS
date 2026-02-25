@@ -127,6 +127,8 @@ class DocumentResponse(BaseModel):
     deleted_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+    embedding_updated_at: Optional[datetime] = None
+    graph_ingested_at: Optional[datetime] = None
     tags: list[TagResponse] = []
 
     @field_validator("tags", mode="before")

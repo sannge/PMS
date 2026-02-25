@@ -85,6 +85,11 @@ class Settings(BaseSettings):
             f"@{self.db_server}:{self.db_port}/{self.db_name}"
         )
 
+    # AI settings
+    ai_encryption_key: str = ""
+    ai_default_embedding_dimensions: int = 1536
+    ai_default_provider: str = "openai"
+
     # Meilisearch settings
     meilisearch_url: str = "http://localhost:7700"
     meilisearch_api_key: str = ""            # Scoped API key for "documents" index

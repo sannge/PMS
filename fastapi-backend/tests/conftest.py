@@ -1,10 +1,13 @@
-"""Shared pytest fixtures for backend tests with async PostgreSQL."""
+"""Shared pytest fixtures for backend tests with async PostgreSQL.
+
+Uses session-scoped table creation (DDL runs once) with function-scoped
+savepoint rollback for fast, isolated tests.
+"""
 
 import asyncio
 import os
 import sys
-from datetime import datetime, timedelta
-from typing import AsyncGenerator, Generator
+from typing import AsyncGenerator
 
 from app.utils.timezone import utc_now
 from unittest.mock import MagicMock, patch
@@ -13,8 +16,13 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy import event, text
+from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 # Add app to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -46,6 +54,41 @@ def get_test_password_hash(password: str) -> str:
 # Use test database (pmsdb_test) - NEVER use main database for tests!
 TEST_DATABASE_URL = settings.test_database_url
 
+# ---------------------------------------------------------------------------
+# Session-scoped engine: tables created ONCE, dropped ONCE
+# ---------------------------------------------------------------------------
+
+_DROP_STATEMENTS = [
+    'DROP TABLE IF EXISTS "DocumentChunks" CASCADE',
+    'DROP TABLE IF EXISTS "DocumentSnapshots" CASCADE',
+    'DROP TABLE IF EXISTS "DocumentTagAssignments" CASCADE',
+    'DROP TABLE IF EXISTS "DocumentTags" CASCADE',
+    'DROP TABLE IF EXISTS "Documents" CASCADE',
+    'DROP TABLE IF EXISTS "DocumentFolders" CASCADE',
+    'DROP TABLE IF EXISTS "AiModels" CASCADE',
+    'DROP TABLE IF EXISTS "AiProviders" CASCADE',
+    'DROP TABLE IF EXISTS "Mentions" CASCADE',
+    'DROP TABLE IF EXISTS "ChecklistItems" CASCADE',
+    'DROP TABLE IF EXISTS "Attachments" CASCADE',
+    'DROP TABLE IF EXISTS "ApplicationMembers" CASCADE',
+    'DROP TABLE IF EXISTS "Comments" CASCADE',
+    'DROP TABLE IF EXISTS "Checklists" CASCADE',
+    'DROP TABLE IF EXISTS "Notes" CASCADE',
+    'DROP TABLE IF EXISTS "Invitations" CASCADE',
+    'DROP TABLE IF EXISTS "Tasks" CASCADE',
+    'DROP TABLE IF EXISTS "ProjectTaskStatusAgg" CASCADE',
+    'DROP TABLE IF EXISTS "ProjectMembers" CASCADE',
+    'DROP TABLE IF EXISTS "ProjectAssignments" CASCADE',
+    'DROP TABLE IF EXISTS "TaskStatuses" CASCADE',
+    'DROP TABLE IF EXISTS "Projects" CASCADE',
+    'DROP TABLE IF EXISTS "Notifications" CASCADE',
+    'DROP TABLE IF EXISTS "Applications" CASCADE',
+    'DROP TABLE IF EXISTS "Users" CASCADE',
+]
+
+# Track pgvector availability at module level (set during engine setup)
+_pgvector_installed = False
+
 
 @pytest.fixture(scope="session")
 def event_loop():
@@ -55,78 +98,111 @@ def event_loop():
     loop.close()
 
 
-@pytest_asyncio.fixture(scope="function")
+@pytest_asyncio.fixture(scope="session")
 async def engine():
-    """Create async test engine with PostgreSQL."""
-    engine = create_async_engine(
+    """Create async test engine — tables created once for the whole session."""
+    _engine = create_async_engine(
         TEST_DATABASE_URL,
         echo=False,
         pool_pre_ping=True,
     )
 
     # Drop all tables first (clean slate)
-    async with engine.begin() as conn:
-        # Use raw SQL for tables with circular FK dependencies
-        await conn.execute(text("DROP TABLE IF EXISTS \"Mentions\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"ChecklistItems\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"Attachments\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"ApplicationMembers\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"Comments\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"Checklists\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"Notes\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"Invitations\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"Tasks\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"ProjectTaskStatusAgg\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"ProjectMembers\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"ProjectAssignments\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"TaskStatuses\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"Projects\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"Notifications\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"Applications\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"Users\" CASCADE"))
+    async with _engine.begin() as conn:
+        for stmt in _DROP_STATEMENTS:
+            await conn.execute(text(stmt))
 
-    # Create all tables
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Ensure required PostgreSQL extensions exist
+    global _pgvector_installed
+    _pgvector_available = False
 
-    yield engine
+    # Check pgvector availability using a separate connection to avoid tainting pool
+    async with _engine.begin() as conn:
+        result = await conn.execute(
+            text("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'")
+        )
+        if result.scalar() is not None:
+            await conn.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
+            _pgvector_available = True
+            _pgvector_installed = True
 
-    # Drop all tables at end
-    async with engine.begin() as conn:
-        await conn.execute(text("DROP TABLE IF EXISTS \"Mentions\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"ChecklistItems\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"Attachments\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"ApplicationMembers\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"Comments\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"Checklists\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"Notes\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"Invitations\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"Tasks\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"ProjectTaskStatusAgg\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"ProjectMembers\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"ProjectAssignments\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"TaskStatuses\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"Projects\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"Notifications\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"Applications\" CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS \"Users\" CASCADE"))
+    # Create pg_trgm extension (comes with standard PostgreSQL)
+    # May already be installed by DBA; IF NOT EXISTS handles that case
+    async with _engine.begin() as conn:
+        try:
+            await conn.execute(text('CREATE EXTENSION IF NOT EXISTS pg_trgm'))
+        except Exception:
+            pass  # Already installed or insufficient privileges (DBA handles this)
 
-    await engine.dispose()
+    # Create all tables once
+    # If pgvector is not available, exclude the DocumentChunks table
+    async with _engine.begin() as conn:
+        if _pgvector_available:
+            await conn.run_sync(Base.metadata.create_all)
+        else:
+            # Create all tables except DocumentChunks (which requires vector type)
+            from app.models.document_chunk import DocumentChunk
+            tables_to_create = [
+                t for t in Base.metadata.sorted_tables
+                if t.name != DocumentChunk.__tablename__
+            ]
+            await conn.run_sync(
+                lambda sync_conn: Base.metadata.create_all(
+                    sync_conn, tables=tables_to_create
+                )
+            )
+
+    yield _engine
+
+    # Drop all tables at end of session
+    async with _engine.begin() as conn:
+        for stmt in _DROP_STATEMENTS:
+            await conn.execute(text(stmt))
+
+    await _engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Function-scoped: each test runs inside a transaction that gets rolled back
+# ---------------------------------------------------------------------------
 
 
 @pytest_asyncio.fixture(scope="function")
-async def db_session(engine) -> AsyncGenerator[AsyncSession, None]:
-    """Create async test database session."""
+async def db_connection(engine) -> AsyncGenerator[AsyncConnection, None]:
+    """Open a connection and begin a transaction that will be rolled back."""
+    async with engine.connect() as conn:
+        trans = await conn.begin()
+        yield conn
+        await trans.rollback()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def db_session(db_connection: AsyncConnection) -> AsyncGenerator[AsyncSession, None]:
+    """Create a session bound to the test transaction.
+
+    Uses begin_nested() (savepoints) so that session.commit() inside tests
+    doesn't actually commit to the DB — the outer transaction rollback in
+    db_connection undoes everything.
+    """
     async_session = async_sessionmaker(
-        engine,
+        bind=db_connection,
         class_=AsyncSession,
         expire_on_commit=False,
         autoflush=False,
     )
 
     async with async_session() as session:
+        # Start a savepoint; commits inside the test become savepoint releases
+        await session.begin_nested()
+
+        # After each commit (savepoint release), start a new savepoint
+        # so subsequent operations in the same test still work
+        @event.listens_for(session.sync_session, "after_transaction_end")
+        def restart_savepoint(session_sync, transaction):
+            if transaction.nested and not transaction._parent.nested:
+                session_sync.begin_nested()
+
         yield session
-        await session.rollback()
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -291,6 +367,13 @@ async def test_notification(db_session: AsyncSession, test_user: User) -> Notifi
     await db_session.commit()
     await db_session.refresh(notification)
     return notification
+
+
+@pytest.fixture
+def requires_pgvector():
+    """Skip test if pgvector extension is not installed on the test database."""
+    if not _pgvector_installed:
+        pytest.skip("pgvector extension not installed on test database")
 
 
 @pytest.fixture

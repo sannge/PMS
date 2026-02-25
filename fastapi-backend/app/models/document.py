@@ -29,6 +29,7 @@ from sqlalchemy.orm import relationship
 from ..database import Base
 
 if TYPE_CHECKING:
+    from .document_chunk import DocumentChunk
     from .document_folder import DocumentFolder
     from .document_tag import DocumentTagAssignment
     from .user import User
@@ -176,6 +177,17 @@ class Document(Base):
         nullable=False,
     )
 
+    # AI embedding/graph timestamps
+    embedding_updated_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    graph_ingested_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
     # Constraints and indexes
     __table_args__ = (
         CheckConstraint(
@@ -206,6 +218,12 @@ class Document(Base):
         back_populates="document",
         cascade="all, delete-orphan",
         lazy="selectin",
+    )
+
+    chunks = relationship(
+        "DocumentChunk",
+        back_populates="document",
+        cascade="all, delete-orphan",
     )
 
     def __repr__(self) -> str:
