@@ -7,8 +7,12 @@ encrypted at rest and never returned in responses.
 
 import ipaddress
 import logging
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 from uuid import UUID
+
+if TYPE_CHECKING:
+    from ..ai.encryption import ApiKeyEncryption
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select, exists
@@ -541,12 +545,6 @@ async def save_capability_config(
         await db.flush()
 
     # Clear any existing default for this capability (across all providers)
-    await db.execute(
-        select(AiModel).where(
-            AiModel.capability == capability,
-            AiModel.is_default.is_(True),
-        )
-    )
     existing_defaults = (await db.execute(
         select(AiModel)
         .join(AiProvider, AiModel.provider_id == AiProvider.id)
@@ -609,8 +607,6 @@ async def test_capability(
     - Embedding: embeds the word "test" and returns dimension count + latency
     - Vision: sends a 1x1 white pixel and returns description + latency
     """
-    import time
-
     if capability not in VALID_CAPABILITIES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1047,10 +1043,9 @@ async def _test_provider_connectivity(provider: AiProvider) -> dict[str, object]
             return {"success": False, "error": f"Unknown provider type: {provider.provider_type}"}
     except Exception as exc:
         logger.warning("Provider connectivity test failed for %s: %s", provider.id, exc)
-        # Sanitize error message to prevent leaking API keys or sensitive details
-        error_msg = str(exc)
-        if api_key and api_key in error_msg:
-            error_msg = error_msg.replace(api_key, "***")
+        # Return a generic error to prevent leaking API keys or sensitive details.
+        # The full exception is logged server-side for debugging.
+        error_msg = f"Connection failed: {type(exc).__name__}"
         return {"success": False, "error": error_msg}
 
 
@@ -1165,9 +1160,8 @@ async def _test_capability_provider(
         return result
     except Exception as exc:
         latency_ms = int((time.monotonic() - start) * 1000)
-        error_msg = str(exc)
-        if api_key and api_key in error_msg:
-            error_msg = error_msg.replace(api_key, "***")
+        logger.warning("Capability test failed for %s: %s", capability, exc)
+        error_msg = f"Connection failed: {type(exc).__name__}"
         return CapabilityTestResult(
             success=False, message=error_msg, latency_ms=latency_ms,
         )

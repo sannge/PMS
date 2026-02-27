@@ -1,4 +1,4 @@
-"""Unit tests for AI rate limiter (Phase 7 — 7.1-7.2).
+"""Unit tests for AI rate limiter (Phase 7 -- 7.1-7.2).
 
 Tests the AIRateLimiter class, RateLimitResult model, rate limit
 configuration loading, and the FastAPI middleware dependencies.
@@ -16,6 +16,7 @@ from app.ai.rate_limiter import (
     RateLimitResult,
     _load_rate_limits,
     check_chat_rate_limit,
+    check_embedding_rate_limit,
     check_import_rate_limit,
     check_reindex_rate_limit,
     get_rate_limiter,
@@ -47,7 +48,7 @@ def _make_mock_redis(card_value: int = 0) -> AsyncMock:
 
 
 def _make_increment_redis(new_count: int = 1) -> AsyncMock:
-    """Create a mock Redis client for increment pipeline (ZADD+ZREM+EXPIRE+ZCARD)."""
+    """Create a mock Redis for check_and_increment/increment pipeline (ZADD+ZREM+EXPIRE+ZCARD)."""
     mock_pipe = AsyncMock()
     mock_pipe.zadd = MagicMock(return_value=mock_pipe)
     mock_pipe.zremrangebyscore = MagicMock(return_value=mock_pipe)
@@ -118,7 +119,7 @@ class TestRateLimitConfig:
 
 
 # ---------------------------------------------------------------------------
-# AIRateLimiter.check_rate_limit
+# AIRateLimiter.check_rate_limit (read-only check)
 # ---------------------------------------------------------------------------
 
 
@@ -200,7 +201,114 @@ class TestCheckRateLimit:
 
 
 # ---------------------------------------------------------------------------
-# AIRateLimiter.increment
+# AIRateLimiter.check_and_increment (atomic check + increment)
+# ---------------------------------------------------------------------------
+
+
+class TestCheckAndIncrement:
+    @pytest.mark.asyncio
+    async def test_under_limit_allowed(self):
+        """Request count below limit: allowed with correct remaining."""
+        redis = _make_increment_redis(new_count=5)
+        limiter = AIRateLimiter(redis)
+
+        result = await limiter.check_and_increment("ai_chat", "user-1", 30, 60)
+
+        assert result.allowed is True
+        assert result.remaining == 25
+        assert result.limit == 30
+
+    @pytest.mark.asyncio
+    async def test_at_limit_allowed(self):
+        """Request that hits exactly the limit: allowed (count == limit)."""
+        redis = _make_increment_redis(new_count=30)
+        limiter = AIRateLimiter(redis)
+
+        result = await limiter.check_and_increment("ai_chat", "user-1", 30, 60)
+
+        assert result.allowed is True
+        assert result.remaining == 0
+
+    @pytest.mark.asyncio
+    async def test_over_limit_blocked(self):
+        """Request that exceeds limit: blocked."""
+        redis = _make_increment_redis(new_count=31)
+        limiter = AIRateLimiter(redis)
+
+        result = await limiter.check_and_increment("ai_chat", "user-1", 30, 60)
+
+        assert result.allowed is False
+        assert result.remaining == 0
+
+    @pytest.mark.asyncio
+    async def test_first_request_allowed(self):
+        """First request in empty window: allowed with full remaining."""
+        redis = _make_increment_redis(new_count=1)
+        limiter = AIRateLimiter(redis)
+
+        result = await limiter.check_and_increment("ai_chat", "user-1", 30, 60)
+
+        assert result.allowed is True
+        assert result.remaining == 29
+
+    @pytest.mark.asyncio
+    async def test_redis_failure_fail_open(self):
+        """When Redis is unavailable, requests should be allowed (fail-open)."""
+        redis = AsyncMock()
+        redis.pipeline = MagicMock(side_effect=ConnectionError("Redis down"))
+        limiter = AIRateLimiter(redis)
+
+        result = await limiter.check_and_increment("ai_chat", "user-1", 30, 60)
+
+        assert result.allowed is True
+        assert result.remaining == 30
+
+    @pytest.mark.asyncio
+    async def test_none_redis_fail_open(self):
+        """When Redis is None (not connected), should fail open."""
+        limiter = AIRateLimiter(None)
+
+        result = await limiter.check_and_increment("ai_chat", "user-1", 30, 60)
+
+        assert result.allowed is True
+
+    @pytest.mark.asyncio
+    async def test_reset_at_is_future(self):
+        redis = _make_increment_redis(new_count=1)
+        limiter = AIRateLimiter(redis)
+
+        before = time.time()
+        result = await limiter.check_and_increment("ai_chat", "user-1", 30, 60)
+        after = time.time()
+
+        assert result.reset_at.timestamp() >= before + 59
+        assert result.reset_at.timestamp() <= after + 61
+
+    @pytest.mark.asyncio
+    async def test_pipeline_commands_called(self):
+        """Verify ZADD+ZREM+EXPIRE+ZCARD pipeline is issued atomically."""
+        mock_pipe = AsyncMock()
+        mock_pipe.zadd = MagicMock(return_value=mock_pipe)
+        mock_pipe.zremrangebyscore = MagicMock(return_value=mock_pipe)
+        mock_pipe.expire = MagicMock(return_value=mock_pipe)
+        mock_pipe.zcard = MagicMock(return_value=mock_pipe)
+        mock_pipe.execute = AsyncMock(return_value=[1, 0, True, 3])
+
+        redis = AsyncMock()
+        redis.pipeline = MagicMock(return_value=mock_pipe)
+
+        limiter = AIRateLimiter(redis)
+        await limiter.check_and_increment("ai_chat", "user-1", 30, 60)
+
+        mock_pipe.zadd.assert_called_once()
+        mock_pipe.zremrangebyscore.assert_called_once()
+        mock_pipe.expire.assert_called_once()
+        mock_pipe.zcard.assert_called_once()
+        mock_pipe.execute.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# AIRateLimiter.increment (standalone)
 # ---------------------------------------------------------------------------
 
 
@@ -287,7 +395,7 @@ class TestGetRateLimiter:
 
 
 # ---------------------------------------------------------------------------
-# Middleware dependencies
+# Middleware dependencies (now use check_and_increment atomically)
 # ---------------------------------------------------------------------------
 
 
@@ -299,7 +407,7 @@ class TestChatRateLimitMiddleware:
         mock_user.id = "user-123"
 
         mock_limiter = AsyncMock(spec=AIRateLimiter)
-        mock_limiter.check_rate_limit = AsyncMock(
+        mock_limiter.check_and_increment = AsyncMock(
             return_value=RateLimitResult(
                 allowed=True,
                 remaining=29,
@@ -308,7 +416,6 @@ class TestChatRateLimitMiddleware:
                 reset_seconds=60,
             )
         )
-        mock_limiter.increment = AsyncMock(return_value=1)
 
         # Should not raise
         await check_chat_rate_limit(
@@ -316,7 +423,7 @@ class TestChatRateLimitMiddleware:
             rate_limiter=mock_limiter,
         )
 
-        mock_limiter.increment.assert_awaited_once()
+        mock_limiter.check_and_increment.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_over_limit_raises_429(self):
@@ -327,7 +434,7 @@ class TestChatRateLimitMiddleware:
         mock_user.id = "user-123"
 
         mock_limiter = AsyncMock(spec=AIRateLimiter)
-        mock_limiter.check_rate_limit = AsyncMock(
+        mock_limiter.check_and_increment = AsyncMock(
             return_value=RateLimitResult(
                 allowed=False,
                 remaining=0,
@@ -349,6 +456,56 @@ class TestChatRateLimitMiddleware:
         assert exc_info.value.headers["X-RateLimit-Remaining"] == "0"
 
 
+class TestEmbeddingRateLimitMiddleware:
+    @pytest.mark.asyncio
+    async def test_under_limit_passes(self):
+        """Under limit: no exception raised, scoped by application_id."""
+        mock_limiter = AsyncMock(spec=AIRateLimiter)
+        mock_limiter.check_and_increment = AsyncMock(
+            return_value=RateLimitResult(
+                allowed=True,
+                remaining=99,
+                reset_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                limit=100,
+                reset_seconds=60,
+            )
+        )
+
+        await check_embedding_rate_limit(
+            application_id="app-123",
+            rate_limiter=mock_limiter,
+        )
+
+        mock_limiter.check_and_increment.assert_awaited_once()
+        call_kwargs = mock_limiter.check_and_increment.call_args
+        assert call_kwargs[1]["scope_id"] == "app-123"
+        assert call_kwargs[1]["endpoint"] == "ai_embed"
+
+    @pytest.mark.asyncio
+    async def test_over_limit_raises_429(self):
+        from fastapi import HTTPException
+
+        mock_limiter = AsyncMock(spec=AIRateLimiter)
+        mock_limiter.check_and_increment = AsyncMock(
+            return_value=RateLimitResult(
+                allowed=False,
+                remaining=0,
+                reset_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                limit=100,
+                reset_seconds=60,
+            )
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await check_embedding_rate_limit(
+                application_id="app-456",
+                rate_limiter=mock_limiter,
+            )
+
+        assert exc_info.value.status_code == 429
+        assert "Embedding rate limit" in exc_info.value.detail
+
+
 class TestImportRateLimitMiddleware:
     @pytest.mark.asyncio
     async def test_over_limit_raises_429(self):
@@ -358,7 +515,7 @@ class TestImportRateLimitMiddleware:
         mock_user.id = "user-456"
 
         mock_limiter = AsyncMock(spec=AIRateLimiter)
-        mock_limiter.check_rate_limit = AsyncMock(
+        mock_limiter.check_and_increment = AsyncMock(
             return_value=RateLimitResult(
                 allowed=False,
                 remaining=0,
@@ -387,7 +544,7 @@ class TestReindexRateLimitMiddleware:
         mock_user.id = "user-789"
 
         mock_limiter = AsyncMock(spec=AIRateLimiter)
-        mock_limiter.check_rate_limit = AsyncMock(
+        mock_limiter.check_and_increment = AsyncMock(
             return_value=RateLimitResult(
                 allowed=False,
                 remaining=0,
