@@ -324,3 +324,56 @@ class AiConfigSummary(BaseModel):
     default_chat_model: Optional[AiModelResponse] = None
     default_embedding_model: Optional[AiModelResponse] = None
     default_vision_model: Optional[AiModelResponse] = None
+
+
+# ---------------------------------------------------------------------------
+# Per-capability configuration (developer settings panel)
+# ---------------------------------------------------------------------------
+
+
+class CapabilityConfig(BaseModel):
+    """Schema for saving per-capability provider + model configuration."""
+
+    provider_type: str = Field(
+        ...,
+        description="Provider type: openai, anthropic, or ollama",
+    )
+    api_key: Optional[str] = Field(
+        None,
+        description="API key (will be encrypted). Omit to keep existing key.",
+    )
+    model_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=255,
+        description="Model ID to set as default for this capability",
+    )
+    base_url: Optional[str] = Field(
+        None,
+        description="Custom API endpoint URL (Ollama only)",
+    )
+
+    @field_validator("provider_type")
+    @classmethod
+    def validate_provider_type(cls, v: str) -> str:
+        return _validate_provider_type(v)
+
+
+class CapabilityTestResult(BaseModel):
+    """Result from testing a capability's provider+model."""
+
+    success: bool
+    message: str
+    latency_ms: Optional[int] = None
+
+
+class EffectiveChatConfig(BaseModel):
+    """Effective chat configuration for the current user."""
+
+    source: str = Field(
+        ...,
+        description="'override' if using personal key, 'global' if using company default",
+    )
+    provider_type: Optional[str] = None
+    model_id: Optional[str] = None
+    display_name: Optional[str] = None

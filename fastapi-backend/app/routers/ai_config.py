@@ -29,6 +29,9 @@ from ..schemas.ai_config import (
     AiProviderCreate,
     AiProviderResponse,
     AiProviderUpdate,
+    CapabilityConfig,
+    CapabilityTestResult,
+    EffectiveChatConfig,
     UserProviderOverride,
 )
 from ..services.auth_service import get_current_user
@@ -476,8 +479,263 @@ async def get_config_summary(
 
 
 # ============================================================================
+# Per-Capability Configuration (Developer Settings Panel)
+# ============================================================================
+
+
+VALID_CAPABILITIES = {"chat", "embedding", "vision"}
+
+
+@router.put("/capability/{capability}", response_model=AiProviderResponse)
+async def save_capability_config(
+    capability: str,
+    body: CapabilityConfig,
+    current_user: User = Depends(require_developer),
+    db: AsyncSession = Depends(get_db),
+) -> AiProviderResponse:
+    """Save provider + model configuration for a single capability.
+
+    Creates or updates the global AiProvider for the given provider_type,
+    then sets the specified model as the default for that capability.
+    """
+    if capability not in VALID_CAPABILITIES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid capability '{capability}'. Must be one of: {', '.join(sorted(VALID_CAPABILITIES))}",
+        )
+
+    _validate_base_url(body.base_url, body.provider_type)
+
+    # Find or create global provider for this provider_type
+    result = await db.execute(
+        select(AiProvider).where(
+            AiProvider.scope == "global",
+            AiProvider.provider_type == body.provider_type,
+        )
+    )
+    provider = result.scalar_one_or_none()
+
+    if provider is None:
+        encrypted_key = None
+        if body.api_key:
+            encrypted_key = _get_encryption().encrypt(body.api_key)
+        provider = AiProvider(
+            name=body.provider_type,
+            display_name=body.provider_type.title(),
+            provider_type=body.provider_type,
+            base_url=body.base_url,
+            api_key_encrypted=encrypted_key,
+            is_enabled=True,
+            scope="global",
+        )
+        db.add(provider)
+        await db.flush()
+    else:
+        # Update existing provider
+        if body.api_key:
+            provider.api_key_encrypted = _get_encryption().encrypt(body.api_key)
+        if body.base_url is not None:
+            provider.base_url = body.base_url
+        provider.is_enabled = True
+        provider.updated_at = utc_now()
+        await db.flush()
+
+    # Clear any existing default for this capability (across all providers)
+    await db.execute(
+        select(AiModel).where(
+            AiModel.capability == capability,
+            AiModel.is_default.is_(True),
+        )
+    )
+    existing_defaults = (await db.execute(
+        select(AiModel)
+        .join(AiProvider, AiModel.provider_id == AiProvider.id)
+        .where(
+            AiProvider.scope == "global",
+            AiModel.capability == capability,
+            AiModel.is_default.is_(True),
+        )
+    )).scalars().all()
+    for m in existing_defaults:
+        m.is_default = False
+
+    # Find or create the model entry for this provider + model_id + capability
+    model_result = await db.execute(
+        select(AiModel).where(
+            AiModel.provider_id == provider.id,
+            AiModel.model_id == body.model_id,
+            AiModel.capability == capability,
+        )
+    )
+    model = model_result.scalar_one_or_none()
+    if model is None:
+        model = AiModel(
+            provider_id=provider.id,
+            model_id=body.model_id,
+            display_name=body.model_id,
+            provider_type=body.provider_type,
+            capability=capability,
+            is_default=True,
+            is_enabled=True,
+        )
+        db.add(model)
+    else:
+        model.is_default = True
+        model.is_enabled = True
+        model.updated_at = utc_now()
+
+    await db.flush()
+
+    # Reload with models for response
+    reload_result = await db.execute(
+        select(AiProvider)
+        .where(AiProvider.id == provider.id)
+        .options(selectinload(AiProvider.models))
+    )
+    provider = reload_result.scalar_one()
+    await _refresh_provider_cache()
+    return AiProviderResponse.model_validate(provider)
+
+
+@router.post("/test/{capability}", response_model=CapabilityTestResult)
+async def test_capability(
+    capability: str,
+    current_user: User = Depends(require_developer),
+    db: AsyncSession = Depends(get_db),
+) -> CapabilityTestResult:
+    """Test the currently configured provider+model for a capability.
+
+    - Chat: sends "Say hello in 5 words" and returns response text + latency
+    - Embedding: embeds the word "test" and returns dimension count + latency
+    - Vision: sends a 1x1 white pixel and returns description + latency
+    """
+    import time
+
+    if capability not in VALID_CAPABILITIES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid capability '{capability}'",
+        )
+
+    # Find the default model for this capability
+    result = await db.execute(
+        select(AiModel)
+        .join(AiProvider, AiModel.provider_id == AiProvider.id)
+        .where(
+            AiProvider.scope == "global",
+            AiModel.capability == capability,
+            AiModel.is_default.is_(True),
+            AiModel.is_enabled.is_(True),
+        )
+        .options(selectinload(AiModel.provider))
+        .limit(1)
+    )
+    model = result.scalar_one_or_none()
+    if model is None:
+        return CapabilityTestResult(
+            success=False,
+            message=f"No default {capability} model configured",
+        )
+
+    provider = model.provider
+    return await _test_capability_provider(provider, model, capability)
+
+
+@router.get("/models/available", response_model=list[AiModelResponse])
+async def list_available_models(
+    provider_type: str | None = None,
+    capability: str | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> list[AiModelResponse]:
+    """List available models from the seed data, filtered by provider_type and/or capability.
+
+    This endpoint is public (no auth required) since the model list is not sensitive.
+    Used by frontend dropdowns to populate model options.
+    """
+    query = (
+        select(AiModel)
+        .join(AiProvider, AiModel.provider_id == AiProvider.id)
+        .where(AiProvider.scope == "global")
+        .options(selectinload(AiModel.provider))
+    )
+    if provider_type:
+        query = query.where(AiModel.provider_type == provider_type)
+    if capability:
+        query = query.where(AiModel.capability == capability)
+
+    query = query.where(AiModel.is_enabled.is_(True))
+    query = query.order_by(AiModel.display_name.asc())
+
+    result = await db.execute(query)
+    models = result.scalars().all()
+    return [AiModelResponse.model_validate(m) for m in models]
+
+
+# ============================================================================
 # User Override Endpoints (/me)
 # ============================================================================
+
+
+@router.get("/me/effective", response_model=EffectiveChatConfig)
+async def get_effective_chat_config(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> EffectiveChatConfig:
+    """Get the effective chat configuration for the current user.
+
+    Resolves user override vs global fallback and returns which is active.
+    """
+    # Check for user override first
+    override_result = await db.execute(
+        select(AiProvider)
+        .where(
+            AiProvider.scope == "user",
+            AiProvider.user_id == current_user.id,
+            AiProvider.is_enabled.is_(True),
+        )
+        .options(selectinload(AiProvider.models))
+    )
+    user_providers = override_result.scalars().all()
+
+    for provider in user_providers:
+        for model in provider.models:
+            if model.capability == "chat" and model.is_enabled:
+                return EffectiveChatConfig(
+                    source="override",
+                    provider_type=provider.provider_type,
+                    model_id=model.model_id,
+                    display_name=model.display_name,
+                )
+
+    # Fall back to global default
+    global_result = await db.execute(
+        select(AiModel)
+        .join(AiProvider, AiModel.provider_id == AiProvider.id)
+        .where(
+            AiProvider.scope == "global",
+            AiModel.capability == "chat",
+            AiModel.is_default.is_(True),
+            AiModel.is_enabled.is_(True),
+        )
+        .options(selectinload(AiModel.provider))
+        .limit(1)
+    )
+    default_model = global_result.scalar_one_or_none()
+    if default_model:
+        return EffectiveChatConfig(
+            source="global",
+            provider_type=default_model.provider.provider_type,
+            model_id=default_model.model_id,
+            display_name=default_model.display_name,
+        )
+
+    # No configuration at all
+    return EffectiveChatConfig(
+        source="global",
+        provider_type=None,
+        model_id=None,
+        display_name=None,
+    )
 
 
 @router.get("/me/providers", response_model=list[AiProviderResponse])
@@ -851,3 +1109,288 @@ async def _test_ollama(base_url: str | None) -> dict[str, object]:
         resp = await client.get(f"{url}/api/tags")
         resp.raise_for_status()
     return {"success": True, "message": "Ollama connection successful"}
+
+
+# ============================================================================
+# Capability-specific test helper
+# ============================================================================
+
+
+async def _test_capability_provider(
+    provider: AiProvider,
+    model: AiModel,
+    capability: str,
+) -> CapabilityTestResult:
+    """Test a specific capability using its configured provider + model.
+
+    - Chat: sends "Say hello in 5 words"
+    - Embedding: embeds "test" and returns dimension count
+    - Vision: sends a 1x1 white pixel
+    """
+    import time
+
+    api_key: str | None = None
+    if provider.api_key_encrypted:
+        try:
+            api_key = _get_encryption().decrypt(provider.api_key_encrypted)
+        except Exception:
+            return CapabilityTestResult(
+                success=False,
+                message="Failed to decrypt API key",
+            )
+
+    base_url = provider.base_url
+    start = time.monotonic()
+
+    try:
+        if capability == "chat":
+            result = await _test_chat_capability(
+                provider.provider_type, api_key, base_url, model.model_id,
+            )
+        elif capability == "embedding":
+            result = await _test_embedding_capability(
+                provider.provider_type, api_key, base_url, model.model_id,
+            )
+        elif capability == "vision":
+            result = await _test_vision_capability(
+                provider.provider_type, api_key, base_url, model.model_id,
+            )
+        else:
+            return CapabilityTestResult(
+                success=False, message=f"Unknown capability: {capability}"
+            )
+
+        latency_ms = int((time.monotonic() - start) * 1000)
+        result.latency_ms = latency_ms
+        return result
+    except Exception as exc:
+        latency_ms = int((time.monotonic() - start) * 1000)
+        error_msg = str(exc)
+        if api_key and api_key in error_msg:
+            error_msg = error_msg.replace(api_key, "***")
+        return CapabilityTestResult(
+            success=False, message=error_msg, latency_ms=latency_ms,
+        )
+
+
+async def _test_chat_capability(
+    provider_type: str,
+    api_key: str | None,
+    base_url: str | None,
+    model_id: str,
+) -> CapabilityTestResult:
+    """Test chat capability by sending a short prompt."""
+    if provider_type == "openai":
+        from openai import AsyncOpenAI
+
+        kwargs: dict = {}
+        if api_key:
+            kwargs["api_key"] = api_key
+        if base_url:
+            kwargs["base_url"] = base_url
+        client = AsyncOpenAI(**kwargs)
+        try:
+            resp = await client.chat.completions.create(
+                model=model_id,
+                messages=[{"role": "user", "content": "Say hello in 5 words"}],
+                max_tokens=20,
+            )
+            text = resp.choices[0].message.content or ""
+            return CapabilityTestResult(success=True, message=text.strip())
+        finally:
+            await client.close()
+
+    elif provider_type == "anthropic":
+        from anthropic import AsyncAnthropic
+
+        kwargs = {}
+        if api_key:
+            kwargs["api_key"] = api_key
+        if base_url:
+            kwargs["base_url"] = base_url
+        client = AsyncAnthropic(**kwargs)
+        try:
+            resp = await client.messages.create(
+                model=model_id,
+                max_tokens=20,
+                messages=[{"role": "user", "content": "Say hello in 5 words"}],
+            )
+            text = resp.content[0].text if resp.content else ""
+            return CapabilityTestResult(success=True, message=text.strip())
+        finally:
+            await client.close()
+
+    elif provider_type == "ollama":
+        import httpx
+
+        url = (base_url or "http://localhost:11434").rstrip("/")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{url}/api/chat",
+                json={
+                    "model": model_id,
+                    "messages": [{"role": "user", "content": "Say hello in 5 words"}],
+                    "stream": False,
+                },
+            )
+            resp.raise_for_status()
+            text = resp.json().get("message", {}).get("content", "")
+            return CapabilityTestResult(success=True, message=text.strip())
+
+    return CapabilityTestResult(success=False, message=f"Unknown provider: {provider_type}")
+
+
+async def _test_embedding_capability(
+    provider_type: str,
+    api_key: str | None,
+    base_url: str | None,
+    model_id: str,
+) -> CapabilityTestResult:
+    """Test embedding capability by embedding the word 'test'."""
+    if provider_type == "openai":
+        from openai import AsyncOpenAI
+
+        kwargs: dict = {}
+        if api_key:
+            kwargs["api_key"] = api_key
+        if base_url:
+            kwargs["base_url"] = base_url
+        client = AsyncOpenAI(**kwargs)
+        try:
+            resp = await client.embeddings.create(
+                model=model_id,
+                input="test",
+            )
+            dims = len(resp.data[0].embedding)
+            return CapabilityTestResult(
+                success=True, message=f"{dims} dimensions",
+            )
+        finally:
+            await client.close()
+
+    elif provider_type == "ollama":
+        import httpx
+
+        url = (base_url or "http://localhost:11434").rstrip("/")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{url}/api/embed",
+                json={"model": model_id, "input": "test"},
+            )
+            resp.raise_for_status()
+            embeddings = resp.json().get("embeddings", [[]])
+            dims = len(embeddings[0]) if embeddings else 0
+            return CapabilityTestResult(
+                success=True, message=f"{dims} dimensions",
+            )
+
+    return CapabilityTestResult(
+        success=False,
+        message=f"Embedding not supported for provider: {provider_type}",
+    )
+
+
+async def _test_vision_capability(
+    provider_type: str,
+    api_key: str | None,
+    base_url: str | None,
+    model_id: str,
+) -> CapabilityTestResult:
+    """Test vision capability by sending a 1x1 white pixel."""
+    import base64
+
+    # 1x1 white pixel PNG (67 bytes)
+    white_pixel = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+        b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00"
+        b"\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00"
+        b"\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    b64_pixel = base64.b64encode(white_pixel).decode()
+
+    if provider_type == "openai":
+        from openai import AsyncOpenAI
+
+        kwargs: dict = {}
+        if api_key:
+            kwargs["api_key"] = api_key
+        if base_url:
+            kwargs["base_url"] = base_url
+        client = AsyncOpenAI(**kwargs)
+        try:
+            resp = await client.chat.completions.create(
+                model=model_id,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe this image in 10 words or less."},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{b64_pixel}"},
+                        },
+                    ],
+                }],
+                max_tokens=30,
+            )
+            text = resp.choices[0].message.content or ""
+            return CapabilityTestResult(success=True, message=text.strip())
+        finally:
+            await client.close()
+
+    elif provider_type == "anthropic":
+        from anthropic import AsyncAnthropic
+
+        kwargs = {}
+        if api_key:
+            kwargs["api_key"] = api_key
+        if base_url:
+            kwargs["base_url"] = base_url
+        client = AsyncAnthropic(**kwargs)
+        try:
+            resp = await client.messages.create(
+                model=model_id,
+                max_tokens=30,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": b64_pixel,
+                            },
+                        },
+                        {"type": "text", "text": "Describe this image in 10 words or less."},
+                    ],
+                }],
+            )
+            text = resp.content[0].text if resp.content else ""
+            return CapabilityTestResult(success=True, message=text.strip())
+        finally:
+            await client.close()
+
+    elif provider_type == "ollama":
+        import httpx
+
+        url = (base_url or "http://localhost:11434").rstrip("/")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{url}/api/chat",
+                json={
+                    "model": model_id,
+                    "messages": [{
+                        "role": "user",
+                        "content": "Describe this image in 10 words or less.",
+                        "images": [b64_pixel],
+                    }],
+                    "stream": False,
+                },
+            )
+            resp.raise_for_status()
+            text = resp.json().get("message", {}).get("content", "")
+            return CapabilityTestResult(success=True, message=text.strip())
+
+    return CapabilityTestResult(
+        success=False, message=f"Vision not supported for provider: {provider_type}",
+    )
