@@ -33,6 +33,7 @@ from ..schemas.ai_chat import (
     ResumeRequest,
 )
 from ..ai.rate_limiter import check_chat_rate_limit
+from ..ai.telemetry import AITelemetry, TelemetryTimer
 from ..services.auth_service import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -333,9 +334,14 @@ async def _stream_agent(
         config: LangGraph config dict (must include ``configurable.thread_id``).
         thread_id: Thread ID to include in ``run_started`` event.
     """
+    import time as _time
+
     yield {"event": "run_started", "data": json.dumps({"thread_id": thread_id})}
 
     interrupted = False
+    # Track tool call start times for telemetry
+    _tool_starts: dict[str, float] = {}  # run_id -> start_time
+    _user_id_for_telemetry = state.get("user_id", "")
 
     try:
         async for event in graph.astream_events(state, config=config, version="v2"):
@@ -350,6 +356,8 @@ async def _stream_agent(
                     }
 
             elif event_kind == "on_tool_start":
+                run_id = event.get("run_id", "")
+                _tool_starts[run_id] = _time.monotonic()
                 yield {
                     "event": "tool_call_start",
                     "data": json.dumps({"tool": event.get("name", "unknown")}),
@@ -357,6 +365,21 @@ async def _stream_agent(
 
             elif event_kind == "on_tool_end":
                 output = event.get("data", {}).get("output", "")
+                tool_name = event.get("name", "unknown")
+                run_id = event.get("run_id", "")
+                # Calculate tool duration
+                start_ts = _tool_starts.pop(run_id, None)
+                tool_duration = int((_time.monotonic() - start_ts) * 1000) if start_ts else 0
+                # Telemetry: log individual tool call
+                try:
+                    await AITelemetry.log_tool_call(
+                        tool_name=tool_name,
+                        user_id=_user_id_for_telemetry,
+                        duration_ms=tool_duration,
+                        success=True,
+                    )
+                except Exception:
+                    pass  # Non-critical
                 # Extract structured sources from tool result metadata
                 sources: list[dict] = []
                 raw_output = event.get("data", {}).get("output")
@@ -368,7 +391,7 @@ async def _stream_agent(
                     "event": "tool_call_end",
                     "data": json.dumps(
                         {
-                            "tool": event.get("name", "unknown"),
+                            "tool": tool_name,
                             "result": str(output),
                             **({"sources": sources} if sources else {}),
                         }
@@ -464,10 +487,22 @@ async def chat(
         }
 
         # 5. Run graph to completion
+        timer = TelemetryTimer().start()
         try:
             result = await graph.ainvoke(state, config=config)
         except Exception:
             logger.exception("Agent graph execution failed for user %s", current_user.id)
+            await AITelemetry.log_chat_request(
+                user_id=current_user.id,
+                provider="unknown",
+                model="unknown",
+                input_tokens=0,
+                output_tokens=0,
+                tool_calls=0,
+                duration_ms=timer.elapsed_ms,
+                success=False,
+                error="Agent execution failed",
+            )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Agent execution failed. Please try again.",
@@ -477,6 +512,32 @@ async def chat(
 
     # 6. Extract response
     result_messages = result.get("messages", [])
+
+    # Extract token usage from result messages for telemetry
+    _input_tokens = 0
+    _output_tokens = 0
+    _provider_name = "unknown"
+    _model_name = "unknown"
+    for msg in result_messages:
+        usage = getattr(msg, "usage_metadata", None)
+        if usage and isinstance(usage, dict):
+            _input_tokens += usage.get("input_tokens", 0)
+            _output_tokens += usage.get("output_tokens", 0)
+        resp_meta = getattr(msg, "response_metadata", None)
+        if resp_meta and isinstance(resp_meta, dict):
+            if resp_meta.get("model_name"):
+                _model_name = resp_meta["model_name"]
+
+    await AITelemetry.log_chat_request(
+        user_id=current_user.id,
+        provider=_provider_name,
+        model=_model_name,
+        input_tokens=_input_tokens,
+        output_tokens=_output_tokens,
+        tool_calls=len(_extract_tool_calls(result_messages)),
+        duration_ms=timer.elapsed_ms,
+        success=True,
+    )
 
     # Check for interrupt state (HITL)
     interrupted = False

@@ -165,6 +165,23 @@ class EmbeddingService:
             document_id, len(chunks), total_tokens, elapsed,
         )
 
+        # Telemetry: log embedding operation
+        try:
+            from .telemetry import AITelemetry
+
+            provider_name = getattr(provider, "provider_name", "unknown")
+            await AITelemetry.log_embedding_batch(
+                document_count=1,
+                chunk_count=len(chunks),
+                total_tokens=total_tokens,
+                provider=provider_name,
+                model=model_id or "unknown",
+                duration_ms=elapsed,
+                success=True,
+            )
+        except Exception:
+            pass  # Non-critical — don't fail embedding on telemetry error
+
         return EmbedResult(
             chunk_count=len(chunks),
             token_count=total_tokens,

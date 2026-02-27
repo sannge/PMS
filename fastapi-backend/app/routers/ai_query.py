@@ -23,6 +23,7 @@ from ..schemas.sql_query import (
     SQLValidateResponse,
 )
 from ..ai.rate_limiter import check_reindex_rate_limit
+from ..ai.telemetry import AITelemetry, TelemetryTimer
 from ..services.auth_service import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -55,11 +56,18 @@ async def execute_query(
     from ..ai.sql_executor import execute as execute_sql
 
     registry = ProviderRegistry()
+    timer = TelemetryTimer().start()
 
     try:
         generated = await generate_query(body.question, db, registry)
     except Exception as e:
         logger.warning("SQL generation failed for user %s: %s", current_user.id, e)
+        await AITelemetry.log_sql_query(
+            user_id=current_user.id,
+            duration_ms=timer.elapsed_ms,
+            success=False,
+            error=f"Generation failed: {type(e).__name__}",
+        )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Failed to generate SQL: {e}",
@@ -69,10 +77,23 @@ async def execute_query(
         query_result = await execute_sql(generated.sql, current_user.id, db)
     except Exception as e:
         logger.warning("SQL execution failed for user %s: %s", current_user.id, e)
+        await AITelemetry.log_sql_query(
+            user_id=current_user.id,
+            duration_ms=timer.elapsed_ms,
+            success=False,
+            error=f"Execution failed: {type(e).__name__}",
+        )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Query execution failed: {e}",
         )
+
+    await AITelemetry.log_sql_query(
+        user_id=current_user.id,
+        duration_ms=timer.elapsed_ms,
+        success=True,
+        row_count=query_result.row_count,
+    )
 
     return SQLQueryResponse(
         question=body.question,
@@ -233,6 +254,13 @@ async def reindex_document(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Failed to enqueue reindex job",
         )
+
+    await AITelemetry.log_reindex(
+        user_id=current_user.id,
+        document_count=1,
+        duration_ms=0,
+        success=True,
+    )
 
     return {"status": "accepted", "document_id": str(document_id)}
 

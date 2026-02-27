@@ -9,11 +9,13 @@ Run with:
 """
 
 import logging
+import os
 from datetime import timedelta
 from typing import Any
 
 from arq import cron
 from arq.connections import RedisSettings
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import settings
 from .database import async_session_maker
@@ -390,6 +392,26 @@ async def embed_document_job(ctx: dict[str, Any], document_id: str) -> dict[str,
                 document_id, embed_result.chunk_count, embed_result.token_count, embed_result.duration_ms,
             )
 
+            # Broadcast EMBEDDING_UPDATED via Redis pub/sub to web server
+            # (worker runs in separate process, so use Redis to reach WS manager)
+            try:
+                await redis_service.publish(
+                    f"document:{doc_uuid}",
+                    {
+                        "type": "embedding_updated",
+                        "data": {
+                            "document_id": document_id,
+                            "chunk_count": embed_result.chunk_count,
+                            "timestamp": utc_now().isoformat(),
+                        },
+                    },
+                )
+            except Exception as ws_err:
+                logger.warning(
+                    "Failed to broadcast EMBEDDING_UPDATED for document %s: %s",
+                    document_id, ws_err,
+                )
+
             return {
                 "status": "success",
                 "chunk_count": embed_result.chunk_count,
@@ -401,6 +423,660 @@ async def embed_document_job(ctx: dict[str, Any], document_id: str) -> dict[str,
         logger.error("embed_document_job failed for document %s: %s", document_id, e, exc_info=True)
         # Return type name only (not str(e)) to avoid leaking sensitive context
         return {"status": "error", "error": type(e).__name__}
+
+
+# =============================================================================
+# Document Import Jobs
+# =============================================================================
+
+
+async def _update_import_progress(session: AsyncSession, job_id, pct: int) -> None:
+    """Update import job progress percentage in a separate connection.
+
+    Uses an independent session so progress updates are immediately visible
+    to polling clients, without interfering with the main pipeline transaction.
+    """
+    from sqlalchemy import update as sa_update
+
+    from .models.import_job import ImportJob
+
+    async with async_session_maker() as progress_db:
+        await progress_db.execute(
+            sa_update(ImportJob).where(ImportJob.id == job_id).values(progress_pct=pct)
+        )
+        await progress_db.commit()
+
+
+def _parse_inline_marks(text: str) -> list[dict]:
+    """Parse inline markdown formatting into TipTap text nodes with marks.
+
+    Handles:
+    - ``[text](url)`` links
+    - ``**bold**`` text
+    - ``*italic*`` text
+    - ````code```` spans
+    - Plain text (everything else)
+
+    Args:
+        text: Raw inline markdown string.
+
+    Returns:
+        List of TipTap text nodes with appropriate marks applied.
+    """
+    import re
+
+    nodes: list[dict] = []
+    pattern = re.compile(
+        r'\[([^\]]+)\]\(([^)]+)\)'  # [text](url)
+        r'|\*\*(.+?)\*\*'           # **bold**
+        r'|\*(.+?)\*'               # *italic*
+        r'|`(.+?)`'                 # `code`
+        r'|([^*`\[]+)'              # plain text
+    )
+    for match in pattern.finditer(text):
+        if match.group(1):  # link
+            href = match.group(2)
+            # Only allow safe URL protocols
+            if href.lower().startswith(('http://', 'https://', 'mailto:')):
+                nodes.append({
+                    "type": "text",
+                    "marks": [{"type": "link", "attrs": {"href": href}}],
+                    "text": match.group(1),
+                })
+            else:
+                # Unsafe protocol - render as plain text
+                nodes.append({"type": "text", "text": match.group(1)})
+        elif match.group(3):  # bold
+            nodes.append({
+                "type": "text",
+                "marks": [{"type": "bold"}],
+                "text": match.group(3),
+            })
+        elif match.group(4):  # italic
+            nodes.append({
+                "type": "text",
+                "marks": [{"type": "italic"}],
+                "text": match.group(4),
+            })
+        elif match.group(5):  # code
+            nodes.append({
+                "type": "text",
+                "marks": [{"type": "code"}],
+                "text": match.group(5),
+            })
+        elif match.group(6):  # plain
+            nodes.append({"type": "text", "text": match.group(6)})
+    return nodes or [{"type": "text", "text": text}]
+
+
+def _parse_table_block(lines: list[str], start: int) -> tuple[dict | None, int]:
+    """Parse a Markdown pipe table starting at *start* into a TipTap table node.
+
+    Returns ``(table_node, next_line_index)`` on success or
+    ``(None, start)`` if the lines do not form a valid table.
+
+    A valid table requires at least a header row and a separator row
+    (``| --- | --- |``).
+
+    Args:
+        lines: Full list of document lines.
+        start: Index of the first line that might be a header row.
+
+    Returns:
+        Tuple of (TipTap table dict or None, next line index to process).
+    """
+    import re
+
+    if start >= len(lines):
+        return None, start
+
+    header_line = lines[start].strip()
+    if not header_line.startswith("|"):
+        return None, start
+
+    # Must have a separator row immediately after the header
+    if start + 1 >= len(lines):
+        return None, start
+    sep_line = lines[start + 1].strip()
+    if not re.match(r"^\|[\s\-:|]+\|$", sep_line):
+        return None, start
+
+    def parse_row(line: str) -> list[str]:
+        cells = line.strip().strip("|").split("|")
+        return [c.strip() for c in cells]
+
+    header_cells = parse_row(header_line)
+
+    rows: list[dict] = []
+    # Header row as tableHeader cells
+    header_row = {
+        "type": "tableRow",
+        "content": [
+            {
+                "type": "tableHeader",
+                "content": [{"type": "paragraph", "content": _parse_inline_marks(cell)}],
+            }
+            for cell in header_cells
+        ],
+    }
+    rows.append(header_row)
+
+    i = start + 2  # skip header + separator
+    while i < len(lines):
+        row_line = lines[i].strip()
+        if not row_line.startswith("|"):
+            break
+        cells = parse_row(row_line)
+        rows.append({
+            "type": "tableRow",
+            "content": [
+                {
+                    "type": "tableCell",
+                    "content": [{"type": "paragraph", "content": _parse_inline_marks(cell)}],
+                }
+                for cell in cells
+            ],
+        })
+        i += 1
+
+    return {"type": "table", "content": rows}, i
+
+
+def markdown_to_tiptap_json(markdown: str) -> dict:
+    """Convert markdown text to a TipTap JSON document structure.
+
+    Handles:
+    - Paragraphs (with inline **bold**, *italic*, ``code``, [links](url))
+    - Headings (``#`` through ``######``)
+    - Bullet lists (``-`` or ``*``)
+    - Ordered lists (``1.`` ``2.`` etc.)
+    - Code blocks (fenced with ``````)
+    - Blockquotes (``>``)
+    - Horizontal rules (``---``, ``***``, ``___``)
+    - Pipe tables (``| col | col |``)
+
+    Args:
+        markdown: Raw markdown string.
+
+    Returns:
+        TipTap-compatible JSON dict with ``"type": "doc"`` at the root.
+    """
+    import re
+
+    lines = markdown.split("\n")
+    content: list[dict] = []
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+
+        # --- Code block (fenced) ---
+        if line.strip().startswith("```"):
+            code_lines: list[str] = []
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                code_lines.append(lines[i])
+                i += 1
+            i += 1  # skip closing ```
+            code_text = "\n".join(code_lines)
+            content.append({
+                "type": "codeBlock",
+                "content": [{"type": "text", "text": code_text}] if code_text else [],
+            })
+            continue
+
+        # --- Horizontal rule ---
+        if re.match(r"^\s*([-*_])\s*\1\s*\1[\s\-*_]*$", line):
+            content.append({"type": "horizontalRule"})
+            i += 1
+            continue
+
+        # --- Heading ---
+        heading_match = re.match(r"^(#{1,6})\s+(.+)$", line)
+        if heading_match:
+            level = len(heading_match.group(1))
+            text = heading_match.group(2).strip()
+            content.append({
+                "type": "heading",
+                "attrs": {"level": level},
+                "content": _parse_inline_marks(text),
+            })
+            i += 1
+            continue
+
+        # --- Blockquote ---
+        if line.strip().startswith(">"):
+            bq_lines: list[str] = []
+            while i < len(lines) and lines[i].strip().startswith(">"):
+                bq_lines.append(re.sub(r"^>\s?", "", lines[i]))
+                i += 1
+            bq_text = "\n".join(bq_lines).strip()
+            # Parse inner content as paragraphs
+            inner_paras = [p.strip() for p in bq_text.split("\n") if p.strip()]
+            bq_content: list[dict] = []
+            for para in inner_paras:
+                bq_content.append({
+                    "type": "paragraph",
+                    "content": _parse_inline_marks(para),
+                })
+            if not bq_content:
+                bq_content = [{"type": "paragraph", "content": []}]
+            content.append({"type": "blockquote", "content": bq_content})
+            continue
+
+        # --- Pipe table ---
+        if line.strip().startswith("|"):
+            table_node, next_i = _parse_table_block(lines, i)
+            if table_node is not None:
+                content.append(table_node)
+                i = next_i
+                continue
+
+        # --- Bullet list ---
+        bullet_match = re.match(r"^[\s]*[-*]\s+(.+)$", line)
+        if bullet_match:
+            items: list[dict] = []
+            while i < len(lines):
+                bm = re.match(r"^[\s]*[-*]\s+(.+)$", lines[i])
+                if not bm:
+                    break
+                items.append({
+                    "type": "listItem",
+                    "content": [{
+                        "type": "paragraph",
+                        "content": _parse_inline_marks(bm.group(1).strip()),
+                    }],
+                })
+                i += 1
+            content.append({"type": "bulletList", "content": items})
+            continue
+
+        # --- Ordered list ---
+        ordered_match = re.match(r"^[\s]*\d+[.)]\s+(.+)$", line)
+        if ordered_match:
+            items = []
+            while i < len(lines):
+                om = re.match(r"^[\s]*\d+[.)]\s+(.+)$", lines[i])
+                if not om:
+                    break
+                items.append({
+                    "type": "listItem",
+                    "content": [{
+                        "type": "paragraph",
+                        "content": _parse_inline_marks(om.group(1).strip()),
+                    }],
+                })
+                i += 1
+            content.append({"type": "orderedList", "content": items})
+            continue
+
+        # --- Empty line: skip ---
+        if not line.strip():
+            i += 1
+            continue
+
+        # --- Paragraph (default) ---
+        content.append({
+            "type": "paragraph",
+            "content": _parse_inline_marks(line.strip()),
+        })
+        i += 1
+
+    # Ensure at least one empty paragraph for TipTap compatibility
+    if not content:
+        content.append({"type": "paragraph", "content": [{"type": "text", "text": ""}]})
+
+    return {"type": "doc", "content": content}
+
+
+async def process_document_import(ctx: dict[str, Any], job_id: str) -> dict[str, Any]:
+    """Background job to process a document import.
+
+    Pipeline:
+        1. Load ImportJob from DB, set status='processing', progress=10%
+        2. Read file from temp_file_path
+        3. Convert via DoclingService.process_file() -> progress=40%
+        4. Create Document (convert markdown to TipTap JSON) -> progress=50%
+        5. Upload extracted images to MinIO -> progress=60%
+        6. Process images through vision LLM -> progress=80%
+        7. Trigger embed_document_job -> progress=90%
+        8. Finalize: status='completed', document_id, progress=100%
+
+    Error handling: Any failure sets status='failed', error_message, and
+    cleans up the temp file.
+
+    WebSocket: Broadcasts IMPORT_COMPLETED or IMPORT_FAILED to the user's
+    channel so the frontend can react in real time.
+
+    Args:
+        ctx: ARQ context dict.
+        job_id: UUID string of the ImportJob to process.
+
+    Returns:
+        dict with status and metadata on success, or error info.
+    """
+    import json
+    import os
+    from uuid import UUID as _UUID
+
+    from sqlalchemy import select
+
+    from .models.import_job import ImportJob
+    from .models.document import Document
+    from .services.document_service import set_scope_fks
+
+    job_uuid = _UUID(job_id)
+    temp_path: str | None = None
+
+    try:
+        async with async_session_maker() as db:
+            # ----------------------------------------------------------------
+            # 1. Load job and mark as processing (10%)
+            # ----------------------------------------------------------------
+            result = await db.execute(
+                select(ImportJob).where(ImportJob.id == job_uuid)
+            )
+            job = result.scalar_one_or_none()
+            if job is None:
+                logger.warning("process_document_import: job %s not found", job_id)
+                return {"status": "skipped", "reason": "not_found"}
+
+            if job.status in ("completed", "failed"):
+                logger.info("process_document_import: job %s already %s, skipping", job_id, job.status)
+                return {"status": "skipped", "reason": job.status}
+
+            temp_path = job.temp_file_path
+            job.status = "processing"
+            job.progress_pct = 10
+            await db.commit()
+
+            # ----------------------------------------------------------------
+            # 2. Read the uploaded file
+            # ----------------------------------------------------------------
+            if not temp_path or not os.path.exists(temp_path):
+                raise FileNotFoundError(
+                    f"Temp file not found: {temp_path}"
+                )
+
+            # ----------------------------------------------------------------
+            # 2b. Set restrictive permissions on temp file
+            # ----------------------------------------------------------------
+            os.chmod(temp_path, 0o600)
+
+            # ----------------------------------------------------------------
+            # 3. Convert document via Docling (40%)
+            # ----------------------------------------------------------------
+            from .ai.docling_service import DoclingService
+
+            docling = DoclingService()
+
+            conversion_result = await docling.process_file(
+                temp_path, job.file_type
+            )
+            markdown_content = conversion_result.markdown
+            extracted_images = conversion_result.images
+
+            await _update_import_progress(db, job_uuid, 40)
+
+            # ----------------------------------------------------------------
+            # 4. Create Document with TipTap JSON content (50%)
+            # ----------------------------------------------------------------
+            tiptap_json = markdown_to_tiptap_json(markdown_content)
+
+            # Title priority: user-provided title > document metadata title > filename stem
+            user_title = getattr(job, "title", None)
+            metadata_title = conversion_result.metadata.get("title_from_doc")
+            base_name = os.path.splitext(job.file_name)[0]
+            doc_title = (user_title or metadata_title or base_name)[:255]
+
+            import re as _re
+
+            # Strip markdown formatting for plain text version
+            plain_text = _re.sub(r'[#*`\[\]()>|_~-]', '', markdown_content)
+            plain_text = _re.sub(r'\n{3,}', '\n\n', plain_text).strip()
+
+            doc = Document(
+                title=doc_title,
+                content_json=json.dumps(tiptap_json),
+                content_markdown=markdown_content,
+                content_plain=plain_text,
+                created_by=job.user_id,
+                folder_id=job.folder_id,
+            )
+            set_scope_fks(doc, job.scope, job.scope_id)
+            db.add(doc)
+            await db.flush()
+            await db.refresh(doc)
+
+            await _update_import_progress(db, job_uuid, 50)
+
+            # ----------------------------------------------------------------
+            # 5–6. Upload images and process through vision LLM (60→80%)
+            # ----------------------------------------------------------------
+            if extracted_images:
+                try:
+                    from .ai.image_understanding_service import (
+                        ExtractedImage as IUSExtractedImage,
+                        ImageUnderstandingService,
+                    )
+                    from .ai.provider_registry import ProviderRegistry
+                    from .ai.embedding_service import EmbeddingService
+                    from .ai.embedding_normalizer import EmbeddingNormalizer
+                    from .ai.chunking_service import SemanticChunker
+                    from .services.minio_service import minio_service
+
+                    registry = ProviderRegistry()
+                    normalizer = EmbeddingNormalizer()
+                    chunker = SemanticChunker()
+                    embedding_svc = EmbeddingService(
+                        provider_registry=registry,
+                        chunker=chunker,
+                        normalizer=normalizer,
+                        db=db,
+                    )
+                    image_svc = ImageUnderstandingService(
+                        provider_registry=registry,
+                        embedding_service=embedding_svc,
+                        minio_service=minio_service,
+                        db=db,
+                    )
+
+                    # Convert Docling ExtractedImage to ImageUnderstandingService ExtractedImage
+                    ius_images: list[IUSExtractedImage] = []
+                    for img in extracted_images:
+                        fmt = img.image_format  # "png" or "jpg"
+                        content_type = f"image/{'jpeg' if fmt == 'jpg' else fmt}"
+                        filename = f"page{img.page_number or 0}_pos{img.position}.{fmt}"
+                        ius_images.append(IUSExtractedImage(
+                            data=img.image_bytes,
+                            content_type=content_type,
+                            filename=filename,
+                            caption=img.caption or "",
+                            page_number=img.page_number or 0,
+                        ))
+
+                    await _update_import_progress(db, job_uuid, 60)
+
+                    scope_ids = {
+                        "application_id": doc.application_id,
+                        "project_id": doc.project_id,
+                        "user_id": doc.user_id or job.user_id,
+                    }
+                    await image_svc.process_imported_images(
+                        images=ius_images,
+                        document_id=doc.id,
+                        scope_ids=scope_ids,
+                    )
+                except Exception as img_err:
+                    logger.warning(
+                        "Image processing failed for job %s (non-fatal): %s",
+                        job_id, img_err,
+                    )
+            else:
+                await _update_import_progress(db, job_uuid, 60)
+
+            await _update_import_progress(db, job_uuid, 80)
+
+            # ----------------------------------------------------------------
+            # 7. Trigger embed_document_job (90%)
+            # ----------------------------------------------------------------
+            try:
+                from arq.connections import create_pool
+                from .config import settings
+
+                redis_pool = await create_pool(parse_redis_url(settings.redis_url))
+                await redis_pool.enqueue_job(
+                    "embed_document_job",
+                    str(doc.id),
+                    _job_id=f"embed:{doc.id}",
+                    _defer_by=timedelta(seconds=120),
+                )
+                await redis_pool.aclose()
+            except Exception as embed_err:
+                logger.warning(
+                    "Failed to enqueue embedding for doc %s (non-fatal): %s",
+                    doc.id, embed_err,
+                )
+
+            await _update_import_progress(db, job_uuid, 90)
+
+            # ----------------------------------------------------------------
+            # 8. Finalize: status=completed, link document (100%)
+            # ----------------------------------------------------------------
+            job.status = "completed"
+            job.progress_pct = 100
+            job.document_id = doc.id
+            job.completed_at = utc_now()
+            job.temp_file_path = None
+            await db.commit()
+
+            # Broadcast IMPORT_COMPLETED via WebSocket
+            try:
+                await redis_service.publish(
+                    f"user:{job.user_id}",
+                    {
+                        "type": "import_completed",
+                        "data": {
+                            "job_id": str(job.id),
+                            "document_id": str(doc.id),
+                            "title": doc.title,
+                            "scope": job.scope,
+                            "timestamp": utc_now().isoformat(),
+                        },
+                    },
+                )
+            except Exception as ws_err:
+                logger.warning(
+                    "Failed to broadcast IMPORT_COMPLETED for job %s: %s",
+                    job_id, ws_err,
+                )
+
+            # Clean up temp file
+            _cleanup_temp_file(temp_path)
+
+            # Telemetry: log successful import
+            try:
+                from .ai.telemetry import AITelemetry
+
+                _import_elapsed = int(
+                    (job.completed_at - job.created_at).total_seconds() * 1000
+                ) if job.completed_at and job.created_at else 0
+                await AITelemetry.log_import(
+                    user_id=job.user_id,
+                    file_type=job.file_type,
+                    file_size=job.file_size or 0,
+                    duration_ms=_import_elapsed,
+                    success=True,
+                )
+            except Exception:
+                pass  # Non-critical
+
+            logger.info(
+                "process_document_import: job %s completed — document %s created",
+                job_id, doc.id,
+            )
+
+            return {
+                "status": "completed",
+                "document_id": str(doc.id),
+                "title": doc.title,
+            }
+
+    except Exception as e:
+        # Map exception types to safe user-facing messages
+        safe_messages = {
+            "FileNotFoundError": "The uploaded file could not be found for processing.",
+            "ImportError": "The document could not be converted. It may be corrupted or password-protected.",
+            "TimeoutError": "The import took too long and was cancelled.",
+        }
+        error_type = type(e).__name__
+        safe_msg = safe_messages.get(error_type, "An unexpected error occurred during import.")
+        logger.error("process_document_import failed for job %s: %s", job_id, str(e), exc_info=True)
+
+        # Mark job as failed
+        try:
+            async with async_session_maker() as db:
+                result = await db.execute(
+                    select(ImportJob).where(ImportJob.id == job_uuid)
+                )
+                job = result.scalar_one_or_none()
+                if job:
+                    job.status = "failed"
+                    job.error_message = safe_msg
+                    job.completed_at = utc_now()
+                    await db.commit()
+
+                    # Broadcast IMPORT_FAILED
+                    try:
+                        await redis_service.publish(
+                            f"user:{job.user_id}",
+                            {
+                                "type": "import_failed",
+                                "data": {
+                                    "job_id": str(job.id),
+                                    "error_message": safe_msg,
+                                    "file_name": job.file_name,
+                                    "timestamp": utc_now().isoformat(),
+                                },
+                            },
+                        )
+                    except Exception:
+                        pass
+        except Exception as db_err:
+            logger.error(
+                "Failed to update job %s status to failed: %s",
+                job_id, db_err,
+            )
+
+        # Telemetry: log failed import
+        try:
+            from .ai.telemetry import AITelemetry
+
+            await AITelemetry.log_import(
+                user_id=str(job_uuid),
+                file_type="unknown",
+                file_size=0,
+                duration_ms=0,
+                success=False,
+                error=error_type,
+            )
+        except Exception:
+            pass  # Non-critical
+
+        # Clean up temp file on failure
+        if temp_path:
+            _cleanup_temp_file(temp_path)
+
+        return {"status": "error", "error": type(e).__name__}
+
+
+def _cleanup_temp_file(path: str | None) -> None:
+    """Safely remove a temporary file if it exists."""
+    if path:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 # =============================================================================
@@ -501,6 +1177,7 @@ class WorkerSettings:
         cleanup_stale_presence,
         check_search_index_consistency,
         embed_document_job,
+        process_document_import,
     ]
 
     # Scheduled cron jobs (configured via .env)
