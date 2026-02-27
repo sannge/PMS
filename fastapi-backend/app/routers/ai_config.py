@@ -118,6 +118,24 @@ def _get_encryption() -> "ApiKeyEncryption":
 # ---------------------------------------------------------------------------
 
 
+async def require_developer(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Require the current user to be a developer.
+
+    Developers have access to global AI configuration (provider CRUD,
+    model CRUD, system prompt). This replaces the former require_ai_admin
+    which checked application ownership.
+    """
+    if not current_user.is_developer:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Developer access required for AI configuration",
+        )
+    return current_user
+
+
+# Keep for backward compatibility until all references are migrated
 async def require_ai_admin(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -153,7 +171,7 @@ router = APIRouter(
 
 @router.get("/providers", response_model=list[AiProviderResponse])
 async def list_providers(
-    current_user: User = Depends(require_ai_admin),
+    current_user: User = Depends(require_developer),
     db: AsyncSession = Depends(get_db),
 ) -> list[AiProviderResponse]:
     """List all global AI providers with their registered models."""
@@ -174,7 +192,7 @@ async def list_providers(
 )
 async def create_provider(
     body: AiProviderCreate,
-    current_user: User = Depends(require_ai_admin),
+    current_user: User = Depends(require_developer),
     db: AsyncSession = Depends(get_db),
 ) -> AiProviderResponse:
     """Create a new global AI provider. API key is encrypted before storage."""
@@ -205,7 +223,7 @@ async def create_provider(
 async def update_provider(
     provider_id: UUID,
     body: AiProviderUpdate,
-    current_user: User = Depends(require_ai_admin),
+    current_user: User = Depends(require_developer),
     db: AsyncSession = Depends(get_db),
 ) -> AiProviderResponse:
     """Update a global AI provider. Omit api_key to keep existing key."""
@@ -251,7 +269,7 @@ async def update_provider(
 )
 async def delete_provider(
     provider_id: UUID,
-    current_user: User = Depends(require_ai_admin),
+    current_user: User = Depends(require_developer),
     db: AsyncSession = Depends(get_db),
 ) -> None:
     """Delete a global AI provider. Cascades to its models."""
@@ -273,7 +291,7 @@ async def delete_provider(
 @router.post("/providers/{provider_id}/test")
 async def test_provider(
     provider_id: UUID,
-    current_user: User = Depends(require_ai_admin),
+    current_user: User = Depends(require_developer),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, object]:
     """Test connectivity for a global AI provider."""
@@ -297,7 +315,7 @@ async def test_provider(
 
 @router.get("/models", response_model=list[AiModelResponse])
 async def list_models(
-    current_user: User = Depends(require_ai_admin),
+    current_user: User = Depends(require_developer),
     db: AsyncSession = Depends(get_db),
 ) -> list[AiModelResponse]:
     """List all AI models across all global providers."""
@@ -319,7 +337,7 @@ async def list_models(
 )
 async def create_model(
     body: AiModelCreate,
-    current_user: User = Depends(require_ai_admin),
+    current_user: User = Depends(require_developer),
     db: AsyncSession = Depends(get_db),
 ) -> AiModelResponse:
     """Register a new AI model under a global provider."""
@@ -362,7 +380,7 @@ async def create_model(
 async def update_model(
     model_id: UUID,
     body: AiModelUpdate,
-    current_user: User = Depends(require_ai_admin),
+    current_user: User = Depends(require_developer),
     db: AsyncSession = Depends(get_db),
 ) -> AiModelResponse:
     """Update an AI model entry."""
@@ -394,7 +412,7 @@ async def update_model(
 )
 async def delete_model(
     model_id: UUID,
-    current_user: User = Depends(require_ai_admin),
+    current_user: User = Depends(require_developer),
     db: AsyncSession = Depends(get_db),
 ) -> None:
     """Delete an AI model entry."""
@@ -413,7 +431,7 @@ async def delete_model(
 
 @router.get("/summary", response_model=AiConfigSummary)
 async def get_config_summary(
-    current_user: User = Depends(require_ai_admin),
+    current_user: User = Depends(require_developer),
     db: AsyncSession = Depends(get_db),
 ) -> AiConfigSummary:
     """Get AI configuration summary with default models per capability."""
@@ -491,7 +509,11 @@ async def create_user_override(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> AiProviderResponse:
-    """Create a user-scoped provider override with a personal API key."""
+    """Create a user-scoped provider override with a personal API key.
+
+    User overrides are restricted to chat capability only. A chat AiModel
+    is auto-created under the new provider using body.preferred_model.
+    """
     _validate_base_url(body.base_url, body.provider_type)
 
     # Check for duplicate override
@@ -524,7 +546,27 @@ async def create_user_override(
     )
     db.add(provider)
     await db.flush()
-    await db.refresh(provider)
+
+    # Auto-create a chat model under the user's provider
+    chat_model = AiModel(
+        provider_id=provider.id,
+        model_id=body.preferred_model,
+        display_name=body.preferred_model,
+        provider_type=body.provider_type,
+        capability="chat",
+        is_default=True,
+        is_enabled=True,
+    )
+    db.add(chat_model)
+    await db.flush()
+
+    # Reload with models relationship for response
+    result = await db.execute(
+        select(AiProvider)
+        .where(AiProvider.id == provider.id)
+        .options(selectinload(AiProvider.models))
+    )
+    provider = result.scalar_one()
     await _refresh_provider_cache()
     return AiProviderResponse.model_validate(provider)
 
@@ -536,7 +578,10 @@ async def update_user_override(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> AiProviderResponse:
-    """Update a user's provider override."""
+    """Update a user's provider override.
+
+    Also updates the auto-created chat model to match preferred_model.
+    """
     result = await db.execute(
         select(AiProvider).where(
             AiProvider.scope == "user",
@@ -557,8 +602,41 @@ async def update_user_override(
         provider.base_url = body.base_url
     provider.updated_at = utc_now()
 
+    # Update the chat model to match new preferred_model
+    model_result = await db.execute(
+        select(AiModel).where(
+            AiModel.provider_id == provider.id,
+            AiModel.capability == "chat",
+        )
+    )
+    existing_model = model_result.scalar_one_or_none()
+    if existing_model:
+        existing_model.model_id = body.preferred_model
+        existing_model.display_name = body.preferred_model
+        existing_model.provider_type = body.provider_type
+        existing_model.updated_at = utc_now()
+    else:
+        # Create if missing (migration from old data)
+        chat_model = AiModel(
+            provider_id=provider.id,
+            model_id=body.preferred_model,
+            display_name=body.preferred_model,
+            provider_type=body.provider_type,
+            capability="chat",
+            is_default=True,
+            is_enabled=True,
+        )
+        db.add(chat_model)
+
     await db.flush()
-    await db.refresh(provider)
+
+    # Reload with models relationship for response
+    reload_result = await db.execute(
+        select(AiProvider)
+        .where(AiProvider.id == provider.id)
+        .options(selectinload(AiProvider.models))
+    )
+    provider = reload_result.scalar_one()
     await _refresh_provider_cache()
     return AiProviderResponse.model_validate(provider)
 

@@ -32,6 +32,15 @@ def set_encryption_key(monkeypatch):
     monkeypatch.setattr("app.config.settings.ai_encryption_key", TEST_ENCRYPTION_KEY)
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def _make_test_user_developer(test_user: User, db_session: AsyncSession):
+    """Mark the primary test user as a developer for admin AI config access."""
+    test_user.is_developer = True
+    db_session.add(test_user)
+    await db_session.commit()
+    await db_session.refresh(test_user)
+
+
 # ---------------------------------------------------------------------------
 # Helper fixtures
 # ---------------------------------------------------------------------------
@@ -85,6 +94,7 @@ async def user_override(client: AsyncClient, auth_headers: dict, test_applicatio
         json={
             "provider_type": "openai",
             "api_key": "sk-user-personal-key",
+            "preferred_model": "gpt-4o",
         },
     )
     assert response.status_code == 201
@@ -598,18 +608,18 @@ class TestConfigSummary:
 
 @pytest.mark.asyncio
 class TestAdminAuth:
-    """Tests for admin-only access (require_ai_admin dependency)."""
+    """Tests for admin-only access (require_developer dependency)."""
 
-    async def test_non_owner_gets_403(
+    async def test_non_developer_gets_403(
         self,
         client: AsyncClient,
         auth_headers_2: dict,
         test_user_2: User,
     ):
-        """A user who owns no application gets 403 on admin endpoints."""
+        """A user who is not a developer gets 403 on admin endpoints."""
         response = await client.get("/api/ai/config/providers", headers=auth_headers_2)
         assert response.status_code == 403
-        assert "application ownership" in response.json()["detail"].lower()
+        assert "developer access required" in response.json()["detail"].lower()
 
     async def test_unauthenticated_gets_401(self, client: AsyncClient):
         """Requests without auth token get 401."""
@@ -636,6 +646,7 @@ class TestUserCreateOverride:
             json={
                 "provider_type": "openai",
                 "api_key": "sk-my-personal-key",
+                "preferred_model": "gpt-4o",
             },
         )
         assert response.status_code == 201
@@ -645,6 +656,10 @@ class TestUserCreateOverride:
         assert data["has_api_key"] is True
         assert "api_key" not in data
         assert "api_key_encrypted" not in data
+        # Auto-created chat model
+        assert len(data["models"]) == 1
+        assert data["models"][0]["model_id"] == "gpt-4o"
+        assert data["models"][0]["capability"] == "chat"
 
     async def test_user_create_override_encrypts_key(
         self,
@@ -661,6 +676,7 @@ class TestUserCreateOverride:
             json={
                 "provider_type": "anthropic",
                 "api_key": raw_key,
+                "preferred_model": "claude-sonnet-4-6",
             },
         )
         assert response.status_code == 201
@@ -687,6 +703,7 @@ class TestUserCreateOverride:
             json={
                 "provider_type": "openai",
                 "api_key": "sk-another-key",
+                "preferred_model": "gpt-4o-mini",
             },
         )
         assert response.status_code == 409
@@ -729,17 +746,21 @@ class TestUserUpdateOverride:
     async def test_user_update_override_model_preference(
         self, client: AsyncClient, auth_headers: dict, user_override: dict
     ):
-        """Updating a user override replaces the API key."""
+        """Updating a user override replaces the API key and updates the chat model."""
         response = await client.put(
             "/api/ai/config/me/providers/openai",
             headers=auth_headers,
             json={
                 "provider_type": "openai",
                 "api_key": "sk-updated-personal-key",
+                "preferred_model": "gpt-4o-mini",
             },
         )
         assert response.status_code == 200
-        assert response.json()["has_api_key"] is True
+        data = response.json()
+        assert data["has_api_key"] is True
+        assert len(data["models"]) == 1
+        assert data["models"][0]["model_id"] == "gpt-4o-mini"
 
     async def test_user_update_nonexistent_override_404(
         self, client: AsyncClient, auth_headers: dict, test_application: Application
@@ -751,6 +772,7 @@ class TestUserUpdateOverride:
             json={
                 "provider_type": "anthropic",
                 "api_key": "sk-some-key",
+                "preferred_model": "claude-sonnet-4-6",
             },
         )
         assert response.status_code == 404
@@ -905,6 +927,7 @@ class TestUserIsolation:
             json={
                 "provider_type": "anthropic",
                 "api_key": "sk-user2-anthropic-key",
+                "preferred_model": "claude-sonnet-4-6",
             },
         )
         assert response.status_code == 201

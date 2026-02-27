@@ -212,11 +212,15 @@ class AiProviderCreate(BaseModel):
 
 
 class UserProviderOverride(BaseModel):
-    """Schema for a user overriding a provider with their own API key."""
+    """Schema for a user overriding a provider with their own API key.
+
+    User overrides are restricted to chat capability only. Embedding and
+    vision always resolve from the global (developer-configured) provider.
+    """
 
     provider_type: str = Field(
         ...,
-        description="Provider type to override: openai, anthropic, or ollama",
+        description="Provider type to override: openai or anthropic",
     )
     api_key: str = Field(
         ...,
@@ -227,9 +231,11 @@ class UserProviderOverride(BaseModel):
         None,
         description="Custom API endpoint URL",
     )
-    preferred_model: Optional[str] = Field(
-        None,
-        description="Preferred model ID for this provider",
+    preferred_model: str = Field(
+        ...,
+        min_length=1,
+        max_length=255,
+        description="Preferred chat model ID (e.g. 'claude-sonnet-4-6')",
     )
 
     @field_validator("provider_type")
