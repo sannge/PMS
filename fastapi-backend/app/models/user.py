@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from ..utils.timezone import utc_now
 
-from sqlalchemy import Column, DateTime, String
+from sqlalchemy import Boolean, Column, DateTime, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -57,6 +57,52 @@ class User(Base):
     password_hash = Column(
         String(255),
         nullable=False,
+    )
+
+    # Email verification fields
+    email_verified = Column(
+        Boolean,
+        default=False,
+        nullable=False,
+        server_default="false",
+    )
+    verification_code = Column(
+        String(64),
+        nullable=True,
+    )
+    verification_code_expires_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    verification_attempts = Column(
+        Integer,
+        default=0,
+        nullable=False,
+        server_default="0",
+    )
+
+    # Password reset fields
+    password_reset_code = Column(
+        String(64),
+        nullable=True,
+    )
+    password_reset_code_expires_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    reset_attempts = Column(
+        Integer,
+        default=0,
+        nullable=False,
+        server_default="0",
+    )
+
+    # Developer access
+    is_developer = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
     )
 
     # Profile fields

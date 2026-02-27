@@ -55,6 +55,10 @@ class AiModelCreate(BaseModel):
         max_length=255,
         description="Human-readable model name",
     )
+    provider_type: str = Field(
+        ...,
+        description="Provider type: openai, anthropic, or ollama",
+    )
     capability: str = Field(
         ...,
         description="Model capability: chat, embedding, or vision",
@@ -78,6 +82,11 @@ class AiModelCreate(BaseModel):
         description="Whether model is active",
     )
 
+    @field_validator("provider_type")
+    @classmethod
+    def validate_provider_type(cls, v: str) -> str:
+        return _validate_provider_type(v)
+
     @field_validator("capability")
     @classmethod
     def validate_capability(cls, v: str) -> str:
@@ -97,11 +106,19 @@ class AiModelUpdate(BaseModel):
         min_length=1,
         max_length=255,
     )
+    provider_type: Optional[str] = None
     capability: Optional[str] = None
     embedding_dimensions: Optional[int] = Field(None, ge=1)
     max_tokens: Optional[int] = Field(None, ge=1)
     is_default: Optional[bool] = None
     is_enabled: Optional[bool] = None
+
+    @field_validator("provider_type")
+    @classmethod
+    def validate_provider_type(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            return _validate_provider_type(v)
+        return v
 
     @field_validator("capability")
     @classmethod
@@ -120,6 +137,7 @@ class AiModelResponse(BaseModel):
     provider_id: UUID
     model_id: str
     display_name: str
+    provider_type: str
     capability: str
     embedding_dimensions: Optional[int] = None
     max_tokens: Optional[int] = None

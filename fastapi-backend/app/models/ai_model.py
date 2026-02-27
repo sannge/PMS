@@ -85,6 +85,13 @@ class AiModel(Base):
         nullable=False,
     )
 
+    # Provider type (denormalized for filtering without join)
+    provider_type = Column(
+        String(50),
+        nullable=False,
+        index=True,
+    )
+
     # Capability
     capability = Column(
         String(50),
@@ -143,6 +150,10 @@ class AiModel(Base):
         CheckConstraint(
             "capability IN ('chat', 'embedding', 'vision')",
             name="ck_ai_models_capability",
+        ),
+        CheckConstraint(
+            "provider_type IN ('openai', 'anthropic', 'ollama')",
+            name="ck_ai_models_provider_type",
         ),
     )
 

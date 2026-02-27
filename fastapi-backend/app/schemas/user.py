@@ -63,6 +63,14 @@ class UserResponse(UserBase):
         None,
         description="URL to user's avatar image",
     )
+    email_verified: bool = Field(
+        False,
+        description="Whether the user's email is verified",
+    )
+    is_developer: bool = Field(
+        False,
+        description="Whether the user has developer access for AI configuration",
+    )
     created_at: Optional[datetime] = Field(
         None,
         description="When the user was created",
@@ -70,6 +78,81 @@ class UserResponse(UserBase):
     updated_at: Optional[datetime] = Field(
         None,
         description="When the user was last updated",
+    )
+
+
+class RegisterResponse(BaseModel):
+    """Response returned after successful registration."""
+
+    message: str = Field(
+        ...,
+        description="Confirmation message",
+    )
+    email: EmailStr = Field(
+        ...,
+        description="Email address the verification code was sent to",
+    )
+
+
+class MessageResponse(BaseModel):
+    """Generic message response."""
+
+    message: str = Field(..., description="Response message")
+
+
+class VerifyEmailRequest(BaseModel):
+    """Request to verify email with a 6-digit code."""
+
+    email: EmailStr = Field(
+        ...,
+        description="User's email address",
+    )
+    code: str = Field(
+        ...,
+        min_length=6,
+        max_length=6,
+        pattern=r"^\d{6}$",
+        description="6-digit verification code",
+    )
+
+
+class ResendVerificationRequest(BaseModel):
+    """Request to resend verification code."""
+
+    email: EmailStr = Field(
+        ...,
+        description="User's email address",
+    )
+
+
+class ForgotPasswordRequest(BaseModel):
+    """Request to initiate password reset."""
+
+    email: EmailStr = Field(
+        ...,
+        description="User's email address",
+    )
+
+
+class ResetPasswordRequest(BaseModel):
+    """Request to reset password with code."""
+
+    email: EmailStr = Field(
+        ...,
+        description="User's email address",
+    )
+    code: str = Field(
+        ...,
+        min_length=6,
+        max_length=6,
+        pattern=r"^\d{6}$",
+        description="6-digit reset code",
+    )
+    new_password: str = Field(
+        ...,
+        min_length=8,
+        max_length=128,
+        description="New password",
     )
 
 

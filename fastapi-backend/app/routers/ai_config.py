@@ -338,6 +338,7 @@ async def create_model(
         provider_id=body.provider_id,
         model_id=body.model_id,
         display_name=body.display_name,
+        provider_type=body.provider_type,
         capability=body.capability,
         embedding_dimensions=body.embedding_dimensions,
         max_tokens=body.max_tokens,
