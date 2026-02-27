@@ -5,13 +5,15 @@ Each request is stored as a member (timestamp) in a sorted set keyed by
 ``ratelimit:{endpoint}:{scope_id}:{window}``. Expired entries are pruned
 on each check, giving accurate per-window counts.
 
-Fail-open: when Redis is unavailable all requests are allowed and a
-warning is logged.
+Fallback: when Redis is unavailable, an in-memory counter with a generous
+limit (2x normal) is used.  This prevents complete bypass while tolerating
+brief Redis outages.  A warning is logged on each fallback hit.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -24,6 +26,17 @@ from ..models.user import User
 from ..services.auth_service import get_current_user
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# In-memory fallback counter (used when Redis is unavailable)
+# ---------------------------------------------------------------------------
+
+_inmemory_lock = threading.Lock()
+# { key: [(timestamp, ...)] }  -- list of request timestamps within window
+_inmemory_counters: dict[str, list[float]] = {}
+# Multiplier for in-memory limits (more generous since less accurate)
+_INMEMORY_LIMIT_MULTIPLIER = 2
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +77,10 @@ def _load_rate_limits() -> dict[str, tuple[int, int]]:
         RATE_LIMIT_AI_REINDEX=20,3600
 
     Falls back to ``RATE_LIMITS`` defaults when not set.
+
+    .. note::
+        Called once at module import time.  Changes to env vars take
+        effect only after a server restart.
     """
     import os
 
@@ -91,10 +108,63 @@ class AIRateLimiter:
     """Redis-based sliding window rate limiter for AI endpoints.
 
     Key format: ``ratelimit:{endpoint}:{scope_id}:{window}``
+
+    When Redis is unavailable, falls back to an in-memory counter with
+    a generous limit (2x normal) to prevent complete bypass during outages.
     """
 
     def __init__(self, redis: Any) -> None:
         self.redis = redis
+
+    @staticmethod
+    def _inmemory_count_and_add(
+        key: str, window_seconds: int, *, add: bool = False
+    ) -> int:
+        """Return current count in window using in-memory fallback.
+
+        If *add* is True, also records a new request timestamp.
+        Prunes expired entries on each call.
+        """
+        now = time.time()
+        cutoff = now - window_seconds
+
+        with _inmemory_lock:
+            timestamps = _inmemory_counters.get(key, [])
+            # Prune expired entries
+            timestamps = [ts for ts in timestamps if ts > cutoff]
+            if add:
+                timestamps.append(now)
+            _inmemory_counters[key] = timestamps
+            return len(timestamps)
+
+    def _fallback_result(
+        self,
+        key: str,
+        limit: int,
+        window_seconds: int,
+        *,
+        add: bool,
+    ) -> RateLimitResult:
+        """Build a RateLimitResult from in-memory counters.
+
+        Uses ``_INMEMORY_LIMIT_MULTIPLIER`` times the normal limit as the
+        threshold, providing a safety net while being more forgiving than
+        the Redis-backed limit (since in-memory counts are per-process).
+        """
+        fallback_limit = limit * _INMEMORY_LIMIT_MULTIPLIER
+        count = self._inmemory_count_and_add(key, window_seconds, add=add)
+        allowed = count <= fallback_limit
+        remaining = max(0, fallback_limit - count)
+        now = time.time()
+        reset_at = datetime.fromtimestamp(now + window_seconds, tz=timezone.utc)
+
+        return RateLimitResult(
+            allowed=allowed,
+            remaining=remaining,
+            reset_at=reset_at,
+            limit=fallback_limit,
+            reset_seconds=window_seconds,
+        )
 
     async def check_rate_limit(
         self,
@@ -122,15 +192,8 @@ class AIRateLimiter:
             results = await pipe.execute()
             current_count: int = results[1]
         except Exception as exc:
-            logger.warning("Rate limit check failed (fail-open): %s", exc)
-            reset_at = datetime.fromtimestamp(now + window_seconds, tz=timezone.utc)
-            return RateLimitResult(
-                allowed=True,
-                remaining=limit,
-                reset_at=reset_at,
-                limit=limit,
-                reset_seconds=window_seconds,
-            )
+            logger.warning("Rate limit Redis unavailable, using in-memory fallback: %s", exc)
+            return self._fallback_result(key, limit, window_seconds, add=False)
 
         remaining = max(0, limit - current_count)
         allowed = current_count < limit
@@ -176,15 +239,8 @@ class AIRateLimiter:
             results = await pipe.execute()
             current_count: int = results[3]
         except Exception as exc:
-            logger.warning("Rate limit check failed (fail-open): %s", exc)
-            reset_at = datetime.fromtimestamp(now + window_seconds, tz=timezone.utc)
-            return RateLimitResult(
-                allowed=True,
-                remaining=limit,
-                reset_at=reset_at,
-                limit=limit,
-                reset_seconds=window_seconds,
-            )
+            logger.warning("Rate limit Redis unavailable, using in-memory fallback: %s", exc)
+            return self._fallback_result(key, limit, window_seconds, add=True)
 
         allowed = current_count <= limit
         remaining = max(0, limit - current_count)
@@ -226,8 +282,8 @@ class AIRateLimiter:
             results = await pipe.execute()
             return results[3]
         except Exception as exc:
-            logger.warning("Rate limit increment failed (fail-open): %s", exc)
-            return 0
+            logger.warning("Rate limit Redis unavailable, using in-memory fallback: %s", exc)
+            return self._inmemory_count_and_add(key, window_seconds, add=True)
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +345,14 @@ async def check_embedding_rate_limit(
     application_id: str,
     rate_limiter: AIRateLimiter = Depends(get_rate_limiter),
 ) -> None:
-    """Dependency for embedding endpoints -- 100 docs/min per application."""
+    """Dependency for embedding endpoints -- 100 docs/min per application.
+
+    **RBAC note:** ``application_id`` is taken from the path/body parameter.
+    The calling router MUST validate that the current user has access to this
+    application (via ``get_current_user`` + membership check) *before* this
+    dependency runs.  This dependency only enforces rate limits, not access
+    control.
+    """
     limit, window = _limits["ai_embed"]
     result = await rate_limiter.check_and_increment(
         endpoint="ai_embed",

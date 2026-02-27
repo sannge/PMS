@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.ai.telemetry import AITelemetry, TelemetryTimer
+from app.ai.telemetry import AITelemetry, TelemetryTimer, _sanitize_error
 
 
 # ---------------------------------------------------------------------------
@@ -384,6 +384,36 @@ class TestEstimateCost:
         cost = AITelemetry.estimate_cost("OpenAI", "GPT-5.2", 1_000_000, 0)
         assert cost is not None
         assert cost == pytest.approx(2.50)
+
+
+# ---------------------------------------------------------------------------
+# _sanitize_error
+# ---------------------------------------------------------------------------
+
+
+class TestSanitizeError:
+    def test_none_returns_none(self):
+        assert _sanitize_error(None) is None
+
+    def test_plain_string_unchanged(self):
+        assert _sanitize_error("Connection refused") == "Connection refused"
+
+    def test_newlines_stripped(self):
+        result = _sanitize_error("line1\nline2\rline3")
+        assert "\n" not in result
+        assert "\r" not in result
+        assert result == "line1 line2 line3"
+
+    def test_truncation(self):
+        long_error = "x" * 600
+        result = _sanitize_error(long_error)
+        assert len(result) == 500 + len("...[truncated]")
+        assert result.endswith("...[truncated]")
+
+    def test_collapse_multiple_spaces(self):
+        result = _sanitize_error("error\n\n\nmessage")
+        assert "   " not in result
+        assert result == "error message"
 
 
 # ---------------------------------------------------------------------------
