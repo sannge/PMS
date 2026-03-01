@@ -1,14 +1,18 @@
 """Authentication service with JWT token generation and user management."""
 
-from datetime import datetime, timedelta
+import hashlib
+import logging
+import secrets
+from datetime import datetime, timedelta, timezone
 from typing import Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import make_transient
 
@@ -18,10 +22,23 @@ from ..models.user import User
 from ..schemas.user import UserCreate
 from ..utils.security import get_password_hash, verify_password
 from ..utils.timezone import utc_now
-from .user_cache_service import CachedUser, get_cached_user, set_cached_user
+from .email_service import (
+    generate_verification_code,
+    send_login_code_email,
+    send_password_reset_email,
+    send_verification_email,
+)
+from .user_cache_service import CachedUser, get_cached_user, invalidate_user, set_cached_user
+
+logger = logging.getLogger(__name__)
 
 # OAuth2 scheme for token-based authentication
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+
+
+def _hash_code(code: str) -> str:
+    """Hash a verification/reset code with SHA-256 for secure storage."""
+    return hashlib.sha256(code.encode()).hexdigest()
 
 
 class Token(BaseModel):
@@ -36,6 +53,8 @@ class TokenData(BaseModel):
 
     user_id: Optional[str] = None
     email: Optional[str] = None
+    jti: Optional[str] = None
+    exp: Optional[datetime] = None
 
 
 def create_access_token(
@@ -62,7 +81,8 @@ def create_access_token(
             minutes=settings.jwt_expiration_minutes
         )
 
-    to_encode.update({"exp": expire})
+    # Add unique token ID for blacklist support
+    to_encode.update({"exp": expire, "jti": uuid4().hex})
 
     # Encode the JWT token
     encoded_jwt = jwt.encode(
@@ -72,6 +92,52 @@ def create_access_token(
     )
 
     return encoded_jwt
+
+
+async def blacklist_token(jti: str, expires_at: datetime) -> None:
+    """Add a token's JTI to the Redis blacklist so it is rejected on future use.
+
+    The Redis key is set with a TTL matching the token's remaining lifetime
+    so blacklist entries are automatically cleaned up after expiry.
+
+    Args:
+        jti: The unique JWT ID claim.
+        expires_at: Token expiration datetime (used to compute TTL).
+    """
+    from .redis_service import redis_service
+
+    if not redis_service.is_connected:
+        logger.warning("Redis unavailable — token blacklist not persisted for jti=%s", jti)
+        return
+
+    ttl_seconds = int((expires_at - utc_now()).total_seconds())
+    if ttl_seconds <= 0:
+        return  # Already expired, no need to blacklist
+
+    try:
+        await redis_service.set(f"token_blacklist:{jti}", "1", ttl=ttl_seconds)
+    except Exception:
+        logger.warning("Failed to blacklist token jti=%s", jti, exc_info=True)
+
+
+async def is_token_blacklisted(jti: str) -> bool:
+    """Check whether a token JTI has been blacklisted.
+
+    Returns False if Redis is unavailable (fail-open to avoid locking
+    out all users during a Redis outage).
+    """
+    from .redis_service import redis_service
+
+    if not redis_service.is_connected:
+        logger.warning("Redis unavailable — token blacklist check skipped (fail-open) for jti=%s", jti)
+        return False
+
+    try:
+        result = await redis_service.get(f"token_blacklist:{jti}")
+        return result is not None
+    except Exception:
+        logger.warning("Failed to check token blacklist for jti=%s", jti, exc_info=True)
+        return False
 
 
 def decode_access_token(token: str) -> Optional[TokenData]:
@@ -95,11 +161,17 @@ def decode_access_token(token: str) -> Optional[TokenData]:
         )
         user_id: str = payload.get("sub")
         email: str = payload.get("email")
+        jti: str = payload.get("jti")
+        exp_timestamp = payload.get("exp")
 
         if user_id is None:
             return None
 
-        return TokenData(user_id=user_id, email=email)
+        exp_dt = None
+        if exp_timestamp is not None:
+            exp_dt = datetime.fromtimestamp(exp_timestamp, tz=timezone.utc)
+
+        return TokenData(user_id=user_id, email=email, jti=jti, exp=exp_dt)
     except JWTError:
         return None
 
@@ -115,7 +187,9 @@ async def get_user_by_email(db: AsyncSession, email: str) -> Optional[User]:
     Returns:
         User object if found, None otherwise
     """
-    result = await db.execute(select(User).where(User.email == email))
+    result = await db.execute(
+        select(User).where(func.lower(User.email) == func.lower(email))
+    )
     return result.scalar_one_or_none()
 
 
@@ -145,28 +219,39 @@ async def authenticate_user(db: AsyncSession, email: str, password: str) -> Opti
 
     Returns:
         User object if authentication successful, None otherwise
+
+    Raises:
+        HTTPException: 403 if email is not verified
     """
     user = await get_user_by_email(db, email)
 
     if not user:
+        # Dummy verify to prevent timing-based user enumeration
+        verify_password(password, "$2b$12$LJ3m4ys3Lg3Dlw9PjXnqKeDKFJb6QXHX6TqGQnKqHqHqHqHqHqHq")
         return None
 
     if not verify_password(password, user.password_hash):
         return None
+
+    if not user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email not verified. Please verify your email first.",
+        )
 
     return user
 
 
 async def create_user(db: AsyncSession, user_data: UserCreate) -> User:
     """
-    Create a new user in the database.
+    Create a new user in the database with a verification code.
 
     Args:
         db: Database session
         user_data: User creation data including password
 
     Returns:
-        Created User object
+        Created User object (email_verified=False)
 
     Raises:
         HTTPException: If email already exists
@@ -182,19 +267,355 @@ async def create_user(db: AsyncSession, user_data: UserCreate) -> User:
     # Hash the password
     hashed_password = get_password_hash(user_data.password)
 
+    # Generate verification code
+    code = generate_verification_code()
+    code_expires_at = utc_now() + timedelta(
+        minutes=settings.email_verification_code_expiry_minutes
+    )
+
     # Create user instance
     db_user = User(
         email=user_data.email,
         password_hash=hashed_password,
         display_name=user_data.display_name,
+        email_verified=False,
+        verification_code=_hash_code(code),
+        verification_code_expires_at=code_expires_at,
     )
 
     # Add to database
-    db.add(db_user)
-    await db.commit()
-    await db.refresh(db_user)
+    try:
+        db.add(db_user)
+        await db.commit()
+        await db.refresh(db_user)
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered",
+        )
+
+    # Send verification email (fire-and-forget, don't fail registration)
+    email_sent = await send_verification_email(user_data.email, code)
+    if not email_sent:
+        logger.warning(
+            "Failed to send verification email to %s", user_data.email
+        )
 
     return db_user
+
+
+async def verify_email_code(db: AsyncSession, email: str, code: str) -> User:
+    """
+    Verify a user's email with the provided code.
+
+    Args:
+        db: Database session
+        email: User's email address
+        code: 6-digit verification code
+
+    Returns:
+        Verified User object
+
+    Raises:
+        HTTPException: If user not found, already verified, code invalid/expired
+    """
+    user = await get_user_by_email(db, email)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid email or code",
+        )
+
+    if user.email_verified:
+        # Idempotent - return user as-is (already verified)
+        return user
+
+    if not user.verification_code or not user.verification_code_expires_at:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No verification code found. Please request a new one.",
+        )
+
+    if utc_now() > user.verification_code_expires_at:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Verification code has expired. Please request a new one.",
+        )
+
+    # Track failed attempts - clear code after 5 failures
+    if not secrets.compare_digest(_hash_code(code), user.verification_code):
+        user.verification_attempts = (user.verification_attempts or 0) + 1
+        if user.verification_attempts >= 5:
+            user.verification_code = None
+            user.verification_code_expires_at = None
+            user.verification_attempts = 0
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Too many failed attempts. Please request a new code.",
+            )
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid verification code",
+        )
+
+    # Mark as verified and clear code
+    user.email_verified = True
+    user.verification_code = None
+    user.verification_code_expires_at = None
+    user.verification_attempts = 0
+    await db.commit()
+    await db.refresh(user)
+
+    invalidate_user(user.id)
+
+    return user
+
+
+async def resend_verification_code(db: AsyncSession, email: str) -> None:
+    """
+    Resend a verification code, enforcing a cooldown period.
+
+    Args:
+        db: Database session
+        email: User's email address
+
+    Raises:
+        HTTPException: If user not found, already verified, or cooldown active
+    """
+    user = await get_user_by_email(db, email)
+    if not user:
+        # Don't reveal whether email exists
+        return
+
+    if user.email_verified:
+        # Don't reveal verification status
+        return
+
+    # Enforce cooldown: code_expires_at - expiry_minutes = when code was sent
+    if user.verification_code_expires_at:
+        code_sent_at = user.verification_code_expires_at - timedelta(
+            minutes=settings.email_verification_code_expiry_minutes
+        )
+        cooldown_ends = code_sent_at + timedelta(
+            seconds=settings.email_verification_resend_cooldown_seconds
+        )
+        if utc_now() < cooldown_ends:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Please wait before requesting a new code",
+            )
+
+    # Generate new code
+    code = generate_verification_code()
+    user.verification_code = _hash_code(code)
+    user.verification_code_expires_at = utc_now() + timedelta(
+        minutes=settings.email_verification_code_expiry_minutes
+    )
+    user.verification_attempts = 0
+    await db.commit()
+
+    await send_verification_email(email, code)
+
+
+async def request_password_reset(db: AsyncSession, email: str) -> None:
+    """
+    Request a password reset code. Always returns success to prevent email enumeration.
+
+    Args:
+        db: Database session
+        email: User's email address
+
+    Raises:
+        HTTPException: 400 if user exists but email is not verified
+    """
+    user = await get_user_by_email(db, email)
+    if not user:
+        # Don't reveal whether email exists
+        return
+
+    if not user.email_verified:
+        # Don't reveal verification status
+        return
+
+    # Enforce cooldown
+    if user.password_reset_code_expires_at:
+        code_sent_at = user.password_reset_code_expires_at - timedelta(
+            minutes=settings.password_reset_code_expiry_minutes
+        )
+        cooldown_ends = code_sent_at + timedelta(
+            seconds=settings.email_verification_resend_cooldown_seconds
+        )
+        if utc_now() < cooldown_ends:
+            # Silently return (don't reveal timing info)
+            return
+
+    code = generate_verification_code()
+    user.password_reset_code = _hash_code(code)
+    user.password_reset_code_expires_at = utc_now() + timedelta(
+        minutes=settings.password_reset_code_expiry_minutes
+    )
+    user.reset_attempts = 0
+    await db.commit()
+
+    await send_password_reset_email(email, code)
+
+
+async def generate_and_send_login_code(db: AsyncSession, user: User) -> None:
+    """Generate a 6-digit login 2FA code, hash it, store it, and email it.
+
+    Reuses the verification_code/verification_code_expires_at columns on
+    the User model, which are NULL after registration verification completes.
+    Calling login again overwrites any previous code (acts as "resend").
+
+    Args:
+        db: Database session.
+        user: The authenticated user who needs a 2FA code.
+    """
+    code = generate_verification_code()
+    user.verification_code = _hash_code(code)
+    user.verification_code_expires_at = utc_now() + timedelta(
+        minutes=settings.email_verification_code_expiry_minutes
+    )
+    user.verification_attempts = 0
+    await db.commit()
+
+    email_sent = await send_login_code_email(user.email, code)
+    if not email_sent:
+        logger.warning("Failed to send login 2FA code to %s", user.email)
+
+
+async def verify_login_code(db: AsyncSession, email: str, code: str) -> User:
+    """Verify a login 2FA code.
+
+    Validates the hashed code, checks expiry, tracks failed attempts
+    (clears after 5), and clears the code columns on success.
+
+    Args:
+        db: Database session.
+        email: User's email address.
+        code: 6-digit verification code.
+
+    Returns:
+        The verified User object.
+
+    Raises:
+        HTTPException: If user not found, code invalid/expired, or too many attempts.
+    """
+    user = await get_user_by_email(db, email)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid email or code",
+        )
+
+    if not user.verification_code or not user.verification_code_expires_at:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No verification code found. Please log in again.",
+        )
+
+    if utc_now() > user.verification_code_expires_at:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Verification code has expired. Please log in again.",
+        )
+
+    if not secrets.compare_digest(_hash_code(code), user.verification_code):
+        user.verification_attempts = (user.verification_attempts or 0) + 1
+        if user.verification_attempts >= 5:
+            user.verification_code = None
+            user.verification_code_expires_at = None
+            user.verification_attempts = 0
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Too many failed attempts. Please log in again.",
+            )
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid verification code",
+        )
+
+    # Success: clear code columns
+    user.verification_code = None
+    user.verification_code_expires_at = None
+    user.verification_attempts = 0
+    await db.commit()
+    await db.refresh(user)
+
+    return user
+
+
+async def reset_password(
+    db: AsyncSession, email: str, code: str, new_password: str
+) -> None:
+    """
+    Reset a user's password with the provided code.
+
+    Args:
+        db: Database session
+        email: User's email address
+        code: 6-digit reset code
+        new_password: New password to set
+
+    Raises:
+        HTTPException: If code invalid, expired, or user not found
+    """
+    user = await get_user_by_email(db, email)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid email or code",
+        )
+
+    if not user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid email or code",
+        )
+
+    if not user.password_reset_code or not user.password_reset_code_expires_at:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No reset code found. Please request a new one.",
+        )
+
+    if utc_now() > user.password_reset_code_expires_at:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reset code has expired. Please request a new one.",
+        )
+
+    # Track failed attempts - clear code after 5 failures
+    if not secrets.compare_digest(_hash_code(code), user.password_reset_code):
+        user.reset_attempts = (user.reset_attempts or 0) + 1
+        if user.reset_attempts >= 5:
+            user.password_reset_code = None
+            user.password_reset_code_expires_at = None
+            user.reset_attempts = 0
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Too many failed attempts. Please request a new code.",
+            )
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid reset code",
+        )
+
+    # Update password and clear reset code
+    user.password_hash = get_password_hash(new_password)
+    user.password_reset_code = None
+    user.password_reset_code_expires_at = None
+    user.reset_attempts = 0
+    await db.commit()
+
+    invalidate_user(user.id)
 
 
 def _user_from_cache(cached: CachedUser) -> User:
@@ -218,6 +639,8 @@ def _user_from_cache(cached: CachedUser) -> User:
         password_hash="",  # Empty placeholder - not used for auth checks
         display_name=cached.display_name,
         avatar_url=cached.avatar_url,
+        email_verified=cached.email_verified,
+        is_developer=cached.is_developer,
     )
     # Mark as transient (not associated with any session)
     make_transient(user)
@@ -255,6 +678,11 @@ async def get_current_user(
     token_data = decode_access_token(token)
     if token_data is None or token_data.user_id is None:
         raise credentials_exception
+
+    # Check token blacklist (logout support)
+    if token_data.jti:
+        if await is_token_blacklisted(token_data.jti):
+            raise credentials_exception
 
     # Get the user from database
     try:

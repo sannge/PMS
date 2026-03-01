@@ -1,6 +1,11 @@
 """Configuration management using pydantic-settings."""
 
+import logging
+import warnings
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_config_logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -96,6 +101,41 @@ class Settings(BaseSettings):
     meilisearch_index_name: str = "documents"
     meilisearch_timeout: float = 5.0         # Client HTTP timeout in seconds
 
+    # SMTP settings
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_encryption: str = "starttls"  # starttls | ssl | none
+    smtp_from_email: str = "noreply@yourapp.com"
+    smtp_from_name: str = "PM Desktop"
+    smtp_timeout: int = 30
+    smtp_validate_certs: bool = True
+    smtp_enabled: bool = False  # Master switch (false = log codes to console)
+
+    # Email verification settings
+    email_verification_code_expiry_minutes: int = 15
+    email_verification_resend_cooldown_seconds: int = 60
+    password_reset_code_expiry_minutes: int = 15
+
+    # OAuth settings (registered with AI providers)
+    openai_oauth_client_id: str = ""
+    anthropic_oauth_client_id: str = ""
+    oauth_state_ttl_seconds: int = 600  # 10 minutes
+
+    # CORS settings
+    cors_origins: str = "http://localhost:5173,http://localhost:8001"  # Comma-separated origins
+
+    @property
+    def use_tls(self) -> bool:
+        """True for implicit TLS (port 465)."""
+        return self.smtp_encryption == "ssl"
+
+    @property
+    def start_tls(self) -> bool:
+        """True for STARTTLS upgrade (port 587)."""
+        return self.smtp_encryption == "starttls"
+
     # Test database settings
     test_db_user: str = "pmsdbtestuser"
     test_db_password: str = ""
@@ -112,3 +152,13 @@ class Settings(BaseSettings):
 
 # Global settings instance
 settings = Settings()
+
+# Warn at startup if AI encryption key is empty while AI provider is configured
+if not settings.ai_encryption_key and settings.ai_default_provider:
+    _msg = (
+        "AI_ENCRYPTION_KEY is empty but AI_DEFAULT_PROVIDER is set to "
+        f"'{settings.ai_default_provider}'. AI provider credentials stored in the "
+        "database will not be encrypted. Set AI_ENCRYPTION_KEY for production use."
+    )
+    _config_logger.warning(_msg)
+    warnings.warn(_msg, stacklevel=1)

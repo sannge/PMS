@@ -7,6 +7,7 @@ encrypted at rest and never returned in responses.
 
 import ipaddress
 import logging
+import socket
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 from uuid import UUID
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select, exists
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -23,7 +25,6 @@ from ..config import settings
 from ..database import get_db
 from ..models.ai_model import AiModel
 from ..models.ai_provider import AiProvider
-from ..models.application import Application
 from ..models.user import User
 from ..schemas.ai_config import (
     AiConfigSummary,
@@ -34,10 +35,15 @@ from ..schemas.ai_config import (
     AiProviderResponse,
     AiProviderUpdate,
     CapabilityConfig,
+    CapabilityConfigResponse,
+    CapabilityTestRequest,
     CapabilityTestResult,
     EffectiveChatConfig,
+    SystemPromptResponse,
+    SystemPromptUpdate,
     UserProviderOverride,
 )
+from ..ai.rate_limiter import check_test_rate_limit
 from ..services.auth_service import get_current_user
 from ..utils.timezone import utc_now
 
@@ -68,14 +74,19 @@ _ALLOWED_PRIVATE_RANGES = [
 ]
 
 
-def _validate_base_url(base_url: str | None, provider_type: str) -> None:
-    """Validate base_url to prevent SSRF, especially for Ollama providers.
+_DANGEROUS_RANGES = [
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("fe80::/10"),
+]
 
-    Ollama providers should only point to localhost or private network IPs.
-    Non-private URLs are rejected for Ollama; other providers allow any URL
-    since they connect to known cloud APIs.
+
+def _validate_base_url(base_url: str | None, provider_type: str) -> None:
+    """Validate base_url to prevent SSRF.
+
+    All provider types: block metadata/link-local IPs (169.254.0.0/16, fe80::/10).
+    Ollama only: additionally restrict to localhost/private network IPs.
     """
-    if not base_url or provider_type != "ollama":
+    if not base_url:
         return
 
     try:
@@ -84,23 +95,69 @@ def _validate_base_url(base_url: str | None, provider_type: str) -> None:
         if not hostname:
             raise ValueError("Invalid URL: no hostname")
 
+        # Enforce http/https scheme only
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(
+                f"base_url must use http or https scheme, got: {parsed.scheme}"
+            )
+
+        # Block dangerous IPs for ALL provider types
+        def _check_dangerous(ip_str: str) -> None:
+            resolved_addr = ipaddress.ip_address(ip_str)
+            # Also check IPv6-mapped IPv4 (e.g. ::ffff:169.254.169.254)
+            addrs_to_check = [resolved_addr]
+            if hasattr(resolved_addr, "ipv4_mapped") and resolved_addr.ipv4_mapped:
+                addrs_to_check.append(resolved_addr.ipv4_mapped)
+            for addr in addrs_to_check:
+                if any(addr in net for net in _DANGEROUS_RANGES):
+                    raise ValueError(
+                        f"base_url hostname '{hostname}' resolves to "
+                        f"dangerous IP {ip_str} (metadata/link-local). "
+                        f"This is not allowed."
+                    )
+
+        # Check direct IP address
+        try:
+            addr = ipaddress.ip_address(hostname)
+        except ValueError:
+            pass  # hostname is a DNS name, not an IP literal — resolve below
+        else:
+            _check_dangerous(str(addr))
+            if provider_type != "ollama":
+                return  # non-Ollama: only metadata check needed for IP literals
+            # Ollama: continue to private range check
+            if any(addr in net for net in _ALLOWED_PRIVATE_RANGES):
+                return
+
         # Allow "localhost" explicitly
         if hostname in ("localhost",):
             return
 
-        # Check if the hostname is an IP address in a private range
+        # Resolve DNS names and check for dangerous IPs
         try:
-            addr = ipaddress.ip_address(hostname)
-            if any(addr in net for net in _ALLOWED_PRIVATE_RANGES):
-                return
-        except ValueError:
-            pass  # hostname is a DNS name, not an IP literal
+            addrinfos = socket.getaddrinfo(hostname, None)
+            resolved_ips = {info[4][0] for info in addrinfos}
+            for ip_str in resolved_ips:
+                _check_dangerous(ip_str)
 
-        # Non-localhost, non-private-IP hostname for Ollama: warn and reject
-        raise ValueError(
-            f"Ollama base_url must be localhost or a private network address, "
-            f"got: {hostname}"
-        )
+            if provider_type != "ollama":
+                return  # non-Ollama: metadata check done, allow public URLs
+
+            # Ollama: verify resolved IPs are private or localhost
+            for ip_str in resolved_ips:
+                resolved_addr = ipaddress.ip_address(ip_str)
+                if any(resolved_addr in net for net in _ALLOWED_PRIVATE_RANGES):
+                    return  # At least one resolved IP is private — allow
+        except socket.gaierror:
+            if provider_type != "ollama":
+                return  # non-Ollama: allow unresolvable hostnames
+            # Ollama: DNS resolution failed — fall through to reject
+
+        if provider_type == "ollama":
+            raise ValueError(
+                f"Ollama base_url must be localhost or a private network address, "
+                f"got: {hostname}"
+            )
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -134,29 +191,24 @@ async def require_developer(
     model CRUD, system prompt). This replaces the former require_ai_admin
     which checked application ownership.
     """
-    if not current_user.is_developer:
+    if current_user.is_developer is None:
+        # Stale cache entry from before the is_developer field was added.
+        # Invalidate the cache so the next request re-fetches from DB.
+        from ..services.user_cache_service import invalidate_user
+
+        logger.warning(
+            "User %s has is_developer=None (stale cache); invalidating",
+            current_user.id,
+        )
+        invalidate_user(current_user.id)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Developer access required for AI configuration",
         )
-    return current_user
-
-
-# Keep for backward compatibility until all references are migrated
-async def require_ai_admin(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> User:
-    """Require the current user to be an owner of at least one application."""
-    result = await db.execute(
-        select(
-            exists().where(Application.owner_id == current_user.id)
-        )
-    )
-    if not result.scalar():
+    if not current_user.is_developer:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="AI admin access requires application ownership",
+            detail="Developer access required for AI configuration",
         )
     return current_user
 
@@ -169,6 +221,80 @@ router = APIRouter(
     prefix="/api/ai/config",
     tags=["ai-config"],
 )
+
+
+# ============================================================================
+# System Prompt Endpoints (require_developer)
+# ============================================================================
+
+
+@router.get(
+    "/system-prompt",
+    response_model=SystemPromptResponse,
+    summary="Get the custom system prompt",
+    responses={
+        200: {"description": "System prompt returned"},
+        403: {"description": "Not a developer"},
+    },
+)
+async def get_system_prompt(
+    current_user: User = Depends(require_developer),
+    db: AsyncSession = Depends(get_db),
+) -> SystemPromptResponse:
+    """Get the custom AI system prompt.
+
+    Returns the stored custom prompt, or an empty string if none is set
+    (meaning the hardcoded default is in use).
+    """
+    from ..models.ai_system_prompt import AiSystemPrompt
+
+    result = await db.execute(select(AiSystemPrompt).limit(1))
+    row = result.scalar_one_or_none()
+    if row:
+        return SystemPromptResponse(prompt=row.prompt)
+    return SystemPromptResponse(prompt="")
+
+
+@router.put(
+    "/system-prompt",
+    response_model=SystemPromptResponse,
+    summary="Update the custom system prompt",
+    responses={
+        200: {"description": "System prompt updated"},
+        403: {"description": "Not a developer"},
+        422: {"description": "Prompt exceeds 2000 characters"},
+    },
+)
+async def update_system_prompt(
+    body: SystemPromptUpdate,
+    current_user: User = Depends(require_developer),
+    db: AsyncSession = Depends(get_db),
+) -> SystemPromptResponse:
+    """Update the AI system prompt.
+
+    Non-empty prompt: upserts the row and returns the saved value.
+    Empty prompt: deletes the row (reset to default) and returns empty string.
+    """
+    from ..models.ai_system_prompt import AiSystemPrompt
+
+    result = await db.execute(select(AiSystemPrompt).limit(1))
+    existing = result.scalar_one_or_none()
+
+    if not body.prompt.strip():
+        # Empty prompt: reset to default by deleting the row
+        if existing:
+            await db.delete(existing)
+            await db.commit()
+        return SystemPromptResponse(prompt="")
+
+    if existing:
+        existing.prompt = body.prompt
+    else:
+        row = AiSystemPrompt(prompt=body.prompt)
+        db.add(row)
+
+    await db.commit()
+    return SystemPromptResponse(prompt=body.prompt)
 
 
 # ============================================================================
@@ -220,7 +346,7 @@ async def create_provider(
         user_id=None,
     )
     db.add(provider)
-    await db.flush()
+    await db.commit()
     await db.refresh(provider)
     await _refresh_provider_cache()
     return AiProviderResponse.model_validate(provider)
@@ -264,7 +390,7 @@ async def update_provider(
         setattr(provider, field, value)
 
     provider.updated_at = utc_now()
-    await db.flush()
+    await db.commit()
     await db.refresh(provider)
     await _refresh_provider_cache()
     return AiProviderResponse.model_validate(provider)
@@ -291,11 +417,11 @@ async def delete_provider(
             detail=f"Global provider {provider_id} not found",
         )
     await db.delete(provider)
-    await db.flush()
+    await db.commit()
     await _refresh_provider_cache()
 
 
-@router.post("/providers/{provider_id}/test")
+@router.post("/providers/{provider_id}/test", dependencies=[Depends(check_test_rate_limit)])
 async def test_provider(
     provider_id: UUID,
     current_user: User = Depends(require_developer),
@@ -322,17 +448,28 @@ async def test_provider(
 
 @router.get("/models", response_model=list[AiModelResponse])
 async def list_models(
+    provider_type: str | None = None,
+    capability: str | None = None,
     current_user: User = Depends(require_developer),
     db: AsyncSession = Depends(get_db),
 ) -> list[AiModelResponse]:
-    """List all AI models across all global providers."""
-    result = await db.execute(
+    """List all AI models across all global providers.
+
+    Optionally filter by ``provider_type`` and/or ``capability``.
+    """
+    query = (
         select(AiModel)
         .join(AiProvider, AiModel.provider_id == AiProvider.id)
         .where(AiProvider.scope == "global")
         .options(selectinload(AiModel.provider))
-        .order_by(AiModel.created_at.asc())
     )
+    if provider_type is not None:
+        query = query.where(AiModel.provider_type == provider_type)
+    if capability is not None:
+        query = query.where(AiModel.capability == capability)
+    query = query.order_by(AiModel.created_at.asc())
+
+    result = await db.execute(query)
     models = result.scalars().all()
     return [AiModelResponse.model_validate(m) for m in models]
 
@@ -353,10 +490,16 @@ async def create_model(
         select(AiProvider)
         .where(AiProvider.id == body.provider_id, AiProvider.scope == "global")
     )
-    if prov_result.scalar_one_or_none() is None:
+    prov = prov_result.scalar_one_or_none()
+    if prov is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Global provider {body.provider_id} not found",
+        )
+    if prov.provider_type != body.provider_type:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"provider_type '{body.provider_type}' does not match provider's type '{prov.provider_type}'",
         )
 
     model = AiModel(
@@ -371,7 +514,16 @@ async def create_model(
         is_enabled=body.is_enabled,
     )
     db.add(model)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Model '{body.model_id}' with capability '{body.capability}' already exists for this provider",
+        )
+
+    await db.commit()
 
     # Reload with provider relationship for response
     result = await db.execute(
@@ -390,10 +542,11 @@ async def update_model(
     current_user: User = Depends(require_developer),
     db: AsyncSession = Depends(get_db),
 ) -> AiModelResponse:
-    """Update an AI model entry."""
+    """Update an AI model entry (global scope only)."""
     result = await db.execute(
         select(AiModel)
-        .where(AiModel.id == model_id)
+        .join(AiProvider)
+        .where(AiModel.id == model_id, AiProvider.scope == "global")
         .options(selectinload(AiModel.provider))
     )
     model = result.scalar_one_or_none()
@@ -408,8 +561,14 @@ async def update_model(
         setattr(model, field, value)
 
     model.updated_at = utc_now()
-    await db.flush()
-    await db.refresh(model)
+    await db.commit()
+    # Re-query with selectinload to ensure provider relationship is available
+    result = await db.execute(
+        select(AiModel)
+        .where(AiModel.id == model.id)
+        .options(selectinload(AiModel.provider))
+    )
+    model = result.scalar_one()
     return AiModelResponse.model_validate(model)
 
 
@@ -422,9 +581,11 @@ async def delete_model(
     current_user: User = Depends(require_developer),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    """Delete an AI model entry."""
+    """Delete an AI model entry (global scope only)."""
     result = await db.execute(
-        select(AiModel).where(AiModel.id == model_id)
+        select(AiModel)
+        .join(AiProvider)
+        .where(AiModel.id == model_id, AiProvider.scope == "global")
     )
     model = result.scalar_one_or_none()
     if model is None:
@@ -433,7 +594,7 @@ async def delete_model(
             detail=f"Model {model_id} not found",
         )
     await db.delete(model)
-    await db.flush()
+    await db.commit()
 
 
 @router.get("/summary", response_model=AiConfigSummary)
@@ -488,6 +649,52 @@ async def get_config_summary(
 
 
 VALID_CAPABILITIES = {"chat", "embedding", "vision"}
+
+
+@router.get("/capability/{capability}", response_model=CapabilityConfigResponse)
+async def get_capability_config(
+    capability: str,
+    current_user: User = Depends(require_developer),
+    db: AsyncSession = Depends(get_db),
+) -> CapabilityConfigResponse:
+    """Get the current default provider + model configuration for a capability.
+
+    Returns the default model (``is_default=True``, global scope) and its
+    provider information.  When no default is configured, all optional
+    fields are ``None``.
+    """
+    if capability not in VALID_CAPABILITIES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid capability '{capability}'. Must be one of: {', '.join(sorted(VALID_CAPABILITIES))}",
+        )
+
+    result = await db.execute(
+        select(AiModel)
+        .join(AiProvider, AiModel.provider_id == AiProvider.id)
+        .where(
+            AiProvider.scope == "global",
+            AiModel.capability == capability,
+            AiModel.is_default.is_(True),
+        )
+        .options(selectinload(AiModel.provider))
+        .limit(1)
+    )
+    model = result.scalar_one_or_none()
+
+    if model is None:
+        return CapabilityConfigResponse(capability=capability)
+
+    provider = model.provider
+    return CapabilityConfigResponse(
+        capability=capability,
+        provider_id=provider.id,
+        provider_type=provider.provider_type,
+        base_url=provider.base_url,
+        model_id=model.model_id,
+        model_display_name=model.display_name,
+        has_api_key=provider.api_key_encrypted is not None,
+    )
 
 
 @router.put("/capability/{capability}", response_model=AiProviderResponse)
@@ -582,7 +789,7 @@ async def save_capability_config(
         model.is_enabled = True
         model.updated_at = utc_now()
 
-    await db.flush()
+    await db.commit()
 
     # Reload with models for response
     reload_result = await db.execute(
@@ -595,17 +802,22 @@ async def save_capability_config(
     return AiProviderResponse.model_validate(provider)
 
 
-@router.post("/test/{capability}", response_model=CapabilityTestResult)
+@router.post("/test/{capability}", response_model=CapabilityTestResult, dependencies=[Depends(check_test_rate_limit)])
 async def test_capability(
     capability: str,
+    body: CapabilityTestRequest | None = None,
     current_user: User = Depends(require_developer),
     db: AsyncSession = Depends(get_db),
 ) -> CapabilityTestResult:
-    """Test the currently configured provider+model for a capability.
+    """Test a provider+model for a capability.
+
+    When a request body is provided, tests inline using the supplied values
+    (no database lookup). When no body is provided, tests the currently
+    saved default configuration.
 
     - Chat: sends "Say hello in 5 words" and returns response text + latency
     - Embedding: embeds the word "test" and returns dimension count + latency
-    - Vision: sends a 1x1 white pixel and returns description + latency
+    - Vision: sends a small test image and returns description + latency
     """
     if capability not in VALID_CAPABILITIES:
         raise HTTPException(
@@ -613,7 +825,61 @@ async def test_capability(
             detail=f"Invalid capability '{capability}'",
         )
 
-    # Find the default model for this capability
+    if body is not None:
+        # Inline test: use the provided values directly without DB lookup.
+        # If an api_key is provided, use it. Otherwise, look up the existing
+        # provider's key ONLY if the base_url matches (to prevent credential
+        # exfiltration via a custom base_url pointing to an attacker's server).
+        api_key = body.api_key
+
+        # Validate base_url for ALL provider types (SSRF prevention).
+        # For Ollama: full private-range check. For others: block metadata IPs only.
+        if body.base_url:
+            _validate_base_url(body.base_url, body.provider_type)
+
+        decrypt_failed = False
+        if not api_key:
+            # Only reuse stored key if base_url matches the saved provider's URL
+            existing = await db.execute(
+                select(AiProvider).where(
+                    AiProvider.scope == "global",
+                    AiProvider.provider_type == body.provider_type,
+                )
+            )
+            existing_provider = existing.scalar_one_or_none()
+            if existing_provider and existing_provider.api_key_encrypted:
+                # Security: refuse to send stored key to a different base_url
+                saved_url = (existing_provider.base_url or "").rstrip("/")
+                request_url = (body.base_url or "").rstrip("/")
+                if saved_url == request_url or not body.base_url:
+                    try:
+                        api_key = _get_encryption().decrypt(
+                            existing_provider.api_key_encrypted
+                        )
+                    except Exception:
+                        decrypt_failed = True
+                elif body.base_url:
+                    return CapabilityTestResult(
+                        success=False,
+                        message="API key required when using a custom base URL",
+                    )
+
+        if not api_key and body.provider_type != "ollama":
+            if decrypt_failed:
+                return CapabilityTestResult(
+                    success=False,
+                    message="Saved key found but decryption failed — try providing a new key",
+                )
+            return CapabilityTestResult(
+                success=False,
+                message="No API key provided and no saved key found",
+            )
+
+        return await _test_inline_capability(
+            body.provider_type, api_key, body.base_url, body.model_id, capability,
+        )
+
+    # Fallback: test the saved default configuration
     result = await db.execute(
         select(AiModel)
         .join(AiProvider, AiModel.provider_id == AiProvider.id)
@@ -812,7 +1078,7 @@ async def create_user_override(
         is_enabled=True,
     )
     db.add(chat_model)
-    await db.flush()
+    await db.commit()
 
     # Reload with models relationship for response
     result = await db.execute(
@@ -882,7 +1148,7 @@ async def update_user_override(
         )
         db.add(chat_model)
 
-    await db.flush()
+    await db.commit()
 
     # Reload with models relationship for response
     reload_result = await db.execute(
@@ -919,11 +1185,11 @@ async def delete_user_override(
             detail=f"No override found for provider type '{provider_type}'",
         )
     await db.delete(provider)
-    await db.flush()
+    await db.commit()
     await _refresh_provider_cache()
 
 
-@router.post("/me/providers/{provider_type}/test")
+@router.post("/me/providers/{provider_type}/test", dependencies=[Depends(check_test_rate_limit)])
 async def test_user_override(
     provider_type: str,
     current_user: User = Depends(get_current_user),
@@ -1042,10 +1308,18 @@ async def _test_provider_connectivity(provider: AiProvider) -> dict[str, object]
         else:
             return {"success": False, "error": f"Unknown provider type: {provider.provider_type}"}
     except Exception as exc:
-        logger.warning("Provider connectivity test failed for %s: %s", provider.id, exc)
-        # Return a generic error to prevent leaking API keys or sensitive details.
-        # The full exception is logged server-side for debugging.
-        error_msg = f"Connection failed: {type(exc).__name__}"
+        logger.warning("Provider connectivity test failed for %s: %s", provider.id, type(exc).__name__)
+        # Return a user-friendly error to prevent leaking exception class names
+        # or sensitive details. The full exception is logged server-side for debugging.
+        exc_type = type(exc).__name__.lower()
+        if "auth" in exc_type or "permission" in exc_type:
+            error_msg = "Authentication failed — check your API key"
+        elif "timeout" in exc_type:
+            error_msg = "Connection timed out — check your network and provider URL"
+        elif "connection" in exc_type or "network" in exc_type:
+            error_msg = "Connection failed — check your network and provider URL"
+        else:
+            error_msg = "Provider test failed — check your configuration"
         return {"success": False, "error": error_msg}
 
 
@@ -1055,8 +1329,9 @@ async def _test_openai(api_key: str | None, base_url: str | None) -> dict[str, o
         from openai import AsyncOpenAI
     except ImportError:
         return {"success": False, "error": "openai package not installed"}
+    import httpx as _httpx
 
-    kwargs: dict = {}
+    kwargs: dict = {"timeout": _httpx.Timeout(30.0)}
     if api_key:
         kwargs["api_key"] = api_key
     if base_url:
@@ -1076,8 +1351,9 @@ async def _test_anthropic(api_key: str | None, base_url: str | None) -> dict[str
         from anthropic import AsyncAnthropic
     except ImportError:
         return {"success": False, "error": "anthropic package not installed"}
+    import httpx as _httpx
 
-    kwargs: dict = {}
+    kwargs: dict = {"timeout": _httpx.Timeout(30.0)}
     if api_key:
         kwargs["api_key"] = api_key
     if base_url:
@@ -1111,44 +1387,29 @@ async def _test_ollama(base_url: str | None) -> dict[str, object]:
 # ============================================================================
 
 
-async def _test_capability_provider(
-    provider: AiProvider,
-    model: AiModel,
+async def _test_inline_capability(
+    provider_type: str,
+    api_key: str | None,
+    base_url: str | None,
+    model_id: str,
     capability: str,
 ) -> CapabilityTestResult:
-    """Test a specific capability using its configured provider + model.
-
-    - Chat: sends "Say hello in 5 words"
-    - Embedding: embeds "test" and returns dimension count
-    - Vision: sends a 1x1 white pixel
-    """
+    """Test a capability using raw config values (no DB models required)."""
     import time
 
-    api_key: str | None = None
-    if provider.api_key_encrypted:
-        try:
-            api_key = _get_encryption().decrypt(provider.api_key_encrypted)
-        except Exception:
-            return CapabilityTestResult(
-                success=False,
-                message="Failed to decrypt API key",
-            )
-
-    base_url = provider.base_url
     start = time.monotonic()
-
     try:
         if capability == "chat":
             result = await _test_chat_capability(
-                provider.provider_type, api_key, base_url, model.model_id,
+                provider_type, api_key, base_url, model_id,
             )
         elif capability == "embedding":
             result = await _test_embedding_capability(
-                provider.provider_type, api_key, base_url, model.model_id,
+                provider_type, api_key, base_url, model_id,
             )
         elif capability == "vision":
             result = await _test_vision_capability(
-                provider.provider_type, api_key, base_url, model.model_id,
+                provider_type, api_key, base_url, model_id,
             )
         else:
             return CapabilityTestResult(
@@ -1160,11 +1421,57 @@ async def _test_capability_provider(
         return result
     except Exception as exc:
         latency_ms = int((time.monotonic() - start) * 1000)
-        logger.warning("Capability test failed for %s: %s", capability, exc)
-        error_msg = f"Connection failed: {type(exc).__name__}"
+        logger.warning(
+            "Inline capability test failed for %s: %s: %s",
+            capability, type(exc).__name__, exc,
+        )
+        exc_type = type(exc).__name__.lower()
+        exc_msg = str(exc).lower()
+        if "auth" in exc_type or "permission" in exc_type:
+            error_msg = "Authentication failed — check your API key"
+        elif "timeout" in exc_type:
+            error_msg = "Connection timed out — check your network and provider URL"
+        elif "connection" in exc_type or "network" in exc_type:
+            error_msg = "Connection failed — check your network and provider URL"
+        elif "bad" in exc_type and "request" in exc_type:
+            if "max_tokens" in exc_msg or "max_completion_tokens" in exc_msg:
+                error_msg = "Invalid token parameter — model may require max_completion_tokens"
+            else:
+                # Surface the API's own error message for bad-request errors
+                error_msg = f"Bad request — {exc}"
+        elif "notfound" in exc_type:
+            error_msg = f"Model not found — check the model ID is correct ({model_id})"
+        elif "rate" in exc_type and "limit" in exc_type:
+            error_msg = "Rate limited — try again in a few seconds"
+        else:
+            error_msg = "Provider test failed — check your configuration"
         return CapabilityTestResult(
             success=False, message=error_msg, latency_ms=latency_ms,
         )
+
+
+async def _test_capability_provider(
+    provider: AiProvider,
+    model: AiModel,
+    capability: str,
+) -> CapabilityTestResult:
+    """Test a specific capability using its configured provider + model.
+
+    Decrypts the provider's API key and delegates to _test_inline_capability.
+    """
+    api_key: str | None = None
+    if provider.api_key_encrypted:
+        try:
+            api_key = _get_encryption().decrypt(provider.api_key_encrypted)
+        except Exception:
+            return CapabilityTestResult(
+                success=False,
+                message="Failed to decrypt API key",
+            )
+
+    return await _test_inline_capability(
+        provider.provider_type, api_key, provider.base_url, model.model_id, capability,
+    )
 
 
 async def _test_chat_capability(
@@ -1174,10 +1481,12 @@ async def _test_chat_capability(
     model_id: str,
 ) -> CapabilityTestResult:
     """Test chat capability by sending a short prompt."""
+    import httpx as _httpx
+
     if provider_type == "openai":
         from openai import AsyncOpenAI
 
-        kwargs: dict = {}
+        kwargs: dict = {"timeout": _httpx.Timeout(30.0)}
         if api_key:
             kwargs["api_key"] = api_key
         if base_url:
@@ -1187,7 +1496,7 @@ async def _test_chat_capability(
             resp = await client.chat.completions.create(
                 model=model_id,
                 messages=[{"role": "user", "content": "Say hello in 5 words"}],
-                max_tokens=20,
+                max_completion_tokens=20,
             )
             text = resp.choices[0].message.content or ""
             return CapabilityTestResult(success=True, message=text.strip())
@@ -1197,7 +1506,7 @@ async def _test_chat_capability(
     elif provider_type == "anthropic":
         from anthropic import AsyncAnthropic
 
-        kwargs = {}
+        kwargs = {"timeout": _httpx.Timeout(30.0)}
         if api_key:
             kwargs["api_key"] = api_key
         if base_url:
@@ -1241,10 +1550,12 @@ async def _test_embedding_capability(
     model_id: str,
 ) -> CapabilityTestResult:
     """Test embedding capability by embedding the word 'test'."""
+    import httpx as _httpx
+
     if provider_type == "openai":
         from openai import AsyncOpenAI
 
-        kwargs: dict = {}
+        kwargs: dict = {"timeout": _httpx.Timeout(30.0)}
         if api_key:
             kwargs["api_key"] = api_key
         if base_url:
@@ -1290,22 +1601,22 @@ async def _test_vision_capability(
     base_url: str | None,
     model_id: str,
 ) -> CapabilityTestResult:
-    """Test vision capability by sending a 1x1 white pixel."""
-    import base64
+    """Test vision capability by sending a small test image."""
+    import httpx as _httpx
 
-    # 1x1 white pixel PNG (67 bytes)
-    white_pixel = (
-        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
-        b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00"
-        b"\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00"
-        b"\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+    # 64x64 solid red square PNG (168 bytes, base64-encoded).
+    # OpenAI rejects 1x1 images as "unsupported"; 64x64 is safely above minimum.
+    b64_pixel = (
+        "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAb0lEQVR4nO3P"
+        "AQkAAAyEwO9feoshgnABdLep8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUN"
+        "yPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I"
+        "8QUNyPEFDcjxBQ3IPanc8OLDQitxAAAAAElFTkSuQmCC"
     )
-    b64_pixel = base64.b64encode(white_pixel).decode()
 
     if provider_type == "openai":
         from openai import AsyncOpenAI
 
-        kwargs: dict = {}
+        kwargs: dict = {"timeout": _httpx.Timeout(30.0)}
         if api_key:
             kwargs["api_key"] = api_key
         if base_url:
@@ -1324,7 +1635,7 @@ async def _test_vision_capability(
                         },
                     ],
                 }],
-                max_tokens=30,
+                max_completion_tokens=30,
             )
             text = resp.choices[0].message.content or ""
             return CapabilityTestResult(success=True, message=text.strip())
@@ -1334,7 +1645,7 @@ async def _test_vision_capability(
     elif provider_type == "anthropic":
         from anthropic import AsyncAnthropic
 
-        kwargs = {}
+        kwargs = {"timeout": _httpx.Timeout(30.0)}
         if api_key:
             kwargs["api_key"] = api_key
         if base_url:

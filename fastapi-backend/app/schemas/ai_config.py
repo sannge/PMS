@@ -31,6 +31,16 @@ def _validate_capability(v: str) -> str:
     return v
 
 
+def _strip_api_key(v: str | None) -> str | None:
+    """Strip whitespace from API keys and reject whitespace-only values."""
+    if v is None:
+        return v
+    stripped = v.strip()
+    if not stripped:
+        return None
+    return stripped
+
+
 # ---------------------------------------------------------------------------
 # AiModel schemas
 # ---------------------------------------------------------------------------
@@ -194,10 +204,12 @@ class AiProviderCreate(BaseModel):
     )
     base_url: Optional[str] = Field(
         None,
+        max_length=2048,
         description="Custom API endpoint URL",
     )
     api_key: Optional[str] = Field(
         None,
+        max_length=2048,
         description="API key (will be encrypted before storage)",
     )
     is_enabled: bool = Field(
@@ -209,6 +221,11 @@ class AiProviderCreate(BaseModel):
     @classmethod
     def validate_provider_type(cls, v: str) -> str:
         return _validate_provider_type(v)
+
+    @field_validator("api_key")
+    @classmethod
+    def strip_api_key(cls, v: str | None) -> str | None:
+        return _strip_api_key(v)
 
 
 class UserProviderOverride(BaseModel):
@@ -225,10 +242,12 @@ class UserProviderOverride(BaseModel):
     api_key: str = Field(
         ...,
         min_length=1,
+        max_length=2048,
         description="User's personal API key",
     )
     base_url: Optional[str] = Field(
         None,
+        max_length=2048,
         description="Custom API endpoint URL",
     )
     preferred_model: str = Field(
@@ -241,7 +260,20 @@ class UserProviderOverride(BaseModel):
     @field_validator("provider_type")
     @classmethod
     def validate_provider_type(cls, v: str) -> str:
-        return _validate_provider_type(v)
+        allowed = {"openai", "anthropic"}
+        if v not in allowed:
+            raise ValueError(
+                f"User overrides only support: {', '.join(sorted(allowed))}"
+            )
+        return v
+
+    @field_validator("api_key")
+    @classmethod
+    def strip_api_key(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("API key cannot be empty or whitespace-only")
+        return stripped
 
 
 class AiProviderUpdate(BaseModel):
@@ -258,8 +290,8 @@ class AiProviderUpdate(BaseModel):
         max_length=255,
     )
     provider_type: Optional[str] = None
-    base_url: Optional[str] = None
-    api_key: Optional[str] = None
+    base_url: Optional[str] = Field(None, max_length=2048)
+    api_key: Optional[str] = Field(None, max_length=2048)
     is_enabled: Optional[bool] = None
 
     @field_validator("provider_type")
@@ -269,9 +301,14 @@ class AiProviderUpdate(BaseModel):
             return _validate_provider_type(v)
         return v
 
+    @field_validator("api_key")
+    @classmethod
+    def strip_api_key(cls, v: str | None) -> str | None:
+        return _strip_api_key(v)
+
 
 class AiProviderResponse(BaseModel):
-    """Schema for AI provider response. Never exposes api_key_encrypted."""
+    """Schema for AI provider response. Never exposes api_key_encrypted or OAuth tokens."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -283,6 +320,7 @@ class AiProviderResponse(BaseModel):
     is_enabled: bool = True
     scope: str = "global"
     user_id: Optional[UUID] = None
+    auth_method: str = "api_key"
     has_api_key: bool = False
     created_at: datetime
     updated_at: datetime
@@ -340,6 +378,7 @@ class CapabilityConfig(BaseModel):
     )
     api_key: Optional[str] = Field(
         None,
+        max_length=2048,
         description="API key (will be encrypted). Omit to keep existing key.",
     )
     model_id: str = Field(
@@ -350,6 +389,7 @@ class CapabilityConfig(BaseModel):
     )
     base_url: Optional[str] = Field(
         None,
+        max_length=2048,
         description="Custom API endpoint URL (Ollama only)",
     )
 
@@ -358,6 +398,34 @@ class CapabilityConfig(BaseModel):
     def validate_provider_type(cls, v: str) -> str:
         return _validate_provider_type(v)
 
+    @field_validator("api_key")
+    @classmethod
+    def strip_api_key(cls, v: str | None) -> str | None:
+        return _strip_api_key(v)
+
+
+class CapabilityTestRequest(BaseModel):
+    """Optional request body for inline capability testing.
+
+    When provided, the test uses these values directly instead of
+    looking up the saved configuration from the database.
+    """
+
+    provider_type: str
+    api_key: Optional[str] = Field(None, max_length=2048)
+    model_id: str = Field(..., min_length=1, max_length=255)
+    base_url: Optional[str] = Field(None, max_length=2048)
+
+    @field_validator("provider_type")
+    @classmethod
+    def validate_provider_type(cls, v: str) -> str:
+        return _validate_provider_type(v)
+
+    @field_validator("api_key")
+    @classmethod
+    def strip_api_key(cls, v: str | None) -> str | None:
+        return _strip_api_key(v)
+
 
 class CapabilityTestResult(BaseModel):
     """Result from testing a capability's provider+model."""
@@ -365,6 +433,23 @@ class CapabilityTestResult(BaseModel):
     success: bool
     message: str
     latency_ms: Optional[int] = None
+
+
+class CapabilityConfigResponse(BaseModel):
+    """Response schema for GET /capability/{capability}.
+
+    Returns the currently configured default model and provider for a
+    specific capability.  All fields are ``None`` when no default is
+    configured.
+    """
+
+    capability: str
+    provider_id: Optional[UUID] = None
+    provider_type: Optional[str] = None
+    base_url: Optional[str] = None
+    model_id: Optional[str] = None
+    model_display_name: Optional[str] = None
+    has_api_key: bool = False
 
 
 class EffectiveChatConfig(BaseModel):
@@ -377,3 +462,27 @@ class EffectiveChatConfig(BaseModel):
     provider_type: Optional[str] = None
     model_id: Optional[str] = None
     display_name: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# System prompt schemas
+# ---------------------------------------------------------------------------
+
+
+class SystemPromptResponse(BaseModel):
+    """Response for the AI system prompt endpoint."""
+
+    prompt: str = Field(
+        "",
+        description="The custom system prompt (empty string means using default)",
+    )
+
+
+class SystemPromptUpdate(BaseModel):
+    """Request body for updating the AI system prompt."""
+
+    prompt: str = Field(
+        ...,
+        max_length=2000,
+        description="Custom system prompt text. Empty string resets to default.",
+    )

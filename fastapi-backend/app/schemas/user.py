@@ -156,6 +156,39 @@ class ResetPasswordRequest(BaseModel):
     )
 
 
+class Login2FAResponse(BaseModel):
+    """Response when login requires 2FA code verification."""
+
+    requires_2fa: bool = Field(
+        True,
+        description="Always True, indicating 2FA is needed",
+    )
+    email: str = Field(
+        ...,
+        description="Email address the verification code was sent to",
+    )
+    message: str = Field(
+        "Verification code sent to your email",
+        description="User-facing message",
+    )
+
+
+class VerifyLoginRequest(BaseModel):
+    """Request to verify a login 2FA code."""
+
+    email: EmailStr = Field(
+        ...,
+        description="User's email address",
+    )
+    code: str = Field(
+        ...,
+        min_length=6,
+        max_length=6,
+        pattern=r"^\d{6}$",
+        description="6-digit verification code",
+    )
+
+
 class UserInDB(UserResponse):
     """Schema for user data including password hash (internal use only)."""
 

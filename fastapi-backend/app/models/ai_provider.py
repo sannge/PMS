@@ -17,6 +17,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Index,
     String,
     Text,
 )
@@ -115,6 +116,24 @@ class AiProvider(Base):
         index=True,
     )
 
+    # Authentication method: 'api_key' (default) or 'oauth'
+    auth_method = Column(
+        String(20),
+        nullable=False,
+        default="api_key",
+        server_default="api_key",
+    )
+
+    # OAuth token storage (Fernet-encrypted)
+    oauth_access_token = Column(Text, nullable=True)
+    oauth_refresh_token = Column(Text, nullable=True)
+    oauth_token_expires_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    oauth_scope = Column(String(500), nullable=True)
+    oauth_provider_user_id = Column(String(255), nullable=True)
+
     # Timestamps
     created_at = Column(
         DateTime(timezone=True),
@@ -139,6 +158,11 @@ class AiProvider(Base):
             "scope IN ('global', 'user')",
             name="ck_ai_providers_scope",
         ),
+        CheckConstraint(
+            "auth_method IN ('api_key', 'oauth')",
+            name="ck_ai_providers_auth_method",
+        ),
+        Index("ix_AiProviders_auth_method", "auth_method"),
     )
 
     # Relationships
@@ -146,6 +170,8 @@ class AiProvider(Base):
         "AiModel",
         back_populates="provider",
         lazy="selectin",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
     user = relationship(

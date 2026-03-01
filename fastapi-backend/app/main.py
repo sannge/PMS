@@ -6,9 +6,10 @@ import logging
 import traceback
 from uuid import UUID
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, status
+from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from .config import settings
@@ -27,9 +28,10 @@ print("=" * 60 + "\n", flush=True)
 from contextlib import asynccontextmanager
 
 from .database import warmup_connection_pool
-from .routers import ai_config_router, application_members_router, applications_router, auth_router, checklists_router, comments_router, dashboard_router, document_folders_router, document_locks_router, document_search_router, document_tags_router, documents_router, files_router, invitations_router, notifications_router, project_assignments_router, project_members_router, projects_router, tasks_router, users_router
+from .routers import ai_chat_router, ai_config_router, ai_import_router, ai_oauth_router, ai_query_router, application_members_router, applications_router, auth_router, checklists_router, comments_router, dashboard_router, document_folders_router, document_locks_router, document_search_router, document_tags_router, documents_router, files_router, invitations_router, notifications_router, project_assignments_router, project_members_router, projects_router, tasks_router, users_router
 from .websocket import manager, route_incoming_message, check_room_access
-from .services.auth_service import decode_access_token
+from .models.user import User
+from .services.auth_service import decode_access_token, get_current_user, is_token_blacklisted
 from .services.redis_service import redis_service
 from .services.archive_service import archive_service
 
@@ -94,10 +96,11 @@ app = FastAPI(
 # CORS Middleware - required for Electron app requests
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Cache-Control", "X-Requested-With"],
+    expose_headers=["Content-Type", "Cache-Control", "X-Accel-Buffering"],
 )
 
 
@@ -153,6 +156,19 @@ app.include_router(documents_router, prefix="/api", tags=["documents"])
 app.include_router(document_tags_router, prefix="/api", tags=["document-tags"])
 app.include_router(document_folders_router, prefix="/api", tags=["document-folders"])
 app.include_router(ai_config_router)
+app.include_router(ai_oauth_router)
+app.include_router(ai_query_router)
+app.include_router(ai_chat_router)
+app.include_router(ai_import_router)
+
+# TODO: Mount CopilotKit AG-UI endpoint at startup when the agent graph is
+# built.  Requires a compiled graph instance which depends on provider config
+# from the DB (resolved per-request currently).  Once a shared graph instance
+# is available at startup, use:
+#   from .ai.agent.copilotkit_runtime import create_copilotkit_sdk
+#   sdk = create_copilotkit_sdk(graph)
+#   if sdk:
+#       app.mount("/api/copilotkit", sdk)
 
 
 @app.get("/")
@@ -167,12 +183,32 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint for monitoring."""
+    """Health check endpoint for monitoring.
+
+    Includes AI service health sub-checks, each wrapped in a 2s timeout
+    so the overall endpoint stays fast (<500ms even with degraded AI).
+    Database and MinIO connectivity are now checked with lightweight probes.
+    """
     redis_health = await redis_service.health_check()
+
+    # Lightweight DB health check
+    db_health = "unavailable"
+    try:
+        from .database import async_session_maker
+        async with async_session_maker() as db:
+            await asyncio.wait_for(
+                db.execute(text("SELECT 1")), timeout=2.0
+            )
+            db_health = "healthy"
+    except Exception:
+        db_health = "unavailable"
+
+    # AI health sub-checks (each independently timed out)
+    ai_health = await _build_ai_health()
+
     return {
         "status": "healthy",
-        "database": "pending",  # Will be updated when database is configured
-        "minio": "pending",  # Will be updated when MinIO is configured
+        "database": db_health,
         "redis": redis_health,
         "websocket": {
             "connections": manager.total_connections,
@@ -182,13 +218,165 @@ async def health_check():
             "type": "arq",
             "note": "Run ARQ worker separately: arq app.worker.WorkerSettings",
         },
+        "ai": ai_health,
+    }
+
+
+# Cache for AI provider connectivity checks (avoid real API calls on every /health)
+_ai_health_cache: dict[str, tuple[dict, float]] = {}
+_AI_HEALTH_CACHE_TTL = 300  # 5 minutes for successful checks
+_AI_HEALTH_FAILURE_CACHE_TTL = 30  # 30 seconds for failed checks
+
+
+async def _build_ai_health() -> dict:
+    """Build AI health section with per-check timeouts.
+
+    Each sub-check is wrapped in asyncio.wait_for with a 2s timeout.
+    On timeout or error, that sub-section returns a degraded/unavailable
+    status instead of failing the entire health endpoint.
+
+    Embedding and chat provider connectivity checks are cached for 5 minutes
+    to avoid making real API calls on every health check.
+    """
+    import time as _time
+    from .database import async_session_maker
+
+    AI_CHECK_TIMEOUT = 2.0
+
+    async def check_sql_access() -> dict:
+        """Count available scoped views and report last AI query timestamp."""
+        from .ai.schema_context import VALID_VIEW_NAMES
+        return {
+            "scoped_views_count": len(VALID_VIEW_NAMES),
+            "last_query_at": None,  # TODO: track via telemetry once available
+        }
+
+    async def check_embedding_provider() -> dict:
+        """Resolve default embedding provider and test connectivity.
+
+        Cached for _AI_HEALTH_CACHE_TTL seconds to avoid real API calls
+        on every health check (saves API credits and reduces latency).
+        """
+        now = _time.time()
+        cached = _ai_health_cache.get("embedding")
+        if cached and cached[1] > now:
+            return cached[0]
+
+        from .ai.provider_registry import ProviderRegistry, ConfigurationError
+        try:
+            async with async_session_maker() as db:
+                registry = ProviderRegistry()
+                provider, model_id = await registry.get_embedding_provider(db)
+                await provider.generate_embedding("test", model_id)
+                result = {
+                    "name": getattr(provider, '__class__', type(provider)).__name__.lower().replace("provider", ""),
+                    "model": model_id,
+                    "connected": True,
+                }
+                _ai_health_cache["embedding"] = (result, now + _AI_HEALTH_CACHE_TTL)
+                return result
+        except ConfigurationError:
+            fail = {"name": None, "model": None, "connected": False}
+            _ai_health_cache["embedding"] = (fail, now + _AI_HEALTH_FAILURE_CACHE_TTL)
+            return fail
+        except Exception:
+            fail = {"name": None, "model": None, "connected": False}
+            _ai_health_cache["embedding"] = (fail, now + _AI_HEALTH_FAILURE_CACHE_TTL)
+            return fail
+
+    async def check_chat_provider() -> dict:
+        """Resolve default chat provider and test connectivity.
+
+        Cached for _AI_HEALTH_CACHE_TTL seconds to avoid real API calls
+        on every health check.
+        """
+        now = _time.time()
+        cached = _ai_health_cache.get("chat")
+        if cached and cached[1] > now:
+            return cached[0]
+
+        from .ai.provider_registry import ProviderRegistry, ConfigurationError
+        try:
+            async with async_session_maker() as db:
+                registry = ProviderRegistry()
+                adapter, model_id = await registry.get_chat_provider(db)
+                await adapter.chat_completion(
+                    messages=[{"role": "user", "content": "hi"}],
+                    model=model_id,
+                    max_tokens=1,
+                )
+                result = {
+                    "name": type(adapter).__name__.lower().replace("provider", ""),
+                    "model": model_id,
+                    "connected": True,
+                }
+                _ai_health_cache["chat"] = (result, now + _AI_HEALTH_CACHE_TTL)
+                return result
+        except ConfigurationError:
+            fail = {"name": None, "model": None, "connected": False}
+            _ai_health_cache["chat"] = (fail, now + _AI_HEALTH_FAILURE_CACHE_TTL)
+            return fail
+        except Exception:
+            fail = {"name": None, "model": None, "connected": False}
+            _ai_health_cache["chat"] = (fail, now + _AI_HEALTH_FAILURE_CACHE_TTL)
+            return fail
+
+    async def check_document_chunks_count() -> int:
+        """Count total DocumentChunk rows."""
+        from sqlalchemy import func, select
+        from .models.document_chunk import DocumentChunk
+        try:
+            async with async_session_maker() as db:
+                result = await db.execute(
+                    select(func.count()).select_from(DocumentChunk)
+                )
+                return result.scalar_one()
+        except Exception:
+            return 0
+
+    async def check_pending_embedding_jobs() -> int:
+        """Query ARQ queue depth from Redis for embedding jobs."""
+        try:
+            if not redis_service.is_connected:
+                return 0
+            # ARQ stores pending jobs in a sorted set keyed "arq:queue"
+            count = await redis_service.client.zcard("arq:queue")
+            return count or 0
+        except Exception:
+            return 0
+
+    # Run all checks with individual timeouts
+    async def _safe_check(coro, default):
+        try:
+            return await asyncio.wait_for(coro(), timeout=AI_CHECK_TIMEOUT)
+        except asyncio.TimeoutError:
+            return default
+        except Exception:
+            return default
+
+    sql_access, embedding, chat, chunks, pending = await asyncio.gather(
+        _safe_check(check_sql_access, {"scoped_views_count": 0, "last_query_at": None}),
+        _safe_check(check_embedding_provider, {"name": None, "model": None, "connected": False}),
+        _safe_check(check_chat_provider, {"name": None, "model": None, "connected": False}),
+        _safe_check(check_document_chunks_count, 0),
+        _safe_check(check_pending_embedding_jobs, 0),
+    )
+
+    return {
+        "sql_access": sql_access,
+        "embedding_provider": embedding,
+        "chat_provider": chat,
+        "document_chunks_count": chunks,
+        "pending_embedding_jobs": pending,
     }
 
 
 @app.post("/api/admin/run-archive-jobs")
-async def run_archive_jobs_manually():
+async def run_archive_jobs_manually(
+    current_user: User = Depends(get_current_user),  # noqa: ARG001 — auth required
+):
     """
-    Manually trigger archive jobs (admin endpoint).
+    Manually trigger archive jobs (admin/developer endpoint).
 
     Archives:
     - Tasks in Done status for 7+ days
@@ -196,6 +384,9 @@ async def run_archive_jobs_manually():
 
     Returns the count of archived items.
     """
+    from .routers.ai_config import require_developer
+    await require_developer(current_user)
+
     result = await archive_service.run_now()
     return result
 
@@ -227,6 +418,11 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = None):
         if token_data is None or token_data.user_id is None:
             logger.debug("WebSocket connection with invalid token")
             await websocket.close(code=4001, reason="Invalid token")
+            return
+        # Check blacklist on initial connection (logout support)
+        if token_data.jti and await is_token_blacklisted(token_data.jti):
+            logger.warning(f"WebSocket connection with blacklisted token (jti={token_data.jti})")
+            await websocket.close(code=4001, reason="Token revoked")
             return
         user_id = UUID(token_data.user_id)
     except Exception as e:
@@ -280,6 +476,18 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = None):
                             })
                             await websocket.close(code=4001, reason="Token expired")
                             break
+
+                        # Check token blacklist (logout support)
+                        if token_data.jti and await is_token_blacklisted(token_data.jti):
+                            logger.warning(f"Token blacklisted for user {user_id}, closing connection")
+                            token_valid = False
+                            await websocket.send_json({
+                                "type": "error",
+                                "data": {"error": "TOKEN_REVOKED", "message": "Session revoked, please re-authenticate"},
+                            })
+                            await websocket.close(code=4001, reason="Token revoked")
+                            break
+
                         last_token_check = current_time
 
                 except Exception:

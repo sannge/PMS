@@ -2,6 +2,7 @@
 
 from .ai_model import AiModel
 from .ai_provider import AiProvider
+from .ai_system_prompt import AiSystemPrompt
 from .application import Application
 from .application_member import ApplicationMember
 from .attachment import Attachment
@@ -13,6 +14,7 @@ from .document_chunk import DocumentChunk
 from .document_folder import DocumentFolder
 from .document_snapshot import DocumentSnapshot
 from .document_tag import DocumentTag, DocumentTagAssignment
+from .import_job import ImportJob
 from .invitation import Invitation
 from .mention import Mention
 
@@ -28,6 +30,7 @@ from .user import User
 __all__ = [
     "AiModel",
     "AiProvider",
+    "AiSystemPrompt",
     "Application",
     "ApplicationMember",
     "Attachment",
@@ -40,6 +43,7 @@ __all__ = [
     "DocumentSnapshot",
     "DocumentTag",
     "DocumentTagAssignment",
+    "ImportJob",
     "Invitation",
     "Mention",
 

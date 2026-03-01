@@ -1,6 +1,7 @@
 """Provider registry for resolving and caching AI provider instances."""
 
 import logging
+from datetime import timedelta
 from uuid import UUID
 
 from sqlalchemy import select
@@ -10,13 +11,18 @@ from sqlalchemy.orm import selectinload
 from ..config import settings
 from ..models.ai_model import AiModel
 from ..models.ai_provider import AiProvider
+from ..utils.timezone import utc_now
 from .anthropic_provider import AnthropicProvider
+from .codex_provider import CodexProvider
 from .encryption import ApiKeyEncryption
 from .ollama_provider import OllamaProvider
 from .openai_provider import OpenAIProvider
 from .provider_interface import LLMProvider, LLMProviderError, VisionProvider
 
 logger = logging.getLogger(__name__)
+
+# Buffer before token expiry to trigger proactive refresh
+_TOKEN_REFRESH_BUFFER = timedelta(minutes=5)
 
 
 class ConfigurationError(LLMProviderError):
@@ -72,9 +78,13 @@ class ProviderRegistry:
     def _build_adapter(self, provider: AiProvider, api_key: str | None) -> LLMProvider | VisionProvider:
         """Instantiate a provider adapter from its DB record.
 
+        Detects auth_method to determine whether to use API key or OAuth
+        token authentication. For OAuth providers, uses CodexProvider (OpenAI)
+        or AnthropicProvider with the OAuth access token.
+
         Args:
             provider: AiProvider ORM instance.
-            api_key: Decrypted API key (may be None for Ollama).
+            api_key: Decrypted API key (may be None for Ollama or OAuth).
 
         Returns:
             An instantiated provider adapter.
@@ -82,6 +92,33 @@ class ProviderRegistry:
         Raises:
             ConfigurationError: If the provider_type is unknown.
         """
+        # OAuth path: use access token instead of API key
+        auth_method = getattr(provider, "auth_method", "api_key")
+        if auth_method == "oauth":
+            if not provider.oauth_access_token:
+                raise ConfigurationError(
+                    f"Provider '{provider.name}' uses OAuth but has no access token."
+                )
+            encryption = ApiKeyEncryption(settings.ai_encryption_key)
+            access_token = encryption.decrypt(provider.oauth_access_token)
+
+            if provider.provider_type == "openai":
+                return CodexProvider(
+                    access_token=access_token,
+                    base_url=provider.base_url,
+                )
+            elif provider.provider_type == "anthropic":
+                # Anthropic OAuth uses access token as API key
+                return AnthropicProvider(
+                    api_key=access_token,
+                    base_url=provider.base_url,
+                )
+            else:
+                raise ConfigurationError(
+                    f"OAuth not supported for provider type: {provider.provider_type}"
+                )
+
+        # Standard API key path
         factory = _PROVIDER_FACTORIES.get(provider.provider_type)
         if factory is None:
             raise ConfigurationError(
@@ -178,12 +215,77 @@ class ProviderRegistry:
 
         return model.provider, model
 
+    def _token_needs_refresh(self, provider: AiProvider) -> bool:
+        """Check whether an OAuth provider's token needs refreshing.
+
+        Returns True if the token expires within the buffer window or has
+        already expired. Returns False for non-OAuth providers.
+        """
+        if getattr(provider, "auth_method", "api_key") != "oauth":
+            return False
+        if not provider.oauth_token_expires_at:
+            return False
+        return utc_now() >= (provider.oauth_token_expires_at - _TOKEN_REFRESH_BUFFER)
+
+    async def _refresh_oauth_token(self, db: AsyncSession, provider: AiProvider) -> None:
+        """Refresh an expired OAuth token and update the database.
+
+        Args:
+            db: Active database session (caller manages commit).
+            provider: The AiProvider with expired OAuth token.
+        """
+        if not provider.oauth_refresh_token:
+            logger.warning(
+                "Cannot refresh OAuth token for provider %s: no refresh token",
+                provider.id,
+            )
+            return
+
+        from .oauth_service import OAuthService, OAuthError
+
+        encryption = ApiKeyEncryption(settings.ai_encryption_key)
+        decrypted_refresh = encryption.decrypt(provider.oauth_refresh_token)
+
+        oauth_svc = OAuthService()
+        try:
+            tokens = await oauth_svc.refresh_tokens(
+                provider_type=provider.provider_type,
+                refresh_token=decrypted_refresh,
+            )
+        except OAuthError:
+            logger.warning(
+                "OAuth token refresh failed for provider %s",
+                provider.id,
+                exc_info=True,
+            )
+            return
+
+        # Update encrypted tokens in DB
+        from datetime import timedelta
+
+        provider.oauth_access_token = encryption.encrypt(tokens["access_token"])
+        if tokens.get("refresh_token"):
+            provider.oauth_refresh_token = encryption.encrypt(tokens["refresh_token"])
+        provider.oauth_token_expires_at = utc_now() + timedelta(
+            seconds=tokens.get("expires_in", 3600)
+        )
+        await db.commit()
+
+        # Clear cached adapter so it rebuilds with new token
+        cache_key = f"chat:{provider.id}"
+        self._cache.pop(cache_key, None)
+
+        logger.info("OAuth token refreshed for provider %s", provider.id)
+
     async def get_chat_provider(
         self,
         db: AsyncSession,
         user_id: UUID | None = None,
     ) -> tuple[LLMProvider, str]:
         """Resolve the chat provider and default model.
+
+        For OAuth providers, automatically refreshes expired tokens before
+        building the adapter.
 
         Args:
             db: Active database session.
@@ -193,6 +295,11 @@ class ProviderRegistry:
             Tuple of (LLMProvider instance, default model ID string).
         """
         provider, model = await self._resolve_provider(db, "chat", user_id)
+
+        # Auto-refresh expired OAuth tokens
+        if self._token_needs_refresh(provider):
+            await self._refresh_oauth_token(db, provider)
+
         cache_key = f"chat:{provider.id}"
 
         if cache_key not in self._cache:

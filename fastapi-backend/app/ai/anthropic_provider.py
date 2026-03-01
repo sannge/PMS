@@ -8,6 +8,7 @@ from typing import Any
 import anthropic
 from anthropic import AsyncAnthropic
 
+from .exceptions import ProviderAuthError
 from .provider_interface import LLMProvider, LLMProviderError, VisionProvider
 
 logger = logging.getLogger(__name__)
@@ -112,6 +113,24 @@ class AnthropicProvider(LLMProvider, VisionProvider):
                 if hasattr(block, "text")
             ]
             return "".join(text_parts)
+        except anthropic.AuthenticationError as exc:
+            err_msg = str(exc).lower()
+            if "subscription" in err_msg or "unauthorized" in err_msg:
+                raise ProviderAuthError(
+                    provider="anthropic",
+                    message=(
+                        "Anthropic rejected your subscription token. "
+                        "This may be because Anthropic does not allow third-party "
+                        "applications to use personal subscription tokens. "
+                        "Please use an API key instead, or contact Anthropic support."
+                    ),
+                    recoverable=True,
+                ) from exc
+            raise LLMProviderError(
+                f"Anthropic authentication failed: {exc}",
+                provider="anthropic",
+                original=exc,
+            ) from exc
         except anthropic.APIError as exc:
             raise LLMProviderError(
                 f"Anthropic chat completion failed: {exc}",
@@ -143,6 +162,24 @@ class AnthropicProvider(LLMProvider, VisionProvider):
             async with self._client.messages.stream(**params) as stream:
                 async for text in stream.text_stream:
                     yield text
+        except anthropic.AuthenticationError as exc:
+            err_msg = str(exc).lower()
+            if "subscription" in err_msg or "unauthorized" in err_msg:
+                raise ProviderAuthError(
+                    provider="anthropic",
+                    message=(
+                        "Anthropic rejected your subscription token. "
+                        "This may be because Anthropic does not allow third-party "
+                        "applications to use personal subscription tokens. "
+                        "Please use an API key instead, or contact Anthropic support."
+                    ),
+                    recoverable=True,
+                ) from exc
+            raise LLMProviderError(
+                f"Anthropic streaming authentication failed: {exc}",
+                provider="anthropic",
+                original=exc,
+            ) from exc
         except anthropic.APIError as exc:
             raise LLMProviderError(
                 f"Anthropic streaming failed: {exc}",

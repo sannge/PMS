@@ -4,7 +4,11 @@ This package contains all FastAPI routers for the application.
 Each router handles a specific domain of the API.
 """
 
+from .ai_chat import router as ai_chat_router
 from .ai_config import router as ai_config_router
+from .ai_import import router as ai_import_router
+from .ai_oauth import router as ai_oauth_router
+from .ai_query import router as ai_query_router
 from .application_members import router as application_members_router
 from .applications import router as applications_router
 from .auth import router as auth_router
@@ -27,7 +31,11 @@ from .tasks import router as tasks_router
 from .users import router as users_router
 
 __all__ = [
+    "ai_chat_router",
     "ai_config_router",
+    "ai_import_router",
+    "ai_oauth_router",
+    "ai_query_router",
     "application_members_router",
     "applications_router",
     "auth_router",
