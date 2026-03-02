@@ -2130,6 +2130,257 @@ async def handle_attachment_deleted(
     )
 
 
+# =============================================================================
+# AI Event Handlers
+# =============================================================================
+
+
+async def handle_embedding_updated(
+    document_id: UUID | str,
+    chunk_count: int,
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Broadcast EMBEDDING_UPDATED after document embedding completion.
+
+    Broadcasts to the document room so subscribers (e.g. users viewing
+    the document) receive real-time index status updates.
+
+    Args:
+        document_id: The document's UUID
+        chunk_count: Number of chunks produced
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_document_room(document_id)
+
+    payload: dict[str, Any] = {
+        "document_id": str(document_id),
+        "chunk_count": chunk_count,
+        "timestamp": utc_now().isoformat(),
+    }
+
+    message = {
+        "type": MessageType.EMBEDDING_UPDATED.value,
+        "data": payload,
+    }
+
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    logger.info(
+        f"Embedding updated: document_id={document_id}, "
+        f"chunk_count={chunk_count}, recipients={recipients}"
+    )
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.EMBEDDING_UPDATED.value,
+        success=True,
+    )
+
+
+async def handle_entities_extracted(
+    document_id: UUID | str,
+    entities_count: int,
+    relationships_count: int,
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Broadcast ENTITIES_EXTRACTED after entity extraction completion.
+
+    Broadcasts to the document room so subscribers receive real-time
+    entity extraction status updates.
+
+    Args:
+        document_id: The document's UUID
+        entities_count: Number of entities extracted
+        relationships_count: Number of relationships found
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_document_room(document_id)
+
+    payload: dict[str, Any] = {
+        "document_id": str(document_id),
+        "entities_count": entities_count,
+        "relationships_count": relationships_count,
+        "timestamp": utc_now().isoformat(),
+    }
+
+    message = {
+        "type": MessageType.ENTITIES_EXTRACTED.value,
+        "data": payload,
+    }
+
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    logger.info(
+        f"Entities extracted: document_id={document_id}, "
+        f"entities={entities_count}, relationships={relationships_count}, "
+        f"recipients={recipients}"
+    )
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.ENTITIES_EXTRACTED.value,
+        success=True,
+    )
+
+
+async def handle_import_completed(
+    user_id: UUID,
+    job_id: UUID | str,
+    document_id: UUID | str,
+    title: str,
+    scope: str | None = None,
+    connection_manager: Optional[ConnectionManager] = None,
+) -> int:
+    """
+    Send IMPORT_COMPLETED as a user DM to the importing user.
+
+    Args:
+        user_id: The user who initiated the import
+        job_id: The import job's UUID
+        document_id: The created document's UUID
+        title: The document title
+        scope: The import scope (application/project/personal)
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        int: Number of connections that received the message
+    """
+    mgr = connection_manager or manager
+
+    payload: dict[str, Any] = {
+        "job_id": str(job_id),
+        "document_id": str(document_id),
+        "title": title,
+        "timestamp": utc_now().isoformat(),
+    }
+    if scope is not None:
+        payload["scope"] = scope
+
+    message = {
+        "type": MessageType.IMPORT_COMPLETED.value,
+        "data": payload,
+    }
+
+    recipients = await mgr.broadcast_to_user(user_id, message)
+
+    logger.info(
+        f"Import completed: job_id={job_id}, document_id={document_id}, "
+        f"user_id={user_id}, recipients={recipients}"
+    )
+
+    return recipients
+
+
+async def handle_import_failed(
+    user_id: UUID,
+    job_id: UUID | str,
+    error_message: str,
+    file_name: str,
+    connection_manager: Optional[ConnectionManager] = None,
+) -> int:
+    """
+    Send IMPORT_FAILED as a user DM to the importing user.
+
+    Args:
+        user_id: The user who initiated the import
+        job_id: The import job's UUID
+        error_message: Safe user-facing error description
+        file_name: The original file name
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        int: Number of connections that received the message
+    """
+    mgr = connection_manager or manager
+
+    payload: dict[str, Any] = {
+        "job_id": str(job_id),
+        "error_message": error_message,
+        "file_name": file_name,
+        "timestamp": utc_now().isoformat(),
+    }
+
+    message = {
+        "type": MessageType.IMPORT_FAILED.value,
+        "data": payload,
+    }
+
+    recipients = await mgr.broadcast_to_user(user_id, message)
+
+    logger.info(
+        f"Import failed: job_id={job_id}, file_name={file_name}, "
+        f"user_id={user_id}, recipients={recipients}"
+    )
+
+    return recipients
+
+
+async def handle_reindex_progress(
+    application_id: UUID | str,
+    total: int,
+    processed: int,
+    failed: int,
+    connection_manager: Optional[ConnectionManager] = None,
+) -> BroadcastResult:
+    """
+    Broadcast REINDEX_PROGRESS to the application room.
+
+    Fired after each document in a batch reindex operation so the
+    frontend indexing tab can show live progress.
+
+    Args:
+        application_id: The application's UUID
+        total: Total documents in the batch
+        processed: Documents processed so far
+        failed: Documents that failed
+        connection_manager: Optional custom manager (defaults to global)
+
+    Returns:
+        BroadcastResult: Result of the broadcast operation
+    """
+    mgr = connection_manager or manager
+    room_id = get_application_room(application_id)
+
+    payload: dict[str, Any] = {
+        "application_id": str(application_id),
+        "total": total,
+        "processed": processed,
+        "failed": failed,
+        "timestamp": utc_now().isoformat(),
+    }
+
+    message = {
+        "type": MessageType.REINDEX_PROGRESS.value,
+        "data": payload,
+    }
+
+    recipients = await mgr.broadcast_to_room(room_id, message)
+
+    logger.debug(
+        f"Reindex progress: application_id={application_id}, "
+        f"{processed}/{total} (failed={failed}), recipients={recipients}"
+    )
+
+    return BroadcastResult(
+        room_id=room_id,
+        recipients=recipients,
+        message_type=MessageType.REINDEX_PROGRESS.value,
+        success=True,
+    )
+
+
 # Export all handlers and utilities
 __all__ = [
     "UpdateAction",
@@ -2178,4 +2429,10 @@ __all__ = [
     # Attachment handlers
     "handle_attachment_uploaded",
     "handle_attachment_deleted",
+    # AI event handlers
+    "handle_embedding_updated",
+    "handle_entities_extracted",
+    "handle_import_completed",
+    "handle_import_failed",
+    "handle_reindex_progress",
 ]

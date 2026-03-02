@@ -237,7 +237,7 @@ class TestCronJobScheduling:
         from app.worker import WorkerSettings
 
         cron_jobs = WorkerSettings.cron_jobs
-        assert len(cron_jobs) == 2
+        assert len(cron_jobs) == 3
 
         # Check archive job - runs at midnight and noon
         archive_cron = cron_jobs[0]
@@ -246,6 +246,10 @@ class TestCronJobScheduling:
         # Check presence cleanup - runs every 30 seconds
         presence_cron = cron_jobs[1]
         assert presence_cron.coroutine.__name__ == "cleanup_stale_presence"
+
+        # Check search index consistency - runs every 5 minutes
+        search_cron = cron_jobs[2]
+        assert search_cron.coroutine.__name__ == "check_search_index_consistency"
 
     @pytest.mark.asyncio
     async def test_cron_job_unique_name_generation(self):

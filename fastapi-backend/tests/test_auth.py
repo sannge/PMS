@@ -126,6 +126,13 @@ class TestTokenFunctions:
 
         assert token_data is None
 
+    def test_decode_expired_token(self):
+        """Expired token should return None."""
+        data = {"sub": str(uuid4()), "email": "test@example.com"}
+        token = create_access_token(data, expires_delta=timedelta(seconds=-1))
+        token_data = decode_access_token(token)
+        assert token_data is None
+
 
 @pytest.mark.asyncio
 class TestUserFunctions:
@@ -199,14 +206,29 @@ class TestUserFunctions:
 
     async def test_create_user_duplicate_email(self, db_session: AsyncSession, test_user: User):
         """Test creating a user with duplicate email raises error."""
+        from fastapi import HTTPException
         user_data = UserCreate(
             email=test_user.email,  # Same email as existing user
             password="Password123!",
             display_name="Duplicate User",
         )
 
-        with pytest.raises(Exception):  # HTTPException
+        with pytest.raises(HTTPException) as exc_info:
             await create_user(db_session, user_data)
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
+    async def test_create_user_sets_unverified(self, db_session: AsyncSession):
+        """New users should be created with email_verified=False."""
+        user_data = UserCreate(
+            email="unverified_new@example.com",
+            password="NewPassword123!",
+            display_name="Unverified New",
+        )
+
+        user = await create_user(db_session, user_data)
+        assert user.email_verified is False
+        assert user.verification_code is not None
 
 
 @pytest.mark.asyncio
@@ -215,7 +237,7 @@ class TestAuthEndpoints:
 
     @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
     async def test_register_success(self, client: AsyncClient):
-        """Test successful user registration."""
+        """Test successful user registration returns verification message."""
         response = await client.post(
             "/auth/register",
             json={
@@ -228,10 +250,8 @@ class TestAuthEndpoints:
         assert response.status_code == 201
         data = response.json()
         assert data["email"] == "newuser@example.com"
-        assert data["display_name"] == "New User"
-        assert "id" in data
-        assert "password" not in data
-        assert "password_hash" not in data
+        assert "message" in data
+        assert "verification" in data["message"].lower()
 
     async def test_register_duplicate_email(self, client: AsyncClient, test_user: User):
         """Test registration with duplicate email fails."""

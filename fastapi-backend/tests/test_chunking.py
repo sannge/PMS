@@ -194,14 +194,22 @@ class TestTipTapChunking:
         assert result[0].token_count > 0
 
     def test_chunk_multiple_headings_splits_at_boundaries(self, chunker):
-        """Document with h1/h2 sections splits at heading boundaries."""
+        """Document with h1/h2 sections splits at heading boundaries.
+
+        Each section must have enough content (>50 tokens) to be emitted
+        as its own chunk; tiny sections are carried forward and merged.
+        """
+        # ~80 tokens per section to exceed the 50-token carry-forward threshold
+        intro_text = "This is the introduction section with enough detail to be meaningful. " * 8
+        details_text = "Here are the project details covering architecture and design choices. " * 8
+        conclusion_text = "In conclusion we have covered all the main points of the project. " * 8
         doc = make_tiptap_doc(
             heading("Introduction", 1),
-            paragraph("This is the introduction section."),
+            paragraph(intro_text),
             heading("Details", 2),
-            paragraph("This is the details section."),
+            paragraph(details_text),
             heading("Conclusion", 2),
-            paragraph("This is the conclusion."),
+            paragraph(conclusion_text),
         )
         result = chunker.chunk_document(doc, "Test Doc", "document")
         assert len(result) >= 2  # At least 2 chunks at heading boundaries
@@ -375,6 +383,43 @@ class TestTipTapChunking:
         assert len(result) == 1
         assert "Line one" in result[0].text
         assert "Line two" in result[0].text
+
+    def test_title_heading_not_its_own_chunk(self, chunker):
+        """Title heading should merge with body content, never be a standalone chunk.
+
+        Regression test: a document with a title heading followed by a large
+        body paragraph should NOT produce a tiny chunk containing only the title.
+        """
+        # ~700 tokens — large enough that title + body > MAX_TOKENS (800),
+        # which previously caused the title buffer to flush separately.
+        body_text = "This sentence has several words for testing purposes. " * 70
+        doc = make_tiptap_doc(
+            heading("Project Plan", 1),
+            paragraph(body_text),
+        )
+        result = chunker.chunk_document(doc, "Project Plan", "document")
+        assert len(result) >= 1
+        # The first chunk must contain the title AND body content together
+        assert "# Project Plan" in result[0].text
+        assert "This sentence" in result[0].text
+        # No chunk should contain ONLY the title
+        for chunk in result:
+            stripped = chunk.text.replace("# Project Plan", "").strip()
+            assert len(stripped) > 0, f"Chunk contains only the title: {chunk.text!r}"
+
+    def test_title_merges_with_split_large_block(self, chunker):
+        """Title heading should prepend to first split chunk when body exceeds MAX_TOKENS."""
+        # ~1500 tokens — a single block exceeding MAX_TOKENS that needs splitting
+        body_text = "Alpha bravo charlie delta echo foxtrot golf hotel. " * 200
+        doc = make_tiptap_doc(
+            heading("Architecture Overview", 1),
+            paragraph(body_text),
+        )
+        result = chunker.chunk_document(doc, "Architecture Overview", "document")
+        assert len(result) >= 2  # Body is large enough to split
+        # Title must be in the first chunk, not isolated
+        assert "# Architecture Overview" in result[0].text
+        assert "Alpha bravo" in result[0].text
 
     def test_chunk_document_type_routes_correctly(self, chunker):
         """document_type parameter correctly routes to appropriate strategy."""

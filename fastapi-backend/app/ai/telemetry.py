@@ -31,7 +31,9 @@ SLOW_THRESHOLD_MS = 5_000
 # ---------------------------------------------------------------------------
 # Cost estimation pricing table (per 1 M tokens, USD)
 # ---------------------------------------------------------------------------
-# Rough estimates for monitoring — NOT for billing.
+# APPROXIMATE pricing for monitoring dashboards only — NOT for billing.
+# Last updated: 2026-02-27.  Source: provider pricing pages.
+# To update: edit the dict below and bump the date above.
 # Format: { "provider:model": (input_per_million, output_per_million) }
 
 _PRICING: dict[str, tuple[float, float]] = {
@@ -57,6 +59,29 @@ _PRICING: dict[str, tuple[float, float]] = {
     # Ollama (local — free)
     "ollama:*": (0.0, 0.0),
 }
+
+
+# Maximum length for error strings in log output.
+_MAX_ERROR_LENGTH = 500
+
+
+def _sanitize_error(error: str | None) -> str | None:
+    """Sanitize user-controlled error strings before logging.
+
+    Strips newlines/carriage returns (prevents log injection), escapes
+    control characters, and truncates to ``_MAX_ERROR_LENGTH`` chars.
+    """
+    if error is None:
+        return None
+    # Strip newlines and carriage returns to prevent log line injection
+    sanitized = error.replace("\n", " ").replace("\r", " ")
+    # Collapse multiple spaces from replacement
+    while "  " in sanitized:
+        sanitized = sanitized.replace("  ", " ")
+    # Truncate
+    if len(sanitized) > _MAX_ERROR_LENGTH:
+        sanitized = sanitized[:_MAX_ERROR_LENGTH] + "...[truncated]"
+    return sanitized
 
 
 class AITelemetry:
@@ -111,7 +136,7 @@ class AITelemetry:
     # ------------------------------------------------------------------
 
     @staticmethod
-    async def log_chat_request(
+    def log_chat_request(
         user_id: UUID | str,
         provider: str,
         model: str,
@@ -128,6 +153,7 @@ class AITelemetry:
             cost_estimate = AITelemetry.estimate_cost(
                 provider, model, input_tokens, output_tokens
             )
+        safe_error = _sanitize_error(error)
         AITelemetry._emit(
             "chat",
             duration_ms=duration_ms,
@@ -139,11 +165,11 @@ class AITelemetry:
             output_tokens=output_tokens,
             tool_calls=tool_calls,
             cost_estimate_usd=cost_estimate,
-            **({"error": error} if error else {}),
+            **({"error": safe_error} if safe_error else {}),
         )
 
     @staticmethod
-    async def log_embedding_batch(
+    def log_embedding_batch(
         document_count: int,
         chunk_count: int,
         total_tokens: int,
@@ -159,6 +185,7 @@ class AITelemetry:
             cost_estimate = AITelemetry.estimate_cost(
                 provider, model, total_tokens, 0
             )
+        safe_error = _sanitize_error(error)
         AITelemetry._emit(
             "embedding",
             duration_ms=duration_ms,
@@ -169,11 +196,11 @@ class AITelemetry:
             provider=provider,
             model=model,
             cost_estimate_usd=cost_estimate,
-            **({"error": error} if error else {}),
+            **({"error": safe_error} if safe_error else {}),
         )
 
     @staticmethod
-    async def log_sql_query(
+    def log_sql_query(
         user_id: UUID | str,
         duration_ms: int,
         success: bool = True,
@@ -182,6 +209,7 @@ class AITelemetry:
         error: str | None = None,
     ) -> None:
         """Log an AI SQL query execution (Phase 3.1)."""
+        safe_error = _sanitize_error(error)
         AITelemetry._emit(
             "sql_query",
             duration_ms=duration_ms,
@@ -189,11 +217,11 @@ class AITelemetry:
             user_id=user_id,
             tables_used=tables_used or [],
             row_count=row_count,
-            **({"error": error} if error else {}),
+            **({"error": safe_error} if safe_error else {}),
         )
 
     @staticmethod
-    async def log_tool_call(
+    def log_tool_call(
         tool_name: str,
         user_id: UUID | str,
         duration_ms: int,
@@ -201,17 +229,18 @@ class AITelemetry:
         error: str | None = None,
     ) -> None:
         """Log an agent tool call."""
+        safe_error = _sanitize_error(error)
         AITelemetry._emit(
             "tool_call",
             duration_ms=duration_ms,
             success=success,
             user_id=user_id,
             tool_name=tool_name,
-            **({"error": error} if error else {}),
+            **({"error": safe_error} if safe_error else {}),
         )
 
     @staticmethod
-    async def log_import(
+    def log_import(
         user_id: UUID | str,
         file_type: str,
         file_size: int,
@@ -224,6 +253,7 @@ class AITelemetry:
 
         No file name or content logged (could be PII).
         """
+        safe_error = _sanitize_error(error)
         AITelemetry._emit(
             "import",
             duration_ms=duration_ms,
@@ -232,11 +262,11 @@ class AITelemetry:
             file_type=file_type,
             file_size_bytes=file_size,
             page_count=page_count,
-            **({"error": error} if error else {}),
+            **({"error": safe_error} if safe_error else {}),
         )
 
     @staticmethod
-    async def log_reindex(
+    def log_reindex(
         user_id: UUID | str,
         document_count: int,
         duration_ms: int,
@@ -244,13 +274,14 @@ class AITelemetry:
         error: str | None = None,
     ) -> None:
         """Log a reindex trigger."""
+        safe_error = _sanitize_error(error)
         AITelemetry._emit(
             "reindex",
             duration_ms=duration_ms,
             success=success,
             user_id=user_id,
             document_count=document_count,
-            **({"error": error} if error else {}),
+            **({"error": safe_error} if safe_error else {}),
         )
 
     # ------------------------------------------------------------------

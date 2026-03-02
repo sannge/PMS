@@ -10,7 +10,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.application import Application
 from app.models.project import Project
 from app.models.task import Task
+from app.models.task_status import TaskStatus, StatusName
 from app.models.user import User
+
+
+@pytest.fixture
+def _task_statuses(test_project: Project):
+    """Provide access to the test project for status lookups (used by helper)."""
+    return test_project
+
+
+async def _get_status_id(db_session: AsyncSession, project_id, name: str):
+    """Look up a TaskStatus id by project and name."""
+    result = await db_session.execute(
+        select(TaskStatus).where(
+            TaskStatus.project_id == project_id,
+            TaskStatus.name == name,
+        )
+    )
+    return result.scalar_one().id
 
 
 @pytest.mark.asyncio
@@ -50,6 +68,7 @@ class TestListTasks:
         test_project: Project, test_user: User
     ):
         """Test pagination of tasks list."""
+        todo_id = await _get_status_id(db_session, test_project.id, StatusName.TODO.value)
         # Create multiple tasks
         for i in range(5):
             task = Task(
@@ -57,6 +76,7 @@ class TestListTasks:
                 task_key=f"TEST-{i+10}",
                 project_id=test_project.id,
                 reporter_id=test_user.id,
+                task_status_id=todo_id,
             )
             db_session.add(task)
         await db_session.commit()
@@ -76,8 +96,9 @@ class TestListTasks:
         test_project: Project, test_user: User
     ):
         """Test searching tasks by title."""
+        todo_id = await _get_status_id(db_session, test_project.id, StatusName.TODO.value)
         for title, key in [("Login Feature", "T1"), ("Logout Feature", "T2"), ("Profile Page", "T3")]:
-            task = Task(title=title, task_key=key, project_id=test_project.id, reporter_id=test_user.id)
+            task = Task(title=title, task_key=key, project_id=test_project.id, reporter_id=test_user.id, task_status_id=todo_id)
             db_session.add(task)
         await db_session.commit()
 
@@ -94,29 +115,32 @@ class TestListTasks:
         self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession,
         test_project: Project, test_user: User
     ):
-        """Test filtering tasks by status."""
-        for title, key, status in [("T1", "K1", "todo"), ("T2", "K2", "in_progress"), ("T3", "K3", "todo")]:
-            task = Task(title=title, task_key=key, status=status, project_id=test_project.id, reporter_id=test_user.id)
+        """Test filtering tasks by status (task_status_id)."""
+        todo_id = await _get_status_id(db_session, test_project.id, StatusName.TODO.value)
+        in_progress_id = await _get_status_id(db_session, test_project.id, StatusName.IN_PROGRESS.value)
+        for title, key, sid in [("T1", "K1", todo_id), ("T2", "K2", in_progress_id), ("T3", "K3", todo_id)]:
+            task = Task(title=title, task_key=key, task_status_id=sid, project_id=test_project.id, reporter_id=test_user.id)
             db_session.add(task)
         await db_session.commit()
 
         response = await client.get(
-            f"/api/projects/{test_project.id}/tasks?status=todo",
+            f"/api/projects/{test_project.id}/tasks?status_id={todo_id}",
             headers=auth_headers,
         )
 
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 2
-        assert all(t["status"] == "todo" for t in data)
+        assert all(t["task_status"]["name"] == "Todo" for t in data)
 
     async def test_list_tasks_filter_by_priority(
         self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession,
         test_project: Project, test_user: User
     ):
         """Test filtering tasks by priority."""
+        todo_id = await _get_status_id(db_session, test_project.id, StatusName.TODO.value)
         for title, key, priority in [("T1", "K1", "high"), ("T2", "K2", "low"), ("T3", "K3", "high")]:
-            task = Task(title=title, task_key=key, priority=priority, project_id=test_project.id, reporter_id=test_user.id)
+            task = Task(title=title, task_key=key, priority=priority, project_id=test_project.id, reporter_id=test_user.id, task_status_id=todo_id)
             db_session.add(task)
         await db_session.commit()
 
@@ -135,8 +159,9 @@ class TestListTasks:
         test_project: Project, test_user: User
     ):
         """Test filtering tasks by type."""
+        todo_id = await _get_status_id(db_session, test_project.id, StatusName.TODO.value)
         for title, key, task_type in [("T1", "K1", "bug"), ("T2", "K2", "story"), ("T3", "K3", "bug")]:
-            task = Task(title=title, task_key=key, task_type=task_type, project_id=test_project.id, reporter_id=test_user.id)
+            task = Task(title=title, task_key=key, task_type=task_type, project_id=test_project.id, reporter_id=test_user.id, task_status_id=todo_id)
             db_session.add(task)
         await db_session.commit()
 
@@ -187,7 +212,6 @@ class TestCreateTask:
                 "title": "New Task",
                 "description": "A new test task",
                 "task_type": "story",
-                "status": "todo",
                 "priority": "high",
             },
         )
@@ -196,7 +220,7 @@ class TestCreateTask:
         data = response.json()
         assert data["title"] == "New Task"
         assert data["task_type"] == "story"
-        assert data["status"] == "todo"
+        assert data["task_status"]["name"] == "Todo"  # Default status
         assert data["priority"] == "high"
         assert "task_key" in data
         assert data["task_key"].startswith(test_project.key + "-")
@@ -217,7 +241,7 @@ class TestCreateTask:
         assert response.status_code == 201
         data = response.json()
         assert data["title"] == "Minimal Task"
-        assert data["status"] == "todo"  # Default
+        assert data["task_status"]["name"] == "Todo"  # Default
         assert data["priority"] == "medium"  # Default
 
     async def test_create_task_with_story_points(
@@ -359,16 +383,22 @@ class TestUpdateTask:
     """Tests for updating tasks."""
 
     async def test_update_task_success(
-        self, client: AsyncClient, auth_headers: dict, test_task: Task
+        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession,
+        test_task: Task, test_project: Project, test_user: User
     ):
         """Test successful task update."""
+        in_progress_id = await _get_status_id(db_session, test_project.id, StatusName.IN_PROGRESS.value)
+        # Assign task directly so status can be changed (unassigned tasks must be Todo)
+        test_task.assignee_id = test_user.id
+        await db_session.commit()
+
         response = await client.put(
             f"/api/tasks/{test_task.id}",
             headers=auth_headers,
             json={
                 "title": "Updated Task Title",
                 "description": "Updated description",
-                "status": "in_progress",
+                "task_status_id": str(in_progress_id),
                 "priority": "high",
             },
         )
@@ -376,54 +406,69 @@ class TestUpdateTask:
         assert response.status_code == 200
         data = response.json()
         assert data["title"] == "Updated Task Title"
-        assert data["status"] == "in_progress"
+        assert data["task_status"]["name"] == "In Progress"
         assert data["priority"] == "high"
 
     async def test_update_task_partial(
-        self, client: AsyncClient, auth_headers: dict, test_task: Task
+        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession,
+        test_task: Task, test_project: Project, test_user: User
     ):
-        """Test partial task update."""
+        """Test partial task update (status change requires assignee)."""
+        done_id = await _get_status_id(db_session, test_project.id, StatusName.DONE.value)
+        # Assign task directly so status can be changed (unassigned tasks must be Todo)
+        test_task.assignee_id = test_user.id
+        await db_session.commit()
+
         response = await client.put(
             f"/api/tasks/{test_task.id}",
             headers=auth_headers,
-            json={"status": "done"},
+            json={"task_status_id": str(done_id)},
         )
 
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] == "done"
+        assert data["task_status"]["name"] == "Done"
         assert data["title"] == test_task.title  # Unchanged
 
     async def test_update_task_status_transition(
-        self, client: AsyncClient, auth_headers: dict, test_task: Task
+        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession,
+        test_task: Task, test_project: Project, test_user: User
     ):
-        """Test task status transitions."""
+        """Test task status transitions (requires assignee for non-Todo statuses)."""
+        in_progress_id = await _get_status_id(db_session, test_project.id, StatusName.IN_PROGRESS.value)
+        in_review_id = await _get_status_id(db_session, test_project.id, StatusName.IN_REVIEW.value)
+        done_id = await _get_status_id(db_session, test_project.id, StatusName.DONE.value)
+
+        # Assign task directly so status can be changed (unassigned tasks must be Todo)
+        test_task.assignee_id = test_user.id
+        await db_session.commit()
+
         # Move to in_progress
         response = await client.put(
             f"/api/tasks/{test_task.id}",
             headers=auth_headers,
-            json={"status": "in_progress"},
+            json={"task_status_id": str(in_progress_id)},
         )
         assert response.status_code == 200
-        assert response.json()["status"] == "in_progress"
+        assert response.json()["task_status"]["name"] == "In Progress"
 
         # Move to in_review
         response = await client.put(
             f"/api/tasks/{test_task.id}",
             headers=auth_headers,
-            json={"status": "in_review"},
+            json={"task_status_id": str(in_review_id)},
         )
         assert response.status_code == 200
-        assert response.json()["status"] == "in_review"
+        assert response.json()["task_status"]["name"] == "In Review"
 
         # Move to done
         response = await client.put(
             f"/api/tasks/{test_task.id}",
             headers=auth_headers,
-            json={"status": "done"},
+            json={"task_status_id": str(done_id)},
         )
         assert response.status_code == 200
-        assert response.json()["status"] == "done"
+        assert response.json()["task_status"]["name"] == "Done"
 
     async def test_update_task_empty_body(
         self, client: AsyncClient, auth_headers: dict, test_task: Task
@@ -519,6 +564,7 @@ class TestDeleteTask:
         test_project: Project, test_task: Task, test_user: User
     ):
         """Test deleting task with subtasks cascades deletion."""
+        todo_id = await _get_status_id(db_session, test_project.id, StatusName.TODO.value)
         # Create a subtask
         subtask = Task(
             title="Subtask",
@@ -526,6 +572,7 @@ class TestDeleteTask:
             project_id=test_project.id,
             parent_id=test_task.id,
             reporter_id=test_user.id,
+            task_status_id=todo_id,
         )
         db_session.add(subtask)
         await db_session.commit()

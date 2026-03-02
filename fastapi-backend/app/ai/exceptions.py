@@ -1,6 +1,14 @@
 """Custom exceptions for AI provider operations."""
 
 
+class OAuthError(Exception):
+    """Raised when an OAuth operation fails."""
+
+    def __init__(self, message: str, provider: str | None = None) -> None:
+        self.provider = provider
+        super().__init__(message)
+
+
 class ProviderAuthError(Exception):
     """Raised when a provider rejects authentication.
 

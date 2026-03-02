@@ -333,10 +333,18 @@ class TestRunArchiveJobs:
         self, db_session: AsyncSession, archivable_task: Task
     ):
         """run_archive_jobs should return counts of archived items."""
-        # Use empty context dict like ARQ does
-        ctx = {}
+        from unittest.mock import patch, AsyncMock
 
-        result = await run_archive_jobs(ctx)
+        # Mock async_session_maker to return the test db_session so that
+        # run_archive_jobs sees the archivable_task created inside the
+        # test transaction (savepoint-based isolation).
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=db_session)
+        mock_cm.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("app.worker.async_session_maker", return_value=mock_cm):
+            ctx = {}
+            result = await run_archive_jobs(ctx)
 
         assert "tasks_archived" in result
         assert "projects_archived" in result
@@ -442,13 +450,17 @@ class TestWorkerSettings:
         """Cron jobs should be configured."""
         from app.worker import WorkerSettings
 
-        assert len(WorkerSettings.cron_jobs) == 2
+        assert len(WorkerSettings.cron_jobs) == 4
 
     def test_functions_registered(self):
         """Job functions should be registered."""
         from app.worker import WorkerSettings
 
-        assert len(WorkerSettings.functions) == 2
+        assert len(WorkerSettings.functions) == 6
         function_names = [f.__name__ for f in WorkerSettings.functions]
         assert "run_archive_jobs" in function_names
         assert "cleanup_stale_presence" in function_names
+        assert "check_search_index_consistency" in function_names
+        assert "embed_document_job" in function_names
+        assert "batch_embed_stale_documents" in function_names
+        assert "process_document_import" in function_names

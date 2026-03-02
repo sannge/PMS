@@ -4,7 +4,7 @@ All existing data is UTC. This migration makes that explicit by converting
 columns from 'timestamp without time zone' to 'timestamp with time zone',
 telling PostgreSQL the existing values are UTC.
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: 20260224_timestamptz
 Revises: 20260223_dashboard_indexes
 Create Date: 2026-02-24
 """
@@ -14,7 +14,7 @@ from alembic import op
 
 
 # revision identifiers, used by Alembic.
-revision: str = "a1b2c3d4e5f6"
+revision: str = "20260224_timestamptz"
 down_revision: Union[str, None] = "20260223_dashboard_indexes"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

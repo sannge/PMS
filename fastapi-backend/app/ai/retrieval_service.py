@@ -4,7 +4,6 @@ Multi-source retrieval combining:
 1. pgvector cosine similarity (semantic search)
 2. Meilisearch keyword search (existing infrastructure)
 3. pg_trgm fuzzy title matching
-4. (Phase 3 will add PostgreSQL knowledge graph entity search)
 
 All sources filtered by user's RBAC scope. Results merged and deduplicated
 using Reciprocal Rank Fusion (RRF).
@@ -45,6 +44,8 @@ class RetrievalResult:
     application_id: UUID | None
     project_id: UUID | None
     snippet: str
+    chunk_type: str = "text"  # "text" or "image"
+    chunk_index: int | None = None
 
 
 @dataclass
@@ -61,6 +62,7 @@ class _RankedResult:
     source: str
     application_id: UUID | None = None
     project_id: UUID | None = None
+    chunk_type: str = "text"
 
 
 class HybridRetrievalService:
@@ -93,6 +95,7 @@ class HybridRetrievalService:
         limit: int = 10,
         application_id: UUID | None = None,
         project_id: UUID | None = None,
+        query_embedding: list[float] | None = None,
     ) -> list[RetrievalResult]:
         """Main retrieval method combining all search sources.
 
@@ -143,15 +146,34 @@ class HybridRetrievalService:
             "user_id": user_id,
         }
 
-        # Step 2: Run searches in parallel
-        semantic_task = self._semantic_search(query, scope_ids, limit=20)
-        keyword_task = self._keyword_search(query, scope_ids, limit=20)
-        fuzzy_task = self._fuzzy_title_search(query, scope_ids, limit=10)
-
-        semantic_results, keyword_results, fuzzy_results = await asyncio.gather(
-            semantic_task, keyword_task, fuzzy_task,
-            return_exceptions=True,
+        # Step 2: Run searches — semantic and fuzzy share the DB session so
+        # they must run sequentially; keyword search uses Meilisearch (HTTP)
+        # and can run in parallel with the DB searches.
+        keyword_task = asyncio.ensure_future(
+            self._keyword_search(query, scope_ids, limit=20)
         )
+
+        # Run DB-backed searches sequentially to avoid concurrent access
+        # on the same AsyncSession (not safe with asyncpg).
+        try:
+            semantic_results: list | Exception = await self._semantic_search(
+                query, scope_ids, limit=20, query_embedding=query_embedding,
+            )
+        except Exception as exc:
+            semantic_results = exc
+
+        try:
+            fuzzy_results: list | Exception = await self._fuzzy_title_search(
+                query, scope_ids, limit=10
+            )
+        except Exception as exc:
+            fuzzy_results = exc
+
+        # Await the Meilisearch keyword search
+        try:
+            keyword_results: list | Exception = await keyword_task
+        except Exception as exc:
+            keyword_results = exc
 
         # Handle exceptions gracefully — don't fail if one source is unavailable
         ranked_lists: list[list[_RankedResult]] = []
@@ -186,6 +208,7 @@ class HybridRetrievalService:
         query: str,
         scope_ids: dict,
         limit: int = 20,
+        query_embedding: list[float] | None = None,
     ) -> list[_RankedResult]:
         """pgvector cosine similarity search.
 
@@ -196,19 +219,24 @@ class HybridRetrievalService:
             query: Search query text.
             scope_ids: Dict with app_ids, project_ids, user_id.
             limit: Maximum results.
+            query_embedding: Pre-computed embedding to skip generation.
 
         Returns:
             List of _RankedResult with source="semantic".
         """
-        try:
-            provider, model_id = await self.provider_registry.get_embedding_provider(
-                self.db
-            )
-            raw_embedding = await provider.generate_embedding(query, model_id)
-            query_embedding = self.normalizer.normalize(raw_embedding)
-        except Exception as e:
-            logger.warning("Semantic search embedding failed: %s", type(e).__name__)
-            return []
+        if query_embedding is not None:
+            # Use pre-computed embedding (from cache)
+            pass
+        else:
+            try:
+                provider, model_id = await self.provider_registry.get_embedding_provider(
+                    self.db
+                )
+                raw_embedding = await provider.generate_embedding(query, model_id)
+                query_embedding = self.normalizer.normalize(raw_embedding)
+            except Exception as e:
+                logger.warning("Semantic search embedding failed: %s", type(e).__name__)
+                return []
 
         app_ids = scope_ids["app_ids"]
         project_ids = scope_ids.get("project_ids", [])
@@ -251,15 +279,16 @@ class HybridRetrievalService:
                 dc.chunk_text,
                 dc.heading_context,
                 dc.chunk_index,
+                dc.chunk_type,
                 dc.application_id,
                 dc.project_id,
                 d.title AS document_title,
-                1 - (dc.embedding <=> :query_embedding::vector) AS similarity
+                1 - (dc.embedding <=> CAST(:query_embedding AS vector)) AS similarity
             FROM "DocumentChunks" dc
             JOIN "Documents" d ON d.id = dc.document_id
             WHERE d.deleted_at IS NULL
               AND ({scope_filter})
-            ORDER BY dc.embedding <=> :query_embedding::vector
+            ORDER BY dc.embedding <=> CAST(:query_embedding AS vector)
             LIMIT :limit
         """)
 
@@ -279,6 +308,7 @@ class HybridRetrievalService:
                 source="semantic",
                 application_id=row.application_id,
                 project_id=row.project_id,
+                chunk_type=row.chunk_type or "text",
             ))
 
         return ranked
@@ -479,6 +509,8 @@ class HybridRetrievalService:
                         "document_title": result.document_title,
                         "chunk_text": result.chunk_text,
                         "heading_context": result.heading_context,
+                        "chunk_type": result.chunk_type,
+                        "chunk_index": result.chunk_index,
                         "best_rank": result.rank,
                         "rrf_score": 0.0,
                         "sources": set(),
@@ -493,6 +525,8 @@ class HybridRetrievalService:
                 if result.rank < merged[key]["best_rank"]:
                     merged[key]["chunk_text"] = result.chunk_text
                     merged[key]["heading_context"] = result.heading_context
+                    merged[key]["chunk_type"] = result.chunk_type
+                    merged[key]["chunk_index"] = result.chunk_index
                     merged[key]["best_rank"] = result.rank
 
         # Convert to RetrievalResult
@@ -512,6 +546,8 @@ class HybridRetrievalService:
                 application_id=entry["application_id"],
                 project_id=entry["project_id"],
                 snippet=snippet,
+                chunk_type=entry.get("chunk_type", "text"),
+                chunk_index=entry.get("chunk_index"),
             ))
 
         return results

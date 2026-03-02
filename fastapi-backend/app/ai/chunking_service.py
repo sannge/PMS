@@ -24,11 +24,19 @@ Canvas Strategy:
 
 from __future__ import annotations
 
+import logging
 import math
+import re
 from dataclasses import dataclass
 from typing import Any
 
+logger = logging.getLogger(__name__)
+
 import tiktoken
+
+# Module-level singleton encoder — tiktoken caches the encoding data
+# internally, but reusing the same object avoids per-instance overhead.
+_tiktoken_encoder = tiktoken.get_encoding("cl100k_base")
 
 
 @dataclass
@@ -48,6 +56,8 @@ class _TextBlock:
     text: str
     heading_context: str | None
     token_count: int = 0
+    is_table: bool = False
+    table_columns: list[str] | None = None
 
 
 @dataclass
@@ -92,7 +102,7 @@ class SemanticChunker:
     def __init__(self, target_tokens: int = 600, overlap_tokens: int = 100) -> None:
         self.target_tokens = target_tokens
         self.overlap_tokens = overlap_tokens
-        self._encoder = tiktoken.get_encoding("cl100k_base")
+        self._encoder = _tiktoken_encoder
 
     def count_tokens(self, text: str) -> int:
         """Count tokens using tiktoken cl100k_base encoding."""
@@ -223,11 +233,13 @@ class SemanticChunker:
                 blocks.extend(inner_blocks)
 
             elif node_type == "table":
-                text = self._extract_table_text(node)
+                text, header_cells = self._extract_table_text_with_headers(node)
                 if text.strip():
                     blocks.append(_TextBlock(
                         text=text,
                         heading_context=current_heading,
+                        is_table=True,
+                        table_columns=header_cells,
                     ))
 
             elif node_type == "horizontalRule":
@@ -302,20 +314,39 @@ class SemanticChunker:
 
     def _extract_table_text(self, node: dict[str, Any]) -> str:
         """Extract text from table nodes."""
+        text, _ = self._extract_table_text_with_headers(node)
+        return text
+
+    def _extract_table_text_with_headers(
+        self, node: dict[str, Any]
+    ) -> tuple[str, list[str]]:
+        """Extract text from table nodes and return header row cells separately.
+
+        Returns:
+            Tuple of (full_table_text, header_cell_texts).
+            header_cell_texts is the list of cell texts from the first row.
+        """
         rows = node.get("content", [])
         parts: list[str] = []
-        for row in rows:
+        header_cells: list[str] = []
+        for row_idx, row in enumerate(rows):
             cells = row.get("content", [])
             cell_texts: list[str] = []
             for cell in cells:
                 text = self._extract_text_recursive(cell.get("content", []))
                 cell_texts.append(text.strip())
+            if row_idx == 0:
+                header_cells = cell_texts
             parts.append(" | ".join(cell_texts) + "\n")
-        return "".join(parts)
+        return "".join(parts), header_cells
 
     def _extract_drawio_text(self, node: dict[str, Any]) -> str:
-        """Extract text from draw.io diagram nodes."""
-        import re
+        """Extract structured graph information from draw.io diagram nodes.
+
+        Parses the full draw.io XML graph structure (vertices, edges, and
+        containment hierarchy) to produce a rich textual representation.
+        Falls back to plain label extraction if no edges or containment are found.
+        """
         import defusedxml.ElementTree as ET
 
         attrs = node.get("attrs", {})
@@ -330,50 +361,119 @@ class SemanticChunker:
             # rejections (DTDForbidden, EntitiesForbidden, ExternalReferenceForbidden)
             return ""
 
-        texts: list[str] = []
-        for cell in root.iter("mxCell"):
-            value = cell.get("value", "")
-            if value:
-                clean = re.sub(r"<[^>]+>", " ", value).strip()
-                clean = re.sub(r"\s+", " ", clean)
-                if clean:
-                    texts.append(clean)
+        def clean_html(text: str) -> str:
+            """Strip HTML tags and normalize whitespace."""
+            cleaned = re.sub(r"<[^>]+>", " ", text).strip()
+            return re.sub(r"\s+", " ", cleaned)
 
-        return "[Diagram] " + " ".join(texts) + "\n" if texts else ""
+        # Pass 1 -- Vertices: collect mxCell[vertex="1"]
+        vertices: dict[str, dict[str, str]] = {}
+        for cell in root.iter("mxCell"):
+            if cell.get("vertex") == "1":
+                cell_id = cell.get("id", "")
+                value = cell.get("value", "")
+                label = clean_html(value) if value else ""
+                parent_id = cell.get("parent", "")
+                if cell_id:
+                    vertices[cell_id] = {"label": label, "parent": parent_id}
+
+        # Pass 2 -- Edges: collect mxCell[edge="1"]
+        edges: list[tuple[str, str, str]] = []
+        for cell in root.iter("mxCell"):
+            if cell.get("edge") == "1":
+                source = cell.get("source", "")
+                target = cell.get("target", "")
+                if source and target and source in vertices and target in vertices:
+                    value = cell.get("value", "")
+                    edge_label = clean_html(value) if value else ""
+                    edges.append((source, target, edge_label))
+
+        # Pass 3 -- Containment: build parent->children map
+        # Only include parents that are actual vertices (not root "0" or layer "1")
+        children_map: dict[str, list[str]] = {}
+        for cell_id, info in vertices.items():
+            parent_id = info["parent"]
+            if parent_id and parent_id in vertices:
+                children_map.setdefault(parent_id, []).append(cell_id)
+
+        # If no structured graph data found, fall back to simple label list
+        if not edges and not children_map:
+            labels = [info["label"] for info in vertices.values() if info["label"]]
+            if labels:
+                return "[Diagram] " + " ".join(labels) + "\n"
+            # Final fallback: extract value from any mxCell (handles XML without
+            # vertex/edge attributes, e.g. simplified draw.io exports)
+            all_labels: list[str] = []
+            for cell in root.iter("mxCell"):
+                value = cell.get("value", "")
+                if value:
+                    clean = clean_html(value)
+                    if clean:
+                        all_labels.append(clean)
+            return "[Diagram] " + " ".join(all_labels) + "\n" if all_labels else ""
+
+        # Build structured output
+        parts: list[str] = ["[Diagram]"]
+
+        # Components line: all vertices with labels
+        labeled = [info["label"] for info in vertices.values() if info["label"]]
+        if labeled:
+            parts.append("Components: " + ", ".join(labeled))
+
+        # Relationships section
+        if edges:
+            parts.append("Relationships:")
+            for source_id, target_id, edge_label in edges:
+                src_label = vertices[source_id]["label"] or source_id
+                tgt_label = vertices[target_id]["label"] or target_id
+                if edge_label:
+                    parts.append(f"- {src_label} -> {edge_label} -> {tgt_label}")
+                else:
+                    parts.append(f"- {src_label} -> {tgt_label}")
+
+        # Structure section (containment)
+        if children_map:
+            parts.append("Structure:")
+            for parent_id, child_ids in children_map.items():
+                parent_label = vertices[parent_id]["label"] or parent_id
+                child_labels = [
+                    vertices[cid]["label"] or cid for cid in child_ids
+                ]
+                parts.append(f"- {parent_label} contains: {', '.join(child_labels)}")
+
+        return "\n".join(parts) + "\n"
+
+    @staticmethod
+    def _is_slide_heading(block: _TextBlock) -> str | None:
+        """Check if a block is a slide heading from Docling import.
+
+        Returns the slide heading text (e.g. "Slide 1: Introduction") if
+        the block text matches the ``## Slide N`` pattern, else None.
+        """
+        text = block.text.strip()
+        m = re.match(r'^#{1,3}\s+(Slide\s+\d+.*)', text)
+        if m:
+            return m.group(1).strip()
+        return None
 
     def _merge_and_split(self, blocks: list[_TextBlock]) -> list[ChunkResult]:
-        """Merge small blocks under same heading; split blocks exceeding MAX_TOKENS."""
+        """Merge small blocks under same heading; split blocks exceeding MAX_TOKENS.
+
+        Special handling:
+        - Table blocks (is_table=True): flush buffer, emit table as its own
+          chunk with a preamble, bypass MAX_TOKENS.
+        - Slide headings ("Slide N: ..."): flush buffer, enforce chunk boundary
+          at slide breaks. Never merge content across slide boundaries.
+        """
         chunks: list[ChunkResult] = []
         current_text = ""
         current_heading: str | None = blocks[0].heading_context if blocks else None
         current_tokens = 0
 
         for block in blocks:
-            # If heading changed and we have accumulated text, flush
-            if block.heading_context != current_heading and current_text.strip():
-                chunks.append(ChunkResult(
-                    text=current_text.strip(),
-                    heading_context=current_heading,
-                    token_count=current_tokens,
-                    chunk_index=0,
-                ))
-                current_text = ""
-                current_tokens = 0
-                current_heading = block.heading_context
-
-            # If adding this block would exceed MAX, flush first
-            if current_tokens + block.token_count > self.MAX_TOKENS and current_text.strip():
-                chunks.append(ChunkResult(
-                    text=current_text.strip(),
-                    heading_context=current_heading,
-                    token_count=current_tokens,
-                    chunk_index=0,
-                ))
-                current_text = ""
-                current_tokens = 0
-
-            # If single block exceeds MAX, split at sentence boundaries
-            if block.token_count > self.MAX_TOKENS:
+            # --- Table blocks: flush buffer, emit as own chunk, bypass MAX_TOKENS ---
+            if block.is_table:
+                # Flush accumulated text buffer
                 if current_text.strip():
                     chunks.append(ChunkResult(
                         text=current_text.strip(),
@@ -384,8 +484,127 @@ class SemanticChunker:
                     current_text = ""
                     current_tokens = 0
 
+                # Build preamble: "Table: {heading} — columns: col1, col2, ..."
+                preamble_parts: list[str] = []
+                preamble_parts.append("Table")
+                if block.heading_context:
+                    preamble_parts.append(f": {block.heading_context}")
+                if block.table_columns:
+                    cols = ", ".join(c for c in block.table_columns if c)
+                    if cols:
+                        preamble_parts.append(f" — columns: {cols}")
+                preamble = "".join(preamble_parts)
+
+                table_text = f"{preamble}\n{block.text.strip()}"
+                table_tokens = self.count_tokens(table_text)
+
+                if table_tokens > self.MAX_TOKENS:
+                    # Split oversized table by row groups
+                    table_chunks = self._split_table_by_rows(
+                        block.text.strip(), preamble, block.heading_context
+                    )
+                    chunks.extend(table_chunks)
+                else:
+                    chunks.append(ChunkResult(
+                        text=table_text,
+                        heading_context=block.heading_context,
+                        token_count=table_tokens,
+                        chunk_index=0,
+                    ))
+                current_heading = block.heading_context
+                continue
+
+            # --- Slide headings: enforce chunk boundary at slide breaks ---
+            slide_title = self._is_slide_heading(block)
+            if slide_title is not None:
+                # Flush accumulated text buffer
+                if current_text.strip():
+                    chunks.append(ChunkResult(
+                        text=current_text.strip(),
+                        heading_context=current_heading,
+                        token_count=current_tokens,
+                        chunk_index=0,
+                    ))
+                    current_text = ""
+                    current_tokens = 0
+                # Use slide title as heading context for this and subsequent blocks
+                current_heading = slide_title
+                current_text = block.text
+                current_tokens = block.token_count
+                continue
+
+            # --- 9.12: Speaker notes — blockquotes within slides ---
+            if (
+                current_heading
+                and re.match(r"^Slide\s+\d+", current_heading)
+                and block.text.lstrip().startswith(">")
+            ):
+                # Strip blockquote markers and prefix with [Speaker Notes]
+                lines = block.text.split("\n")
+                cleaned = []
+                for line in lines:
+                    cleaned.append(re.sub(r"^>\s?", "", line))
+                speaker_text = "[Speaker Notes] " + "\n".join(cleaned).strip() + "\n"
+                block = _TextBlock(
+                    text=speaker_text,
+                    heading_context=block.heading_context,
+                    token_count=self.count_tokens(speaker_text),
+                )
+
+            # If heading changed and we have accumulated text, flush —
+            # BUT if the buffer is tiny (e.g. just a heading line like
+            # "# Introduction\n" with no body text), carry it forward
+            # into the next chunk instead of emitting a near-empty chunk.
+            if block.heading_context != current_heading and current_text.strip():
+                if current_tokens > 50:
+                    chunks.append(ChunkResult(
+                        text=current_text.strip(),
+                        heading_context=current_heading,
+                        token_count=current_tokens,
+                        chunk_index=0,
+                    ))
+                    current_text = ""
+                    current_tokens = 0
+                current_heading = block.heading_context
+
+            # If adding this block would exceed MAX, flush first —
+            # BUT if the buffer is tiny (≤50 tokens, e.g. just a title or
+            # heading line), keep it so it merges with the next content
+            # instead of being emitted as a near-empty chunk.
+            if current_tokens + block.token_count > self.MAX_TOKENS and current_text.strip():
+                if current_tokens > 50:
+                    chunks.append(ChunkResult(
+                        text=current_text.strip(),
+                        heading_context=current_heading,
+                        token_count=current_tokens,
+                        chunk_index=0,
+                    ))
+                    current_text = ""
+                    current_tokens = 0
+
+            # If single block exceeds MAX, split at sentence boundaries
+            if block.token_count > self.MAX_TOKENS:
+                if current_text.strip():
+                    if current_tokens > 50:
+                        # Buffer is large enough — emit as its own chunk
+                        chunks.append(ChunkResult(
+                            text=current_text.strip(),
+                            heading_context=current_heading,
+                            token_count=current_tokens,
+                            chunk_index=0,
+                        ))
+                        text_to_split = block.text
+                    else:
+                        # Buffer is tiny (e.g. just a title) — prepend it
+                        # to the block text so it stays with the content
+                        text_to_split = current_text + block.text
+                else:
+                    text_to_split = block.text
+                current_text = ""
+                current_tokens = 0
+
                 split_chunks = self._split_large_text(
-                    block.text, block.heading_context
+                    text_to_split, block.heading_context
                 )
                 chunks.extend(split_chunks)
                 current_heading = block.heading_context
@@ -402,6 +621,72 @@ class SemanticChunker:
                 token_count=current_tokens,
                 chunk_index=0,
             ))
+
+        return chunks
+
+    def _split_table_by_rows(
+        self,
+        table_text: str,
+        preamble: str,
+        heading_context: str | None,
+        rows_per_chunk: int = 50,
+    ) -> list[ChunkResult]:
+        """Split an oversized table into chunks of row groups.
+
+        Parses the table text into header + data rows, then groups data rows
+        into chunks of ``rows_per_chunk``, repeating the header at the top of
+        each chunk with a preamble indicating the row range.
+
+        Args:
+            table_text: Raw table text (pipe-delimited rows separated by newlines).
+            preamble: Base preamble (e.g. "Table: Heading — columns: A, B").
+            heading_context: Heading context for each chunk.
+            rows_per_chunk: Target number of data rows per chunk (default 50).
+
+        Returns:
+            List of ChunkResult, one per row group.
+        """
+        lines = [ln for ln in table_text.split("\n") if ln.strip()]
+        if not lines:
+            return []
+
+        # First line with "|" is the header row
+        header_line = lines[0]
+        data_lines = lines[1:]
+
+        if not data_lines:
+            # Table with only a header — emit as single chunk
+            full_text = f"{preamble}\n{header_line}"
+            return [ChunkResult(
+                text=full_text,
+                heading_context=heading_context,
+                token_count=self.count_tokens(full_text),
+                chunk_index=0,
+            )]
+
+        chunks: list[ChunkResult] = []
+        total_rows = len(data_lines)
+
+        for start in range(0, total_rows, rows_per_chunk):
+            end = min(start + rows_per_chunk, total_rows)
+            group = data_lines[start:end]
+
+            chunk_preamble = f"{preamble} (rows {start + 1}-{end})"
+            chunk_text = f"{chunk_preamble}\n{header_line}\n" + "\n".join(group)
+            chunks.append(ChunkResult(
+                text=chunk_text,
+                heading_context=heading_context,
+                token_count=self.count_tokens(chunk_text),
+                chunk_index=0,
+            ))
+
+        logger.info(
+            "Oversized table split: %d rows -> %d chunks of ~%d rows (heading: %s)",
+            total_rows,
+            len(chunks),
+            rows_per_chunk,
+            heading_context,
+        )
 
         return chunks
 
@@ -474,7 +759,6 @@ class SemanticChunker:
 
     def _split_into_sentences(self, text: str) -> list[str]:
         """Split text into sentences at period/newline boundaries."""
-        import re
         # Split at sentence-ending punctuation followed by space, or at newlines
         parts = re.split(r'(?<=[.!?])\s+|\n+', text)
         # Re-add spacing
@@ -521,22 +805,57 @@ class SemanticChunker:
     ) -> list[ChunkResult]:
         """Canvas document chunking pipeline.
 
-        1. Extract text-bearing elements
-        2. Build connectivity graph from connectors
-        3. Cluster connected/proximate elements
-        4. Generate chunk text per cluster
-        5. Split oversized clusters
-        6. Assign chunk_index
+        1. Detect containers with TipTap content — route through _chunk_tiptap
+        2. Extract text-bearing elements (non-container)
+        3. Build connectivity graph from connectors
+        4. Cluster connected/proximate elements
+        5. Generate chunk text per cluster
+        6. Split oversized clusters
+        7. Assign chunk_index
         """
         if not content_json:
             return []
 
+        chunks: list[ChunkResult] = []
+
+        # --- Phase 1: Process containers with TipTap content ---
+        containers = content_json.get("containers", [])
+        container_ids: set[str] = set()
+        for container in containers:
+            if not isinstance(container, dict):
+                continue
+            container_id = container.get("id", "")
+            if container_id:
+                container_ids.add(container_id)
+            content = container.get("content")
+            if isinstance(content, dict) and content.get("type") == "doc":
+                # Build heading context from container label and position
+                label = container.get("label", "") or "Container"
+                position = container.get("position", {})
+                px = float(position.get("x", 0))
+                py = float(position.get("y", 0))
+                if px < 500 and py < 500:
+                    quadrant = "Top Left"
+                elif px >= 500 and py < 500:
+                    quadrant = "Top Right"
+                elif px < 500 and py >= 500:
+                    quadrant = "Bottom Left"
+                else:
+                    quadrant = "Bottom Right"
+                container_heading = f"{label} — {quadrant}"
+                # Run full TipTap chunking on container content
+                container_chunks = self._chunk_tiptap(content, container_heading)
+                chunks.extend(container_chunks)
+
+        # --- Phase 2: Process non-container elements ---
         elements, connectors = self._extract_canvas_elements(content_json)
         if not elements:
-            return []
+            # Still have container chunks — assign indexes and return
+            for i, chunk in enumerate(chunks):
+                chunk.chunk_index = i
+            return chunks
 
         clusters = self._cluster_canvas_elements(elements, connectors)
-        chunks: list[ChunkResult] = []
 
         for cluster in clusters:
             chunk_text = self._build_cluster_text(cluster, connectors)
@@ -620,6 +939,16 @@ class SemanticChunker:
         """
         if not elements:
             return []
+
+        # Cap: skip O(n^2) clustering for very large canvases
+        _MAX_CLUSTER_ELEMENTS = 500
+        if len(elements) > _MAX_CLUSTER_ELEMENTS:
+            logger.info(
+                "Canvas has %d elements (> %d), skipping spatial clustering",
+                len(elements),
+                _MAX_CLUSTER_ELEMENTS,
+            )
+            return [elements]
 
         # Build element index
         elem_map: dict[str, int] = {}
@@ -726,7 +1055,11 @@ class SemanticChunker:
         cluster: list[_CanvasElement],
         connectors: list[_CanvasConnector],
     ) -> list[ChunkResult]:
-        """Split an oversized cluster at element boundaries."""
+        """Split an oversized cluster at element boundaries.
+
+        If a single element exceeds MAX_TOKENS, fall back to
+        _split_large_text for that element's text.
+        """
         chunks: list[ChunkResult] = []
         current_elements: list[_CanvasElement] = []
         current_tokens = 0
@@ -734,6 +1067,33 @@ class SemanticChunker:
         for elem in cluster:
             elem_text = f"[{elem.type.replace('_', ' ').title()}] {elem.text}"
             elem_tokens = self.count_tokens(elem_text)
+
+            # Single element exceeds MAX_TOKENS — sub-split via _split_large_text
+            if elem_tokens > self.MAX_TOKENS:
+                # Flush accumulated elements first
+                if current_elements:
+                    text = self._build_cluster_text(current_elements, connectors)
+                    heading = self._canvas_heading_context(current_elements[0])
+                    chunks.append(ChunkResult(
+                        text=text.strip(),
+                        heading_context=heading,
+                        token_count=self.count_tokens(text),
+                        chunk_index=0,
+                    ))
+                    current_elements = []
+                    current_tokens = 0
+
+                heading = self._canvas_heading_context(elem)
+                sub_chunks = self._split_large_text(elem_text, heading)
+                logger.info(
+                    "Oversized canvas element sub-split: type=%s, "
+                    "tokens=%d, sub_chunks=%d",
+                    elem.type,
+                    elem_tokens,
+                    len(sub_chunks),
+                )
+                chunks.extend(sub_chunks)
+                continue
 
             if current_tokens + elem_tokens > self.MAX_TOKENS and current_elements:
                 text = self._build_cluster_text(current_elements, connectors)

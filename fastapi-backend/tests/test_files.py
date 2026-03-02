@@ -179,7 +179,7 @@ class TestGetFileInfo:
         db_session: AsyncSession,
         test_user: User,
     ):
-        """Test getting another user's file info."""
+        """Test getting another user's file info - allowed for any authenticated user."""
         attachment = Attachment(
             id=uuid4(),
             file_name="test.txt",
@@ -195,7 +195,7 @@ class TestGetFileInfo:
         response = await client.get(
             f"/api/files/{attachment.id}/info", headers=auth_headers_2
         )
-        assert response.status_code == 403
+        assert response.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -208,6 +208,7 @@ class TestDeleteFile:
         auth_headers: dict,
         db_session: AsyncSession,
         test_user: User,
+        test_task: Task,
     ):
         """Test deleting a file."""
         from app.main import app as fastapi_app
@@ -218,8 +219,11 @@ class TestDeleteFile:
             file_type="text/plain",
             file_size=1024,
             minio_bucket="pm-attachments",
-            minio_key="general/uuid/test.txt",
+            minio_key="task/uuid/test.txt",
             uploaded_by=test_user.id,
+            entity_type="task",
+            entity_id=test_task.id,
+            task_id=test_task.id,
         )
         db_session.add(attachment)
         await db_session.commit()
@@ -414,7 +418,9 @@ class TestGetFile:
         db_session: AsyncSession,
         test_user: User,
     ):
-        """Test getting another user's file."""
+        """Test getting another user's file - allowed for any authenticated user."""
+        from app.main import app as fastapi_app
+
         attachment = Attachment(
             id=uuid4(),
             file_name="test.txt",
@@ -427,10 +433,22 @@ class TestGetFile:
         db_session.add(attachment)
         await db_session.commit()
 
-        response = await client.get(
-            f"/api/files/{attachment.id}", headers=auth_headers_2
-        )
-        assert response.status_code == 403
+        # Mock MinIO since the endpoint generates a presigned URL
+        mock_minio = MagicMock()
+        mock_minio.get_presigned_download_url.return_value = "http://example.com/download"
+
+        def override_minio():
+            return mock_minio
+
+        fastapi_app.dependency_overrides[get_minio_service] = override_minio
+
+        try:
+            response = await client.get(
+                f"/api/files/{attachment.id}", headers=auth_headers_2
+            )
+            assert response.status_code == 200
+        finally:
+            fastapi_app.dependency_overrides.pop(get_minio_service, None)
 
 
 @pytest.mark.asyncio
@@ -491,7 +509,9 @@ class TestGetDownloadUrl:
         db_session: AsyncSession,
         test_user: User,
     ):
-        """Test getting download URL for another user's file."""
+        """Test getting download URL for another user's file - allowed for any authenticated user."""
+        from app.main import app as fastapi_app
+
         attachment = Attachment(
             id=uuid4(),
             file_name="test.txt",
@@ -504,7 +524,19 @@ class TestGetDownloadUrl:
         db_session.add(attachment)
         await db_session.commit()
 
-        response = await client.get(
-            f"/api/files/{attachment.id}/download-url", headers=auth_headers_2
-        )
-        assert response.status_code == 403
+        # Mock MinIO since the endpoint generates a presigned URL
+        mock_minio = MagicMock()
+        mock_minio.get_presigned_download_url.return_value = "http://example.com/fresh-url"
+
+        def override_minio():
+            return mock_minio
+
+        fastapi_app.dependency_overrides[get_minio_service] = override_minio
+
+        try:
+            response = await client.get(
+                f"/api/files/{attachment.id}/download-url", headers=auth_headers_2
+            )
+            assert response.status_code == 200
+        finally:
+            fastapi_app.dependency_overrides.pop(get_minio_service, None)

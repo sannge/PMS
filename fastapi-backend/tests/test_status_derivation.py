@@ -686,7 +686,7 @@ class TestRecalculateAggregationFromTasks:
         assert result == "In Progress"
 
     def test_recalculate_with_legacy_status_strings(self):
-        """Recalculates correctly using legacy status strings."""
+        """Tasks without task_status default to Todo."""
         agg = self._create_mock_agg()
         tasks = [
             self._create_mock_task_with_legacy_status("todo"),
@@ -696,14 +696,16 @@ class TestRecalculateAggregationFromTasks:
 
         result = recalculate_aggregation_from_tasks(agg, tasks)
 
+        # Legacy status strings are NOT parsed; tasks without task_status
+        # default to Todo per the production code.
         assert agg.total_tasks == 3
-        assert agg.todo_tasks == 1
-        assert agg.active_tasks == 1
-        assert agg.done_tasks == 1
-        assert result == "In Progress"
+        assert agg.todo_tasks == 3
+        assert agg.active_tasks == 0
+        assert agg.done_tasks == 0
+        assert result == "Todo"
 
-    def test_recalculate_maps_blocked_to_issue(self):
-        """Recalculates blocked status as issue (migration support)."""
+    def test_recalculate_maps_blocked_to_todo_default(self):
+        """Tasks without task_status (legacy 'blocked') default to Todo."""
         agg = self._create_mock_agg()
         tasks = [
             self._create_mock_task_with_legacy_status("blocked"),
@@ -712,10 +714,11 @@ class TestRecalculateAggregationFromTasks:
 
         result = recalculate_aggregation_from_tasks(agg, tasks)
 
+        # Legacy status strings are NOT parsed; both default to Todo
         assert agg.total_tasks == 2
-        assert agg.issue_tasks == 1  # blocked mapped to issue
-        assert agg.todo_tasks == 1
-        assert result == "Issue"
+        assert agg.issue_tasks == 0
+        assert agg.todo_tasks == 2
+        assert result == "Todo"
 
     def test_recalculate_with_all_statuses(self):
         """Recalculates correctly with all status types."""

@@ -52,7 +52,7 @@ def _make_mock_registry(provider=None):
 
 @pytest_asyncio.fixture
 async def test_doc_with_chunks(
-    db_session: AsyncSession, test_user, test_application
+    db_session: AsyncSession, test_user, test_application, requires_pgvector
 ) -> Document:
     """Create a test document with pre-created chunks."""
     doc = Document(
@@ -102,7 +102,7 @@ async def second_application(db_session: AsyncSession, test_user_2) -> Applicati
 
 @pytest_asyncio.fixture
 async def doc_in_second_app(
-    db_session: AsyncSession, test_user_2, second_application
+    db_session: AsyncSession, test_user_2, second_application, requires_pgvector
 ) -> Document:
     """Create a document in the second application."""
     doc = Document(

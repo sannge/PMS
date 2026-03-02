@@ -16,6 +16,7 @@ from uuid import UUID
 import httpx
 
 from ..config import settings
+from .exceptions import OAuthError
 
 logger = logging.getLogger(__name__)
 
@@ -34,14 +35,6 @@ PROVIDER_CONFIG: dict[str, dict[str, str | list[str]]] = {
         "scopes": ["claude.chat", "claude.models.read"],
     },
 }
-
-
-class OAuthError(Exception):
-    """Raised when an OAuth operation fails."""
-
-    def __init__(self, message: str, provider: str | None = None) -> None:
-        self.provider = provider
-        super().__init__(message)
 
 
 class OAuthService:
@@ -122,13 +115,10 @@ class OAuthService:
 
         key = f"oauth_state:{state}"
 
-        # GET + DELETE atomically (pipeline)
-        raw = await redis_service.get(key)
+        # Atomic GET + DELETE via Redis GETDEL (Redis 6.2+)
+        raw = await redis_service.client.getdel(key)
         if not raw:
             return None
-
-        # Delete immediately (single-use)
-        await redis_service.delete(key)
 
         try:
             data = json.loads(raw)
@@ -255,9 +245,17 @@ class OAuthService:
                 provider_type,
             )
 
-        data = response.json()
+        try:
+            data = response.json()
+            access_token = data["access_token"]
+        except (ValueError, KeyError) as exc:
+            raise OAuthError(
+                "Invalid token response from provider",
+                provider_type,
+            ) from exc
+
         return {
-            "access_token": data["access_token"],
+            "access_token": access_token,
             "refresh_token": data.get("refresh_token"),
             "expires_in": data.get("expires_in", 3600),
             "scope": data.get("scope"),
@@ -311,9 +309,16 @@ class OAuthService:
                 provider_type,
             )
 
-        data = response.json()
+        try:
+            data = response.json()
+            access_token = data["access_token"]
+        except (ValueError, KeyError) as exc:
+            raise OAuthError(
+                "Invalid refresh response from provider", provider_type
+            ) from exc
+
         return {
-            "access_token": data["access_token"],
+            "access_token": access_token,
             "refresh_token": data.get("refresh_token", refresh_token),
             "expires_in": data.get("expires_in", 3600),
         }

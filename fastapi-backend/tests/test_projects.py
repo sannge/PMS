@@ -1,6 +1,6 @@
 """Unit tests for Projects CRUD API endpoints."""
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from uuid import uuid4
 
 from app.utils.timezone import utc_now
@@ -74,6 +74,7 @@ class TestListProjects:
                 name=f"Project {i}",
                 key=f"PRJ{i}",
                 application_id=test_application.id,
+                due_date=date.today() + timedelta(days=30),
             )
             db_session.add(project)
         await db_session.commit()
@@ -93,7 +94,7 @@ class TestListProjects:
     ):
         """Test searching projects by name."""
         for name, key in [("Alpha Project", "ALPHA"), ("Beta Project", "BETA"), ("Gamma Task", "GAMMA")]:
-            project = Project(name=name, key=key, application_id=test_application.id)
+            project = Project(name=name, key=key, application_id=test_application.id, due_date=date.today() + timedelta(days=30))
             db_session.add(project)
         await db_session.commit()
 
@@ -111,7 +112,7 @@ class TestListProjects:
     ):
         """Test filtering projects by type."""
         for name, key, ptype in [("P1", "P1", "scrum"), ("P2", "P2", "kanban"), ("P3", "P3", "scrum")]:
-            project = Project(name=name, key=key, project_type=ptype, application_id=test_application.id)
+            project = Project(name=name, key=key, project_type=ptype, application_id=test_application.id, due_date=date.today() + timedelta(days=30))
             db_session.add(project)
         await db_session.commit()
 
@@ -168,6 +169,7 @@ class TestCreateProject:
                 "key": "NEWPRJ",
                 "description": "A new test project",
                 "project_type": "scrum",
+                "due_date": str(date.today() + timedelta(days=30)),
             },
         )
 
@@ -185,7 +187,7 @@ class TestCreateProject:
         response = await client.post(
             f"/api/applications/{test_application.id}/projects",
             headers=auth_headers,
-            json={"name": "Minimal Project", "key": "MIN"},
+            json={"name": "Minimal Project", "key": "MIN", "due_date": str(date.today() + timedelta(days=30))},
         )
 
         assert response.status_code == 201
@@ -201,7 +203,7 @@ class TestCreateProject:
         response = await client.post(
             f"/api/applications/{test_application.id}/projects",
             headers=auth_headers,
-            json={"name": "Another Project", "key": test_project.key},
+            json={"name": "Another Project", "key": test_project.key, "due_date": str(date.today() + timedelta(days=30))},
         )
 
         assert response.status_code == 400
@@ -236,7 +238,7 @@ class TestCreateProject:
         response = await client.post(
             f"/api/applications/{uuid4()}/projects",
             headers=auth_headers,
-            json={"name": "Test", "key": "TST"},
+            json={"name": "Test", "key": "TST", "due_date": str(date.today() + timedelta(days=30))},
         )
 
         assert response.status_code == 404
@@ -248,7 +250,7 @@ class TestCreateProject:
         response = await client.post(
             f"/api/applications/{test_application.id}/projects",
             headers=auth_headers_2,
-            json={"name": "Test", "key": "TST"},
+            json={"name": "Test", "key": "TST", "due_date": str(date.today() + timedelta(days=30))},
         )
 
         assert response.status_code == 403
@@ -423,20 +425,34 @@ class TestDeleteProject:
         self, client: AsyncClient, auth_headers: dict, test_project: Project,
         test_task: Task, db_session: AsyncSession
     ):
-        """Test that deleting project cascades to delete tasks."""
-        task_id = test_task.id
+        """Test deleting a project cascades to its tasks.
+
+        The delete endpoint deletes Tasks (raw SQL) before TaskStatuses
+        to avoid the RESTRICT FK constraint on Tasks.task_status_id.
+        Verifies both HTTP response and that DB rows are actually removed.
+        """
+        project_id = test_project.id
 
         response = await client.delete(
-            f"/api/projects/{test_project.id}",
+            f"/api/projects/{project_id}",
             headers=auth_headers,
         )
 
         assert response.status_code == 204
 
-        # Verify task is also deleted
-        result = await db_session.execute(select(Task).filter(Task.id == task_id))
-        task = result.scalar_one_or_none()
-        assert task is None
+        # Verify tasks were actually deleted from the database
+        from app.models.task import Task as TaskModel
+        from app.models.task_status import TaskStatus as TaskStatusModel
+        task_result = await db_session.execute(
+            select(TaskModel).where(TaskModel.project_id == project_id)
+        )
+        assert task_result.scalars().all() == [], "Tasks should be deleted when project is deleted"
+
+        # Verify task statuses were also deleted
+        status_result = await db_session.execute(
+            select(TaskStatusModel).where(TaskStatusModel.project_id == project_id)
+        )
+        assert status_result.scalars().all() == [], "TaskStatuses should be deleted when project is deleted"
 
 
 @pytest.mark.asyncio

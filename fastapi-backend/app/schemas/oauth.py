@@ -63,15 +63,6 @@ class OAuthCallbackRequest(BaseModel):
     )
 
 
-class OAuthTokenResponse(BaseModel):
-    """Internal token response -- never returned to client."""
-
-    access_token: str
-    refresh_token: Optional[str] = None
-    expires_in: int = 3600
-    scope: Optional[str] = None
-
-
 class OAuthConnectionStatus(BaseModel):
     """Status of a user's OAuth connection (never includes tokens)."""
 

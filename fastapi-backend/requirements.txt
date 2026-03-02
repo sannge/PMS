@@ -46,6 +46,27 @@ pgvector>=0.3.0
 tiktoken>=0.7.0
 defusedxml>=0.7.0
 
+# Email (SMTP)
+aiosmtplib>=3.0.0
+
+# AI agent SQL access & Excel export
+openpyxl>=3.1.0
+sqlglot>=25.0.0
+
+# AI agent (LangGraph)
+langgraph>=1.0.0,<2.0.0
+langchain-core>=1.0.0,<2.0.0
+langchain-openai>=1.0.0,<2.0.0
+langchain-anthropic>=1.0.0,<2.0.0
+# copilotkit is optional — frontend uses custom REST endpoints for AI chat
+# Install manually if you want the /api/copilotkit AG-UI mount:
+#   pip install copilotkit>=0.1.35
+# copilotkit>=0.1.35,<1.0.0
+sse-starlette>=2.0.0
+
+# Document import (PDF/DOCX/PPTX conversion)
+docling>=2.0.0,<3.0.0
+
 # Testing
 pytest>=8.3.0
 pytest-asyncio>=0.24.0

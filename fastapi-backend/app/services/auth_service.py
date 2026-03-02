@@ -1,5 +1,6 @@
 """Authentication service with JWT token generation and user management."""
 
+import asyncio
 import hashlib
 import logging
 import secrets
@@ -295,12 +296,8 @@ async def create_user(db: AsyncSession, user_data: UserCreate) -> User:
             detail="Email already registered",
         )
 
-    # Send verification email (fire-and-forget, don't fail registration)
-    email_sent = await send_verification_email(user_data.email, code)
-    if not email_sent:
-        logger.warning(
-            "Failed to send verification email to %s", user_data.email
-        )
+    # Send verification email (fire-and-forget, don't block response)
+    asyncio.create_task(send_verification_email(user_data.email, code))
 
     return db_user
 
@@ -417,7 +414,7 @@ async def resend_verification_code(db: AsyncSession, email: str) -> None:
     user.verification_attempts = 0
     await db.commit()
 
-    await send_verification_email(email, code)
+    asyncio.create_task(send_verification_email(email, code))
 
 
 async def request_password_reset(db: AsyncSession, email: str) -> None:
@@ -460,7 +457,7 @@ async def request_password_reset(db: AsyncSession, email: str) -> None:
     user.reset_attempts = 0
     await db.commit()
 
-    await send_password_reset_email(email, code)
+    asyncio.create_task(send_password_reset_email(email, code))
 
 
 async def generate_and_send_login_code(db: AsyncSession, user: User) -> None:
@@ -482,9 +479,7 @@ async def generate_and_send_login_code(db: AsyncSession, user: User) -> None:
     user.verification_attempts = 0
     await db.commit()
 
-    email_sent = await send_login_code_email(user.email, code)
-    if not email_sent:
-        logger.warning("Failed to send login 2FA code to %s", user.email)
+    asyncio.create_task(send_login_code_email(user.email, code))
 
 
 async def verify_login_code(db: AsyncSession, email: str, code: str) -> User:

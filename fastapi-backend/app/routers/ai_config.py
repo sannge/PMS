@@ -43,21 +43,12 @@ from ..schemas.ai_config import (
     SystemPromptUpdate,
     UserProviderOverride,
 )
+from ..ai.provider_registry import refresh_provider_cache
 from ..ai.rate_limiter import check_test_rate_limit
 from ..services.auth_service import get_current_user
 from ..utils.timezone import utc_now
 
 logger = logging.getLogger(__name__)
-
-
-async def _refresh_provider_cache() -> None:
-    """Refresh the provider registry cache after configuration changes."""
-    try:
-        from ..ai.provider_registry import ProviderRegistry
-        registry = ProviderRegistry()
-        await registry.refresh()
-    except Exception:
-        logger.debug("Provider registry refresh skipped (not yet initialized)")
 
 
 
@@ -348,7 +339,7 @@ async def create_provider(
     db.add(provider)
     await db.commit()
     await db.refresh(provider)
-    await _refresh_provider_cache()
+    await refresh_provider_cache()
     return AiProviderResponse.model_validate(provider)
 
 
@@ -392,7 +383,7 @@ async def update_provider(
     provider.updated_at = utc_now()
     await db.commit()
     await db.refresh(provider)
-    await _refresh_provider_cache()
+    await refresh_provider_cache()
     return AiProviderResponse.model_validate(provider)
 
 
@@ -418,7 +409,7 @@ async def delete_provider(
         )
     await db.delete(provider)
     await db.commit()
-    await _refresh_provider_cache()
+    await refresh_provider_cache()
 
 
 @router.post("/providers/{provider_id}/test", dependencies=[Depends(check_test_rate_limit)])
@@ -798,7 +789,7 @@ async def save_capability_config(
         .options(selectinload(AiProvider.models))
     )
     provider = reload_result.scalar_one()
-    await _refresh_provider_cache()
+    await refresh_provider_cache()
     return AiProviderResponse.model_validate(provider)
 
 
@@ -1087,7 +1078,7 @@ async def create_user_override(
         .options(selectinload(AiProvider.models))
     )
     provider = result.scalar_one()
-    await _refresh_provider_cache()
+    await refresh_provider_cache()
     return AiProviderResponse.model_validate(provider)
 
 
@@ -1157,7 +1148,7 @@ async def update_user_override(
         .options(selectinload(AiProvider.models))
     )
     provider = reload_result.scalar_one()
-    await _refresh_provider_cache()
+    await refresh_provider_cache()
     return AiProviderResponse.model_validate(provider)
 
 
@@ -1186,7 +1177,7 @@ async def delete_user_override(
         )
     await db.delete(provider)
     await db.commit()
-    await _refresh_provider_cache()
+    await refresh_provider_cache()
 
 
 @router.post("/me/providers/{provider_type}/test", dependencies=[Depends(check_test_rate_limit)])

@@ -373,3 +373,15 @@ class ProviderRegistry:
                 await adapter.close()
         self._cache.clear()
         logger.info("Provider registry cache cleared")
+
+
+async def refresh_provider_cache() -> None:
+    """Refresh the provider registry cache after configuration changes.
+
+    Safe to call from routers — silently skips if not yet initialized.
+    """
+    try:
+        registry = ProviderRegistry()
+        await registry.refresh()
+    except Exception:
+        logger.debug("Provider registry refresh skipped (not yet initialized)")

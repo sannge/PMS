@@ -197,11 +197,11 @@ class TestGetNotification:
     async def test_get_notification_wrong_user(
         self, client: AsyncClient, auth_headers_2: dict, test_notification: Notification
     ):
-        """Test getting another user's notification."""
+        """Test getting another user's notification returns 404 (not 403 to prevent info leak)."""
         response = await client.get(
             f"/api/notifications/{test_notification.id}", headers=auth_headers_2
         )
-        assert response.status_code == 403  # Access denied for other user's notification
+        assert response.status_code == 404
 
     async def test_get_notification_unauthorized(
         self, client: AsyncClient, test_notification: Notification
@@ -253,13 +253,13 @@ class TestMarkAsRead:
     async def test_mark_as_read_wrong_user(
         self, client: AsyncClient, auth_headers_2: dict, test_notification: Notification
     ):
-        """Test updating another user's notification."""
+        """Test updating another user's notification returns 404 (not 403 to prevent info leak)."""
         response = await client.put(
             f"/api/notifications/{test_notification.id}",
             headers=auth_headers_2,
             json={"is_read": True},
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -352,12 +352,12 @@ class TestDeleteNotification:
     async def test_delete_notification_wrong_user(
         self, client: AsyncClient, auth_headers_2: dict, test_notification: Notification
     ):
-        """Test deleting another user's notification."""
+        """Test deleting another user's notification returns 404 (not 403 to prevent info leak)."""
         response = await client.delete(
             f"/api/notifications/{test_notification.id}",
             headers=auth_headers_2,
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
 
 
 @pytest.mark.asyncio

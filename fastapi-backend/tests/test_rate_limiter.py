@@ -1,7 +1,8 @@
 """Unit tests for AI rate limiter (Phase 7 -- 7.1-7.2).
 
 Tests the AIRateLimiter class, RateLimitResult model, rate limit
-configuration loading, and the FastAPI middleware dependencies.
+configuration loading, the FastAPI middleware dependencies, and the
+in-memory fallback counter used when Redis is unavailable.
 """
 
 import time
@@ -14,6 +15,10 @@ from app.ai.rate_limiter import (
     AIRateLimiter,
     RATE_LIMITS,
     RateLimitResult,
+    _INMEMORY_LIMIT_MULTIPLIER,
+    _INMEMORY_MAX_KEYS,
+    _inmemory_counters,
+    _inmemory_lock,
     _load_rate_limits,
     check_chat_rate_limit,
     check_embedding_rate_limit,
@@ -28,36 +33,38 @@ from app.ai.rate_limiter import (
 # ---------------------------------------------------------------------------
 
 
-def _make_mock_redis(card_value: int = 0) -> AsyncMock:
-    """Create a mock Redis client with pipeline support.
+def _make_mock_redis(check_return: int = 0, inc_return: int = 1, check_and_inc_return: int = 1) -> MagicMock:
+    """Create a mock Redis client with Lua script support.
 
-    ``card_value`` controls what ZCARD returns (simulating current count).
+    ``check_return`` controls what the check-only script returns.
+    ``inc_return`` controls what the increment-only script returns.
+    ``check_and_inc_return`` controls what check_and_increment script returns
+    (-1 means rate limited).
     """
-    mock_pipe = AsyncMock()
-    mock_pipe.zremrangebyscore = MagicMock(return_value=mock_pipe)
-    mock_pipe.zcard = MagicMock(return_value=mock_pipe)
-    mock_pipe.zadd = MagicMock(return_value=mock_pipe)
-    mock_pipe.expire = MagicMock(return_value=mock_pipe)
-    # Pipeline execute returns results in order of queued commands
-    mock_pipe.execute = AsyncMock(return_value=[0, card_value])
+    mock_check_script = AsyncMock(return_value=check_return)
+    mock_inc_script = AsyncMock(return_value=inc_return)
+    mock_check_and_inc_script = AsyncMock(return_value=check_and_inc_return)
 
-    mock_redis = AsyncMock()
-    mock_redis.pipeline = MagicMock(return_value=mock_pipe)
+    mock_redis = MagicMock()
+    # register_script is called 3 times in __init__: check_and_inc, inc, check
+    mock_redis.register_script = MagicMock(
+        side_effect=[mock_check_and_inc_script, mock_inc_script, mock_check_script]
+    )
 
     return mock_redis
 
 
-def _make_increment_redis(new_count: int = 1) -> AsyncMock:
-    """Create a mock Redis for check_and_increment/increment pipeline (ZADD+ZREM+EXPIRE+ZCARD)."""
-    mock_pipe = AsyncMock()
-    mock_pipe.zadd = MagicMock(return_value=mock_pipe)
-    mock_pipe.zremrangebyscore = MagicMock(return_value=mock_pipe)
-    mock_pipe.expire = MagicMock(return_value=mock_pipe)
-    mock_pipe.zcard = MagicMock(return_value=mock_pipe)
-    mock_pipe.execute = AsyncMock(return_value=[1, 0, True, new_count])
+def _make_failing_redis() -> MagicMock:
+    """Create a mock Redis whose Lua scripts raise ConnectionError (fallback testing)."""
+    error = ConnectionError("Redis down")
+    mock_check_script = AsyncMock(side_effect=error)
+    mock_inc_script = AsyncMock(side_effect=error)
+    mock_check_and_inc_script = AsyncMock(side_effect=error)
 
-    mock_redis = AsyncMock()
-    mock_redis.pipeline = MagicMock(return_value=mock_pipe)
+    mock_redis = MagicMock()
+    mock_redis.register_script = MagicMock(
+        side_effect=[mock_check_and_inc_script, mock_inc_script, mock_check_script]
+    )
 
     return mock_redis
 
@@ -126,7 +133,7 @@ class TestRateLimitConfig:
 class TestCheckRateLimit:
     @pytest.mark.asyncio
     async def test_under_limit_allowed(self):
-        redis = _make_mock_redis(card_value=5)
+        redis = _make_mock_redis(check_return=5)
         limiter = AIRateLimiter(redis)
 
         result = await limiter.check_rate_limit("ai_chat", "user-1", 30, 60)
@@ -137,7 +144,7 @@ class TestCheckRateLimit:
 
     @pytest.mark.asyncio
     async def test_at_limit_blocked(self):
-        redis = _make_mock_redis(card_value=30)
+        redis = _make_mock_redis(check_return=30)
         limiter = AIRateLimiter(redis)
 
         result = await limiter.check_rate_limit("ai_chat", "user-1", 30, 60)
@@ -147,7 +154,7 @@ class TestCheckRateLimit:
 
     @pytest.mark.asyncio
     async def test_over_limit_blocked(self):
-        redis = _make_mock_redis(card_value=35)
+        redis = _make_mock_redis(check_return=35)
         limiter = AIRateLimiter(redis)
 
         result = await limiter.check_rate_limit("ai_chat", "user-1", 30, 60)
@@ -157,7 +164,7 @@ class TestCheckRateLimit:
 
     @pytest.mark.asyncio
     async def test_empty_window_allowed(self):
-        redis = _make_mock_redis(card_value=0)
+        redis = _make_mock_redis(check_return=0)
         limiter = AIRateLimiter(redis)
 
         result = await limiter.check_rate_limit("ai_chat", "user-1", 30, 60)
@@ -167,7 +174,7 @@ class TestCheckRateLimit:
 
     @pytest.mark.asyncio
     async def test_reset_at_is_future(self):
-        redis = _make_mock_redis(card_value=0)
+        redis = _make_mock_redis(check_return=0)
         limiter = AIRateLimiter(redis)
 
         before = time.time()
@@ -179,25 +186,29 @@ class TestCheckRateLimit:
         assert result.reset_at.timestamp() <= after + 61
 
     @pytest.mark.asyncio
-    async def test_redis_failure_fail_open(self):
-        """When Redis is unavailable, all requests should be allowed."""
-        redis = AsyncMock()
-        redis.pipeline = MagicMock(side_effect=ConnectionError("Redis down"))
+    async def test_redis_failure_uses_inmemory_fallback(self):
+        """When Redis is unavailable, in-memory fallback is used."""
+        _inmemory_counters.clear()
+        redis = _make_failing_redis()
         limiter = AIRateLimiter(redis)
 
         result = await limiter.check_rate_limit("ai_chat", "user-1", 30, 60)
 
         assert result.allowed is True
-        assert result.remaining == 30
+        # check_rate_limit does not increment, so remaining equals full fallback limit
+        assert result.limit == 30 * _INMEMORY_LIMIT_MULTIPLIER
+        assert result.remaining == 30 * _INMEMORY_LIMIT_MULTIPLIER
 
     @pytest.mark.asyncio
-    async def test_none_redis_fail_open(self):
-        """When Redis is None (not connected), should fail open."""
+    async def test_none_redis_uses_inmemory_fallback(self):
+        """When Redis is None (not connected), in-memory fallback is used."""
+        _inmemory_counters.clear()
         limiter = AIRateLimiter(None)
 
         result = await limiter.check_rate_limit("ai_chat", "user-1", 30, 60)
 
         assert result.allowed is True
+        assert result.limit == 30 * _INMEMORY_LIMIT_MULTIPLIER
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +220,8 @@ class TestCheckAndIncrement:
     @pytest.mark.asyncio
     async def test_under_limit_allowed(self):
         """Request count below limit: allowed with correct remaining."""
-        redis = _make_increment_redis(new_count=5)
+        # Lua script returns new count (5) on success
+        redis = _make_mock_redis(check_and_inc_return=5)
         limiter = AIRateLimiter(redis)
 
         result = await limiter.check_and_increment("ai_chat", "user-1", 30, 60)
@@ -221,7 +233,8 @@ class TestCheckAndIncrement:
     @pytest.mark.asyncio
     async def test_at_limit_allowed(self):
         """Request that hits exactly the limit: allowed (count == limit)."""
-        redis = _make_increment_redis(new_count=30)
+        # Lua script returns 30 (added successfully as the 30th entry)
+        redis = _make_mock_redis(check_and_inc_return=30)
         limiter = AIRateLimiter(redis)
 
         result = await limiter.check_and_increment("ai_chat", "user-1", 30, 60)
@@ -231,8 +244,9 @@ class TestCheckAndIncrement:
 
     @pytest.mark.asyncio
     async def test_over_limit_blocked(self):
-        """Request that exceeds limit: blocked."""
-        redis = _make_increment_redis(new_count=31)
+        """Request that exceeds limit: blocked (Lua returns -1)."""
+        # Lua script returns -1 when count >= limit (request NOT added)
+        redis = _make_mock_redis(check_and_inc_return=-1)
         limiter = AIRateLimiter(redis)
 
         result = await limiter.check_and_increment("ai_chat", "user-1", 30, 60)
@@ -243,7 +257,7 @@ class TestCheckAndIncrement:
     @pytest.mark.asyncio
     async def test_first_request_allowed(self):
         """First request in empty window: allowed with full remaining."""
-        redis = _make_increment_redis(new_count=1)
+        redis = _make_mock_redis(check_and_inc_return=1)
         limiter = AIRateLimiter(redis)
 
         result = await limiter.check_and_increment("ai_chat", "user-1", 30, 60)
@@ -252,29 +266,33 @@ class TestCheckAndIncrement:
         assert result.remaining == 29
 
     @pytest.mark.asyncio
-    async def test_redis_failure_fail_open(self):
-        """When Redis is unavailable, requests should be allowed (fail-open)."""
-        redis = AsyncMock()
-        redis.pipeline = MagicMock(side_effect=ConnectionError("Redis down"))
+    async def test_redis_failure_uses_inmemory_fallback(self):
+        """When Redis is unavailable, in-memory fallback is used."""
+        _inmemory_counters.clear()
+        redis = _make_failing_redis()
         limiter = AIRateLimiter(redis)
 
         result = await limiter.check_and_increment("ai_chat", "user-1", 30, 60)
 
         assert result.allowed is True
-        assert result.remaining == 30
+        assert result.limit == 30 * _INMEMORY_LIMIT_MULTIPLIER
+        # One request recorded
+        assert result.remaining == 30 * _INMEMORY_LIMIT_MULTIPLIER - 1
 
     @pytest.mark.asyncio
-    async def test_none_redis_fail_open(self):
-        """When Redis is None (not connected), should fail open."""
+    async def test_none_redis_uses_inmemory_fallback(self):
+        """When Redis is None (not connected), in-memory fallback is used."""
+        _inmemory_counters.clear()
         limiter = AIRateLimiter(None)
 
         result = await limiter.check_and_increment("ai_chat", "user-1", 30, 60)
 
         assert result.allowed is True
+        assert result.limit == 30 * _INMEMORY_LIMIT_MULTIPLIER
 
     @pytest.mark.asyncio
     async def test_reset_at_is_future(self):
-        redis = _make_increment_redis(new_count=1)
+        redis = _make_mock_redis(check_and_inc_return=1)
         limiter = AIRateLimiter(redis)
 
         before = time.time()
@@ -285,26 +303,23 @@ class TestCheckAndIncrement:
         assert result.reset_at.timestamp() <= after + 61
 
     @pytest.mark.asyncio
-    async def test_pipeline_commands_called(self):
-        """Verify ZADD+ZREM+EXPIRE+ZCARD pipeline is issued atomically."""
-        mock_pipe = AsyncMock()
-        mock_pipe.zadd = MagicMock(return_value=mock_pipe)
-        mock_pipe.zremrangebyscore = MagicMock(return_value=mock_pipe)
-        mock_pipe.expire = MagicMock(return_value=mock_pipe)
-        mock_pipe.zcard = MagicMock(return_value=mock_pipe)
-        mock_pipe.execute = AsyncMock(return_value=[1, 0, True, 3])
-
-        redis = AsyncMock()
-        redis.pipeline = MagicMock(return_value=mock_pipe)
-
+    async def test_lua_script_called_with_correct_args(self):
+        """Verify Lua script is called with keys and args."""
+        redis = _make_mock_redis(check_and_inc_return=3)
         limiter = AIRateLimiter(redis)
+
         await limiter.check_and_increment("ai_chat", "user-1", 30, 60)
 
-        mock_pipe.zadd.assert_called_once()
-        mock_pipe.zremrangebyscore.assert_called_once()
-        mock_pipe.expire.assert_called_once()
-        mock_pipe.zcard.assert_called_once()
-        mock_pipe.execute.assert_awaited_once()
+        # The check_and_inc script should have been called once
+        limiter._check_and_inc.assert_awaited_once()
+        call_kwargs = limiter._check_and_inc.call_args
+        assert call_kwargs[1]["keys"] == ["ratelimit:ai_chat:user-1:60"]
+        args = call_kwargs[1]["args"]
+        # args: [now, window_seconds, limit, member, ttl]
+        assert len(args) == 5
+        assert args[1] == 60  # window_seconds
+        assert args[2] == 30  # limit
+        assert args[4] == 61  # ttl = window + 1
 
 
 # ---------------------------------------------------------------------------
@@ -315,7 +330,7 @@ class TestCheckAndIncrement:
 class TestIncrement:
     @pytest.mark.asyncio
     async def test_first_request(self):
-        redis = _make_increment_redis(new_count=1)
+        redis = _make_mock_redis(inc_return=1)
         limiter = AIRateLimiter(redis)
 
         count = await limiter.increment("ai_chat", "user-1", 60)
@@ -324,7 +339,7 @@ class TestIncrement:
 
     @pytest.mark.asyncio
     async def test_subsequent_request(self):
-        redis = _make_increment_redis(new_count=5)
+        redis = _make_mock_redis(inc_return=5)
         limiter = AIRateLimiter(redis)
 
         count = await limiter.increment("ai_chat", "user-1", 60)
@@ -332,37 +347,146 @@ class TestIncrement:
         assert count == 5
 
     @pytest.mark.asyncio
-    async def test_redis_failure_returns_zero(self):
-        redis = AsyncMock()
-        redis.pipeline = MagicMock(side_effect=ConnectionError("Redis down"))
+    async def test_redis_failure_uses_inmemory_fallback(self):
+        """When Redis fails, increment uses in-memory fallback."""
+        _inmemory_counters.clear()
+        redis = _make_failing_redis()
         limiter = AIRateLimiter(redis)
 
         count = await limiter.increment("ai_chat", "user-1", 60)
 
-        assert count == 0
+        assert count == 1  # First request recorded in fallback
 
     @pytest.mark.asyncio
-    async def test_pipeline_commands_called(self):
-        """Verify the correct pipeline commands are issued."""
-        mock_pipe = AsyncMock()
-        mock_pipe.zadd = MagicMock(return_value=mock_pipe)
-        mock_pipe.zremrangebyscore = MagicMock(return_value=mock_pipe)
-        mock_pipe.expire = MagicMock(return_value=mock_pipe)
-        mock_pipe.zcard = MagicMock(return_value=mock_pipe)
-        mock_pipe.execute = AsyncMock(return_value=[1, 0, True, 3])
-
-        redis = AsyncMock()
-        redis.pipeline = MagicMock(return_value=mock_pipe)
-
+    async def test_lua_script_called_with_correct_args(self):
+        """Verify Lua increment script is called with keys and args."""
+        redis = _make_mock_redis(inc_return=3)
         limiter = AIRateLimiter(redis)
+
         await limiter.increment("ai_chat", "user-1", 60)
 
-        # ZADD, ZREMRANGEBYSCORE, EXPIRE, ZCARD should all be called
-        mock_pipe.zadd.assert_called_once()
-        mock_pipe.zremrangebyscore.assert_called_once()
-        mock_pipe.expire.assert_called_once()
-        mock_pipe.zcard.assert_called_once()
-        mock_pipe.execute.assert_awaited_once()
+        limiter._inc.assert_awaited_once()
+        call_kwargs = limiter._inc.call_args
+        assert call_kwargs[1]["keys"] == ["ratelimit:ai_chat:user-1:60"]
+        args = call_kwargs[1]["args"]
+        # args: [now, window_seconds, member, ttl]
+        assert len(args) == 4
+        assert args[1] == 60  # window_seconds
+        assert args[3] == 61  # ttl = window + 1
+
+
+# ---------------------------------------------------------------------------
+# In-memory fallback counter
+# ---------------------------------------------------------------------------
+
+
+class TestInMemoryFallback:
+    """Tests for the in-memory fallback when Redis is unavailable."""
+
+    def setup_method(self):
+        """Clear in-memory counters before each test."""
+        _inmemory_counters.clear()
+
+    @pytest.mark.asyncio
+    async def test_check_and_increment_fallback_allowed(self):
+        """When Redis fails, in-memory fallback allows requests under 2x limit."""
+        redis = _make_failing_redis()
+        limiter = AIRateLimiter(redis)
+
+        result = await limiter.check_and_increment("ai_chat", "user-1", 30, 60)
+
+        assert result.allowed is True
+        # Fallback limit is 2x normal
+        assert result.limit == 30 * _INMEMORY_LIMIT_MULTIPLIER
+        assert result.remaining == 30 * _INMEMORY_LIMIT_MULTIPLIER - 1
+
+    @pytest.mark.asyncio
+    async def test_check_and_increment_fallback_blocked(self):
+        """When in-memory count exceeds 2x limit, requests are blocked."""
+        redis = _make_failing_redis()
+        limiter = AIRateLimiter(redis)
+        limit = 5
+        fallback_limit = limit * _INMEMORY_LIMIT_MULTIPLIER  # 10
+
+        # Fill up the fallback counter
+        for _ in range(fallback_limit):
+            await limiter.check_and_increment("ai_chat", "user-1", limit, 60)
+
+        # Next request should be blocked
+        result = await limiter.check_and_increment("ai_chat", "user-1", limit, 60)
+        assert result.allowed is False
+        assert result.remaining == 0
+
+    @pytest.mark.asyncio
+    async def test_check_rate_limit_fallback_no_increment(self):
+        """check_rate_limit fallback should not add a counter entry."""
+        redis = _make_failing_redis()
+        limiter = AIRateLimiter(redis)
+
+        result = await limiter.check_rate_limit("ai_chat", "user-1", 30, 60)
+
+        assert result.allowed is True
+        # Should not have incremented counter
+        key = "ratelimit:ai_chat:user-1:60"
+        async with _inmemory_lock:
+            assert len(_inmemory_counters.get(key, [])) == 0
+
+    @pytest.mark.asyncio
+    async def test_increment_fallback_returns_count(self):
+        """increment() fallback should record and return count."""
+        redis = _make_failing_redis()
+        limiter = AIRateLimiter(redis)
+
+        count1 = await limiter.increment("ai_chat", "user-1", 60)
+        count2 = await limiter.increment("ai_chat", "user-1", 60)
+
+        assert count1 == 1
+        assert count2 == 2
+
+    @pytest.mark.asyncio
+    async def test_fallback_prunes_expired_entries(self):
+        """Expired entries should be pruned from in-memory counters."""
+        key = "ratelimit:ai_chat:user-1:60"
+        # Manually insert an old entry
+        old_ts = time.time() - 120  # 2 minutes ago, outside 60s window
+        async with _inmemory_lock:
+            _inmemory_counters[key] = [old_ts]
+
+        redis = _make_failing_redis()
+        limiter = AIRateLimiter(redis)
+
+        result = await limiter.check_and_increment("ai_chat", "user-1", 30, 60)
+
+        # Old entry pruned, only the new one remains
+        assert result.allowed is True
+        async with _inmemory_lock:
+            assert len(_inmemory_counters[key]) == 1
+
+    @pytest.mark.asyncio
+    async def test_none_redis_uses_fallback(self):
+        """When Redis is None, should use in-memory fallback."""
+        limiter = AIRateLimiter(None)
+
+        result = await limiter.check_and_increment("ai_chat", "user-1", 30, 60)
+
+        assert result.allowed is True
+        assert result.limit == 30 * _INMEMORY_LIMIT_MULTIPLIER
+
+    @pytest.mark.asyncio
+    async def test_max_keys_safety_clears_counters(self):
+        """When in-memory dict exceeds _INMEMORY_MAX_KEYS, it gets cleared."""
+        # Fill with fake keys beyond the limit
+        for i in range(_INMEMORY_MAX_KEYS + 1):
+            _inmemory_counters[f"fake-key-{i}"] = [time.time()]
+
+        # Next call should trigger the safety clear
+        count = await AIRateLimiter._inmemory_count_and_add(
+            "new-key", 60, add=True
+        )
+
+        # After eviction, the new entry should exist
+        assert count == 1
+        assert "new-key" in _inmemory_counters
 
 
 # ---------------------------------------------------------------------------
@@ -372,26 +496,31 @@ class TestIncrement:
 
 class TestGetRateLimiter:
     def test_returns_limiter_when_connected(self):
-        mock_redis = MagicMock()
-        mock_redis.is_connected = True
+        mock_redis_service = MagicMock()
+        mock_redis_service.is_connected = True
         mock_client = MagicMock()
-        mock_redis.client = mock_client
+        mock_redis_service.client = mock_client
 
-        with patch("app.services.redis_service.redis_service", mock_redis):
+        with patch("app.services.redis_service.redis_service", mock_redis_service):
             limiter = get_rate_limiter()
 
         assert isinstance(limiter, AIRateLimiter)
         assert limiter.redis is mock_client
+        # Lua scripts should be registered
+        assert mock_client.register_script.call_count == 3
 
     def test_returns_limiter_with_none_when_disconnected(self):
-        mock_redis = MagicMock()
-        mock_redis.is_connected = False
+        mock_redis_service = MagicMock()
+        mock_redis_service.is_connected = False
 
-        with patch("app.services.redis_service.redis_service", mock_redis):
+        with patch("app.services.redis_service.redis_service", mock_redis_service):
             limiter = get_rate_limiter()
 
         assert isinstance(limiter, AIRateLimiter)
         assert limiter.redis is None
+        assert limiter._check_and_inc is None
+        assert limiter._inc is None
+        assert limiter._check is None
 
 
 # ---------------------------------------------------------------------------

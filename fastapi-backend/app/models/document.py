@@ -177,16 +177,18 @@ class Document(Base):
         nullable=False,
     )
 
-    # AI embedding/graph timestamps
+    # AI embedding timestamp
     embedding_updated_at = Column(
         DateTime(timezone=True),
         nullable=True,
     )
 
-    graph_ingested_at = Column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
+    @property
+    def is_embedding_stale(self) -> bool:
+        """True when embeddings are out of date or have never been generated."""
+        if self.embedding_updated_at is None:
+            return True
+        return self.embedding_updated_at < self.updated_at
 
     # Constraints and indexes
     __table_args__ = (
@@ -200,17 +202,15 @@ class Document(Base):
         Index("ix_documents_project_folder", "project_id", "folder_id"),
     )
 
-    # Relationships
+    # Relationships (default lazy loading -- use selectinload/joinedload at query site)
     folder = relationship(
         "DocumentFolder",
         back_populates="documents",
-        lazy="joined",
     )
 
     creator = relationship(
         "User",
         foreign_keys=[created_by],
-        lazy="joined",
     )
 
     tags = relationship(

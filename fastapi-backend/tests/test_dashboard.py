@@ -379,6 +379,7 @@ class TestDashboardArchivedExclusion:
             description="An archived project",
             project_type="kanban",
             archived_at=datetime.now(timezone.utc),
+            due_date=date.today() + timedelta(days=30),
         )
         db_session.add(archived_project)
         await db_session.commit()
@@ -713,6 +714,7 @@ class TestDashboardMultiAppAggregation:
                     key=f"MP{app_i}{proj_i}",
                     description=f"Multi project {app_i}-{proj_i}",
                     project_type="kanban",
+                    due_date=date.today() + timedelta(days=30),
                 )
                 db_session.add(proj)
                 await db_session.flush()
@@ -864,6 +866,7 @@ class TestDashboardProjectHealthLimit:
                 key=f"HP{i:02d}",
                 description=f"Health project {i}",
                 project_type="kanban",
+                due_date=date.today() + timedelta(days=30),
             )
             db_session.add(proj)
             await db_session.flush()
@@ -1332,6 +1335,7 @@ class TestDashboardAllProjectsArchived:
             key="ARC",
             description="Archived project",
             project_type="kanban",
+            due_date=date.today() + timedelta(days=30),
             archived_at=datetime.now(timezone.utc),
         )
         db_session.add(project)
@@ -1359,14 +1363,14 @@ class TestDashboardActiveTrendNormalDelta:
         db_session: AsyncSession,
     ):
         """Active trend with tasks in both periods."""
-        # Get an active status
+        # Get an active status (multiple may exist: In Progress, In Review)
         result = await db_session.execute(
             select(TaskStatus).where(
                 TaskStatus.project_id == test_project.id,
                 TaskStatus.category == "Active",
             )
         )
-        active_status = result.scalar_one()
+        active_status = result.scalars().first()
 
         now = datetime.now(timezone.utc)
         # 2 tasks created in current period (last 30 days), assigned to user

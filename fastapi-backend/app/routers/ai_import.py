@@ -111,37 +111,92 @@ async def upload_and_import(
             detail=f"Unsupported MIME type '{content_type}'. Allowed: {', '.join(sorted(ALLOWED_MIME_TYPES.keys()))}",
         )
 
-    # --- Validate file size (read into memory to check) ---
-    contents = await file.read()
-    file_size = len(contents)
-    if file_size > MAX_FILE_SIZE:
+    file_type = ALLOWED_MIME_TYPES[content_type]
+
+    # --- Stream file to temp location (avoid loading entire file into memory) ---
+    temp_file_path: str | None = None
+    try:
+        tmp = tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=f".{file_type}",
+            prefix="import_",
+        )
+        temp_file_path = tmp.name
+        tmp.close()
+        os.chmod(temp_file_path, 0o600)
+
+        file_size = 0
+        magic_bytes = b""
+        CHUNK_SIZE = 64 * 1024  # 64KB
+
+        with open(temp_file_path, "wb") as f:
+            while True:
+                chunk = await file.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                # Capture first bytes for magic detection
+                if file_size == 0:
+                    magic_bytes = chunk[:8]
+                file_size += len(chunk)
+                if file_size > MAX_FILE_SIZE:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=f"File too large (>{MAX_FILE_SIZE} bytes). Maximum allowed: {MAX_FILE_SIZE} bytes (50 MB)",
+                    )
+                f.write(chunk)
+
+    except HTTPException:
+        # Clean up temp file on validation failure
+        if temp_file_path:
+            try:
+                os.unlink(temp_file_path)
+            except OSError:
+                pass
+        raise
+    except OSError as e:
+        if temp_file_path:
+            try:
+                os.unlink(temp_file_path)
+            except OSError:
+                pass
+        logger.error("Failed to save uploaded file to temp: %s", e)
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File too large ({file_size} bytes). Maximum allowed: {MAX_FILE_SIZE} bytes (50 MB)",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save uploaded file",
         )
 
     # --- Verify file magic bytes ---
     detected = None
     for magic, ftype in FILE_MAGIC.items():
-        if contents.startswith(magic):
+        if magic_bytes.startswith(magic):
             detected = ftype
             break
 
     if detected is None:
+        try:
+            os.unlink(temp_file_path)
+        except OSError:
+            pass
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="File content does not match expected format",
         )
 
-    file_type = ALLOWED_MIME_TYPES[content_type]
-
     # For DOCX/PPTX, both start with PK (ZIP), so check the extension matches
     if detected == "docx_or_pptx" and file_type not in ("docx", "pptx"):
+        try:
+            os.unlink(temp_file_path)
+        except OSError:
+            pass
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="File content does not match declared file type",
         )
     if detected == "pdf" and file_type != "pdf":
+        try:
+            os.unlink(temp_file_path)
+        except OSError:
+            pass
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="File content does not match declared file type",
@@ -150,6 +205,10 @@ async def upload_and_import(
     # --- RBAC: check write access to target scope ---
     perm_service = PermissionService(db)
     if not await perm_service.check_can_edit_knowledge(current_user.id, scope, scope_id):
+        try:
+            os.unlink(temp_file_path)
+        except OSError:
+            pass
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have write access to the target scope",
@@ -168,28 +227,14 @@ async def upload_and_import(
             )
         )
         if not folder_result.scalar_one_or_none():
+            try:
+                os.unlink(temp_file_path)
+            except OSError:
+                pass
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Folder not found in target scope",
             )
-
-    # --- Save uploaded file to temp location ---
-    try:
-        tmp = tempfile.NamedTemporaryFile(
-            delete=False,
-            suffix=f".{file_type}",
-            prefix="import_",
-        )
-        tmp.write(contents)
-        tmp.close()
-        temp_file_path = tmp.name
-        os.chmod(temp_file_path, 0o600)
-    except OSError as e:
-        logger.error("Failed to save uploaded file to temp: %s", e)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to save uploaded file",
-        )
 
     # --- Derive title from filename if not provided ---
     job_title = title if title else Path(file_name).stem

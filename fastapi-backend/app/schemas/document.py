@@ -128,7 +128,8 @@ class DocumentResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     embedding_updated_at: Optional[datetime] = None
-    graph_ingested_at: Optional[datetime] = None
+    is_embedding_stale: bool = True
+    embedding_sync_pending: bool = False
     tags: list[TagResponse] = []
 
     @field_validator("tags", mode="before")
@@ -154,6 +155,8 @@ class DocumentListItem(BaseModel):
     created_at: datetime
     updated_at: datetime
     deleted_at: Optional[datetime] = None
+    is_embedding_stale: bool = True
+    embedding_sync_pending: bool = False
 
 
 class DocumentListResponse(BaseModel):

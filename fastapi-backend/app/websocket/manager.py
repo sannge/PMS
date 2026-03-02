@@ -105,6 +105,9 @@ class MessageType(str, Enum):
     DOCUMENT_UNLOCKED = "document_unlocked"
     DOCUMENT_FORCE_TAKEN = "document_force_taken"
 
+    # Embedding events
+    DOCUMENT_EMBEDDING_SYNCED = "document_embedding_synced"
+
     # Document CRUD events (knowledge base)
     DOCUMENT_CREATED = "document_created"
     DOCUMENT_UPDATED = "document_updated"
@@ -114,6 +117,13 @@ class MessageType(str, Enum):
     FOLDER_CREATED = "folder_created"
     FOLDER_UPDATED = "folder_updated"
     FOLDER_DELETED = "folder_deleted"
+
+    # AI events
+    EMBEDDING_UPDATED = "embedding_updated"
+    ENTITIES_EXTRACTED = "entities_extracted"
+    IMPORT_COMPLETED = "import_completed"
+    IMPORT_FAILED = "import_failed"
+    REINDEX_PROGRESS = "reindex_progress"
 
     # Ping/pong for keepalive
     PING = "ping"

@@ -144,6 +144,7 @@ class EmbeddingService:
                 document_id=document_id,
                 chunk_index=chunk.chunk_index,
                 chunk_text=chunk.text,
+                chunk_type="text",
                 heading_context=chunk.heading_context,
                 embedding=embedding,
                 token_count=chunk.token_count,
@@ -170,7 +171,7 @@ class EmbeddingService:
             from .telemetry import AITelemetry
 
             provider_name = getattr(provider, "provider_name", "unknown")
-            await AITelemetry.log_embedding_batch(
+            AITelemetry.log_embedding_batch(
                 document_count=1,
                 chunk_count=len(chunks),
                 total_tokens=total_tokens,

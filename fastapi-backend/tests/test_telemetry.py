@@ -36,12 +36,11 @@ def _parse_last_log(caplog) -> dict:
 
 
 class TestLogChatRequest:
-    @pytest.mark.asyncio
-    async def test_structured_output(self, caplog):
+    def test_structured_output(self, caplog):
         _capture_log(caplog)
         user_id = uuid4()
 
-        await AITelemetry.log_chat_request(
+        AITelemetry.log_chat_request(
             user_id=user_id,
             provider="anthropic",
             model="claude-sonnet-4-6",
@@ -65,11 +64,10 @@ class TestLogChatRequest:
         assert "timestamp" in data
         assert "cost_estimate_usd" in data
 
-    @pytest.mark.asyncio
-    async def test_no_pii_in_output(self, caplog):
+    def test_no_pii_in_output(self, caplog):
         _capture_log(caplog)
 
-        await AITelemetry.log_chat_request(
+        AITelemetry.log_chat_request(
             user_id=uuid4(),
             provider="openai",
             model="gpt-5",
@@ -84,11 +82,10 @@ class TestLogChatRequest:
         assert "sk-" not in log_text
         assert "message" not in log_text.lower() or "message" in json.loads(log_text).get("operation", "")
 
-    @pytest.mark.asyncio
-    async def test_info_level_on_success(self, caplog):
+    def test_info_level_on_success(self, caplog):
         _capture_log(caplog)
 
-        await AITelemetry.log_chat_request(
+        AITelemetry.log_chat_request(
             user_id=uuid4(),
             provider="openai",
             model="gpt-5",
@@ -101,11 +98,10 @@ class TestLogChatRequest:
 
         assert caplog.records[-1].levelno == logging.INFO
 
-    @pytest.mark.asyncio
-    async def test_error_level_on_failure(self, caplog):
+    def test_error_level_on_failure(self, caplog):
         _capture_log(caplog)
 
-        await AITelemetry.log_chat_request(
+        AITelemetry.log_chat_request(
             user_id=uuid4(),
             provider="openai",
             model="gpt-5",
@@ -121,11 +117,10 @@ class TestLogChatRequest:
         data = _parse_last_log(caplog)
         assert data["error"] == "Provider timeout"
 
-    @pytest.mark.asyncio
-    async def test_warning_level_on_slow(self, caplog):
+    def test_warning_level_on_slow(self, caplog):
         _capture_log(caplog)
 
-        await AITelemetry.log_chat_request(
+        AITelemetry.log_chat_request(
             user_id=uuid4(),
             provider="openai",
             model="gpt-5",
@@ -138,11 +133,10 @@ class TestLogChatRequest:
 
         assert caplog.records[-1].levelno == logging.WARNING
 
-    @pytest.mark.asyncio
-    async def test_cost_auto_calculated(self, caplog):
+    def test_cost_auto_calculated(self, caplog):
         _capture_log(caplog)
 
-        await AITelemetry.log_chat_request(
+        AITelemetry.log_chat_request(
             user_id=uuid4(),
             provider="anthropic",
             model="claude-sonnet-4-6",
@@ -163,11 +157,10 @@ class TestLogChatRequest:
 
 
 class TestLogEmbeddingBatch:
-    @pytest.mark.asyncio
-    async def test_structured_output(self, caplog):
+    def test_structured_output(self, caplog):
         _capture_log(caplog)
 
-        await AITelemetry.log_embedding_batch(
+        AITelemetry.log_embedding_batch(
             document_count=5,
             chunk_count=42,
             total_tokens=8000,
@@ -183,11 +176,10 @@ class TestLogEmbeddingBatch:
         assert data["total_tokens"] == 8000
         assert data["success"] is True
 
-    @pytest.mark.asyncio
-    async def test_cost_for_embedding(self, caplog):
+    def test_cost_for_embedding(self, caplog):
         _capture_log(caplog)
 
-        await AITelemetry.log_embedding_batch(
+        AITelemetry.log_embedding_batch(
             document_count=1,
             chunk_count=10,
             total_tokens=1_000_000,
@@ -207,11 +199,10 @@ class TestLogEmbeddingBatch:
 
 
 class TestLogToolCall:
-    @pytest.mark.asyncio
-    async def test_structured_output(self, caplog):
+    def test_structured_output(self, caplog):
         _capture_log(caplog)
 
-        await AITelemetry.log_tool_call(
+        AITelemetry.log_tool_call(
             tool_name="query_knowledge",
             user_id=uuid4(),
             duration_ms=150,
@@ -224,11 +215,10 @@ class TestLogToolCall:
         assert data["duration_ms"] == 150
         assert data["success"] is True
 
-    @pytest.mark.asyncio
-    async def test_failed_tool_call(self, caplog):
+    def test_failed_tool_call(self, caplog):
         _capture_log(caplog)
 
-        await AITelemetry.log_tool_call(
+        AITelemetry.log_tool_call(
             tool_name="sql_query",
             user_id=uuid4(),
             duration_ms=50,
@@ -248,11 +238,10 @@ class TestLogToolCall:
 
 
 class TestLogImport:
-    @pytest.mark.asyncio
-    async def test_structured_output(self, caplog):
+    def test_structured_output(self, caplog):
         _capture_log(caplog)
 
-        await AITelemetry.log_import(
+        AITelemetry.log_import(
             user_id=uuid4(),
             file_type="pdf",
             file_size=1024 * 1024,
@@ -269,11 +258,10 @@ class TestLogImport:
         # No file name in output
         assert "file_name" not in data
 
-    @pytest.mark.asyncio
-    async def test_no_file_name_logged(self, caplog):
+    def test_no_file_name_logged(self, caplog):
         _capture_log(caplog)
 
-        await AITelemetry.log_import(
+        AITelemetry.log_import(
             user_id=uuid4(),
             file_type="docx",
             file_size=500,
@@ -291,11 +279,10 @@ class TestLogImport:
 
 
 class TestLogSqlQuery:
-    @pytest.mark.asyncio
-    async def test_structured_output(self, caplog):
+    def test_structured_output(self, caplog):
         _capture_log(caplog)
 
-        await AITelemetry.log_sql_query(
+        AITelemetry.log_sql_query(
             user_id=uuid4(),
             duration_ms=250,
             success=True,
@@ -315,11 +302,10 @@ class TestLogSqlQuery:
 
 
 class TestLogReindex:
-    @pytest.mark.asyncio
-    async def test_structured_output(self, caplog):
+    def test_structured_output(self, caplog):
         _capture_log(caplog)
 
-        await AITelemetry.log_reindex(
+        AITelemetry.log_reindex(
             user_id=uuid4(),
             document_count=3,
             duration_ms=0,

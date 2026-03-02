@@ -41,18 +41,30 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """
     Async dependency injection for FastAPI.
 
-    Auto-commits on success, rollbacks on exception.
+    Yields a session without auto-commit -- all commits must be explicit
+    in the calling code. Rolls back on unhandled exceptions to prevent
+    partial writes.
+
+    COMMIT CONVENTION:
+        All write operations (POST, PUT, PATCH, DELETE) MUST call
+        ``await db.commit()`` explicitly. The session will NOT auto-commit
+        on success. Forgetting to commit will silently discard changes.
+
+        The commit call should live in whichever layer owns the transaction:
+        - Router-level: when the router orchestrates multiple service calls
+        - Service-level: when a service method is a self-contained unit of work
+
+        Do NOT double-commit (once in the service, again in the router).
 
     Usage:
         @app.get("/items")
-        async def get_items(db: AsyncSession = Depends(get_db)):
-            result = await db.execute(select(Item))
-            return result.scalars().all()
+        async def create_item(db: AsyncSession = Depends(get_db)):
+            db.add(Item(...))
+            await db.commit()
     """
     async with async_session_maker() as session:
         try:
             yield session
-            await session.commit()
         except Exception:
             await session.rollback()
             raise

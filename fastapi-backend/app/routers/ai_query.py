@@ -22,11 +22,56 @@ from ..schemas.sql_query import (
     SQLValidateRequest,
     SQLValidateResponse,
 )
-from ..ai.rate_limiter import check_reindex_rate_limit
+from ..ai.rate_limiter import check_query_rate_limit, check_reindex_rate_limit
 from ..ai.telemetry import AITelemetry, TelemetryTimer
 from ..services.auth_service import get_current_user
 
 logger = logging.getLogger(__name__)
+
+
+async def _user_can_access_document(
+    doc: Document, user: User, db: AsyncSession
+) -> bool:
+    """Check whether the user has access to a document based on its scope.
+
+    Personal docs: only the owner.
+    App-scoped docs: user must be an ApplicationMember.
+    Project-scoped docs: user must be a member of the project's application.
+    """
+    from ..models.application_member import ApplicationMember
+    from ..models.project import Project
+
+    # Owner always has access
+    if doc.user_id and doc.user_id == user.id:
+        return True
+
+    # App-scoped: verify user is a member of the application
+    if doc.application_id is not None:
+        result = await db.execute(
+            select(ApplicationMember.id).where(
+                ApplicationMember.application_id == doc.application_id,
+                ApplicationMember.user_id == user.id,
+            ).limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
+    # Project-scoped: verify user is a member of the project's application
+    if doc.project_id is not None:
+        result = await db.execute(
+            select(ApplicationMember.id)
+            .join(Project, Project.application_id == ApplicationMember.application_id)
+            .where(
+                Project.id == doc.project_id,
+                ApplicationMember.user_id == user.id,
+            ).limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
+    # Personal doc belonging to another user
+    if doc.user_id and doc.user_id != user.id:
+        return False
+
+    return False
 
 
 router = APIRouter(
@@ -45,6 +90,7 @@ async def execute_query(
     body: SQLQueryRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    _rate_limit: None = Depends(check_query_rate_limit),
 ) -> SQLQueryResponse:
     """Execute a natural-language query against the project management schema.
 
@@ -62,7 +108,7 @@ async def execute_query(
         generated = await generate_query(body.question, db, registry)
     except Exception as e:
         logger.warning("SQL generation failed for user %s: %s", current_user.id, e)
-        await AITelemetry.log_sql_query(
+        AITelemetry.log_sql_query(
             user_id=current_user.id,
             duration_ms=timer.elapsed_ms,
             success=False,
@@ -77,7 +123,7 @@ async def execute_query(
         query_result = await execute_sql(generated.sql, current_user.id, db)
     except Exception as e:
         logger.warning("SQL execution failed for user %s: %s", current_user.id, e)
-        await AITelemetry.log_sql_query(
+        AITelemetry.log_sql_query(
             user_id=current_user.id,
             duration_ms=timer.elapsed_ms,
             success=False,
@@ -88,7 +134,7 @@ async def execute_query(
             detail=f"Query execution failed: {e}",
         )
 
-    await AITelemetry.log_sql_query(
+    AITelemetry.log_sql_query(
         user_id=current_user.id,
         duration_ms=timer.elapsed_ms,
         success=True,
@@ -132,11 +178,17 @@ async def validate_query(
             error=result.error,
             tables_used=result.tables_used,
         )
-    except Exception as e:
+    except (ValueError, SyntaxError) as e:
         logger.warning("SQL validation error: %s", e)
         return SQLValidateResponse(
             is_valid=False,
             error=str(e),
+        )
+    except Exception as e:
+        logger.exception("Unexpected SQL validation error: %s", e)
+        return SQLValidateResponse(
+            is_valid=False,
+            error="Internal validation error",
         )
 
 
@@ -223,28 +275,27 @@ async def reindex_document(
             detail=f"Document {document_id} not found",
         )
 
+    # RBAC: verify user has access to the document's scope
+    if not await _user_can_access_document(doc, current_user, db):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document {document_id} not found",
+        )
+
     # Enqueue embedding job via ARQ
     try:
-        from ..services.redis_service import redis_service
+        from ..services.arq_helper import get_arq_redis
 
-        if not redis_service.is_connected:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Background worker not available",
-            )
-
-        from arq.connections import ArqRedis
-
-        pool = redis_service.client
-        arq_redis: ArqRedis | None = getattr(pool, "_arq_redis", None)
-        if arq_redis is None:
-            arq_redis = ArqRedis(pool_or_conn=pool.connection_pool)
-            pool._arq_redis = arq_redis  # type: ignore[attr-defined]
-
+        arq_redis = await get_arq_redis()
         await arq_redis.enqueue_job(
             "embed_document_job",
             str(document_id),
             _job_id=f"embed:{document_id}",
+        )
+    except RuntimeError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Background worker not available",
         )
     except HTTPException:
         raise
@@ -255,7 +306,7 @@ async def reindex_document(
             detail="Failed to enqueue reindex job",
         )
 
-    await AITelemetry.log_reindex(
+    AITelemetry.log_reindex(
         user_id=current_user.id,
         document_count=1,
         duration_ms=0,
@@ -282,19 +333,26 @@ async def get_index_status(
     if the document has never been embedded.
     """
     result = await db.execute(
-        select(Document.embedding_updated_at).where(
+        select(Document).where(
             Document.id == document_id,
             Document.deleted_at.is_(None),
         )
     )
-    row = result.one_or_none()
-    if row is None:
+    doc = result.scalar_one_or_none()
+    if doc is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Document {document_id} not found",
         )
 
-    embedding_updated_at = row[0]
+    # RBAC: verify user has access to the document's scope
+    if not await _user_can_access_document(doc, current_user, db):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document {document_id} not found",
+        )
+
+    embedding_updated_at = doc.embedding_updated_at
     return {
         "document_id": str(document_id),
         "embedding_updated_at": embedding_updated_at.isoformat() if embedding_updated_at else None,

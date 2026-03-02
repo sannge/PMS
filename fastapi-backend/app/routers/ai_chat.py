@@ -10,6 +10,7 @@ All endpoints require JWT authentication.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -22,7 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from langgraph.types import Command
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..database import async_session_maker, get_db
+from ..database import async_session_maker
 from ..models.user import User
 from ..schemas.ai_chat import (
     ChatImageAttachment,
@@ -46,45 +47,65 @@ MAX_IMAGES = 5
 MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB decoded
 ALLOWED_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 
+# Streaming safety limits
+STREAM_OVERALL_TIMEOUT_S = 120  # Max total stream duration
+STREAM_IDLE_TIMEOUT_S = 30  # Max gap between chunks
+MAX_CHUNKS_PER_RESPONSE = 2000  # ~32KB at avg 16 bytes/chunk
+
 # ---------------------------------------------------------------------------
 # Thread ownership tracking (H4 — prevent IDOR)
 # ---------------------------------------------------------------------------
-# Maps thread_id -> user_id string.  Set when a thread is created in
-# chat / chat_stream, checked in history / replay / resume endpoints.
-# Sufficient for single-process deployments; a proper DB-backed table
-# should replace this in production multi-worker setups.
+# Redis-backed storage: key "thread_owner:{thread_id}" -> user_id string.
+# Falls back to in-memory OrderedDict when Redis is unavailable.
+# NOTE: In-memory fallback is per-process. Multi-worker deployments MUST have
+# Redis available for thread ownership to work across workers. When Redis is
+# down, cross-worker requests to foreign threads are allowed through (fail-open)
+# to avoid breaking existing sessions.
+
+_THREAD_OWNER_TTL = 86400  # 24 hours
+
+# In-memory fallback (used only when Redis is down)
+_thread_owners_fallback: OrderedDict[str, str] = OrderedDict()
+_FALLBACK_MAX_SIZE = 100_000
 
 
-class _BoundedThreadOwners(OrderedDict):
-    """Thread ownership store with max-size eviction (FIFO).
+async def _register_thread(thread_id: str, user_id: str) -> None:
+    """Record the owner of a thread in Redis (with in-memory fallback)."""
+    from ..services.redis_service import redis_service
 
-    Single-process only. For multi-worker deployments, replace with
-    Redis-backed storage (key: f"thread_owner:{thread_id}", TTL: 86400).
-    """
+    try:
+        if redis_service.is_connected:
+            await redis_service.set(
+                f"thread_owner:{thread_id}", user_id, ttl=_THREAD_OWNER_TTL
+            )
+            return
+    except Exception:
+        pass  # Fall through to in-memory
 
-    MAX_SIZE = 100_000
-
-    def __setitem__(self, key: str, value: str) -> None:
-        super().__setitem__(key, value)
-        if len(self) > self.MAX_SIZE:
-            self.popitem(last=False)  # evict oldest
-
-
-_thread_owners: _BoundedThreadOwners = _BoundedThreadOwners()
-
-
-def _register_thread(thread_id: str, user_id: str) -> None:
-    """Record the owner of a thread."""
-    _thread_owners[thread_id] = user_id
+    _thread_owners_fallback[thread_id] = user_id
+    if len(_thread_owners_fallback) > _FALLBACK_MAX_SIZE:
+        _thread_owners_fallback.popitem(last=False)
 
 
-def _validate_thread_owner(thread_id: str, user_id: str) -> None:
+async def _validate_thread_owner(thread_id: str, user_id: str) -> None:
     """Raise 403 if *thread_id* does not belong to *user_id*.
 
     Threads that have no recorded owner (e.g. created before this check
-    was added) are allowed through to avoid breaking existing sessions.
+    was added, or Redis was unavailable) are allowed through to avoid
+    breaking existing sessions.
     """
-    owner = _thread_owners.get(thread_id)
+    from ..services.redis_service import redis_service
+
+    owner: str | None = None
+    try:
+        if redis_service.is_connected:
+            owner = await redis_service.get(f"thread_owner:{thread_id}")
+    except Exception:
+        pass  # Fall through to in-memory
+
+    if owner is None:
+        owner = _thread_owners_fallback.get(thread_id)
+
     if owner is not None and owner != user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -100,9 +121,9 @@ def _validate_thread_owner(thread_id: str, user_id: str) -> None:
 async def get_tool_db() -> AsyncGenerator[AsyncSession, None]:
     """Provide an independent database session for agent tool execution.
 
-    Agent tools run inside the LangGraph tool node which is separate from the
-    request's ``Depends(get_db)`` session.  Using the factory ensures each
-    tool call gets its own session lifecycle (auto-commit / rollback).
+    Agent tools run inside the LangGraph tool node which is separate from
+    the request lifecycle.  Using the factory ensures each tool call gets
+    its own session lifecycle (auto-commit / rollback).
     """
     async with async_session_maker() as session:
         try:
@@ -240,9 +261,12 @@ def _extract_sources(messages: list[Any]) -> list[dict]:
 
 async def _setup_agent_context(
     current_user: User,
-    db: AsyncSession,
 ) -> tuple[Any, dict[str, Any]]:
     """Build RBAC context, set tool context, and compile agent graph.
+
+    Opens a short-lived DB session for the RBAC query only, then releases
+    the connection back to the pool before returning.  This prevents
+    holding a connection idle for the entire agent execution (~120 s).
 
     Returns (graph, context).
     Caller must call clear_tool_context() in a finally block.
@@ -253,7 +277,8 @@ async def _setup_agent_context(
     from ..ai.agent.tools_write import WRITE_TOOLS
     from ..ai.provider_registry import ProviderRegistry
 
-    context = await AgentRBACContext.build_agent_context(str(current_user.id), db)
+    async with async_session_maker() as db:
+        context = await AgentRBACContext.build_agent_context(str(current_user.id), db)
     registry = ProviderRegistry()
     set_tool_context(
         user_id=str(current_user.id),
@@ -336,9 +361,14 @@ async def _stream_agent(
     """
     import time as _time
 
+    from app.ai.agent.source_references import reset_source_accumulator, get_accumulated_sources
+
     yield {"event": "run_started", "data": json.dumps({"thread_id": thread_id})}
 
     interrupted = False
+    # Initialize per-request source accumulator (ContextVar).
+    # Tool functions push sources here; we read them after the run completes.
+    reset_source_accumulator()
     # Track tool call start times for telemetry
     _tool_starts: dict[str, float] = {}  # run_id -> start_time
     _user_id_for_telemetry = state.get("user_id", "")
@@ -360,40 +390,46 @@ async def _stream_agent(
                 _tool_starts[run_id] = _time.monotonic()
                 yield {
                     "event": "tool_call_start",
-                    "data": json.dumps({"tool": event.get("name", "unknown")}),
+                    "data": json.dumps({
+                        "id": run_id,
+                        "name": event.get("name", "unknown"),
+                    }),
                 }
 
             elif event_kind == "on_tool_end":
-                output = event.get("data", {}).get("output", "")
+                raw_output = event.get("data", {}).get("output")
+                # Extract text content — ToolMessage has .content, otherwise str()
+                if hasattr(raw_output, "content"):
+                    output_text = str(raw_output.content)
+                elif isinstance(raw_output, str):
+                    output_text = raw_output
+                else:
+                    output_text = str(raw_output) if raw_output else ""
                 tool_name = event.get("name", "unknown")
                 run_id = event.get("run_id", "")
+                is_error = output_text.lower().startswith("error") or "failed" in output_text.lower()
                 # Calculate tool duration
                 start_ts = _tool_starts.pop(run_id, None)
                 tool_duration = int((_time.monotonic() - start_ts) * 1000) if start_ts else 0
                 # Telemetry: log individual tool call
                 try:
-                    await AITelemetry.log_tool_call(
+                    AITelemetry.log_tool_call(
                         tool_name=tool_name,
                         user_id=_user_id_for_telemetry,
                         duration_ms=tool_duration,
-                        success=True,
+                        success=not is_error,
                     )
                 except Exception:
                     pass  # Non-critical
-                # Extract structured sources from tool result metadata
-                sources: list[dict] = []
-                raw_output = event.get("data", {}).get("output")
-                if hasattr(raw_output, "additional_kwargs"):
-                    msg_sources = raw_output.additional_kwargs.get("sources")
-                    if msg_sources and isinstance(msg_sources, list):
-                        sources = msg_sources
                 yield {
                     "event": "tool_call_end",
                     "data": json.dumps(
                         {
-                            "tool": tool_name,
-                            "result": str(output),
-                            **({"sources": sources} if sources else {}),
+                            "id": run_id,
+                            "name": tool_name,
+                            "summary": output_text[:200] if output_text else "",
+                            "details": output_text if output_text else "",
+                            **({"error": output_text} if is_error else {}),
                         }
                     ),
                 }
@@ -428,7 +464,24 @@ async def _stream_agent(
     except Exception:
         logger.debug("Could not check interrupt state after stream", exc_info=True)
 
-    yield {"event": "run_finished", "data": json.dumps({"interrupted": interrupted})}
+    # Extract checkpoint_id for rewind/time-travel feature
+    checkpoint_id: str | None = None
+    try:
+        if graph_state:
+            config_val = getattr(graph_state, "config", {})
+            configurable = config_val.get("configurable", {}) if isinstance(config_val, dict) else {}
+            checkpoint_id = configurable.get("checkpoint_id")
+    except Exception:
+        pass
+
+    yield {
+        "event": "run_finished",
+        "data": json.dumps({
+            "interrupted": interrupted,
+            "sources": get_accumulated_sources(),
+            **({"checkpoint_id": checkpoint_id} if checkpoint_id else {}),
+        }),
+    }
     yield {"event": "end", "data": "{}"}
 
 
@@ -450,7 +503,6 @@ router = APIRouter(
 async def chat(
     request: ChatRequest,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
     _rate_limit: None = Depends(check_chat_rate_limit),
 ) -> ChatResponse:
     """Non-streaming chat endpoint.
@@ -464,7 +516,7 @@ async def chat(
     _validate_images(request.images)
 
     # 2. Setup agent context (RBAC, tools, graph)
-    graph, context = await _setup_agent_context(current_user, db)
+    graph, context = await _setup_agent_context(current_user)
 
     try:
         # 3. Build messages
@@ -475,8 +527,8 @@ async def chat(
         # 4. Build initial state and config
         thread_id = request.thread_id or str(uuid4())
         if request.thread_id:
-            _validate_thread_owner(thread_id, str(current_user.id))
-        _register_thread(thread_id, str(current_user.id))
+            await _validate_thread_owner(thread_id, str(current_user.id))
+        await _register_thread(thread_id, str(current_user.id))
         config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
 
         state: dict[str, Any] = {
@@ -486,13 +538,35 @@ async def chat(
             "accessible_project_ids": context["accessible_project_ids"],
         }
 
-        # 5. Run graph to completion
+        # 5. Run graph to completion (with timeout)
         timer = TelemetryTimer().start()
         try:
-            result = await graph.ainvoke(state, config=config)
+            async with asyncio.timeout(STREAM_OVERALL_TIMEOUT_S):
+                result = await graph.ainvoke(state, config=config)
+        except TimeoutError:
+            logger.warning(
+                "Agent graph timed out (%ds) for user %s",
+                STREAM_OVERALL_TIMEOUT_S,
+                current_user.id,
+            )
+            AITelemetry.log_chat_request(
+                user_id=current_user.id,
+                provider="unknown",
+                model="unknown",
+                input_tokens=0,
+                output_tokens=0,
+                tool_calls=0,
+                duration_ms=timer.elapsed_ms,
+                success=False,
+                error="Agent execution timed out",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail="Agent response timed out. Please try again.",
+            )
         except Exception:
             logger.exception("Agent graph execution failed for user %s", current_user.id)
-            await AITelemetry.log_chat_request(
+            AITelemetry.log_chat_request(
                 user_id=current_user.id,
                 provider="unknown",
                 model="unknown",
@@ -528,7 +602,7 @@ async def chat(
             if resp_meta.get("model_name"):
                 _model_name = resp_meta["model_name"]
 
-    await AITelemetry.log_chat_request(
+    AITelemetry.log_chat_request(
         user_id=current_user.id,
         provider=_provider_name,
         model=_model_name,
@@ -569,7 +643,6 @@ async def chat(
 async def chat_stream(
     request: ChatRequest,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
     _rate_limit: None = Depends(check_chat_rate_limit),
 ) -> Any:
     """SSE streaming chat endpoint.
@@ -586,7 +659,7 @@ async def chat_stream(
     _validate_images(request.images)
 
     # 2. Setup agent context (RBAC, tools, graph)
-    graph, context = await _setup_agent_context(current_user, db)
+    graph, context = await _setup_agent_context(current_user)
 
     # C3: wrap message/state building in try/finally so context is cleared on setup failure
     try:
@@ -598,8 +671,8 @@ async def chat_stream(
         # 4. Build initial state and config
         thread_id = request.thread_id or str(uuid4())
         if request.thread_id:
-            _validate_thread_owner(thread_id, str(current_user.id))
-        _register_thread(thread_id, str(current_user.id))
+            await _validate_thread_owner(thread_id, str(current_user.id))
+        await _register_thread(thread_id, str(current_user.id))
         config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
 
         state: dict[str, Any] = {
@@ -612,11 +685,67 @@ async def chat_stream(
         clear_tool_context()
         raise
 
-    # 5. Return SSE stream (cleanup in generator)
+    # 5. Return SSE stream (cleanup in generator) with timeout + chunk limit
     async def _guarded_stream() -> AsyncGenerator[dict, None]:
+        chunk_count = 0
+        aiter_stream = _stream_agent(graph, state, config, thread_id=thread_id).__aiter__()
+
         try:
-            async for event in _stream_agent(graph, state, config, thread_id=thread_id):
-                yield event
+            async with asyncio.timeout(STREAM_OVERALL_TIMEOUT_S):
+                while True:
+                    try:
+                        event = await asyncio.wait_for(
+                            anext(aiter_stream),
+                            timeout=STREAM_IDLE_TIMEOUT_S,
+                        )
+                    except StopAsyncIteration:
+                        break
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "Stream idle timeout (%ds) for user %s, thread %s",
+                            STREAM_IDLE_TIMEOUT_S,
+                            current_user.id,
+                            thread_id,
+                        )
+                        yield {
+                            "event": "error",
+                            "data": json.dumps(
+                                {"message": "Stream timeout — response took too long"}
+                            ),
+                        }
+                        return
+
+                    # Chunk limit check
+                    chunk_count += 1
+                    if chunk_count > MAX_CHUNKS_PER_RESPONSE:
+                        logger.warning(
+                            "Stream chunk limit (%d) exceeded for user %s, thread %s",
+                            MAX_CHUNKS_PER_RESPONSE,
+                            current_user.id,
+                            thread_id,
+                        )
+                        yield {
+                            "event": "error",
+                            "data": json.dumps(
+                                {"message": "Response exceeded maximum size"}
+                            ),
+                        }
+                        return
+
+                    yield event
+        except TimeoutError:
+            logger.warning(
+                "Stream overall timeout (%ds) for user %s, thread %s",
+                STREAM_OVERALL_TIMEOUT_S,
+                current_user.id,
+                thread_id,
+            )
+            yield {
+                "event": "error",
+                "data": json.dumps(
+                    {"message": "Stream timeout — response took too long"}
+                ),
+            }
         finally:
             clear_tool_context()
 
@@ -635,7 +764,7 @@ async def chat_stream(
 async def resume_chat(
     request: ResumeRequest,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    _rate_limit: None = Depends(check_chat_rate_limit),
 ) -> Any:
     """Resume a conversation after a human-in-the-loop interrupt.
 
@@ -647,7 +776,6 @@ async def resume_chat(
     Args:
         request: Contains thread_id and user response payload.
         current_user: Authenticated user (JWT).
-        db: Database session.
 
     Returns:
         ChatResponse with the agent's post-resume reply.
@@ -656,7 +784,7 @@ async def resume_chat(
     from ..ai.agent.tools_read import clear_tool_context
 
     # Validate thread ownership
-    _validate_thread_owner(request.thread_id, str(current_user.id))
+    await _validate_thread_owner(request.thread_id, str(current_user.id))
 
     checkpointer = get_checkpointer()
     if checkpointer is None:
@@ -666,22 +794,57 @@ async def resume_chat(
         )
 
     # Setup agent context (RBAC, tools, graph)
-    graph, _context = await _setup_agent_context(current_user, db)
+    graph, _context = await _setup_agent_context(current_user)
 
     try:
+        timer = TelemetryTimer().start()
         config: dict[str, Any] = {
             "configurable": {"thread_id": request.thread_id}
         }
 
         try:
-            result = await graph.ainvoke(
-                Command(resume=request.response), config=config
+            async with asyncio.timeout(STREAM_OVERALL_TIMEOUT_S):
+                result = await graph.ainvoke(
+                    Command(resume=request.response), config=config
+                )
+        except TimeoutError:
+            logger.warning(
+                "Agent resume timed out (%ds) for user %s, thread %s",
+                STREAM_OVERALL_TIMEOUT_S,
+                current_user.id,
+                request.thread_id,
+            )
+            AITelemetry.log_chat_request(
+                user_id=current_user.id,
+                provider="unknown",
+                model="unknown",
+                input_tokens=0,
+                output_tokens=0,
+                tool_calls=0,
+                duration_ms=timer.elapsed_ms,
+                success=False,
+                error="Agent resume timed out",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail="Agent response timed out. Please try again.",
             )
         except Exception:
             logger.exception(
                 "Agent resume failed for user %s, thread %s",
                 current_user.id,
                 request.thread_id,
+            )
+            AITelemetry.log_chat_request(
+                user_id=current_user.id,
+                provider="unknown",
+                model="unknown",
+                input_tokens=0,
+                output_tokens=0,
+                tool_calls=0,
+                duration_ms=timer.elapsed_ms,
+                success=False,
+                error="Agent resume failed",
             )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -690,8 +853,33 @@ async def resume_chat(
     finally:
         clear_tool_context()
 
-    # Extract response
+    # Extract response and log success telemetry
     result_messages = result.get("messages", [])
+
+    _input_tokens = 0
+    _output_tokens = 0
+    _model_name = "unknown"
+    for msg in result_messages:
+        usage = getattr(msg, "usage_metadata", None)
+        if usage and isinstance(usage, dict):
+            _input_tokens += usage.get("input_tokens", 0)
+            _output_tokens += usage.get("output_tokens", 0)
+        resp_meta = getattr(msg, "response_metadata", None)
+        if resp_meta and isinstance(resp_meta, dict):
+            if resp_meta.get("model_name"):
+                _model_name = resp_meta["model_name"]
+
+    AITelemetry.log_chat_request(
+        user_id=current_user.id,
+        provider="unknown",
+        model=_model_name,
+        input_tokens=_input_tokens,
+        output_tokens=_output_tokens,
+        tool_calls=len(_extract_tool_calls(result_messages)),
+        duration_ms=timer.elapsed_ms,
+        success=True,
+    )
+
     return _build_chat_response(result_messages, request.thread_id)
 
 
@@ -711,10 +899,10 @@ async def get_conversation_history(
     after LLM responses), not internal tool execution checkpoints.
     This powers the time-travel / rewind UI.
     """
-    from ..ai.agent.graph import get_checkpointer  # noqa: F811
+    from ..ai.agent.graph import get_checkpointer
 
     # H4: validate thread ownership
-    _validate_thread_owner(thread_id, str(current_user.id))
+    await _validate_thread_owner(thread_id, str(current_user.id))
 
     checkpointer = get_checkpointer()
     if checkpointer is None:
@@ -758,7 +946,7 @@ async def get_conversation_history(
 async def replay_conversation(
     request: ReplayRequest,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    _rate_limit: None = Depends(check_chat_rate_limit),
 ) -> Any:
     """Replay a conversation from a previous checkpoint.
 
@@ -777,7 +965,7 @@ async def replay_conversation(
     from ..ai.agent.tools_read import clear_tool_context
 
     # H4: validate thread ownership
-    _validate_thread_owner(request.thread_id, str(current_user.id))
+    await _validate_thread_owner(request.thread_id, str(current_user.id))
 
     checkpointer = get_checkpointer()
     if checkpointer is None:
@@ -787,7 +975,7 @@ async def replay_conversation(
         )
 
     # Setup agent context (RBAC, tools, graph)
-    graph, context = await _setup_agent_context(current_user, db)
+    graph, context = await _setup_agent_context(current_user)
 
     if request.message:
         # H8: branch — create a new thread_id for the replayed conversation
@@ -795,7 +983,7 @@ async def replay_conversation(
         # generator's own finally handles cleanup. Matching chat_stream pattern.
         try:
             branch_thread_id = str(uuid4())
-            _register_thread(branch_thread_id, str(current_user.id))
+            await _register_thread(branch_thread_id, str(current_user.id))
             branch_config: dict[str, Any] = {
                 "configurable": {
                     "thread_id": branch_thread_id,
@@ -814,12 +1002,67 @@ async def replay_conversation(
             raise
 
         async def _guarded_replay() -> AsyncGenerator[dict, None]:
+            chunk_count = 0
+            aiter_stream = _stream_agent(
+                graph, input_state, branch_config,
+                thread_id=branch_thread_id,
+            ).__aiter__()
+
             try:
-                async for event in _stream_agent(
-                    graph, input_state, branch_config,
-                    thread_id=branch_thread_id,
-                ):
-                    yield event
+                async with asyncio.timeout(STREAM_OVERALL_TIMEOUT_S):
+                    while True:
+                        try:
+                            event = await asyncio.wait_for(
+                                anext(aiter_stream),
+                                timeout=STREAM_IDLE_TIMEOUT_S,
+                            )
+                        except StopAsyncIteration:
+                            break
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                "Replay idle timeout (%ds) for user %s, thread %s",
+                                STREAM_IDLE_TIMEOUT_S,
+                                current_user.id,
+                                branch_thread_id,
+                            )
+                            yield {
+                                "event": "error",
+                                "data": json.dumps(
+                                    {"message": "Stream timeout — response took too long"}
+                                ),
+                            }
+                            return
+
+                        chunk_count += 1
+                        if chunk_count > MAX_CHUNKS_PER_RESPONSE:
+                            logger.warning(
+                                "Replay chunk limit (%d) for user %s, thread %s",
+                                MAX_CHUNKS_PER_RESPONSE,
+                                current_user.id,
+                                branch_thread_id,
+                            )
+                            yield {
+                                "event": "error",
+                                "data": json.dumps(
+                                    {"message": "Response exceeded maximum size"}
+                                ),
+                            }
+                            return
+
+                        yield event
+            except TimeoutError:
+                logger.warning(
+                    "Replay overall timeout (%ds) for user %s, thread %s",
+                    STREAM_OVERALL_TIMEOUT_S,
+                    current_user.id,
+                    branch_thread_id,
+                )
+                yield {
+                    "event": "error",
+                    "data": json.dumps(
+                        {"message": "Stream timeout — response took too long"}
+                    ),
+                }
             finally:
                 clear_tool_context()
 

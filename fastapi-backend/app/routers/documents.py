@@ -7,7 +7,6 @@ and tag assignment with scope compatibility validation.
 """
 
 import asyncio
-from datetime import timedelta
 from typing import Literal, Optional
 from uuid import UUID
 
@@ -67,6 +66,15 @@ router = APIRouter(
 )
 
 
+def _log_task_exception(task: asyncio.Task) -> None:
+    """Callback for fire-and-forget tasks — log exceptions instead of silently dropping."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("Background search index task failed: %s: %s", type(exc).__name__, exc)
+
+
 def _get_document_scope(doc: Document) -> tuple[str, str]:
     """Extract scope type and ID from a document."""
     if doc.application_id:
@@ -75,7 +83,8 @@ def _get_document_scope(doc: Document) -> tuple[str, str]:
         return "project", str(doc.project_id)
     elif doc.user_id:
         return "personal", str(doc.user_id)
-    return "unknown", ""
+    logger.warning("Document %s has no scope (no app, project, or user ID)", doc.id)
+    return "personal", ""
 
 
 async def _broadcast_document_event(
@@ -464,6 +473,14 @@ async def list_documents(
 
     items = [DocumentListItem.model_validate(doc) for doc in documents]
 
+    # Batch-check ARQ for pending embed jobs (single Redis pipeline)
+    from ..services.arq_helper import batch_embed_jobs_pending
+
+    pending_ids = await batch_embed_jobs_pending([doc.id for doc in documents])
+    for item in items:
+        if item.id in pending_ids:
+            item.embedding_sync_pending = True
+
     next_cursor = None
     if has_next and documents:
         last = documents[-1]
@@ -522,7 +539,7 @@ async def create_document(
     await db.commit()
 
     # Fire-and-forget: index new document for search (non-blocking)
-    asyncio.create_task(index_document_from_data(search_doc_data))
+    asyncio.create_task(index_document_from_data(search_doc_data)).add_done_callback(_log_task_exception)
 
     # Broadcast document created event
     await _broadcast_document_event(
@@ -567,7 +584,11 @@ async def get_document(
             detail="You do not have permission to view this document",
         )
 
-    return DocumentResponse.model_validate(document)
+    from ..services.arq_helper import is_embed_job_pending
+
+    response = DocumentResponse.model_validate(document)
+    response.embedding_sync_pending = await is_embed_job_pending(document_id)
+    return response
 
 
 @router.put("/{document_id}", response_model=DocumentResponse)
@@ -668,7 +689,7 @@ async def update_document(
     await db.commit()
 
     # Fire-and-forget: update search index (non-blocking)
-    asyncio.create_task(index_document_from_data(search_doc_data))
+    asyncio.create_task(index_document_from_data(search_doc_data)).add_done_callback(_log_task_exception)
 
     # Broadcast document updated event
     await _broadcast_document_event(
@@ -740,27 +761,10 @@ async def save_content(
     # Fire-and-forget: update search index AFTER commit (non-blocking)
     if search_doc_data:
         from ..services.search_service import index_document_from_data
-        asyncio.create_task(index_document_from_data(search_doc_data))
+        asyncio.create_task(index_document_from_data(search_doc_data)).add_done_callback(_log_task_exception)
 
-    # Enqueue embedding job (deferred 120s to reduce churn during active editing)
-    try:
-        from ..services.redis_service import redis_service
-        if redis_service.is_connected:
-            from arq.connections import ArqRedis
-            pool = redis_service.client
-            # Reuse ArqRedis wrapper cached on the redis_service client
-            arq_redis: ArqRedis | None = getattr(pool, "_arq_redis", None)
-            if arq_redis is None:
-                arq_redis = ArqRedis(pool_or_conn=pool.connection_pool)
-                pool._arq_redis = arq_redis  # type: ignore[attr-defined]
-            await arq_redis.enqueue_job(
-                "embed_document_job",
-                str(document_id),
-                _job_id=f"embed:{document_id}",
-                _defer_by=timedelta(seconds=120),
-            )
-    except Exception:
-        logger.exception("Failed to enqueue embed_document_job for %s", document_id)
+    # Auto-embed removed (Phase 9.6): embeddings now triggered only by
+    # manual sync (POST /documents/{id}/sync-embeddings) or nightly batch job.
 
     await _broadcast_document_event(
         MessageType.DOCUMENT_UPDATED,
@@ -824,7 +828,7 @@ async def delete_document(
 
     # Fire-and-forget: mark document as deleted in search index (non-blocking)
     from ..services.search_service import index_document_soft_delete
-    asyncio.create_task(index_document_soft_delete(doc_id_for_search))
+    asyncio.create_task(index_document_soft_delete(doc_id_for_search)).add_done_callback(_log_task_exception)
 
     # Broadcast document deleted event
     await _broadcast_document_event(
@@ -899,7 +903,7 @@ async def restore_document(
 
     # Fire-and-forget: restore document in search index (non-blocking)
     from ..services.search_service import index_document_restore
-    asyncio.create_task(index_document_restore(doc_id_for_search))
+    asyncio.create_task(index_document_restore(doc_id_for_search)).add_done_callback(_log_task_exception)
 
     # Broadcast document restored event (appears as created to other clients)
     await _broadcast_document_event(
@@ -1127,3 +1131,72 @@ async def remove_tag_from_document(
 
     await db.delete(assignment)
     await db.flush()
+
+
+# ============================================================================
+# Embedding sync endpoint (Phase 9.6)
+# ============================================================================
+
+
+@router.post(
+    "/{document_id}/sync-embeddings",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def sync_embeddings(
+    document_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Queue an embedding sync job for a single document.
+
+    Requires Editor or Owner permission on the document's scope.
+    Returns 202 Accepted with the job ID.
+    """
+    result = await db.execute(
+        select(Document)
+        .where(Document.id == document_id)
+        .where(Document.deleted_at.is_(None))
+    )
+    document = result.scalar_one_or_none()
+
+    if document is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document {document_id} not found",
+        )
+
+    perm_service = PermissionService(db)
+    scope_type, scope_id = PermissionService.resolve_entity_scope(document)
+    if not await perm_service.check_can_edit_knowledge(current_user.id, scope_type, scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to sync embeddings for this document",
+        )
+
+    try:
+        from ..services.arq_helper import get_arq_redis
+
+        arq_redis = await get_arq_redis()
+        # Clear previous job + result keys so ARQ dedup doesn't silently skip re-enqueue
+        await arq_redis.delete(
+            f"arq:job:embed:{document_id}",
+            f"arq:result:embed:{document_id}",
+        )
+        await arq_redis.enqueue_job(
+            "embed_document_job",
+            str(document_id),
+            _job_id=f"embed:{document_id}",
+        )
+    except RuntimeError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Background worker not available",
+        )
+    except Exception:
+        logger.exception("Failed to enqueue embed_document_job for %s", document_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Failed to enqueue embedding sync job",
+        )
+
+    return {"status": "accepted", "document_id": str(document_id)}

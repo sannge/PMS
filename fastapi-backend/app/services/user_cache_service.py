@@ -36,6 +36,8 @@ class CachedUser:
     email: str
     display_name: Optional[str]
     avatar_url: Optional[str]
+    email_verified: bool = True
+    is_developer: bool = False
 
 
 # Cache storage: user_id -> (CachedUser, expiry_timestamp)
@@ -77,6 +79,8 @@ def set_cached_user(user) -> None:
             email=user.email,
             display_name=user.display_name,
             avatar_url=getattr(user, "avatar_url", None),
+            email_verified=getattr(user, "email_verified", True),
+            is_developer=getattr(user, "is_developer", False),
         ),
         time.time() + _CACHE_TTL,
     )
@@ -300,25 +304,42 @@ def _evict_oldest(cache: dict) -> None:
     """
     Remove oldest 10% of entries from cache.
 
+    Takes advantage of dict insertion order (Python 3.7+) — entries are
+    iterated in FIFO order, so the first entries are the oldest.
+
     Args:
         cache: The cache dictionary to evict from
     """
     if not cache:
         return
 
-    # Sort by expiry time (second element of tuple)
-    sorted_items = sorted(cache.items(), key=lambda x: x[1][1])
-    evict_count = max(1, len(sorted_items) // 10)
-
-    for key, _ in sorted_items[:evict_count]:
-        cache.pop(key, None)
+    evict_count = max(1, len(cache) // 10)
+    keys_to_remove = list(cache.keys())[:evict_count]
+    for key in keys_to_remove:
+        del cache[key]
 
 
 def clear_all_caches() -> None:
-    """Clear all caches. Used for testing or admin operations."""
+    """Clear all in-memory caches. Used for testing or admin operations.
+
+    Clears user/role caches from this module plus other module-level caches
+    that could leak state between tests.
+    """
     clear_user_cache()
     clear_app_role_cache()
     clear_project_role_cache()
+
+    # Clear WebSocket room authorization cache
+    from ..websocket.room_auth import _auth_cache
+    _auth_cache.clear()
+
+    # Clear AI health check cache (keyed by fixed strings "embedding"/"chat")
+    from ..main import _ai_health_cache
+    _ai_health_cache.clear()
+
+    # Clear auto-archive throttle (keyed by application_id)
+    from ..routers.projects import _auto_archive_last_run
+    _auto_archive_last_run.clear()
 
 
 def get_cache_stats() -> dict:

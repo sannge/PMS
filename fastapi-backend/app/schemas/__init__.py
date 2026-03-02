@@ -46,6 +46,11 @@ from .document_folder import (
     FolderTreeNode,
     FolderUpdate,
 )
+from .import_job import (
+    ImportJobCreate,
+    ImportJobListResponse,
+    ImportJobResponse,
+)
 from .project import (
     ProjectCreate,
     ProjectResponse,
@@ -115,6 +120,10 @@ __all__ = [
     "FolderResponse",
     "FolderTreeNode",
     "FolderUpdate",
+    # Import job schemas
+    "ImportJobCreate",
+    "ImportJobListResponse",
+    "ImportJobResponse",
     # Project schemas
     "ProjectCreate",
     "ProjectResponse",

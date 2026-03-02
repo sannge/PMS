@@ -716,15 +716,13 @@ class TestApiKeyEncryption:
 class TestEmbeddingNormalizer:
 
     def test_pads_short_vectors(self):
-        normalizer = EmbeddingNormalizer(target_dimensions=5)
-        result = normalizer.normalize([1.0, 2.0])
-        assert len(result) == 5
-        # Last three elements were originally zero-padded, then L2-normalized
-        # Check that the structure is correct (padded zeros remain zero after normalization)
-        # Wait -- after L2 norm, zeros remain zero: 0.0 / norm == 0.0
-        assert result[2] == pytest.approx(0.0)
-        assert result[3] == pytest.approx(0.0)
-        assert result[4] == pytest.approx(0.0)
+        # Use target=10 with 9 elements (10% gap — exactly at threshold, allowed)
+        normalizer = EmbeddingNormalizer(target_dimensions=10)
+        result = normalizer.normalize([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0])
+        assert len(result) == 10
+        # Last element was zero-padded, then L2-normalized
+        # After L2 norm, zeros remain zero: 0.0 / norm == 0.0
+        assert result[9] == pytest.approx(0.0)
 
     def test_truncates_long_vectors(self):
         normalizer = EmbeddingNormalizer(target_dimensions=3)

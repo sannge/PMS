@@ -15,7 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ..ai.encryption import ApiKeyEncryption
-from ..ai.oauth_service import OAuthError, OAuthService, get_oauth_service
+from ..ai.exceptions import OAuthError
+from ..ai.oauth_service import OAuthService, get_oauth_service
+from ..ai.provider_registry import refresh_provider_cache
 from ..ai.rate_limiter import AIRateLimiter, get_rate_limiter, _raise_rate_limit
 from ..config import settings
 from ..database import get_db
@@ -33,6 +35,18 @@ from ..services.auth_service import get_current_user
 from ..utils.timezone import utc_now
 
 logger = logging.getLogger(__name__)
+
+_ALLOWED_REDIRECT_PREFIXES = ("http://localhost:", "http://127.0.0.1:")
+
+
+def _validate_redirect_uri(redirect_uri: str) -> None:
+    """Reject redirect URIs that don't target localhost (Electron app)."""
+    if not redirect_uri.startswith(_ALLOWED_REDIRECT_PREFIXES):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="redirect_uri must target localhost (http://localhost:... or http://127.0.0.1:...)",
+        )
+
 
 router = APIRouter(
     prefix="/api/ai/config/me/oauth",
@@ -75,6 +89,8 @@ async def initiate_oauth(
     Returns an auth URL that the Electron app opens in a BrowserWindow.
     The state token is stored in Redis for callback validation.
     """
+    _validate_redirect_uri(body.redirect_uri)
+
     try:
         auth_url, state = await oauth_service.generate_auth_url(
             provider_type=body.provider_type,
@@ -111,13 +127,15 @@ async def oauth_callback(
 ) -> OAuthConnectionStatus:
     """Exchange authorization code for tokens and store the connection.
 
-    1. Validates state token (CSRF protection, single-use)
+    1. Validates redirect_uri and state token (CSRF protection, single-use)
     2. Exchanges code for tokens via provider
     3. Encrypts tokens with Fernet before storage
     4. Creates/updates user-scoped AiProvider with auth_method='oauth'
     5. Auto-creates chat AiModel entry
     6. Returns connection status (never includes tokens)
     """
+    _validate_redirect_uri(body.redirect_uri)
+
     # Validate state token
     state_data = await oauth_service._validate_state(body.state, current_user.id)
     if state_data is None:
@@ -220,7 +238,7 @@ async def oauth_callback(
     await db.refresh(provider)
 
     # Refresh provider registry cache
-    await _refresh_provider_cache()
+    await refresh_provider_cache()
 
     # Build status response (never include tokens)
     scopes = (
@@ -247,25 +265,27 @@ async def oauth_callback(
     },
 )
 async def disconnect_oauth(
+    provider_type: str | None = None,
     current_user: User = Depends(get_current_user),
     oauth_service: OAuthService = Depends(get_oauth_service),
     db: AsyncSession = Depends(get_db),
 ) -> OAuthDisconnectResponse:
     """Disconnect OAuth provider and revoke tokens.
 
-    1. Finds user-scoped OAuth provider
+    1. Finds user-scoped OAuth provider (optionally filtered by provider_type)
     2. Revokes tokens at the provider (best-effort)
     3. Deletes the user-scoped AiProvider + cascade to AiModel
     4. User falls back to company default
     """
-    result = await db.execute(
-        select(AiProvider).where(
-            AiProvider.user_id == current_user.id,
-            AiProvider.scope == "user",
-            AiProvider.auth_method == "oauth",
-        )
+    query = select(AiProvider).where(
+        AiProvider.user_id == current_user.id,
+        AiProvider.scope == "user",
+        AiProvider.auth_method == "oauth",
     )
-    provider = result.scalar_one_or_none()
+    if provider_type:
+        query = query.where(AiProvider.provider_type == provider_type)
+    result = await db.execute(query)
+    provider = result.scalars().first()
 
     if not provider:
         raise HTTPException(
@@ -273,28 +293,29 @@ async def disconnect_oauth(
             detail="No OAuth connection found",
         )
 
-    # Best-effort token revocation
-    if provider.oauth_access_token:
-        try:
-            encryption = ApiKeyEncryption(settings.ai_encryption_key)
-            decrypted_token = encryption.decrypt(provider.oauth_access_token)
-            await oauth_service.revoke_tokens(
-                provider_type=provider.provider_type,
-                access_token=decrypted_token,
-            )
-        except Exception:
-            logger.warning(
-                "Failed to revoke OAuth tokens for user %s (best-effort)",
-                current_user.id,
-                exc_info=True,
-            )
+    # Best-effort token revocation (both access and refresh tokens)
+    encryption = ApiKeyEncryption(settings.ai_encryption_key)
+    for token_col in (provider.oauth_access_token, provider.oauth_refresh_token):
+        if token_col:
+            try:
+                decrypted_token = encryption.decrypt(token_col)
+                await oauth_service.revoke_tokens(
+                    provider_type=provider.provider_type,
+                    access_token=decrypted_token,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to revoke OAuth token for user %s (best-effort)",
+                    current_user.id,
+                    exc_info=True,
+                )
 
     # Delete the provider (cascades to models)
     await db.delete(provider)
     await db.commit()
 
     # Refresh provider registry cache
-    await _refresh_provider_cache()
+    await refresh_provider_cache()
 
     return OAuthDisconnectResponse(
         disconnected=True,
@@ -311,18 +332,20 @@ async def disconnect_oauth(
     },
 )
 async def oauth_status(
+    provider_type: str | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> OAuthConnectionStatus:
     """Get current OAuth connection status. Never returns actual tokens."""
-    result = await db.execute(
-        select(AiProvider).where(
-            AiProvider.user_id == current_user.id,
-            AiProvider.scope == "user",
-            AiProvider.auth_method == "oauth",
-        )
+    query = select(AiProvider).where(
+        AiProvider.user_id == current_user.id,
+        AiProvider.scope == "user",
+        AiProvider.auth_method == "oauth",
     )
-    provider = result.scalar_one_or_none()
+    if provider_type:
+        query = query.where(AiProvider.provider_type == provider_type)
+    result = await db.execute(query)
+    provider = result.scalars().first()
 
     if not provider:
         return OAuthConnectionStatus(connected=False)
@@ -340,11 +363,3 @@ async def oauth_status(
     )
 
 
-async def _refresh_provider_cache() -> None:
-    """Refresh the provider registry cache after configuration changes."""
-    try:
-        from ..ai.provider_registry import ProviderRegistry
-        registry = ProviderRegistry()
-        await registry.refresh()
-    except Exception:
-        logger.debug("Provider registry refresh skipped (not yet initialized)")

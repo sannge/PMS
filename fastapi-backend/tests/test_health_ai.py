@@ -64,6 +64,10 @@ def _patch_health_deps(
     if valid_views is None:
         valid_views = []
 
+    # Clear the AI health cache before each test to avoid stale cached results
+    import app.main as _main_mod
+    _main_mod._ai_health_cache.clear()
+
     with patch("app.database.async_session_maker", mock_maker), \
          patch("app.main.redis_service", mock_redis), \
          patch(

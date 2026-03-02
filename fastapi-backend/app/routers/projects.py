@@ -11,6 +11,7 @@ Access Control:
 """
 
 import asyncio
+import logging
 from datetime import datetime, timedelta
 from typing import Annotated, Dict, List, Optional
 from uuid import UUID
@@ -49,6 +50,8 @@ from ..schemas.project import (
 from ..services.auth_service import get_current_user
 from ..services.notification_service import NotificationService
 from ..websocket.manager import MessageType, manager
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Projects"])
 
@@ -953,31 +956,94 @@ async def delete_project(
     # Combine unique user IDs to notify (excluding the user who deleted)
     users_to_notify = (set(project_member_ids) | set(application_owner_ids)) - {current_user.id}
 
-    # Break circular dependency: delete TaskStatuses first, then Project
-    # (Project.derived_status_id references TaskStatus, TaskStatus.project_id cascades from Project)
-    # ORM cascade can't resolve this, so we handle it manually:
+    # Break circular dependency: manually delete in FK-safe order.
+    # Task.task_status_id has ondelete=RESTRICT, so Tasks must go first.
     # 1. Null out Project's FK references to TaskStatus
-    # 2. Delete TaskStatuses via raw SQL (bypasses ORM cascade confusion)
-    # 3. Delete Project (remaining cascades like tasks, members still work)
+    # 2. Collect MinIO file references BEFORE cascade deletes DB records
+    # 3. Delete Tasks via raw SQL (DB cascades Comments, Checklists, Attachments)
+    # 4. Delete TaskStatuses via raw SQL
+    # 5. Delete Project (remaining cascades like members still work)
+    # 6. Clean up MinIO files AFTER commit (orphaned files > broken DB references)
     from sqlalchemy import delete as sql_delete
+    from ..models.task import Task as TaskModel
     from ..models.task_status import TaskStatus as TaskStatusModel
+    from ..models.attachment import Attachment
+    from ..models.document import Document
 
     project.derived_status_id = None
     project.override_status_id = None
     await db.flush()
 
-    # Delete TaskStatuses via raw SQL to bypass ORM circular dependency
+    # Collect MinIO file references BEFORE cascade deletes the DB records.
+    # We query now but delete from MinIO AFTER db.commit() so that a DB
+    # rollback doesn't leave broken references to already-deleted files.
+    minio_files_to_delete: list[tuple[str, str]] = []
+
+    # Task attachments (linked via task_id FK)
+    task_ids_result = await db.execute(
+        select(Task.id).where(Task.project_id == project_id)
+    )
+    task_ids = [row[0] for row in task_ids_result.all()]
+
+    if task_ids:
+        attach_result = await db.execute(
+            select(Attachment.minio_bucket, Attachment.minio_key).where(
+                Attachment.task_id.in_(task_ids),
+                Attachment.minio_bucket.is_not(None),
+                Attachment.minio_key.is_not(None),
+            )
+        )
+        minio_files_to_delete.extend(attach_result.all())
+
+    # Document attachments (linked via polymorphic entity_type/entity_id)
+    doc_ids_result = await db.execute(
+        select(Document.id).where(Document.project_id == project_id)
+    )
+    doc_ids = [row[0] for row in doc_ids_result.all()]
+
+    if doc_ids:
+        doc_attach_result = await db.execute(
+            select(Attachment.minio_bucket, Attachment.minio_key).where(
+                Attachment.entity_type == "document",
+                Attachment.entity_id.in_(doc_ids),
+                Attachment.minio_bucket.is_not(None),
+                Attachment.minio_key.is_not(None),
+            )
+        )
+        minio_files_to_delete.extend(doc_attach_result.all())
+
+    # Delete Tasks first (their task_status_id FK is RESTRICT)
+    await db.execute(
+        sql_delete(TaskModel).where(TaskModel.project_id == project_id)
+    )
+
+    # Now safe to delete TaskStatuses
     await db.execute(
         sql_delete(TaskStatusModel).where(TaskStatusModel.project_id == project_id)
     )
 
-    # Expire the project to clear cached task_statuses relationship
-    # Otherwise ORM will try to cascade-delete already-deleted TaskStatuses
-    db.expire(project, ["task_statuses", "derived_status", "override_status"])
+    # Expire the project to clear cached relationships for already-deleted rows
+    # Otherwise ORM will try to cascade-delete already-deleted Tasks/TaskStatuses
+    db.expire(project, ["tasks", "task_statuses", "derived_status", "override_status"])
 
-    # Delete the project
+    # Delete the project (DB CASCADE handles Documents, DocumentFolders, Members)
     await db.delete(project)
     await db.commit()
+
+    # Clean up MinIO files AFTER successful commit.
+    # Safe ordering: orphaned MinIO files are recoverable via reconciliation;
+    # broken DB references (files deleted but records remain) are not.
+    if minio_files_to_delete:
+        from ..services.minio_service import MinIOService, MinIOServiceError
+        minio = MinIOService()
+        for bucket, key in minio_files_to_delete:
+            try:
+                minio.delete_file(bucket=bucket, object_name=key)
+            except MinIOServiceError:
+                logger.warning(
+                    "Failed to delete MinIO file %s/%s during project deletion",
+                    bucket, key,
+                )
 
     # Broadcast project deletion to application room for real-time updates
     # (for users viewing the dashboard/project list)

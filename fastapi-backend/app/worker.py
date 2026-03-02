@@ -385,27 +385,66 @@ async def embed_document_job(ctx: dict[str, Any], document_id: str) -> dict[str,
                 scope_ids=scope_ids,
             )
 
+            # Process images through vision LLM and store as supplementary chunks
+            image_count = 0
+            try:
+                from .ai.image_understanding_service import ImageUnderstandingService
+                from .services.minio_service import minio_service
+
+                image_svc = ImageUnderstandingService(
+                    provider_registry=registry,
+                    embedding_service=service,
+                    minio_service=minio_service,
+                    db=db,
+                )
+                image_descriptions = await image_svc.process_document_images(
+                    document_id=doc_uuid,
+                    content_json=content,
+                )
+                image_count = len(image_descriptions)
+            except Exception as img_err:
+                logger.warning(
+                    "embed_document_job: image processing failed for %s (non-fatal): %s",
+                    document_id, img_err,
+                )
+
             await db.commit()
 
+            total_chunks = embed_result.chunk_count + image_count
             logger.info(
-                "embed_document_job: document %s embedded — %d chunks, %d tokens, %dms",
-                document_id, embed_result.chunk_count, embed_result.token_count, embed_result.duration_ms,
+                "embed_document_job: document %s embedded — %d text chunks, %d image chunks, %d tokens, %dms",
+                document_id, embed_result.chunk_count, image_count, embed_result.token_count, embed_result.duration_ms,
             )
 
-            # Broadcast EMBEDDING_UPDATED via Redis pub/sub to web server
-            # (worker runs in separate process, so use Redis to reach WS manager)
+            # Broadcast EMBEDDING_UPDATED to the scope room the user is in
+            # (worker runs in separate process, so publish to ws:broadcast directly)
             try:
-                await redis_service.publish(
-                    f"document:{doc_uuid}",
-                    {
-                        "type": "embedding_updated",
-                        "data": {
-                            "document_id": document_id,
-                            "chunk_count": embed_result.chunk_count,
-                            "timestamp": utc_now().isoformat(),
-                        },
+                ws_payload = {
+                    "type": "embedding_updated",
+                    "data": {
+                        "document_id": document_id,
+                        "chunk_count": total_chunks,
+                        "timestamp": utc_now().isoformat(),
                     },
-                )
+                }
+                # Determine the scope room — user is in application or user room
+                if doc.application_id:
+                    room_id = f"application:{doc.application_id}"
+                elif doc.project_id:
+                    # Project-scoped docs: resolve parent application
+                    from .models.project import Project
+                    proj = await db.get(Project, doc.project_id)
+                    room_id = f"application:{proj.application_id}" if proj and proj.application_id else None
+                elif doc.user_id:
+                    room_id = f"user:{doc.user_id}"
+                else:
+                    room_id = None
+
+                if room_id:
+                    await redis_service.publish(
+                        "ws:broadcast",
+                        {"room_id": room_id, "message": ws_payload},
+                    )
             except Exception as ws_err:
                 logger.warning(
                     "Failed to broadcast EMBEDDING_UPDATED for document %s: %s",
@@ -414,7 +453,9 @@ async def embed_document_job(ctx: dict[str, Any], document_id: str) -> dict[str,
 
             return {
                 "status": "success",
-                "chunk_count": embed_result.chunk_count,
+                "chunk_count": total_chunks,
+                "text_chunks": embed_result.chunk_count,
+                "image_chunks": image_count,
                 "token_count": embed_result.token_count,
                 "duration_ms": embed_result.duration_ms,
             }
@@ -426,8 +467,97 @@ async def embed_document_job(ctx: dict[str, Any], document_id: str) -> dict[str,
 
 
 # =============================================================================
+# Nightly Batch Embedding Job (Phase 9.6)
+# =============================================================================
+
+NIGHTLY_EMBED_BATCH_SIZE = 10
+NIGHTLY_EMBED_BATCH_DELAY_S = 5
+MAX_NIGHTLY_EMBED = 500
+
+
+async def batch_embed_stale_documents(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Nightly cron job: embed all documents with stale or missing embeddings.
+
+    Queries documents where ``embedding_updated_at IS NULL`` or
+    ``embedding_updated_at < updated_at``, then enqueues embed jobs
+    in batches with spacing to avoid overwhelming the embedding API.
+
+    Returns:
+        dict with count of documents queued.
+    """
+    import asyncio
+
+    from sqlalchemy import select, or_
+
+    queued = 0
+    try:
+        async with async_session_maker() as db:
+            result = await db.execute(
+                select(Document.id).where(
+                    Document.deleted_at.is_(None),
+                    or_(
+                        Document.embedding_updated_at.is_(None),
+                        Document.embedding_updated_at < Document.updated_at,
+                    ),
+                ).limit(MAX_NIGHTLY_EMBED)
+            )
+            stale_ids = [row[0] for row in result.all()]
+
+            if not stale_ids:
+                logger.info("batch_embed_stale_documents: no stale documents found")
+                return {"status": "success", "queued": 0}
+
+            logger.info(
+                "batch_embed_stale_documents: found %d stale documents",
+                len(stale_ids),
+            )
+
+            from .services.arq_helper import get_arq_redis
+
+            arq_redis = await get_arq_redis()
+
+            for i in range(0, len(stale_ids), NIGHTLY_EMBED_BATCH_SIZE):
+                batch = stale_ids[i : i + NIGHTLY_EMBED_BATCH_SIZE]
+                for doc_id in batch:
+                    try:
+                        await arq_redis.enqueue_job(
+                            "embed_document_job",
+                            str(doc_id),
+                            _job_id=f"embed:{doc_id}",
+                        )
+                        queued += 1
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to enqueue embed for doc %s: %s", doc_id, e
+                        )
+
+                # Pause between batches to avoid overwhelming the API
+                if i + NIGHTLY_EMBED_BATCH_SIZE < len(stale_ids):
+                    await asyncio.sleep(NIGHTLY_EMBED_BATCH_DELAY_S)
+
+    except Exception as e:
+        logger.error("batch_embed_stale_documents failed: %s", e, exc_info=True)
+        return {"status": "error", "error": type(e).__name__, "queued": queued}
+
+    logger.info("batch_embed_stale_documents: queued %d documents", queued)
+    return {"status": "success", "queued": queued}
+
+
+# =============================================================================
 # Document Import Jobs
 # =============================================================================
+
+MAX_CONCURRENT_IMPORTS = 5
+MAX_IMPORT_RETRIES = 5
+IMPORT_CONCURRENCY_KEY = "import:concurrency:count"
+IMPORT_CONCURRENCY_TTL = 3600  # 1hr safety TTL
+
+# Lua script for atomic INCR + EXPIRE (prevents TTL leak on crash between calls)
+_INCR_WITH_TTL_LUA = """
+local v = redis.call('INCR', KEYS[1])
+redis.call('EXPIRE', KEYS[1], ARGV[1])
+return v
+"""
 
 
 async def _update_import_progress(session: AsyncSession, job_id, pct: int) -> None:
@@ -729,7 +859,7 @@ def markdown_to_tiptap_json(markdown: str) -> dict:
     return {"type": "doc", "content": content}
 
 
-async def process_document_import(ctx: dict[str, Any], job_id: str) -> dict[str, Any]:
+async def process_document_import(ctx: dict[str, Any], job_id: str, _retry_count: int = 0) -> dict[str, Any]:
     """Background job to process a document import.
 
     Pipeline:
@@ -786,6 +916,68 @@ async def process_document_import(ctx: dict[str, Any], job_id: str) -> dict[str,
                 return {"status": "skipped", "reason": job.status}
 
             temp_path = job.temp_file_path
+
+            # ----------------------------------------------------------------
+            # 1b. Global concurrency check (Redis-based)
+            # ----------------------------------------------------------------
+            _concurrency_acquired = False
+            try:
+                if redis_service.is_connected:
+                    current_count = await redis_service.client.eval(
+                        _INCR_WITH_TTL_LUA, 1, IMPORT_CONCURRENCY_KEY, IMPORT_CONCURRENCY_TTL
+                    )
+
+                    if current_count > MAX_CONCURRENT_IMPORTS:
+                        # Over limit — decrement and re-enqueue with delay
+                        await redis_service.client.decr(IMPORT_CONCURRENCY_KEY)
+
+                        if _retry_count >= MAX_IMPORT_RETRIES:
+                            logger.warning(
+                                "Import job %s exceeded max retries (%d) due to concurrency limits",
+                                job_id,
+                                MAX_IMPORT_RETRIES,
+                            )
+                            # Mark job as failed
+                            job.status = "failed"
+                            job.error_message = (
+                                "Import deferred too many times due to high server load. "
+                                "Please try again later."
+                            )
+                            job.completed_at = utc_now()
+                            await db.commit()
+                            return {"status": "failed", "reason": "max_retries_exceeded"}
+
+                        logger.info(
+                            "Import concurrency: %d/%d active — re-enqueuing job %s with 15s delay (retry %d/%d)",
+                            current_count - 1,
+                            MAX_CONCURRENT_IMPORTS,
+                            job_id,
+                            _retry_count + 1,
+                            MAX_IMPORT_RETRIES,
+                        )
+                        from arq.connections import create_pool
+                        redis_pool = await create_pool(parse_redis_url(settings.redis_url))
+                        await redis_pool.enqueue_job(
+                            "process_document_import",
+                            job_id,
+                            _retry_count + 1,
+                            _job_id=f"import:{job_id}:retry:{_retry_count + 1}",
+                            _defer_by=timedelta(seconds=15),
+                        )
+                        await redis_pool.aclose()
+                        return {"status": "deferred", "reason": "concurrency_limit"}
+                    _concurrency_acquired = True
+                    logger.info(
+                        "Import concurrency: %d/%d active",
+                        current_count,
+                        MAX_CONCURRENT_IMPORTS,
+                    )
+            except Exception as redis_err:
+                # Fail-open: if Redis is down, allow the import
+                logger.warning(
+                    "Redis concurrency check failed (fail-open): %s", redis_err
+                )
+
             job.status = "processing"
             job.progress_pct = 10
             await db.commit()
@@ -902,10 +1094,15 @@ async def process_document_import(ctx: dict[str, Any], job_id: str) -> dict[str,
                         "project_id": doc.project_id,
                         "user_id": doc.user_id or job.user_id,
                     }
+
+                    # Parse slide titles from markdown for image heading context
+                    slide_titles = _parse_slide_titles(markdown_content)
+
                     await image_svc.process_imported_images(
                         images=ius_images,
                         document_id=doc.id,
                         scope_ids=scope_ids,
+                        slide_titles=slide_titles if slide_titles else None,
                     )
                 except Exception as img_err:
                     logger.warning(
@@ -922,7 +1119,6 @@ async def process_document_import(ctx: dict[str, Any], job_id: str) -> dict[str,
             # ----------------------------------------------------------------
             try:
                 from arq.connections import create_pool
-                from .config import settings
 
                 redis_pool = await create_pool(parse_redis_url(settings.redis_url))
                 await redis_pool.enqueue_job(
@@ -981,7 +1177,7 @@ async def process_document_import(ctx: dict[str, Any], job_id: str) -> dict[str,
                 _import_elapsed = int(
                     (job.completed_at - job.created_at).total_seconds() * 1000
                 ) if job.completed_at and job.created_at else 0
-                await AITelemetry.log_import(
+                AITelemetry.log_import(
                     user_id=job.user_id,
                     file_type=job.file_type,
                     file_size=job.file_size or 0,
@@ -995,6 +1191,15 @@ async def process_document_import(ctx: dict[str, Any], job_id: str) -> dict[str,
                 "process_document_import: job %s completed — document %s created",
                 job_id, doc.id,
             )
+
+            # Decrement concurrency counter on success
+            if _concurrency_acquired:
+                try:
+                    val = await redis_service.client.decr(IMPORT_CONCURRENCY_KEY)
+                    if val < 0:
+                        await redis_service.client.set(IMPORT_CONCURRENCY_KEY, 0)
+                except Exception:
+                    pass
 
             return {
                 "status": "completed",
@@ -1052,7 +1257,7 @@ async def process_document_import(ctx: dict[str, Any], job_id: str) -> dict[str,
         try:
             from .ai.telemetry import AITelemetry
 
-            await AITelemetry.log_import(
+            AITelemetry.log_import(
                 user_id=str(job_uuid),
                 file_type="unknown",
                 file_size=0,
@@ -1063,11 +1268,40 @@ async def process_document_import(ctx: dict[str, Any], job_id: str) -> dict[str,
         except Exception:
             pass  # Non-critical
 
+        # Decrement concurrency counter on failure
+        try:
+            if redis_service.is_connected:
+                val = await redis_service.client.decr(IMPORT_CONCURRENCY_KEY)
+                if val < 0:
+                    await redis_service.client.set(IMPORT_CONCURRENCY_KEY, 0)
+        except Exception:
+            pass
+
         # Clean up temp file on failure
         if temp_path:
             _cleanup_temp_file(temp_path)
 
         return {"status": "error", "error": type(e).__name__}
+
+
+def _parse_slide_titles(markdown: str) -> dict[int, str]:
+    """Parse ``## Slide N: Title`` headings from Docling-produced markdown.
+
+    Returns a mapping of page_number -> slide_title for use as image heading
+    context (Task 9.14).
+    """
+    import re
+
+    titles: dict[int, str] = {}
+    for m in re.finditer(r'^#{1,3}\s+(Slide\s+\d+.*)', markdown, re.MULTILINE):
+        full = m.group(1).strip()
+        # Extract page number and optional title after colon
+        num_match = re.match(r'Slide\s+(\d+)(?::\s*(.*))?', full)
+        if num_match:
+            page = int(num_match.group(1))
+            title = (num_match.group(2) or "").strip() or full
+            titles[page] = title
+    return titles
 
 
 def _cleanup_temp_file(path: str | None) -> None:
@@ -1177,6 +1411,7 @@ class WorkerSettings:
         cleanup_stale_presence,
         check_search_index_consistency,
         embed_document_job,
+        batch_embed_stale_documents,
         process_document_import,
     ]
 
@@ -1189,6 +1424,8 @@ class WorkerSettings:
         cron(cleanup_stale_presence, second=get_presence_cleanup_seconds()),
         # Search index consistency checker: every 5 minutes (at minute 0,5,10,...,55)
         cron(check_search_index_consistency, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}, second=0),
+        # Nightly batch embed stale documents: 2:00 AM daily
+        cron(batch_embed_stale_documents, hour={2}, minute=0, second=0),
     ]
 
     # Lifecycle hooks

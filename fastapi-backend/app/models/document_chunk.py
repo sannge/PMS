@@ -31,6 +31,7 @@ class DocumentChunk(Base):
         document_id: FK to Documents (CASCADE delete)
         chunk_index: Position of this chunk within the document
         chunk_text: Plain text content of this chunk
+        chunk_type: Type of chunk content — "text" (default) or "image"
         heading_context: Nearest heading for context (nullable)
         embedding: pgvector embedding (1536 dimensions for text-embedding-3-small)
         token_count: Number of tokens in this chunk
@@ -52,12 +53,11 @@ class DocumentChunk(Base):
         nullable=False,
     )
 
-    # Parent document
+    # Parent document (covered by composite unique index idx_document_chunks_doc_idx)
     document_id = Column(
         UUID(as_uuid=True),
         ForeignKey("Documents.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
 
     # Chunk position within document
@@ -70,6 +70,13 @@ class DocumentChunk(Base):
     chunk_text = Column(
         Text,
         nullable=False,
+    )
+
+    # Chunk type: "text" (default) or "image" (vision-described)
+    chunk_type = Column(
+        String(20),
+        nullable=False,
+        default="text",
     )
 
     # Nearest heading for context

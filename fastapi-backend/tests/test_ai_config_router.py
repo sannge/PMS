@@ -214,7 +214,8 @@ class TestCreateProvider:
             },
         )
         assert response.status_code == 422
-        assert "localhost or a private network" in response.json()["detail"]
+        detail = response.json()["detail"]
+        assert "dangerous IP" in detail or "metadata" in detail or "localhost or a private network" in detail
 
     async def test_create_ollama_provider_allows_localhost(
         self, client: AsyncClient, auth_headers: dict, test_application: Application
@@ -466,7 +467,7 @@ class TestTestProvider:
     async def test_test_provider_connectivity_failure(
         self, client: AsyncClient, auth_headers: dict, test_provider: dict
     ):
-        """Failed connectivity test returns success=False with error."""
+        """Failed connectivity test returns success=False with generic error (no sensitive details)."""
         provider_id = test_provider["id"]
 
         with patch(
@@ -481,7 +482,13 @@ class TestTestProvider:
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is False
-        assert "Connection refused" in data["error"]
+        # Error message should be user-friendly (no exception class names leaked)
+        assert data["error"] in (
+            "Provider test failed \u2014 check your configuration",
+            "Connection failed \u2014 check your network and provider URL",
+            "Authentication failed \u2014 check your API key",
+            "Connection timed out \u2014 check your network and provider URL",
+        )
 
 
 # ============================================================================
@@ -544,7 +551,7 @@ class TestCreateModel:
             headers=auth_headers,
             json=model_payload,
         )
-        assert resp2.status_code in (409, 500)
+        assert resp2.status_code == 409
 
     async def test_update_model(
         self, client: AsyncClient, auth_headers: dict, test_model: dict

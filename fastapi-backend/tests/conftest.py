@@ -7,10 +7,11 @@ savepoint rollback for fast, isolated tests.
 import asyncio
 import os
 import sys
+from datetime import date, timedelta
 from typing import AsyncGenerator
 
 from app.utils.timezone import utc_now
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -34,6 +35,7 @@ from app.main import app
 from app.models import Application, Notification, Project, Task, User
 from app.models.task_status import TaskStatus, StatusName, STATUS_CATEGORY_MAP
 from app.services.auth_service import create_access_token
+from app.services.user_cache_service import clear_all_caches
 
 
 def get_test_password_hash(password: str) -> str:
@@ -58,7 +60,43 @@ TEST_DATABASE_URL = settings.test_database_url
 # Session-scoped engine: tables created ONCE, dropped ONCE
 # ---------------------------------------------------------------------------
 
+# SQL to drop stale composite types left behind by CREATE TABLE.
+# Without this, a crashed previous session can leave orphan types
+# that cause UniqueViolationError on the next CREATE TABLE.
+# IMPORTANT: Exclude types that are table row types (typrelid != 0)
+# because those are managed by PostgreSQL and CASCADE would drop the table.
+_DROP_COMPOSITE_TYPES_SQL = """DO $$ DECLARE r RECORD;
+BEGIN
+    FOR r IN (SELECT typname FROM pg_type
+              WHERE typnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
+              AND typtype = 'c'
+              AND typrelid = 0
+              AND typname NOT LIKE 'pg_%'
+              AND typname NOT IN ('vector'))
+    LOOP
+        EXECUTE 'DROP TYPE IF EXISTS "' || r.typname || '" CASCADE';
+    END LOOP;
+END $$;"""
+
 _DROP_STATEMENTS = [
+    # Drop scoped views first (created by migration, reference tables below)
+    'DROP VIEW IF EXISTS v_checklist_items CASCADE',
+    'DROP VIEW IF EXISTS v_checklists CASCADE',
+    'DROP VIEW IF EXISTS v_attachments CASCADE',
+    'DROP VIEW IF EXISTS v_users CASCADE',
+    'DROP VIEW IF EXISTS v_project_assignments CASCADE',
+    'DROP VIEW IF EXISTS v_project_members CASCADE',
+    'DROP VIEW IF EXISTS v_application_members CASCADE',
+    'DROP VIEW IF EXISTS v_comments CASCADE',
+    'DROP VIEW IF EXISTS v_document_folders CASCADE',
+    'DROP VIEW IF EXISTS v_documents CASCADE',
+    'DROP VIEW IF EXISTS v_task_statuses CASCADE',
+    'DROP VIEW IF EXISTS v_tasks CASCADE',
+    'DROP VIEW IF EXISTS v_projects CASCADE',
+    'DROP VIEW IF EXISTS v_applications CASCADE',
+    # Drop tables in FK-safe order
+    'DROP TABLE IF EXISTS ai_system_prompts CASCADE',
+    'DROP TABLE IF EXISTS "ImportJobs" CASCADE',
     'DROP TABLE IF EXISTS "DocumentChunks" CASCADE',
     'DROP TABLE IF EXISTS "DocumentSnapshots" CASCADE',
     'DROP TABLE IF EXISTS "DocumentTagAssignments" CASCADE',
@@ -90,53 +128,66 @@ _DROP_STATEMENTS = [
 _pgvector_installed = False
 
 
-@pytest.fixture(scope="session")
-def event_loop():
-    """Create event loop for async tests."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
-
-
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def engine():
-    """Create async test engine — tables created once for the whole session."""
-    _engine = create_async_engine(
-        TEST_DATABASE_URL,
-        echo=False,
-        pool_pre_ping=True,
+    """Create async test engine — tables created once for the whole session.
+
+    Architecture:
+    - DDL operations (DROP/CREATE) use a disposable NullPool engine that is
+      disposed immediately after schema setup.  This avoids poisoning the
+      test engine's pool with long-lived DDL connections.
+    - Test execution uses a POOLED engine (pool_size=5) with
+      pool_reset_on_return="rollback".  Pooled connections prevent Windows
+      TCP port exhaustion: NullPool creates a fresh TCP socket per test
+      (~1000+ sockets in TIME_WAIT), which exhausts the ephemeral port
+      range on Windows after ~576 tests.  A pool reuses a small number
+      of connections, avoiding the problem entirely.
+    """
+    # --- Phase 1: DDL setup with a small pooled engine ---
+    # Use pool_size=1 instead of NullPool to avoid Windows TCP churn
+    # (NullPool creates a fresh TCP socket per begin() block which can
+    # cause ConnectionDoesNotExistError when connections drop mid-DDL).
+    _ddl_engine = create_async_engine(
+        TEST_DATABASE_URL, pool_size=1, max_overflow=0,
     )
 
-    # Drop all tables first (clean slate)
-    async with _engine.begin() as conn:
+    # Drop all tables and stale composite types (clean slate)
+    async with _ddl_engine.begin() as conn:
         for stmt in _DROP_STATEMENTS:
             await conn.execute(text(stmt))
+        await conn.execute(text(_DROP_COMPOSITE_TYPES_SQL))
 
-    # Ensure required PostgreSQL extensions exist
+    # Ensure required PostgreSQL extensions exist.
+    # Extensions must be in their own transactions because CREATE EXTENSION
+    # failures (InsufficientPrivilegeError) abort the current transaction.
     global _pgvector_installed
     _pgvector_available = False
 
-    # Check pgvector availability using a separate connection to avoid tainting pool
-    async with _engine.begin() as conn:
+    async with _ddl_engine.begin() as conn:
         result = await conn.execute(
             text("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'")
         )
         if result.scalar() is not None:
-            await conn.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
-            _pgvector_available = True
-            _pgvector_installed = True
+            try:
+                await conn.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
+                _pgvector_available = True
+                _pgvector_installed = True
+            except Exception:
+                pass  # Insufficient privileges (test user is not superuser)
 
-    # Create pg_trgm extension (comes with standard PostgreSQL)
-    # May already be installed by DBA; IF NOT EXISTS handles that case
-    async with _engine.begin() as conn:
+    async with _ddl_engine.begin() as conn:
         try:
             await conn.execute(text('CREATE EXTENSION IF NOT EXISTS pg_trgm'))
         except Exception:
-            pass  # Already installed or insufficient privileges (DBA handles this)
+            pass  # Already installed or insufficient privileges
+
+    # Safety net: drop any stale composite types that survived table drops
+    # (handles partially-failed previous sessions)
+    async with _ddl_engine.begin() as conn:
+        await conn.execute(text(_DROP_COMPOSITE_TYPES_SQL))
 
     # Create all tables once
-    # If pgvector is not available, exclude the DocumentChunks table
-    async with _engine.begin() as conn:
+    async with _ddl_engine.begin() as conn:
         if _pgvector_available:
             await conn.run_sync(Base.metadata.create_all)
         else:
@@ -152,12 +203,26 @@ async def engine():
                 )
             )
 
+    # Dispose DDL engine — its connections are no longer needed
+    await _ddl_engine.dispose()
+
+    # --- Phase 2: Create pooled engine for test execution ---
+    _engine = create_async_engine(
+        TEST_DATABASE_URL,
+        echo=False,
+        pool_size=5,
+        max_overflow=10,
+        pool_pre_ping=True,
+        pool_reset_on_return="rollback",
+    )
+
     yield _engine
 
-    # Drop all tables at end of session
+    # --- Teardown: drop all tables + composite types, dispose engine ---
     async with _engine.begin() as conn:
         for stmt in _DROP_STATEMENTS:
             await conn.execute(text(stmt))
+        await conn.execute(text(_DROP_COMPOSITE_TYPES_SQL))
 
     await _engine.dispose()
 
@@ -205,6 +270,30 @@ async def db_session(db_connection: AsyncConnection) -> AsyncGenerator[AsyncSess
         yield session
 
 
+@pytest.fixture(autouse=True)
+def _clear_user_caches():
+    """Clear in-memory user/role caches before each test to prevent cross-test interference."""
+    clear_all_caches()
+    yield
+    clear_all_caches()
+
+
+@pytest.fixture(autouse=True)
+def _mock_smtp():
+    """Prevent real SMTP connections during tests.
+
+    The production .env has SMTP_ENABLED=true, so without this mock every
+    call to create_user() / resend_verification / forgot-password would
+    attempt a real SMTP connection (60 s timeout x 3 retries), blocking
+    the event loop and cascading into hundreds of asyncpg errors.
+    """
+    with patch(
+        "app.services.email_service.aiosmtplib.send",
+        new_callable=AsyncMock,
+    ):
+        yield
+
+
 @pytest_asyncio.fixture(scope="function")
 async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     """Create async test client with database dependency override."""
@@ -224,12 +313,13 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
 
 @pytest_asyncio.fixture
 async def test_user(db_session: AsyncSession) -> User:
-    """Create a test user."""
+    """Create a test user (email verified)."""
     user = User(
         id=uuid4(),
         email="test@example.com",
         password_hash=get_test_password_hash("TestPassword123!"),
         display_name="Test User",
+        email_verified=True,
     )
     db_session.add(user)
     await db_session.commit()
@@ -239,12 +329,13 @@ async def test_user(db_session: AsyncSession) -> User:
 
 @pytest_asyncio.fixture
 async def test_user_2(db_session: AsyncSession) -> User:
-    """Create a second test user."""
+    """Create a second test user (email verified)."""
     user = User(
         id=uuid4(),
         email="test2@example.com",
         password_hash=get_test_password_hash("TestPassword456!"),
         display_name="Test User 2",
+        email_verified=True,
     )
     db_session.add(user)
     await db_session.commit()
@@ -305,6 +396,7 @@ async def test_project(db_session: AsyncSession, test_application: Application) 
         key="TEST",
         description="A test project",
         project_type="kanban",
+        due_date=date.today() + timedelta(days=30),
     )
     db_session.add(project)
     await db_session.flush()
@@ -347,6 +439,8 @@ async def test_task(db_session: AsyncSession, test_project: Project, test_user: 
         reporter_id=test_user.id,
     )
     db_session.add(task)
+    # Bump counter to stay in sync with the manually-created task key
+    test_project.next_task_number = 2
     await db_session.commit()
     await db_session.refresh(task)
     return task

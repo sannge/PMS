@@ -48,11 +48,22 @@ class TestNormalize:
         norm = math.sqrt(sum(x * x for x in result))
         assert abs(norm - 1.0) < 1e-6
 
+    def test_normalize_zero_pads_exact_10pct_gap(self):
+        """Vector shorter by exactly 10% is still zero-padded (boundary)."""
+        normalizer = EmbeddingNormalizer(target_dimensions=100)
+        # 90 dimensions = exactly 10% gap (threshold is >10%, so this passes)
+        raw = [1.0] * 90
+        result = normalizer.normalize(raw)
+
+        assert len(result) == 100
+        norm = math.sqrt(sum(x * x for x in result))
+        assert abs(norm - 1.0) < 1e-6
+
     def test_normalize_rejects_large_gap(self):
         """Vector shorter by >10% raises ValueError."""
         normalizer = EmbeddingNormalizer(target_dimensions=100)
-        # 80 dimensions = 20% gap (exceeds 10% threshold)
-        raw = [1.0] * 80
+        # 89 dimensions = 11% gap (exceeds >10% threshold)
+        raw = [1.0] * 89
         with pytest.raises(ValueError, match="too far from target"):
             normalizer.normalize(raw)
 

@@ -16,7 +16,13 @@ _BACKOFF_BASE = 1.0  # seconds
 
 
 def generate_verification_code() -> str:
-    """Generate a cryptographically secure 6-digit verification code."""
+    """Generate a 6-digit verification code.
+
+    Returns a fixed '000000' when SMTP is disabled (dev mode) so codes
+    are predictable without email delivery.
+    """
+    if not settings.smtp_enabled:
+        return "000000"
     return f"{secrets.randbelow(1000000):06d}"
 
 

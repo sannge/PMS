@@ -186,20 +186,15 @@ def sanitize_search_query(q: str) -> str:
 async def _get_user_application_ids(
     db: AsyncSession, user_id: UUID
 ) -> list[UUID]:
-    """Batch query: all applications where user is a member OR owner."""
+    """Single query: all applications where user is a member OR owner."""
     result = await db.execute(
         select(ApplicationMember.application_id)
         .where(ApplicationMember.user_id == user_id)
+        .union(
+            select(Application.id).where(Application.owner_id == user_id)
+        )
     )
-    member_app_ids = set(result.scalars().all())
-
-    result2 = await db.execute(
-        select(Application.id)
-        .where(Application.owner_id == user_id)
-    )
-    owner_app_ids = set(result2.scalars().all())
-
-    return list(member_app_ids | owner_app_ids)
+    return list(result.scalars().all())
 
 
 async def _get_projects_in_applications(
@@ -897,13 +892,15 @@ async def full_reindex(db: AsyncSession) -> dict:
     await client.wait_for_task(task_info.task_uid)
 
     # 3. Batch-load all active documents (select only needed columns, 1000 per batch).
+    # Uses keyset pagination (WHERE id > last_id ORDER BY id) instead of OFFSET
+    # to avoid O(N*batch) scan degradation on large tables.
     # Outerjoin Project to resolve application_id for project-scoped docs.
     batch_size = 1000
-    offset_val = 0
+    last_id = None
     total = 0
 
     while True:
-        result = await db.execute(
+        query = (
             select(
                 Document.id,
                 Document.title,
@@ -918,12 +915,17 @@ async def full_reindex(db: AsyncSession) -> dict:
             )
             .outerjoin(Project, Document.project_id == Project.id)
             .where(Document.deleted_at.is_(None))
-            .offset(offset_val)
-            .limit(batch_size)
         )
+        if last_id is not None:
+            query = query.where(Document.id > last_id)
+        query = query.order_by(Document.id).limit(batch_size)
+
+        result = await db.execute(query)
         rows = result.all()
         if not rows:
             break
+
+        last_id = rows[-1].id
 
         batch = [{
             "id": str(row.id),
@@ -940,7 +942,6 @@ async def full_reindex(db: AsyncSession) -> dict:
 
         await temp_index.add_documents(batch)
         total += len(rows)
-        offset_val += batch_size
         gc.collect()  # Free memory between batches
 
     # 4. Atomic swap

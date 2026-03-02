@@ -23,7 +23,7 @@ class TestMessageType:
         assert MessageType.CONNECTED == "connected"
         assert MessageType.DISCONNECTED == "disconnected"
         assert MessageType.TASK_CREATED == "task_created"
-        assert MessageType.NOTE_UPDATED == "note_updated"
+        assert MessageType.TASK_UPDATED == "task_updated"
         assert MessageType.PING == "ping"
         assert MessageType.PONG == "pong"
 
