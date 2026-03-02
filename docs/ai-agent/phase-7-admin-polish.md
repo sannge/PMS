@@ -7,89 +7,320 @@
 
 ---
 
-## Task 7.1: AI Settings Panel
+## Task 7.0: Database Migration — `is_developer` Column
+
+### Modify: `fastapi-backend/app/models/user.py`
+
+Add `is_developer` boolean column:
+
+```python
+is_developer = Column(
+    Boolean,
+    nullable=False,
+    default=False,
+    server_default="false",
+)
+```
+
+### New Migration: `alembic/versions/YYYYMMDD_add_user_is_developer.py`
+
+```sql
+ALTER TABLE "Users" ADD COLUMN is_developer BOOLEAN NOT NULL DEFAULT false;
+```
+
+No UI for managing this — set manually via database for trusted developers.
+
+### Modify: `fastapi-backend/app/routers/ai_config.py`
+
+Replace `require_ai_admin()` with `require_developer()`:
+
+```python
+async def require_developer(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Require the current user to be a developer."""
+    if not current_user.is_developer:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Developer access required for AI configuration",
+        )
+    return current_user
+```
+
+Apply `require_developer` to all global admin endpoints (provider CRUD, model CRUD, system prompt).
+User override endpoints (`/me/*`) remain accessible to any authenticated user via `get_current_user`.
+
+### Modify: `fastapi-backend/app/schemas/ai_config.py`
+
+Add `provider_type` column to `AiModels` table for seed data filtering:
+
+```python
+class AiModelCreate(BaseModel):
+    # ... existing fields ...
+    provider_type: str  # NEW: "openai", "anthropic", "ollama"
+```
+
+### New: Model Seed Data
+
+All known models pre-populated in `AiModels` table. New models added manually via DB INSERT.
+Frontend dropdowns read from this table, filtered by `provider_type` and `capability`.
+
+**OpenAI Chat Models:**
+| model_id | display_name | capability | provider_type |
+|----------|-------------|------------|---------------|
+| `gpt-5.2` | GPT-5.2 | chat | openai |
+| `gpt-5.1` | GPT-5.1 | chat | openai |
+| `gpt-5` | GPT-5 | chat | openai |
+| `gpt-5-mini` | GPT-5 Mini | chat | openai |
+| `gpt-5-nano` | GPT-5 Nano | chat | openai |
+| `gpt-4.1` | GPT-4.1 | chat | openai |
+| `gpt-4.1-mini` | GPT-4.1 Mini | chat | openai |
+
+**Anthropic Chat Models:**
+| model_id | display_name | capability | provider_type |
+|----------|-------------|------------|---------------|
+| `claude-opus-4-6` | Claude Opus 4.6 | chat | anthropic |
+| `claude-sonnet-4-6` | Claude Sonnet 4.6 | chat | anthropic |
+| `claude-opus-4-5` | Claude Opus 4.5 | chat | anthropic |
+| `claude-sonnet-4-5` | Claude Sonnet 4.5 | chat | anthropic |
+| `claude-haiku-4-5` | Claude Haiku 4.5 | chat | anthropic |
+
+**Ollama Chat Models:**
+| model_id | display_name | capability | provider_type |
+|----------|-------------|------------|---------------|
+| `llama3.1` | Llama 3.1 | chat | ollama |
+| `llama3.2` | Llama 3.2 | chat | ollama |
+| `mistral` | Mistral | chat | ollama |
+| `qwen3` | Qwen 3 | chat | ollama |
+
+**Embedding Models (OpenAI + Ollama only — Anthropic has no embedding API):**
+| model_id | display_name | capability | provider_type | embedding_dimensions |
+|----------|-------------|------------|---------------|---------------------|
+| `text-embedding-3-small` | Embedding 3 Small | embedding | openai | 1536 |
+| `text-embedding-3-large` | Embedding 3 Large | embedding | openai | 3072 |
+| `nomic-embed-text` | Nomic Embed Text | embedding | ollama | 768 |
+| `mxbai-embed-large` | MxBai Embed Large | embedding | ollama | 1024 |
+| `all-minilm` | All-MiniLM | embedding | ollama | 384 |
+| `snowflake-arctic-embed` | Snowflake Arctic | embedding | ollama | 1024 |
+
+**Vision Models:**
+| model_id | display_name | capability | provider_type |
+|----------|-------------|------------|---------------|
+| `gpt-5.2` | GPT-5.2 Vision | vision | openai |
+| `gpt-5.1` | GPT-5.1 Vision | vision | openai |
+| `gpt-5` | GPT-5 Vision | vision | openai |
+| `gpt-4.1` | GPT-4.1 Vision | vision | openai |
+| `claude-opus-4-6` | Claude Opus 4.6 Vision | vision | anthropic |
+| `claude-sonnet-4-6` | Claude Sonnet 4.6 Vision | vision | anthropic |
+| `claude-sonnet-4-5` | Claude Sonnet 4.5 Vision | vision | anthropic |
+| `llava` | LLaVA 1.6 | vision | ollama |
+| `llava-llama3` | LLaVA-Llama3 | vision | ollama |
+| `qwen2.5-vl` | Qwen 2.5 VL | vision | ollama |
+
+> **Adding new models**: When new models are released (e.g., GPT-5.3, Claude Opus 4.7),
+> INSERT a new row into `AiModels` with the correct `provider_type` and `capability`.
+> The row appears in frontend dropdowns automatically. No code change required.
+
+### Acceptance Criteria
+- [ ] `is_developer` column added to Users table via Alembic migration
+- [ ] `require_developer()` replaces `require_ai_admin()` on all global admin endpoints
+- [ ] User override endpoints still use `get_current_user` (any authenticated user)
+- [ ] `provider_type` column added to `AiModels` table
+- [ ] All seed models inserted via migration or seed script
+- [ ] Model dropdowns populate from DB, filtered by `provider_type` + `capability`
+
+---
+
+## Task 7.1: Developer AI Settings Panel
 
 ### New File: `electron-app/src/renderer/components/ai/ai-settings-panel.tsx`
 
-Accessible to Application Owners from the application settings area.
+Accessible to **Developers only** (`is_developer=true`). Three separate sections — one per capability — each with its own provider, API key, and model.
 
 ```tsx
 /**
- * AI Settings Panel — Admin UI for configuring AI providers, models, and indexing.
+ * Developer AI Settings Panel — Configure AI providers per capability.
  *
- * Access: Application Owners only (check role before rendering)
+ * Access: Developers only (is_developer=true, check before rendering)
  *
- * Layout — Tabs:
+ * Layout — 3 independent sections (Chat, Embedding, Vision):
  *
- * ┌─────────────────────────────────────────────────────┐
- * │ AI Settings                                        │
- * ├──────────┬──────────┬──────────┬──────────────────┤
- * │ Providers│  Models  │ Indexing │ System Prompt     │
- * ├──────────┴──────────┴──────────┴──────────────────┤
- * │                                                    │
- * │  (Tab content here)                                │
- * │                                                    │
- * └────────────────────────────────────────────────────┘
+ * ┌──────────────────────────────────────────────────────────┐
+ * │ AI Configuration (Developer Only)                        │
+ * ├──────────────────────────────────────────────────────────┤
+ * │                                                          │
+ * │ ━━ CHAT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
+ * │ Provider:  [Anthropic        ▼]                          │
+ * │ API Key:   [sk-ant-•••••••••••••]                        │
+ * │ Model:     [claude-sonnet-4-6   ▼]                       │
+ * │            [Test Chat] 🟢 "Hello! I'm Blair" (201ms)    │
+ * │                                                          │
+ * │ ━━ EMBEDDING ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
+ * │ Provider:  [OpenAI           ▼]                          │
+ * │ API Key:   [sk-•••••••••••••••]                          │
+ * │ Model:     [text-embedding-3-small ▼]                    │
+ * │            [Test Embedding] 🟢 1536 dims (89ms)         │
+ * │                                                          │
+ * │ ━━ VISION ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
+ * │ Provider:  [OpenAI           ▼]                          │
+ * │ API Key:   [sk-•••••••••••••••]                          │
+ * │ Model:     [gpt-5.2             ▼]                       │
+ * │            [Test Vision] 🟢 "White image" (412ms)       │
+ * │                                                          │
+ * └──────────────────────────────────────────────────────────┘
+ *
+ * Additional tabs: Indexing, Blair's Personality (unchanged)
  */
 ```
 
-### Tab 1: Providers
+### Section: Chat Configuration
+
+- **Provider dropdown**: OpenAI, Anthropic, Ollama (all 3 supported)
+- **API Key**: Password input, masked display (`••••••sk-1234`). Required for OpenAI/Anthropic, optional for Ollama.
+- **Model dropdown**: Populated from `AiModels` table filtered by `provider_type` + `capability='chat'`
+- **Base URL**: Text input, visible only when Ollama selected (default: `http://localhost:11434`)
+- **[Test Chat]**: Sends `"Say hello in 5 words"` to the selected provider+model, displays response text + latency
+- Status indicators: 🟢 Connected (shows response), 🔴 Error (shows error message), 🟡 Testing (spinner)
+- **This is the global default** — affects all users who don't set their own override
+
+### Section: Embedding Configuration
+
+- **Provider dropdown**: OpenAI, Ollama only (Anthropic has no embedding API — grayed out / not shown)
+- **API Key**: Same pattern as chat
+- **Model dropdown**: Filtered by `provider_type` + `capability='embedding'`
+- **[Test Embedding]**: Embeds the word `"test"`, displays dimension count + latency
+- **Warning banner**: "Changing the embedding model requires re-embedding all documents. This can take significant time and API cost depending on corpus size."
+
+### Section: Vision Configuration
+
+- **Provider dropdown**: OpenAI, Anthropic, Ollama (all 3 supported)
+- **API Key**: Same pattern
+- **Model dropdown**: Filtered by `provider_type` + `capability='vision'`
+- **[Test Vision]**: Sends a 1x1 white PNG pixel, displays model's description + latency
+
+### General UX Notes
+
+- Each section saves independently (`[Save]` button per section)
+- Changing provider clears the API key and model fields
+- Model dropdown is disabled until provider is selected
+- If the same provider+key is used across sections (e.g., OpenAI for chat + vision), the key is stored once and shared
+- **Backend endpoint**: `PUT /api/ai/config/capability/{capability}` — saves provider + key + model for one capability
+
+### Acceptance Criteria
+- [ ] Three separate sections render (Chat, Embedding, Vision)
+- [ ] Provider dropdown filters model options correctly per capability
+- [ ] Embedding section excludes Anthropic from provider dropdown
+- [ ] API key input masked, never shown in full
+- [ ] Each section has independent Test button with result display
+- [ ] Test Chat shows response text + latency
+- [ ] Test Embedding shows dimension count + latency
+- [ ] Test Vision shows image description + latency
+- [ ] Save per section works independently
+- [ ] Embedding model change shows re-embed warning
+- [ ] Only `is_developer=true` users can access panel (hidden + 403 for others)
+- [ ] Responsive layout
+
+---
+
+## Task 7.1b: User Chat Override UI
+
+### New File: `electron-app/src/renderer/components/ai/user-chat-override.tsx`
+
+Accessible to **any authenticated user** from the chat sidebar gear icon. Allows users to bring their own API key for chat only.
+
+```tsx
+/**
+ * User Chat Override — personal API key for Blair chat.
+ *
+ * Access: Any authenticated user (including viewers)
+ * Location: Chat sidebar → gear icon (⚙) → settings popover/panel
+ *
+ * ┌─────────────────────────────────────────────┐
+ * │ ⚙ AI Settings                              │
+ * ├─────────────────────────────────────────────┤
+ * │                                             │
+ * │ Use your own AI subscription to power       │
+ * │ Blair. Otherwise, the company default       │
+ * │ will be used.                               │
+ * │                                             │
+ * │ Provider:  ○ OpenAI    ○ Anthropic          │
+ * │                                             │
+ * │ API Key:   [•••••••••••••••••••••]          │
+ * │                                             │
+ * │ Model:     [Claude Sonnet 4.6       ▼]      │
+ * │                                             │
+ * │         [Test] 🟢 Connected (189ms)         │
+ * │                                             │
+ * │         [Save]  [Remove My Override]        │
+ * │                                             │
+ * │ i Your key is encrypted and never shared.   │
+ * │   Remove anytime to use company default.    │
+ * │                                             │
+ * │ Currently using: Your Anthropic key         │
+ * └─────────────────────────────────────────────┘
+ */
+```
+
+### UX Details
+
+- **Provider**: Radio buttons — **OpenAI** and **Anthropic** only. No Ollama (server-side, not relevant for personal keys).
+- **API Key**: Password input, masked. Required.
+- **Model dropdown**: Populated from `AiModels` table filtered by selected `provider_type` + `capability='chat'`.
+  - OpenAI selected → shows GPT-5.2, GPT-5.1, GPT-5, GPT-5 Mini, GPT-5 Nano, GPT-4.1, GPT-4.1 Mini
+  - Anthropic selected → shows Claude Opus 4.6, Claude Sonnet 4.6, Claude Opus 4.5, Claude Sonnet 4.5, Claude Haiku 4.5
+- **[Test]**: Calls `POST /api/ai/config/me/providers/{type}/test` after saving. Shows response latency + success/failure.
+- **[Save]**: Calls `POST /api/ai/config/me/providers` — creates/updates user-scoped provider with `scope='user'` and auto-creates a chat `AiModel` under it.
+- **[Remove My Override]**: Calls `DELETE /api/ai/config/me/providers/{type}` — removes user override, falls back to company default.
+- **Status bar at bottom**: Shows current effective state:
+  - `"Currently using: Your Anthropic key (Claude Sonnet 4.6)"` — override active
+  - `"Currently using: Company default (GPT-5.2)"` — no override, using global
+  - `"⚠ Your key failed. Using company default."` — override key invalid, fell back
+  - `"⚠ AI not configured. Contact your admin."` — no global config and no override
+
+### Backend Changes
+
+- `POST /api/ai/config/me/providers` — restrict to chat-only overrides. Reject attempts to create embedding/vision overrides.
+- Auto-create a chat `AiModel` under the user's provider from the `preferred_model` field (which becomes required).
+- `ProviderRegistry.get_vision_provider()` — remove `user_id` parameter so vision always resolves globally (same as embedding).
+
+### API Flow
 
 ```
-┌─────────────────────────────────────────────────────┐
-│ LLM Providers                        [+ Add Provider]│
-├─────────────────────────────────────────────────────┤
-│                                                      │
-│ ┌──────────────────────────────────────────────────┐ │
-│ │ OpenAI                              🟢 Connected │ │
-│ │ Scope: Global                                    │ │
-│ │ API Key: ••••••••••sk-1234                       │ │
-│ │ [Test] [Edit] [Delete]                           │ │
-│ └──────────────────────────────────────────────────┘ │
-│                                                      │
-│ ┌──────────────────────────────────────────────────┐ │
-│ │ Anthropic                           🔴 No key   │ │
-│ │ Scope: Global                                    │ │
-│ │ API Key: Not configured                          │ │
-│ │ [Test] [Edit] [Delete]                           │ │
-│ └──────────────────────────────────────────────────┘ │
-│                                                      │
-│ ┌──────────────────────────────────────────────────┐ │
-│ │ Ollama (Local)                      🟡 Checking  │ │
-│ │ Scope: Application (Engineering)                 │ │
-│ │ URL: http://localhost:11434                      │ │
-│ │ [Test] [Edit] [Delete]                           │ │
-│ └──────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────┘
+1. User picks Anthropic, pastes key, picks claude-sonnet-4-6
+2. Clicks [Save]
+   → POST /api/ai/config/me/providers
+     { provider_type: "anthropic", api_key: "sk-ant-...", preferred_model: "claude-sonnet-4-6" }
+   → Backend encrypts key, creates AiProvider(scope='user') + AiModel(capability='chat')
+3. Clicks [Test]
+   → POST /api/ai/config/me/providers/anthropic/test
+   → Backend decrypts key, sends minimal message, returns { success: true, latency_ms: 189 }
+   → UI shows 🟢 or 🔴
+4. Next time Blair is used:
+   → ProviderRegistry.get_chat_provider(db, user_id=current_user.id)
+   → Finds user's Anthropic override → uses it
+   → Embedding/Vision still use company global config (unaffected)
+5. User clicks [Remove My Override]
+   → DELETE /api/ai/config/me/providers/anthropic
+   → Falls back to company default
 ```
 
-- Status indicators: 🟢 Connected, 🔴 Error/No key, 🟡 Checking
-- "Test" button calls `POST /api/ai/config/providers/{id}/test`
-- "Add Provider" opens form dialog (name, type, URL, API key, scope)
-- "Edit" opens same form pre-filled
-- "Delete" shows confirmation dialog (cascade warning for models)
+### Acceptance Criteria
+- [ ] Accessible from chat sidebar gear icon
+- [ ] Only shows OpenAI and Anthropic as provider options (no Ollama)
+- [ ] Model dropdown filters by selected provider + capability='chat'
+- [ ] API key encrypted on save, never returned in responses
+- [ ] Test button verifies connectivity and shows latency
+- [ ] Save creates user-scoped provider + auto-creates chat model
+- [ ] Remove override deletes user-scoped provider, falls back to global
+- [ ] Status bar shows current effective configuration
+- [ ] Works for any authenticated user (including viewers)
+- [ ] Embedding and vision are unaffected by user override
 
-### Tab 2: Models
+---
 
-```
-┌─────────────────────────────────────────────────────────┐
-│ Configured Models                          [+ Add Model]│
-├────────────┬───────────┬────────────┬──────────┬───────┤
-│ Model      │ Provider  │ Capability │ Default  │       │
-├────────────┼───────────┼────────────┼──────────┼───────┤
-│ GPT-4o     │ OpenAI    │ Chat       │ ✅ Yes   │ [Edit]│
-│ GPT-4o     │ OpenAI    │ Vision     │ ✅ Yes   │ [Edit]│
-│ text-embed │ OpenAI    │ Embedding  │ ✅ Yes   │ [Edit]│
-│ Claude 4   │ Anthropic │ Chat       │ ❌ No    │ [Edit]│
-│ llama3     │ Ollama    │ Chat       │ ❌ No    │ [Edit]│
-└────────────┴───────────┴────────────┴──────────┴───────┘
-```
+## Task 7.1c: Developer Indexing Tab
 
-- "Default" checkbox: Only one default per capability
-- Click default toggles (with confirmation if changing)
-- "Add Model" form: provider (dropdown), model_id, capability, dimensions (if embedding)
-
-### Tab 3: Indexing
+Part of the developer settings panel (separate tab alongside the capability sections).
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -120,7 +351,7 @@ Accessible to Application Owners from the application settings area.
 - Individual reindex calls `POST /api/ai/reindex/{document_id}`
 - Progress updates via WebSocket events
 
-### Tab 4: Blair's Personality
+### Developer Tab: Blair's Personality
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -137,7 +368,7 @@ Accessible to Application Owners from the application settings area.
 │ └─────────────────────────────────────────────────────┘ │
 │                                                         │
 │ This overrides Blair's default personality.              │
-│ Leave empty to use the default friendly assistant.       │
+│ Leave empty to use the default (concise, professional). │
 │ Note: Blair's name is always "Blair" regardless of      │
 │ custom prompt.                                          │
 │                                                         │
@@ -147,18 +378,15 @@ Accessible to Application Owners from the application settings area.
 
 - Textarea for custom system prompt
 - Saved as application-level setting (new column or JSON config)
-- "Reset to Default" clears custom prompt, reverts to Blair's default personality
+- "Reset to Default" clears custom prompt, reverts to Blair's default (concise, professional)
 - Preview of current effective prompt (custom or default)
 - Blair's name always stays "Blair" even with custom prompt (prepended if not present)
 
-### Acceptance Criteria
-- [ ] All four tabs render correctly
-- [ ] Provider CRUD with test connectivity
-- [ ] Model CRUD with default management
-- [ ] Indexing status table loads correctly
+### Acceptance Criteria (Indexing + Personality)
+- [ ] Indexing tab loads document status correctly
 - [ ] Reindex buttons trigger backend operations
 - [ ] System prompt customization saves and applies
-- [ ] Only Application Owners can access panel
+- [ ] Only `is_developer=true` users can access developer settings
 - [ ] Responsive layout
 
 ---
@@ -181,11 +409,11 @@ Add a small index status badge to the document editor header:
  *
  * Clickable: Opens small popover with:
  * - Embedding updated: timestamp
- * - Graph updated: timestamp
+ * - (Graph timestamp removed — Phase 3 KG replaced by Phase 3.1)
  * - Chunk count: N
  * - [Reindex Now] button
  *
- * Data source: DocumentResponse.embedding_updated_at, graph_ingested_at
+ * Data source: DocumentResponse.embedding_updated_at (graph_ingested_at removed by Phase 3.1)
  */
 ```
 
@@ -460,7 +688,7 @@ class AITelemetry:
 Add telemetry calls to:
 - `ai_chat.py` router (after each chat request)
 - `embedding_service.py` (after each embedding batch)
-- `entity_extraction_service.py` (after each extraction)
+- ~~`entity_extraction_service.py` (after each extraction)~~ *(Removed — Phase 3 KG replaced by Phase 3.1)*
 - Agent tool execution (each tool call)
 - Import worker (after each import)
 
@@ -488,9 +716,10 @@ async def health():
 
     # AI Services
     ai_health = {
-        "knowledge_graph": {
-            "entity_count": int,         # Total entities in DocumentEntities
-            "relationship_count": int,   # Total relationships
+        # knowledge_graph section REMOVED — Phase 3 KG replaced by Phase 3.1 (SQL access via scoped views)
+        "sql_access": {
+            "scoped_views_count": int,   # Number of v_* views available
+            "last_query_at": str | None, # ISO timestamp of last AI SQL query
         },
         "embedding_provider": {
             "name": str | None,      # e.g., "openai"
@@ -514,7 +743,7 @@ async def health():
 
 ### Acceptance Criteria
 - [ ] Health endpoint includes AI service status
-- [ ] Knowledge graph counts reported (entities, relationships)
+- [ ] ~~Knowledge graph counts reported~~ → SQL access status reported (scoped views count, last query timestamp)
 - [ ] Provider connectivity status shown
 - [ ] Chunk count for system overview
 - [ ] Health endpoint doesn't slow down (timeouts on checks)
@@ -675,13 +904,12 @@ export function useAiConfigSummary() {
 ## Verification Checklist — Full E2E
 
 ```
-1. Configure AI Provider:
-   → Open application settings → AI Settings tab
-   → Add OpenAI provider with API key
-   → Click "Test" → Shows "Connected"
-   → Add GPT-4o model for chat + vision
-   → Add text-embedding-3-small model for embedding
-   → Set both as defaults
+1. Developer Configure AI (requires is_developer=true):
+   → Open developer settings → AI Configuration
+   → Chat section: pick Anthropic, paste API key, select claude-sonnet-4-6, click [Test Chat] → Shows response text + latency 🟢
+   → Embedding section: pick OpenAI, paste API key, select text-embedding-3-small, click [Test Embedding] → Shows 1536 dims 🟢
+   → Vision section: pick OpenAI (same key auto-shared), select gpt-5.2, click [Test Vision] → Shows description 🟢
+   → Save each section independently
 
 2. Create a Document:
    → Create a document with text content + embedded images
@@ -689,11 +917,10 @@ export function useAiConfigSummary() {
    → Document header shows "Indexed X seconds ago"
    → Click badge → popover shows chunk count
 
-3. Trigger Entity Extraction:
-   → In AI Settings → Indexing tab
-   → Click "Reindex Now" on the document
-   → graph_ingested_at populates, entities appear
-   → WebSocket event updates UI
+3. ~~Trigger Entity Extraction~~ → Test SQL Access *(Updated — Phase 3 KG replaced by Phase 3.1)*:
+   → In Blair sidebar, ask "How many tasks are in this project?"
+   → Verify SQL query executes against scoped views
+   → Verify results are RBAC-scoped to user's accessible applications
 
 4. Chat with Blair:
    → Open Blair sidebar (click Sparkles icon or Ctrl+Shift+A)
@@ -751,8 +978,17 @@ export function useAiConfigSummary() {
     → GET /health
     → AI section shows provider status, chunk count, entity count
 
-12. Settings Admin:
-    → Non-owner tries to access AI settings → hidden/403
-    → Owner can CRUD providers and models
+12. Developer Settings Access:
+    → Non-developer tries to access AI settings → hidden/403
+    → Developer (is_developer=true) can configure chat/embedding/vision providers+models
+    → Test buttons work for all 3 capabilities
     → Indexing tab shows all documents with status
+
+13. User Chat Override:
+    → Any authenticated user opens sidebar → gear icon → AI Settings
+    → Picks Anthropic, pastes personal API key, selects Claude Sonnet 4.6
+    → Clicks [Test] → 🟢 Connected
+    → Clicks [Save] → status shows "Currently using: Your Anthropic key"
+    → Blair now uses personal key for chat (embedding/vision unaffected)
+    → Clicks [Remove My Override] → falls back to company default
 ```

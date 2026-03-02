@@ -5,7 +5,7 @@
 **Status**: COMPLETE
 **Spec**: [phase-2-vector-embeddings.md](../phase-2-vector-embeddings.md)
 **Depends on**: Phase 1 (LLM providers for embedding generation)
-**Blocks**: Phase 3, Phase 4, Phase 6
+**Blocks**: Phase 3.1, Phase 4, Phase 6
 
 ## Task Count Summary
 
@@ -114,11 +114,11 @@
 | # | Task | Owner | Status | Notes |
 |---|------|-------|--------|-------|
 | 2.3.1 | Add column to `Documents` table: `embedding_updated_at` — TIMESTAMP WITH TIME ZONE, nullable | DBE | [x] | Migration includes these |
-| 2.3.2 | Add column to `Documents` table: `graph_ingested_at` — TIMESTAMP WITH TIME ZONE, nullable | DBE | [x] | Migration includes these |
+| 2.3.2 | Add column to `Documents` table: `graph_ingested_at` — TIMESTAMP WITH TIME ZONE, nullable | DBE | [x] | Migration includes these; **Note: dropped by Phase 3.1 migration** |
 | 2.3.3 | Create GIN trigram index: `idx_documents_title_trgm ON "Documents" USING GIN(title gin_trgm_ops)` | DBE | [x] | Migration includes these |
 | 2.3.4 | Write `downgrade()` for Document modifications: drop index, drop columns | DBE | [x] | Migration includes these |
 | 2.3.5 | **QE Verify**: `embedding_updated_at` column added to `Documents` — `\d "Documents"` | QE | [!] | Blocked: pgvector not installed on server |
-| 2.3.6 | **QE Verify**: `graph_ingested_at` column added to `Documents` | QE | [!] | Blocked: pgvector not installed on server |
+| 2.3.6 | **QE Verify**: `graph_ingested_at` column added to `Documents` | QE | [-] | Superseded: column dropped by Phase 3.1 migration |
 | 2.3.7 | **QE Verify**: GIN trigram index created — `\di idx_documents_title_trgm` shows `gin` access method | QE | [!] | Blocked: pgvector not installed on server |
 | 2.3.8 | **QE Verify**: Downgrade removes columns and index cleanly | QE | [!] | Blocked: pgvector not installed on server |
 
@@ -138,7 +138,7 @@
 | 2.4.4 | Map column: `embedding` — `mapped_column(Vector(1536))` using `pgvector.sqlalchemy.Vector` | BE | [x] | Requires `from pgvector.sqlalchemy import Vector` |
 | 2.4.5 | Map all remaining columns: `chunk_index`, `chunk_text`, `heading_context`, `token_count`, `application_id`, `project_id`, `user_id`, `created_at`, `updated_at` | BE | [x] | Use `utc_now` from `app.utils.timezone` for timestamp defaults |
 | 2.4.6 | Add relationship: `document: Mapped["Document"] = relationship(back_populates="chunks")` | BE | [x] | |
-| 2.4.7 | Add to `Document` model (`document.py`): columns `embedding_updated_at` and `graph_ingested_at` as `DateTime(timezone=True), nullable=True` | BE | [x] | |
+| 2.4.7 | Add to `Document` model (`document.py`): columns `embedding_updated_at` and `graph_ingested_at` as `DateTime(timezone=True), nullable=True` | BE | [x] | **Note: `graph_ingested_at` removed by Phase 3.1** |
 | 2.4.8 | Add to `Document` model: `chunks: Mapped[list["DocumentChunk"]] = relationship(back_populates="document", cascade="all, delete-orphan")` | BE | [x] | `delete-orphan` ensures ORM-level cascade |
 | 2.4.9 | Register `DocumentChunk` in `app/models/__init__.py` — add import and add to `__all__` list | BE | [x] | |
 | 2.4.10 | **QE Verify**: `DocumentChunk` model maps correctly — create instance, verify all columns accessible, relationship loads bidirectionally | QE | [!] | Blocked: pgvector not installed on test DB |
@@ -309,13 +309,13 @@
 | # | Task | Owner | Status | Notes |
 |---|------|-------|--------|-------|
 | 2.13.1 | Add `embedding_updated_at: datetime | None = None` to `DocumentResponse` schema in `app/schemas/document.py` | BE | [x] | |
-| 2.13.2 | Add `graph_ingested_at: datetime | None = None` to `DocumentResponse` schema | BE | [x] | |
+| 2.13.2 | Add `graph_ingested_at: datetime | None = None` to `DocumentResponse` schema | BE | [x] | **Note: removed by Phase 3.1** |
 | 2.13.3 | Verify `DocumentListItem` schema does NOT include new fields (they are content-level detail, not list-level) | BE | [x] | Performance: list queries don't need embedding timestamps |
 | 2.13.4 | Add `pgvector>=0.3.0` to `requirements.txt` | BE | [x] | Python bindings for pgvector |
 | 2.13.5 | Add `tiktoken>=0.7.0` to `requirements.txt` | BE | [x] | Token counting for chunking service |
 | 2.13.6 | Ensure `app/ai/__init__.py` exists (may already exist from Phase 1) | BE | [x] | Package init for AI module |
 | 2.13.7 | Run `pip install -r requirements.txt` — verify no version conflicts with existing or Phase 1 dependencies | BE | [x] | |
-| 2.13.8 | **QE Verify**: Document API responses include `embedding_updated_at` and `graph_ingested_at` fields (null for unindexed documents) | QE | [!] | Blocked: requires running server |
+| 2.13.8 | **QE Verify**: Document API responses include `embedding_updated_at` field (null for unindexed documents) | QE | [!] | Blocked: requires running server; `graph_ingested_at` removed by Phase 3.1 |
 | 2.13.9 | **QE Verify**: Fields update to non-null after successful embedding | QE | [!] | Blocked: requires running server |
 
 ---
@@ -430,4 +430,4 @@
 | 2.18.9 | **QE**: Verify retrieval tests enforce RBAC boundaries | QE | [x] | test_retrieval_respects_rbac_boundaries passes |
 | 2.18.10 | **QE**: Run `ruff check app/ai/` — no linting violations | QE | [x] | All checks passed |
 | 2.18.11 | **QE**: Run `ruff check` on test files — no linting violations | QE | [x] | All checks passed |
-| 2.18.12 | **QE**: Phase 2 sign-off — all code complete, 9 review rounds, all tests green | QE | [x] | Gate for Phase 3 and Phase 4 |
+| 2.18.12 | **QE**: Phase 2 sign-off — all code complete, 9 review rounds, all tests green | QE | [x] | Gate for Phase 3.1, Phase 4, Phase 6 |

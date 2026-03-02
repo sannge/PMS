@@ -19,7 +19,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useAuthStore } from "@/contexts/auth-context";
+import { useAuthToken, useAuthUserId } from "@/contexts/auth-context";
 import { useWebSocket } from "./use-websocket";
 import { MessageType, WebSocketClient } from "@/lib/websocket";
 import { queryKeys } from "@/lib/query-client";
@@ -99,7 +99,7 @@ export function useDocumentLock({
   userRole,
   lastActivityRef,
 }: UseDocumentLockOptions): UseDocumentLockReturn {
-  const token = useAuthStore((s) => s.token);
+  const token = useAuthToken();
   const queryClient = useQueryClient();
   const { subscribe, status: wsStatus } = useWebSocket();
 
@@ -516,8 +516,8 @@ export function useActiveLocks(
   scope: string,
   scopeId: string | null,
 ): Map<string, ActiveLockInfo> {
-  const token = useAuthStore((s) => s.token);
-  const userId = useAuthStore((s) => s.user?.id ?? null);
+  const token = useAuthToken();
+  const userId = useAuthUserId();
   const queryClient = useQueryClient();
   const { subscribe, joinRoom, leaveRoom, status: wsStatus } = useWebSocket();
 

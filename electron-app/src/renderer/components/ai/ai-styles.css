@@ -1,0 +1,204 @@
+/**
+ * Blair AI Sidebar Styles
+ *
+ * Premium design system for the Blair AI copilot.
+ * Animations, transitions, and visual effects that bring
+ * the sidebar to life. Uses CSS variables from PM Desktop
+ * for light/dark mode compatibility.
+ */
+
+/* ============================================================================
+   Header Accent — Animated Gradient Shimmer
+   ============================================================================ */
+
+@keyframes blair-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.blair-accent-bar {
+  background: linear-gradient(
+    90deg,
+    rgba(245, 158, 11, 0) 0%,
+    rgba(245, 158, 11, 0.6) 20%,
+    rgba(234, 88, 12, 0.8) 50%,
+    rgba(245, 158, 11, 0.6) 80%,
+    rgba(245, 158, 11, 0) 100%
+  );
+  background-size: 200% 100%;
+  animation: blair-shimmer 4s ease-in-out infinite;
+}
+
+/* ============================================================================
+   Blair Avatar — Breathing Glow
+   ============================================================================ */
+
+@keyframes blair-glow {
+  0%, 100% { box-shadow: 0 4px 12px rgba(245, 158, 11, 0.15); }
+  50% { box-shadow: 0 4px 20px rgba(245, 158, 11, 0.35); }
+}
+
+.blair-avatar-glow {
+  animation: blair-glow 3s ease-in-out infinite;
+}
+
+/* ============================================================================
+   Floating Particles — Empty State Decoration
+   ============================================================================ */
+
+@keyframes blair-float {
+  0%, 100% {
+    transform: translateY(0) scale(1);
+    opacity: 0.5;
+  }
+  50% {
+    transform: translateY(-8px) scale(1.2);
+    opacity: 1;
+  }
+}
+
+.blair-float {
+  animation: blair-float 3s ease-in-out infinite;
+}
+
+/* ============================================================================
+   Thinking Indicator — Pulsing Dots
+   ============================================================================ */
+
+@keyframes blair-dot-pulse {
+  0%, 100% {
+    transform: scale(0.6);
+    opacity: 0.3;
+  }
+  50% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.blair-thinking-dot {
+  animation: blair-dot-pulse 1.4s ease-in-out infinite;
+}
+
+/* ============================================================================
+   Tool Running — Ripple Ring
+   ============================================================================ */
+
+@keyframes blair-ripple {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(2.8);
+    opacity: 0;
+  }
+}
+
+.blair-tool-ripple {
+  animation: blair-ripple 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+/* ============================================================================
+   Message Entrance — Slide Up + Fade In
+   ============================================================================ */
+
+@keyframes blair-msg-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.blair-msg-enter {
+  animation: blair-msg-enter 0.3s ease-out both;
+}
+
+/* ============================================================================
+   Citation Highlight
+   ============================================================================ */
+
+.blair-citation-highlight {
+  background-color: rgba(250, 204, 21, 0.4);
+  border-radius: 2px;
+  transition: background-color 1s ease-out;
+}
+
+.blair-citation-highlight.fading {
+  background-color: transparent;
+}
+
+/* ============================================================================
+   Sidebar Scroll Area Overrides
+   ============================================================================ */
+
+.blair-sidebar [data-radix-scroll-area-viewport] {
+  scroll-behavior: smooth;
+}
+
+.blair-sidebar [data-radix-scroll-area-scrollbar] {
+  width: 6px;
+}
+
+/* ============================================================================
+   Rewind Mode Styles
+   ============================================================================ */
+
+.blair-rewind-dimmed {
+  opacity: 0.3;
+  text-decoration: line-through;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.blair-rewind-banner {
+  border-top: 2px solid hsl(var(--warning, 45 93% 47%));
+  background-color: hsl(var(--warning, 45 93% 47%) / 0.08);
+}
+
+/* ============================================================================
+   Dark Mode Adjustments
+   ============================================================================ */
+
+.dark .blair-citation-highlight {
+  background-color: rgba(250, 204, 21, 0.3);
+}
+
+.dark .blair-citation-highlight.fading {
+  background-color: transparent;
+}
+
+.dark .blair-rewind-banner {
+  background-color: hsl(var(--warning, 45 93% 47%) / 0.12);
+}
+
+.dark .blair-accent-bar {
+  background: linear-gradient(
+    90deg,
+    rgba(245, 158, 11, 0) 0%,
+    rgba(245, 158, 11, 0.4) 20%,
+    rgba(234, 88, 12, 0.6) 50%,
+    rgba(245, 158, 11, 0.4) 80%,
+    rgba(245, 158, 11, 0) 100%
+  );
+  background-size: 200% 100%;
+  animation: blair-shimmer 4s ease-in-out infinite;
+}
+
+/* ============================================================================
+   Reduced Motion Preferences
+   ============================================================================ */
+
+@media (prefers-reduced-motion: reduce) {
+  .blair-sidebar *,
+  .blair-sidebar *::before,
+  .blair-sidebar *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -33,7 +33,7 @@ import {
 import { useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { queryKeys } from '@/lib/query-client'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthUserId } from '@/contexts/auth-context'
 import { useKnowledgeBase } from '@/contexts/knowledge-base-context'
 import { useProjects, type Project } from '@/hooks/query-index'
 import {
@@ -389,7 +389,7 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
     clearReveal,
   } = useKnowledgeBase()
 
-  const userId = useAuthStore((s) => s.user?.id ?? null)
+  const userId = useAuthUserId()
 
   // Determine effective scope - applicationId prop overrides context
   const isApplicationScope = !!applicationId

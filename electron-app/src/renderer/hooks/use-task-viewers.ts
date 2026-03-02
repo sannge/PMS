@@ -13,7 +13,7 @@
 
 import { useEffect, useCallback, useState, useRef } from 'react'
 import { useWebSocket, MessageType } from './use-websocket'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthUser } from '@/contexts/auth-context'
 
 // ============================================================================
 // Types
@@ -65,26 +65,32 @@ export function useTaskViewers({
   enabled = true,
 }: UseTaskViewersOptions): UseTaskViewersReturn {
   const { send, subscribe, status } = useWebSocket()
-  const user = useAuthStore((state) => state.user)
+  const user = useAuthUser()
 
   const [viewers, setViewers] = useState<Record<string, TaskViewer[]>>({})
+  const viewersRef = useRef<Record<string, TaskViewer[]>>(viewers)
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null)
   const viewingIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
-  // Get viewers for a task
+  // Keep ref in sync with state so callbacks always read latest data
+  useEffect(() => {
+    viewersRef.current = viewers
+  })
+
+  // Get viewers for a task (stable reference — reads from ref)
   const getViewers = useCallback(
     (taskId: string): TaskViewer[] => {
-      return viewers[taskId] || []
+      return viewersRef.current[taskId] || []
     },
-    [viewers]
+    []
   )
 
-  // Get viewer count
+  // Get viewer count (stable reference — reads from ref)
   const getViewerCount = useCallback(
     (taskId: string): number => {
-      return (viewers[taskId] || []).length
+      return (viewersRef.current[taskId] || []).length
     },
-    [viewers]
+    []
   )
 
   // Send viewing indicator

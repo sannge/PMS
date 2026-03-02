@@ -7,23 +7,13 @@
  * Usage:
  * ```tsx
  * const { user, isAuthenticated, login, logout } = useAuth()
- *
- * // In a form submit handler
- * const success = await login({ email, password })
- * if (success) {
- *   navigate('/dashboard')
- * }
  * ```
  */
 
 import { useCallback, useEffect } from 'react'
 import {
-  useAuthStore,
-  selectUser,
-  selectIsAuthenticated,
-  selectIsLoading,
-  selectIsInitialized,
-  selectError,
+  useAuthState,
+  useAuthActions,
   getAuthHeaders,
   type User,
   type LoginCredentials,
@@ -42,6 +32,8 @@ export interface UseAuthReturn {
   isLoading: boolean
   isInitialized: boolean
   error: AuthError | null
+  pendingVerificationEmail: string | null
+  pendingVerificationContext: 'registration' | 'login' | null
 
   // Actions
   login: (credentials: LoginCredentials) => Promise<boolean>
@@ -49,6 +41,12 @@ export interface UseAuthReturn {
   logout: () => Promise<void>
   checkAuth: () => Promise<boolean>
   clearError: () => void
+  verifyEmail: (email: string, code: string) => Promise<boolean>
+  verifyLogin: (email: string, code: string) => Promise<boolean>
+  resendVerification: (email: string) => Promise<boolean>
+  forgotPassword: (email: string) => Promise<boolean>
+  resetPassword: (email: string, code: string, newPassword: string) => Promise<boolean>
+  clearPendingVerification: () => void
 
   // Helpers
   getAuthHeaders: () => Record<string, string>
@@ -59,76 +57,40 @@ export interface UseAuthReturn {
 // ============================================================================
 
 /**
- * Hook for authentication state and operations
- *
- * Provides access to:
- * - Current user and authentication status
- * - Login, register, and logout functions
- * - Loading and error states
- * - Helper for getting auth headers
+ * Hook for authentication state and operations.
+ * Uses split contexts: AuthStateContext for state (re-renders on state change)
+ * and AuthActionsContext for actions (stable, never causes re-render).
  */
 export function useAuth(): UseAuthReturn {
-  // Select state using individual selectors for optimal re-renders
-  const user = useAuthStore(selectUser)
-  const isAuthenticated = useAuthStore(selectIsAuthenticated)
-  const isLoading = useAuthStore(selectIsLoading)
-  const isInitialized = useAuthStore(selectIsInitialized)
-  const error = useAuthStore(selectError)
+  const state = useAuthState()
+  const actions = useAuthActions()
 
-  // Get actions from store
-  const storeLogin = useAuthStore((state) => state.login)
-  const storeRegister = useAuthStore((state) => state.register)
-  const storeLogout = useAuthStore((state) => state.logout)
-  const storeCheckAuth = useAuthStore((state) => state.checkAuth)
-  const storeClearError = useAuthStore((state) => state.clearError)
-  const token = useAuthStore((state) => state.token)
-
-  // Stable action references
-  const login = useCallback(
-    async (credentials: LoginCredentials): Promise<boolean> => {
-      return storeLogin(credentials)
-    },
-    [storeLogin]
-  )
-
-  const register = useCallback(
-    async (data: RegisterData): Promise<boolean> => {
-      return storeRegister(data)
-    },
-    [storeRegister]
-  )
-
-  const logout = useCallback(async (): Promise<void> => {
-    return storeLogout()
-  }, [storeLogout])
-
-  const checkAuth = useCallback(async (): Promise<boolean> => {
-    return storeCheckAuth()
-  }, [storeCheckAuth])
-
-  const clearError = useCallback((): void => {
-    storeClearError()
-  }, [storeClearError])
-
-  // Helper to get auth headers for API calls
   const getAuthHeadersCallback = useCallback((): Record<string, string> => {
-    return getAuthHeaders(token)
-  }, [token])
+    return getAuthHeaders(state.token)
+  }, [state.token])
 
   return {
-    // State
-    user,
-    isAuthenticated,
-    isLoading,
-    isInitialized,
-    error,
+    // State (from AuthStateContext)
+    user: state.user,
+    isAuthenticated: state.isAuthenticated,
+    isLoading: state.isLoading,
+    isInitialized: state.isInitialized,
+    error: state.error,
+    pendingVerificationEmail: state.pendingVerificationEmail,
+    pendingVerificationContext: state.pendingVerificationContext,
 
-    // Actions
-    login,
-    register,
-    logout,
-    checkAuth,
-    clearError,
+    // Actions (from AuthActionsContext -- stable references)
+    login: actions.login,
+    register: actions.register,
+    logout: actions.logout,
+    checkAuth: actions.checkAuth,
+    clearError: actions.clearError,
+    verifyEmail: actions.verifyEmail,
+    verifyLogin: actions.verifyLogin,
+    resendVerification: actions.resendVerification,
+    forgotPassword: actions.forgotPassword,
+    resetPassword: actions.resetPassword,
+    clearPendingVerification: actions.clearPendingVerification,
 
     // Helpers
     getAuthHeaders: getAuthHeadersCallback,
@@ -140,34 +102,18 @@ export function useAuth(): UseAuthReturn {
 // ============================================================================
 
 /**
- * Hook that initializes authentication on mount
- *
+ * Hook that initializes authentication on mount.
  * Use this in your app's root component to check auth status on startup.
- *
- * ```tsx
- * function App() {
- *   const { isInitialized, isAuthenticated } = useAuthInit()
- *
- *   if (!isInitialized) {
- *     return <LoadingScreen />
- *   }
- *
- *   return isAuthenticated ? <Dashboard /> : <Login />
- * }
- * ```
  */
 export function useAuthInit(): {
   isInitialized: boolean
   isAuthenticated: boolean
   isLoading: boolean
 } {
-  const checkAuth = useAuthStore((state) => state.checkAuth)
-  const isInitialized = useAuthStore(selectIsInitialized)
-  const isAuthenticated = useAuthStore(selectIsAuthenticated)
-  const isLoading = useAuthStore(selectIsLoading)
+  const { checkAuth } = useAuthActions()
+  const { isInitialized, isAuthenticated, isLoading } = useAuthState()
 
   useEffect(() => {
-    // Only check auth once on mount
     if (!isInitialized) {
       checkAuth()
     }
@@ -181,74 +127,35 @@ export function useAuthInit(): {
 }
 
 /**
- * Hook to access only the current user
- *
+ * Hook to access only the current user.
  * Optimized for components that only need user data.
- *
- * ```tsx
- * function UserAvatar() {
- *   const user = useCurrentUser()
- *   if (!user) return null
- *   return <Avatar src={user.avatar_url} name={user.display_name} />
- * }
- * ```
  */
 export function useCurrentUser(): User | null {
-  return useAuthStore(selectUser)
+  return useAuthState().user
 }
 
 /**
- * Hook to check if user is authenticated
- *
+ * Hook to check if user is authenticated.
  * Optimized for components that only need auth status.
- *
- * ```tsx
- * function NavBar() {
- *   const isAuthenticated = useIsAuthenticated()
- *   return isAuthenticated ? <UserMenu /> : <LoginButton />
- * }
- * ```
  */
 export function useIsAuthenticated(): boolean {
-  return useAuthStore(selectIsAuthenticated)
+  return useAuthState().isAuthenticated
 }
 
-/**
- * Hook to get the auth token
- *
- * Useful for components that need to make authenticated API calls.
- *
- * ```tsx
- * function DataFetcher() {
- *   const token = useAuthToken()
- *   // Use token for API calls
- * }
- * ```
- */
-export function useAuthToken(): string | null {
-  return useAuthStore((state) => state.token)
-}
+// useAuthToken is exported from @/contexts/auth-context (canonical location).
+// Import it from there to avoid duplicate definitions.
 
 /**
- * Hook to get auth loading and error states
- *
+ * Hook to get auth loading and error states.
  * Useful for forms that need to show loading/error feedback.
- *
- * ```tsx
- * function LoginForm() {
- *   const { isLoading, error, clearError } = useAuthStatus()
- *   // Show loading spinner, error messages
- * }
- * ```
  */
 export function useAuthStatus(): {
   isLoading: boolean
   error: AuthError | null
   clearError: () => void
 } {
-  const isLoading = useAuthStore(selectIsLoading)
-  const error = useAuthStore(selectError)
-  const clearError = useAuthStore((state) => state.clearError)
+  const { isLoading, error } = useAuthState()
+  const { clearError } = useAuthActions()
 
   return {
     isLoading,

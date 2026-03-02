@@ -13,7 +13,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthToken } from '@/contexts/auth-context'
 import {
   wsClient,
   WebSocketClient,
@@ -167,7 +167,7 @@ export interface UseWebSocketReturn {
 export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketReturn {
   const { autoConnect = true, initialRooms = [], client = wsClient } = options
 
-  const token = useAuthStore((state) => state.token)
+  const token = useAuthToken()
   const initialRoomsRef = useRef(initialRooms)
 
   const [status, setStatus] = useState<WebSocketStatus>({

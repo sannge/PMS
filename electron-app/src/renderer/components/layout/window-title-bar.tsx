@@ -38,6 +38,7 @@ export interface WindowTitleBarProps {
   variant?: 'default' | 'auth'
   theme?: Theme
   onThemeChange?: (theme: Theme) => void
+  extraControls?: React.ReactNode
 }
 
 // ============================================================================
@@ -302,6 +303,7 @@ function CompactUserMenu(): JSX.Element {
   }, [logout])
 
   useEffect(() => {
+    if (!isOpen) return
     const handleClickOutside = (event: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         setIsOpen(false)
@@ -309,7 +311,7 @@ function CompactUserMenu(): JSX.Element {
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [])
+  }, [isOpen])
 
   const getInitials = (name?: string | null, email?: string | null): string => {
     if (name) {
@@ -392,15 +394,19 @@ function CompactUserMenu(): JSX.Element {
 function UtilityControls({
   theme,
   onThemeChange,
+  extraControls,
 }: {
   theme: Theme
   onThemeChange?: (theme: Theme) => void
+  extraControls?: React.ReactNode
 }): JSX.Element {
   return (
     <div className="flex items-center gap-1 app-no-drag">
       <SearchButton />
 
       <ThemeToggle theme={theme} onThemeChange={onThemeChange} />
+
+      {extraControls}
 
       <div className="h-4 w-px bg-sidebar-muted/20 mx-0.5" />
 
@@ -507,6 +513,7 @@ export function WindowTitleBar({
   variant = 'default',
   theme = 'system',
   onThemeChange,
+  extraControls,
 }: WindowTitleBarProps): JSX.Element {
   return (
     <div
@@ -526,7 +533,7 @@ export function WindowTitleBar({
       {/* Center/Right - Utility Controls + Window Controls */}
       <div className="flex items-center">
         {variant !== 'auth' && (
-          <UtilityControls theme={theme} onThemeChange={onThemeChange} />
+          <UtilityControls theme={theme} onThemeChange={onThemeChange} extraControls={extraControls} />
         )}
         <WindowControls variant={variant} />
       </div>

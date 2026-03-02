@@ -3,7 +3,7 @@
 **Goal**: Document content gets automatically embedded on save. Semantic + fuzzy search available via API.
 
 **Depends on**: Phase 1 (LLM providers for embedding generation)
-**Blocks**: Phase 3, Phase 4, Phase 6
+**Blocks**: Phase 3.1, Phase 4, Phase 6
 
 ---
 
@@ -75,7 +75,7 @@ CREATE INDEX idx_document_chunks_user ON "DocumentChunks" (user_id);
 
 ```sql
 ALTER TABLE "Documents" ADD COLUMN embedding_updated_at TIMESTAMP NULL;
-ALTER TABLE "Documents" ADD COLUMN graph_ingested_at TIMESTAMP NULL;
+-- Note: graph_ingested_at was removed by Phase 3.1 (drop_knowledge_graph migration)
 
 -- pg_trgm index for fuzzy title matching
 CREATE INDEX idx_documents_title_trgm
@@ -87,7 +87,7 @@ CREATE INDEX idx_documents_title_trgm
 - [ ] `DocumentChunks` table created with correct types
 - [ ] HNSW index created (verify with `\di` in psql)
 - [ ] pg_trgm GIN index on `Documents.title`
-- [ ] `embedding_updated_at` and `graph_ingested_at` added to `Documents`
+- [ ] `embedding_updated_at` added to `Documents` (Note: `graph_ingested_at` removed by Phase 3.1)
 - [ ] CASCADE on document_id FK (chunks deleted when document deleted)
 - [ ] Downgrade removes all additions
 
@@ -126,7 +126,7 @@ class DocumentChunk(Base):
 Add columns:
 ```python
 embedding_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-graph_ingested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+# Note: graph_ingested_at was removed by Phase 3.1 (drop_knowledge_graph migration)
 ```
 
 Add relationship:
@@ -471,7 +471,7 @@ class HybridRetrievalService:
     1. pgvector cosine similarity (semantic)
     2. Meilisearch keyword search (existing infrastructure)
     3. pg_trgm fuzzy title matching
-    4. (Phase 3 adds PostgreSQL knowledge graph entity search)
+    4. (Phase 3 knowledge graph entity search was REMOVED by Phase 3.1)
 
     All sources filtered by user's RBAC scope.
     Results merged and deduplicated using RRF.
@@ -493,7 +493,7 @@ class HybridRetrievalService:
            a. pgvector: embed query → cosine similarity → top 20
            b. Meilisearch: keyword search → top 20
            c. pg_trgm: similarity(title, query) > 0.3 → top 10
-           d. (Phase 3: PostgreSQL entity graph search → top 10)
+           d. (Phase 3 entity graph search REMOVED by Phase 3.1)
         3. Reciprocal Rank Fusion (k=60):
            For each result across all sources:
              rrf_score = sum(1 / (k + rank_in_source))
@@ -586,7 +586,7 @@ class HybridRetrievalService:
 Add to `DocumentResponse`:
 ```python
 embedding_updated_at: datetime | None = None
-graph_ingested_at: datetime | None = None
+# Note: graph_ingested_at was removed by Phase 3.1
 ```
 
 ### Acceptance Criteria

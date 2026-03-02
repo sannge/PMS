@@ -11,7 +11,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { cn } from '@/lib/utils'
 import { parseBackendDate } from '@/lib/time-utils'
-import { useAuthStore, getAuthHeaders } from '@/contexts/auth-context'
+import { useAuthToken, getAuthHeaders } from '@/contexts/auth-context'
 import { useNotificationUIStore } from '@/contexts/notification-ui-context'
 import {
   useNotifications,
@@ -254,7 +254,7 @@ interface InvitationPopupProps {
 }
 
 function InvitationDetailPopup({ notification, onClose, onSuccess }: InvitationPopupProps) {
-  const token = useAuthStore((state) => state.token)
+  const token = useAuthToken()
   const acceptInvitation = useAcceptInvitation()
   const rejectInvitation = useRejectInvitation()
 

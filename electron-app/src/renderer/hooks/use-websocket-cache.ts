@@ -13,11 +13,12 @@
 
 import { useEffect, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { wsClient, MessageType, type Unsubscribe } from '@/lib/websocket'
 import { queryKeys } from '@/lib/query-client'
 import type { Task } from '@/hooks/use-queries'
 import { showBrowserNotification } from '@/lib/notifications'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthUser } from '@/contexts/auth-context'
 import type { DocumentListResponse } from './use-documents'
 import type { FolderTreeNode } from './use-document-folders'
 
@@ -27,45 +28,39 @@ import type { FolderTreeNode } from './use-document-folders'
 
 interface ApplicationEventData {
   application_id: string
-  [key: string]: unknown
 }
 
 interface ProjectEventData {
   project_id: string
   application_id?: string
-  [key: string]: unknown
 }
 
 interface TaskEventData {
   task_id: string
   project_id: string
-  [key: string]: unknown
+  task?: Record<string, unknown>
 }
 
 interface CommentEventData {
   task_id: string
   comment_id?: string
   attachment_ids?: string[]
-  [key: string]: unknown
 }
 
 interface ChecklistEventData {
   task_id: string
   checklist_id?: string
-  [key: string]: unknown
 }
 
 interface MemberEventData {
   application_id: string
   user_id: string
-  [key: string]: unknown
 }
 
 interface ProjectMemberEventData {
   project_id: string
   user_id: string
   application_id?: string
-  [key: string]: unknown
 }
 
 interface NotificationEventData {
@@ -75,13 +70,11 @@ interface NotificationEventData {
   message?: string
   entity_type?: string
   entity_id?: string
-  [key: string]: unknown
 }
 
 interface AttachmentEventData {
   task_id: string
   attachment_id?: string
-  [key: string]: unknown
 }
 
 interface DocumentEventData {
@@ -92,7 +85,7 @@ interface DocumentEventData {
   actor_id?: string | null
   /** For project-scoped items, the parent application ID */
   application_id?: string | null
-  [key: string]: unknown
+  timestamp?: string
 }
 
 interface FolderEventData {
@@ -103,7 +96,8 @@ interface FolderEventData {
   actor_id?: string | null
   /** For project-scoped items, the parent application ID */
   application_id?: string | null
-  [key: string]: unknown
+  timestamp?: string
+
 }
 
 // ============================================================================
@@ -127,8 +121,22 @@ const recentEvents = new Map<string, number>()
 let lastCleanupTime = 0
 
 /**
+ * Clear the event deduplication cache.
+ * Call on logout to prevent stale fingerprints across sessions.
+ */
+export function clearEventDedup(): void {
+  recentEvents.clear()
+  lastCleanupTime = 0
+}
+
+/**
  * Returns true if this event fingerprint was already seen within DEDUP_WINDOW_MS.
  * Otherwise records it and returns false (first occurrence).
+ *
+ * Fingerprints use only event_type + entity_id (no server timestamp) so that
+ * the same logical event received from two different WS rooms (project + app)
+ * always produces the same fingerprint regardless of serialization timing.
+ * The 1-second dedup window is sufficient to collapse cross-room duplicates.
  */
 function isDuplicateEvent(fingerprint: string): boolean {
   const now = Date.now()
@@ -177,7 +185,7 @@ export interface WebSocketCacheOptions {
 export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {}): void {
   const queryClient = useQueryClient()
   const optionsRef = useRef(options)
-  const currentUser = useAuthStore((state) => state.user)
+  const currentUser = useAuthUser()
   const currentUserRef = useRef(currentUser)
 
   // Keep refs up to date
@@ -282,7 +290,7 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
     unsubscribers.push(
       wsClient.on<TaskEventData>(MessageType.TASK_UPDATED, (data) => {
         // WS payload: { task_id, project_id, task: { id, title, ... } }
-        const taskPayload = (data as Record<string, unknown>).task as Record<string, unknown> | undefined
+        const taskPayload = data.task
         if (taskPayload?.id && taskPayload?.title) {
           // Full task payload — update cache in-place, no refetch needed
           const task = taskPayload as unknown as Task
@@ -314,7 +322,7 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
 
     unsubscribers.push(
       wsClient.on<TaskEventData>(MessageType.TASK_STATUS_CHANGED, (data) => {
-        const taskPayload = (data as Record<string, unknown>).task as Record<string, unknown> | undefined
+        const taskPayload = data.task
         if (taskPayload?.id && taskPayload?.title) {
           const task = taskPayload as unknown as Task
           queryClient.setQueryData<Task>(queryKeys.task(data.task_id), task)
@@ -331,7 +339,7 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
 
     unsubscribers.push(
       wsClient.on<TaskEventData>(MessageType.TASK_MOVED, (data) => {
-        const taskPayload = (data as Record<string, unknown>).task as Record<string, unknown> | undefined
+        const taskPayload = data.task
         if (taskPayload?.id && taskPayload?.title) {
           const task = taskPayload as unknown as Task
           queryClient.setQueryData<Task>(queryKeys.task(data.task_id), task)
@@ -640,7 +648,7 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
 
     unsubscribers.push(
       wsClient.on<DocumentEventData>(MessageType.DOCUMENT_CREATED, (data) => {
-        if (isDuplicateEvent(`doc_created:${data.document_id}:${data.timestamp}`)) return
+        if (isDuplicateEvent(`doc_created:${data.document_id}`)) return
         // NOTE: Do NOT skip own actions. Invalidation ensures IndexedDB persisted cache
         // is updated with server-confirmed data (real ID replacing temp ID, accurate timestamps).
         queryClient.invalidateQueries({ queryKey: queryKeys.documents(data.scope, data.scope_id) })
@@ -660,7 +668,7 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
 
     unsubscribers.push(
       wsClient.on<DocumentEventData>(MessageType.DOCUMENT_UPDATED, (data) => {
-        if (isDuplicateEvent(`doc_updated:${data.document_id}:${data.timestamp}`)) return
+        if (isDuplicateEvent(`doc_updated:${data.document_id}`)) return
         const isOwnAction = data.actor_id && data.actor_id === currentUserRef.current?.id
 
         // For own actions, the save mutation already updates the individual document
@@ -688,7 +696,7 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
 
     unsubscribers.push(
       wsClient.on<DocumentEventData>(MessageType.DOCUMENT_DELETED, (data) => {
-        if (isDuplicateEvent(`doc_deleted:${data.document_id}:${data.timestamp}`)) return
+        if (isDuplicateEvent(`doc_deleted:${data.document_id}`)) return
         // NOTE: Do NOT skip own actions here. Same IndexedDB rehydration issue
         // as FOLDER_DELETED — optimistic update only touches in-memory cache,
         // but stale data in IndexedDB can cause deleted documents to reappear.
@@ -730,7 +738,7 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
 
     unsubscribers.push(
       wsClient.on<FolderEventData>(MessageType.FOLDER_CREATED, (data) => {
-        if (isDuplicateEvent(`folder_created:${data.folder_id}:${data.timestamp}`)) return
+        if (isDuplicateEvent(`folder_created:${data.folder_id}`)) return
         // NOTE: Do NOT skip own actions. The optimistic update adds the folder
         // to in-memory cache, but without running this handler the invalidation
         // that fetches accurate server data (materialized_path, depth, document_count)
@@ -747,7 +755,7 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
 
     unsubscribers.push(
       wsClient.on<FolderEventData>(MessageType.FOLDER_UPDATED, (data) => {
-        if (isDuplicateEvent(`folder_updated:${data.folder_id}:${data.timestamp}`)) return
+        if (isDuplicateEvent(`folder_updated:${data.folder_id}`)) return
         // NOTE: Do NOT skip own actions. Same IndexedDB consistency rationale:
         // invalidation ensures the persisted cache is updated with server-confirmed data.
         queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders(data.scope, data.scope_id) })
@@ -759,7 +767,7 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
 
     unsubscribers.push(
       wsClient.on<FolderEventData>(MessageType.FOLDER_DELETED, (data) => {
-        if (isDuplicateEvent(`folder_deleted:${data.folder_id}:${data.timestamp}`)) return
+        if (isDuplicateEvent(`folder_deleted:${data.folder_id}`)) return
         // NOTE: Do NOT skip own actions here. The optimistic update in useDeleteFolder
         // only updates the in-memory TanStack Query cache, but IndexedDB persistence
         // still holds stale data. If we skip, the debounced persister writes stale data
@@ -824,6 +832,80 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
         queryClient.invalidateQueries({ queryKey: queryKeys.invitations })
         queryClient.invalidateQueries({ queryKey: queryKeys.pendingInvitations })
       })
+    )
+
+    // ========================================================================
+    // AI Indexing Events
+    // ========================================================================
+
+    unsubscribers.push(
+      wsClient.on<{ document_id: string; chunk_count: number; timestamp: string }>(
+        MessageType.EMBEDDING_UPDATED,
+        (data) => {
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.documentIndexStatus(data.document_id),
+          })
+          // Surgically update is_embedding_stale instead of invalidating the full
+          // document query (which refetches content_json, potentially large).
+          queryClient.setQueryData(
+            queryKeys.document(data.document_id),
+            (old: Record<string, unknown> | undefined) =>
+              old ? { ...old, is_embedding_stale: false, embedding_sync_pending: false } : old
+          )
+        }
+      )
+    )
+
+    unsubscribers.push(
+      wsClient.on<{ document_id: string; entities_count: number; relationships_count: number; timestamp: string }>(
+        MessageType.ENTITIES_EXTRACTED,
+        (data) => {
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.documentIndexStatus(data.document_id),
+          })
+        }
+      )
+    )
+
+    // ========================================================================
+    // AI Import Events
+    // ========================================================================
+
+    unsubscribers.push(
+      wsClient.on<{ job_id: string; document_id: string; title: string; scope: string }>(
+        MessageType.IMPORT_COMPLETED,
+        (data) => {
+          queryClient.invalidateQueries({ queryKey: queryKeys.importJobs })
+          toast.success(`Import complete: ${data.title}`)
+        }
+      )
+    )
+
+    unsubscribers.push(
+      wsClient.on<{ job_id: string; error_message: string; file_name: string }>(
+        MessageType.IMPORT_FAILED,
+        (data) => {
+          queryClient.invalidateQueries({ queryKey: queryKeys.importJobs })
+          toast.error(`Import failed: ${data.file_name}`, {
+            description: data.error_message,
+          })
+        }
+      )
+    )
+
+    // ========================================================================
+    // AI Reindex Progress Events
+    // ========================================================================
+
+    unsubscribers.push(
+      wsClient.on<{ application_id: string; total: number; processed: number; failed: number }>(
+        MessageType.REINDEX_PROGRESS,
+        (data) => {
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.applicationIndexStatus(data.application_id),
+          })
+        }
+      )
     )
 
     // Cleanup on unmount

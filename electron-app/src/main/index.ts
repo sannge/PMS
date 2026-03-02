@@ -13,11 +13,12 @@ import { config } from 'dotenv'
 import { resolve } from 'path'
 config({ path: resolve(__dirname, '../../.env') })
 
-import { app, BrowserWindow, shell, session, Menu, MenuItemConstructorOptions, ipcMain } from 'electron'
+import { app, BrowserWindow, shell, session, Menu, MenuItemConstructorOptions, ipcMain, clipboard } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
 import { registerNotificationHandlers } from './notifications'
+import { registerOAuthHandlers } from './oauth-handler'
 
 // Support custom user data directory via environment variable (must be set before app ready)
 if (process.env.ELECTRON_USER_DATA_DIR) {
@@ -103,6 +104,47 @@ function createWindow(): void {
     const isAllowed = allowedUrls.some(allowed => url.startsWith(allowed))
     if (!isAllowed) {
       event.preventDefault()
+    }
+  })
+
+  // Right-click context menu with Copy / Select All etc.
+  mainWindow.webContents.on('context-menu', (_event, params) => {
+    const menuItems: MenuItemConstructorOptions[] = []
+
+    if (params.isEditable) {
+      menuItems.push(
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { type: 'separator' },
+        { role: 'selectAll' },
+      )
+    } else {
+      if (params.selectionText) {
+        menuItems.push({ role: 'copy' })
+        menuItems.push({ type: 'separator' })
+      }
+      menuItems.push({ role: 'selectAll' })
+    }
+
+    if (params.linkURL) {
+      menuItems.push(
+        { type: 'separator' },
+        {
+          label: 'Copy Link',
+          click: () => {
+            clipboard.writeText(params.linkURL)
+          },
+        },
+      )
+    }
+
+    if (menuItems.length > 0) {
+      const contextMenu = Menu.buildFromTemplate(menuItems)
+      contextMenu.popup()
     }
   })
 
@@ -349,6 +391,9 @@ app.whenReady().then(() => {
 
   // Register notification handlers for desktop alerts
   registerNotificationHandlers()
+
+  // Register OAuth IPC handlers for AI provider subscription connections
+  registerOAuthHandlers()
 
   // Create application menu
   createApplicationMenu()

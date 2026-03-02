@@ -14,7 +14,7 @@ import {
   type UseQueryResult,
   type UseMutationResult,
 } from '@tanstack/react-query'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthToken, useAuthUserId } from '@/contexts/auth-context'
 import { queryKeys } from '@/lib/query-client'
 
 // ============================================================================
@@ -39,6 +39,10 @@ export interface Document {
   created_at: string
   updated_at: string
   tags: DocumentTagRef[]
+  /** True when document content has changed since last embedding sync */
+  is_embedding_stale?: boolean
+  /** True when an embedding sync job is queued or in-progress */
+  embedding_sync_pending?: boolean
 }
 
 export interface DocumentTagRef {
@@ -60,6 +64,10 @@ export interface DocumentListItem {
   created_at: string
   updated_at: string
   deleted_at: string | null
+  /** True when document content has changed since last embedding sync */
+  is_embedding_stale?: boolean
+  /** True when an embedding sync job is queued or in-progress */
+  embedding_sync_pending?: boolean
 }
 
 export interface DocumentListResponse {
@@ -157,8 +165,8 @@ export function useDocuments(
   scopeId: string | null,
   options?: DocumentsQueryOptions
 ): UseQueryResult<DocumentListResponse, Error> {
-  const token = useAuthStore((s) => s.token)
-  const userId = useAuthStore((s) => s.user?.id ?? null)
+  const token = useAuthToken()
+  const userId = useAuthUserId()
 
   // For personal scope, use userId as the cache key so WebSocket invalidation works
   const effectiveScopeId = scope === 'personal' ? (userId ?? '') : (scopeId ?? '')
@@ -225,7 +233,7 @@ export function useDocuments(
  * Fetch a single document by ID with full content.
  */
 export function useDocument(id: string | null): UseQueryResult<Document, Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useQuery({
     queryKey: queryKeys.document(id ?? ''),
@@ -271,8 +279,8 @@ export function isTempId(id: string | null | undefined): boolean {
  * Adds document to cache immediately, replaces with server data on success.
  */
 export function useCreateDocument(): UseMutationResult<Document, Error, CreateDocumentParams> {
-  const token = useAuthStore((s) => s.token)
-  const userId = useAuthStore((s) => s.user?.id ?? null)
+  const token = useAuthToken()
+  const userId = useAuthUserId()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -363,9 +371,9 @@ export function useCreateDocument(): UseMutationResult<Document, Error, CreateDo
  * Rename a document with optimistic update.
  */
 export function useRenameDocument(): UseMutationResult<Document, Error, RenameDocumentParams> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
-  const userId = useAuthStore((s) => s.user?.id ?? null)
+  const userId = useAuthUserId()
 
   return useMutation({
     mutationFn: async ({ documentId, title, row_version }: RenameDocumentParams) => {
@@ -450,9 +458,9 @@ export function useRenameDocument(): UseMutationResult<Document, Error, RenameDo
  * Move a document to a different folder with optimistic update.
  */
 export function useMoveDocument(): UseMutationResult<Document, Error, MoveDocumentParams> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
-  const userId = useAuthStore((s) => s.user?.id ?? null)
+  const userId = useAuthUserId()
 
   return useMutation({
     mutationFn: async ({ documentId, folder_id, row_version }: MoveDocumentParams) => {
@@ -571,9 +579,9 @@ export function useMoveDocument(): UseMutationResult<Document, Error, MoveDocume
  * Removes document from cache immediately, rollback on error.
  */
 export function useDeleteDocument(): UseMutationResult<void, Error, { documentId: string; scope: string; scopeId: string }> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
-  const userId = useAuthStore((s) => s.user?.id ?? null)
+  const userId = useAuthUserId()
 
   return useMutation({
     mutationFn: async ({ documentId }: { documentId: string; scope: string; scopeId: string }) => {
@@ -662,9 +670,9 @@ export function useReorderDocument(
   scope: string,
   scopeId: string
 ): UseMutationResult<Document, Error, ReorderDocumentParams> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
-  const userId = useAuthStore((s) => s.user?.id ?? null)
+  const userId = useAuthUserId()
 
   const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
 
@@ -733,7 +741,7 @@ export interface ScopesSummaryResponse {
  * Fetch which scopes have documents for auto-managed tab visibility.
  */
 export function useApplicationsWithDocs(): UseQueryResult<ScopesSummaryResponse, Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useQuery({
     queryKey: queryKeys.scopesSummary(),
@@ -779,7 +787,7 @@ export interface ProjectsWithContentResponse {
 export function useProjectsWithContent(
   applicationId: string | null
 ): UseQueryResult<ProjectsWithContentResponse, Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useQuery({
     queryKey: ['projects-with-content', applicationId],

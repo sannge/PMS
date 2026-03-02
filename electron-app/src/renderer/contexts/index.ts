@@ -8,6 +8,11 @@
 export {
   AuthProvider,
   useAuthStore,
+  useAuthState,
+  useAuthActions,
+  useAuthToken,
+  useAuthUserId,
+  useAuthUser,
   getAuthHeaders,
   selectUser,
   selectIsAuthenticated,

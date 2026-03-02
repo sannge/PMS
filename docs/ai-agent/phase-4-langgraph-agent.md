@@ -2,7 +2,7 @@
 
 **Goal**: ReAct agent with all READ/WRITE tools. Testable via API (no frontend yet).
 
-**Depends on**: Phase 1 (LLM providers), Phase 2 (retrieval), Phase 3 (graph search)
+**Depends on**: Phase 1 (LLM providers), Phase 2 (retrieval), Phase 3.1 (SQL access + agent tools)
 **Blocks**: Phase 5 (frontend needs agent backend)
 
 ---
@@ -33,39 +33,28 @@ class AgentState(TypedDict):
     accessible_project_ids: list[str]  # User's accessible projects
 
 
-SYSTEM_PROMPT = """You are Blair, the PM Desktop AI assistant. You help users understand their projects, \
-tasks, knowledge base, and relationships between them.
+SYSTEM_PROMPT = """You are Blair, the PM Desktop AI assistant. You help users with their projects, \
+tasks, and knowledge base.
 
-Be friendly, helpful, and proactive with suggestions. When presenting data, be concise but include \
-key details. When you find related information, mention it proactively.
+Be concise and professional. Give direct answers. No filler, no preamble, no unnecessary \
+pleasantries. Use bullet points and tables over prose. Only elaborate when the user asks.
 
 You have access to the user's applications, projects, tasks, and knowledge base documents \
-(including both regular documents and canvas documents). You can also create tasks, update statuses, \
-and create documents when the user asks — but always confirm before taking action.
+(including regular documents and canvas documents). You can create tasks, update statuses, \
+and create documents — always confirm before taking action.
 
-Guidelines:
-- When asked about projects or tasks, use the appropriate tools to fetch real data
-- When asked to search knowledge, use query_knowledge for broad searches
-- When asked about entity relationships, use query_entities for graph traversal
-- For write operations (create task, update status, etc.), always show what you plan to do and wait for confirmation
-- If information spans multiple sources, synthesize it into a coherent answer
-- ALWAYS include source references when citing information — provide document title, section heading, \
-  and a brief snippet so the user can click through to the exact location
-- If the user sends images, analyze them and respond based on what you see
-- If you don't find relevant information, say so honestly rather than guessing
-- You can understand and search content from both regular documents and canvas documents
+Tool usage:
+- Structural questions (projects, tasks, members, statuses) → sql_query tool
+- Content questions (document search, knowledge lookup) → query_knowledge tool
+- Write operations → always confirm before executing
+- Include source references when citing content (document title + section)
+- If you don't find relevant information, say so — don't guess
 
-Clarification guidelines:
-- If the user's request is ambiguous or could mean multiple things, ASK for clarification \
-  before proceeding. Use the request_clarification tool to present options when helpful.
-- If you search the knowledge base but don't find enough information, ask the user to \
-  provide more context — e.g., which project, which document, what time frame, etc.
-- If the user mentions something vague like "the document" or "that task", ask which \
-  specific one they mean — offer a few likely candidates based on context.
-- When there are multiple possible interpretations, present them as concrete options \
-  so the user can pick one quickly rather than re-typing their request.
-- Don't over-ask: if you have enough information to give a useful answer, just answer. \
-  Only clarify when the ambiguity would lead to a wrong or unhelpful response.
+Clarification:
+- If the request is ambiguous, ask for clarification before proceeding. \
+  Use request_clarification to present options when helpful.
+- Ask one thing at a time. Get the answer, then ask the next if needed.
+- Don't over-ask — if you have enough context, just answer.
 """
 
 
@@ -139,7 +128,7 @@ def build_agent_graph(tools: list, checkpointer=None) -> CompiledGraph:
 
 ### Acceptance Criteria
 - [ ] `AgentState` TypedDict defined with correct fields
-- [ ] System prompt sets friendly, helpful tone
+- [ ] System prompt sets concise, professional tone
 - [ ] Graph compiles without errors
 - [ ] ReAct loop: agent → tools → agent → ... → END
 - [ ] `should_continue` correctly detects tool calls
@@ -184,38 +173,30 @@ async def query_knowledge(
     # 6. Sources attached to STATE_SNAPSHOT AG-UI event for frontend rendering
 ```
 
-### Tool: `query_entities`
+### Tool: `sql_query`
+
+> **Note**: This tool replaces the original `query_entities` tool (which used the Phase 3 Knowledge Graph).
+> Phase 3.1 provides direct read-only SQL access to the relational schema via scoped views.
 
 ```python
 @tool
-async def query_entities(
-    query: str,
-    entity_name: str | None = None,
-    entity_type: str | None = None
+async def sql_query(
+    question: str,
 ) -> str:
     """
-    Search the knowledge graph for entities, relationships, and connections
-    between concepts, people, systems, or any entity mentioned in documents.
-    Use this when the user asks about what is known about a specific thing,
-    how things relate to each other, or who works on what.
+    Query the project database to answer structural questions about applications,
+    projects, tasks, users, assignments, and other relational data.
+    Use this when the user asks about who owns what, task counts, project status,
+    team members, or any question answerable from the relational schema.
 
     Args:
-        query: The search query (natural language)
-        entity_name: Optional - get full context for a specific named entity
-        entity_type: Optional - filter by type: "system", "person", "team",
-                     "technology", "concept", "project"
+        question: Natural language question (will be converted to SQL)
     """
-    # 1. If entity_name provided:
-    #    a. Find entity by name via KnowledgeGraphService.search_entities()
-    #    b. Get full context via KnowledgeGraphService.get_entity_context()
-    #    c. Include relationships (outgoing + incoming) and source documents
-    # 2. Else:
-    #    a. Search entities matching query
-    #    b. For top results, include relationship summaries
-    # 3. Format as readable text:
-    #    - Entity name, type, description
-    #    - Key relationships: "depends_on Auth Service", "maintained_by Backend Team"
-    #    - Source documents with snippets
+    # 1. Generate SQL from question via sql_generator (LLM)
+    # 2. Validate SQL via sql_validator (sqlglot AST)
+    # 3. Execute against scoped views (RBAC enforced by SET LOCAL)
+    # 4. Format results as readable markdown table
+    # Wraps Phase 3.1 sql_query_tool()
 ```
 
 ### Tool: `get_projects`
@@ -1154,7 +1135,7 @@ class ToolResultWithSources:
 3. HybridRetrievalService returns:
    - Chunk from "API Architecture" doc, heading "Payment Flow", text "The payment..."
    - Chunk from "Sprint 12 Notes" doc, heading "Backend Updates", text "Refactored payment..."
-   - Entity match: "Payment Service" from knowledge graph
+   - (Entity match removed — Phase 3 KG replaced by Phase 3.1 SQL access)
       │
 4. query_knowledge tool formats text for LLM AND returns SourceReference list
       │

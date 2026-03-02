@@ -19,10 +19,11 @@ import {
   FileText,
   Lock,
 } from 'lucide-react'
+import { DocumentStatusBadge } from './document-status-badge'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { cn } from '@/lib/utils'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthUserId } from '@/contexts/auth-context'
 import type { ActiveLockInfo } from '@/hooks/use-document-lock'
 import type { FolderTreeNode } from '@/hooks/use-document-folders'
 import type { DocumentListItem } from '@/hooks/use-documents'
@@ -47,7 +48,7 @@ const DocumentLockIndicator = memo(function DocumentLockIndicator({
   lockInfo,
   hidden = false,
 }: DocumentLockIndicatorProps): JSX.Element | null {
-  const userId = useAuthStore((s) => s.user?.id)
+  const userId = useAuthUserId()
 
   // Hide if no lock, during rename, or if locked by the current user
   if (hidden || !lockInfo || lockInfo.userId === userId) return null
@@ -262,6 +263,15 @@ export function FolderTreeItem({
         />
       ) : (
         <span className="flex-1 min-w-0 text-[13px] leading-[22px] truncate">{displayName}</span>
+      )}
+
+      {/* Embedding status indicator for documents */}
+      {type === 'document' && !isRenaming && ((node as DocumentListItem).is_embedding_stale || (node as DocumentListItem).embedding_sync_pending) && (
+        <DocumentStatusBadge
+          documentId={node.id}
+          isEmbeddingStale={(node as DocumentListItem).is_embedding_stale}
+          variant="dot"
+        />
       )}
 
       {/* Lock indicator for documents being edited */}

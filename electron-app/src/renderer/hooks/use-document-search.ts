@@ -14,7 +14,7 @@
  */
 
 import { useInfiniteQuery, keepPreviousData } from '@tanstack/react-query'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthToken } from '@/contexts/auth-context'
 import { queryKeys } from '@/lib/query-client'
 import { useState, useEffect, useMemo, useCallback } from 'react'
 
@@ -58,7 +58,7 @@ export interface DocumentSearchOptions {
 }
 
 export function useDocumentSearch(query: string, options?: DocumentSearchOptions) {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const applicationId = options?.applicationId
   const projectId = options?.projectId
 

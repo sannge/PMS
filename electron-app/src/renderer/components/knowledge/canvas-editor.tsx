@@ -10,7 +10,7 @@ import { useState, useCallback, useRef, useEffect, useReducer, useMemo } from 'r
 import type { Editor } from '@tiptap/core'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthToken } from '@/contexts/auth-context'
 import type { CanvasDocument } from './canvas-types'
 import type { SetImageAttrs } from './editor-extensions'
 import { useCanvasState } from './use-canvas-state'
@@ -32,6 +32,7 @@ interface CanvasEditorProps {
   title?: string
   updatedAt?: string
   onBaselineSync?: (json: object) => void
+  isEmbeddingStale?: boolean
 }
 
 export function CanvasEditor({
@@ -43,13 +44,14 @@ export function CanvasEditor({
   title,
   updatedAt,
   onBaselineSync,
+  isEmbeddingStale,
 }: CanvasEditorProps) {
   const [activeEditor, setActiveEditor] = useState<Editor | null>(null)
   const measuredHeights = useRef<Map<string, number>>(new Map()).current
   const measuredWidths = useRef<Map<string, number>>(new Map()).current
   // Counter to force canvas bounds recalculation when measured sizes change
   const [boundsVersion, forceCanvasBoundsUpdate] = useReducer((v: number) => v + 1, 0)
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const canvasRootRef = useRef<HTMLDivElement>(null)
 
   const state = useCanvasState(canvasData, onChange, editable)
@@ -298,7 +300,7 @@ export function CanvasEditor({
 
       {/* Title section — mirrors normal document's h1 heading + timestamp */}
       <div className="px-6 pt-4 pb-2 border-b shrink-0">
-        {updatedAt && <DocumentTimestamp updatedAt={updatedAt} />}
+        {updatedAt && <DocumentTimestamp updatedAt={updatedAt} documentId={documentId} isEmbeddingStale={isEmbeddingStale} />}
         {editable ? (
           <input
             type="text"

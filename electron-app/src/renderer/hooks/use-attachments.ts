@@ -19,7 +19,7 @@ import {
   UseQueryResult,
   UseMutationResult,
 } from '@tanstack/react-query'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthToken } from '@/contexts/auth-context'
 import { queryKeys } from '@/lib/query-client'
 
 // ============================================================================
@@ -117,7 +117,7 @@ function getEntityQueryKey(entityType: EntityType, entityId: string): readonly s
  * Persisted to IndexedDB for offline access.
  */
 export function useAttachments(taskId: string | undefined): UseQueryResult<Attachment[], Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useQuery({
     queryKey: queryKeys.attachments(taskId || ''),
@@ -151,7 +151,7 @@ export function useEntityAttachments(
   entityType: EntityType | undefined,
   entityId: string | undefined
 ): UseQueryResult<Attachment[], Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useQuery({
     queryKey: entityType && entityId ? getEntityQueryKey(entityType, entityId) : ['attachments', 'none'],
@@ -184,7 +184,7 @@ export function useEntityAttachments(
 export function useDownloadUrl(
   attachmentId: string | undefined
 ): UseQueryResult<string | null, Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useQuery({
     queryKey: queryKeys.downloadUrl(attachmentId || ''),
@@ -217,7 +217,7 @@ export function useDownloadUrl(
 export function useDownloadUrls(
   attachmentIds: string[]
 ): UseQueryResult<Record<string, string>, Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const sortedIds = [...attachmentIds].sort()
 
   return useQuery({
@@ -327,7 +327,7 @@ interface UploadFilePayload {
  * Supports both legacy task-specific and generic entity uploads.
  */
 export function useUploadFile(): UseMutationResult<Attachment, Error, UploadFilePayload> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -424,7 +424,7 @@ export function useDeleteAttachment(): UseMutationResult<
   { attachmentId: string; entityType?: EntityType; entityId?: string; taskId?: string },
   { previous?: Attachment[] }
 > {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -530,7 +530,7 @@ export function useDeleteAttachments(): UseMutationResult<void, Error, string[]>
  * Helper hook to get attachment download URL and trigger download.
  */
 export function useDownloadAttachment(): UseMutationResult<void, Error, Attachment> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useMutation({
     mutationFn: async (attachment: Attachment) => {
@@ -564,7 +564,7 @@ export function useDownloadAttachment(): UseMutationResult<void, Error, Attachme
  * Returns a function that fetches the URL.
  */
 export function useGetDownloadUrl(): (attachmentId: string) => Promise<string | null> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useCallback(
@@ -610,7 +610,7 @@ export function useGetDownloadUrl(): (attachmentId: string) => Promise<string | 
 export function useGetDownloadUrls(): (
   attachmentIds: string[]
 ) => Promise<Record<string, string>> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useCallback(

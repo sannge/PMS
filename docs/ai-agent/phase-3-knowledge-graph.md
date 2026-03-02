@@ -1,10 +1,17 @@
 # Phase 3: Knowledge Graph (PostgreSQL)
 
-**Goal**: Entity extraction from documents stored as a lightweight knowledge graph in PostgreSQL. Graph-based entity retrieval added to hybrid pipeline and exposed as a dedicated agent tool.
+> **STATUS: REPLACED BY [Phase 3.1: Agent SQL Access & Excel Export](phase-3.1-sql-access.md)**
+>
+> The LLM-extracted knowledge graph has been replaced by direct read-only SQL access
+> via scoped PostgreSQL views. The relational schema already models entities and relationships
+> explicitly (Users, Projects, Tasks, etc. with FK relationships), making LLM extraction redundant.
+> All Phase 3 code (~4,880 LOC) is removed in Phase 3.1.
 
-**Depends on**: Phase 1 (LLM providers for entity extraction), Phase 2 (embedding infrastructure, chunking pipeline)
-**Blocks**: Phase 4 (agent needs `query_entities` tool)
-**Parallel with**: Phase 6 (independent work)
+~~**Goal**: Entity extraction from documents stored as a lightweight knowledge graph in PostgreSQL. Graph-based entity retrieval added to hybrid pipeline and exposed as a dedicated agent tool.~~
+
+~~**Depends on**: Phase 1 (LLM providers for entity extraction), Phase 2 (embedding infrastructure, chunking pipeline)~~
+~~**Blocks**: Phase 4 (agent needs `query_entities` tool)~~
+~~**Parallel with**: Phase 6 (independent work)~~
 
 ---
 

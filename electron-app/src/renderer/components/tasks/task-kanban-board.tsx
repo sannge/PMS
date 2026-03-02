@@ -7,7 +7,7 @@
 
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { cn } from '@/lib/utils'
-import { useAuthStore, getAuthHeaders } from '@/contexts/auth-context'
+import { useAuthToken, getAuthHeaders } from '@/contexts/auth-context'
 import { useMoveTask, useTaskStatuses, type Task } from '@/hooks/use-queries'
 import {
   DndContext,
@@ -278,7 +278,7 @@ export function TaskKanbanBoard({
   const [activeTask, setActiveTask] = useState<Task | null>(null)
 
   // Auth
-  const token = useAuthStore((state) => state.token)
+  const token = useAuthToken()
 
   // Task move mutation
   const moveTaskMutation = useMoveTask(projectId)

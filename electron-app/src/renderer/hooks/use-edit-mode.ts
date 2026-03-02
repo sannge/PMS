@@ -22,7 +22,7 @@ import { useSaveDocumentContent } from './use-queries'
 import { useDocument } from './use-documents'
 import type { Document } from './use-documents'
 import { useKnowledgeBase } from '@/contexts/knowledge-base-context'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthState } from '@/contexts/auth-context'
 import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '@/lib/query-client'
 import {
@@ -91,9 +91,10 @@ export function useEditMode({
   canEdit,
   isOwner = false,
 }: UseEditModeOptions): UseEditModeReturn {
-  const token = useAuthStore((s) => s.token)
-  const userId = useAuthStore((s) => s.user?.id ?? '')
-  const userName = useAuthStore((s) => s.user?.display_name ?? s.user?.email ?? '')
+  const authState = useAuthState()
+  const token = authState.token
+  const userId = authState.user?.id ?? ''
+  const userName = authState.user?.display_name ?? authState.user?.email ?? ''
   const queryClient = useQueryClient()
   const {
     registerNavigationGuard,

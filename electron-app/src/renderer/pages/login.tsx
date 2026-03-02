@@ -11,8 +11,10 @@
 
 import { useState, useCallback, FormEvent, ChangeEvent } from 'react'
 import { cn } from '@/lib/utils'
+import { validateEmail, validatePassword } from '@/lib/validation'
 import { useAuth, type LoginCredentials } from '@/hooks/use-auth'
 import { WindowTitleBar } from '@/components/layout/window-title-bar'
+import { AnimatedBackground } from '@/components/auth/animated-background'
 import {
   Loader2,
   Mail,
@@ -29,6 +31,7 @@ import {
 
 interface LoginPageProps {
   onNavigateToRegister: () => void
+  onNavigateToForgotPassword: () => void
 }
 
 interface FormErrors {
@@ -37,65 +40,10 @@ interface FormErrors {
 }
 
 // ============================================================================
-// Validation
-// ============================================================================
-
-function validateEmail(email: string): string | undefined {
-  if (!email.trim()) {
-    return 'Email is required'
-  }
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-  if (!emailRegex.test(email)) {
-    return 'Please enter a valid email address'
-  }
-  return undefined
-}
-
-function validatePassword(password: string): string | undefined {
-  if (!password) {
-    return 'Password is required'
-  }
-  if (password.length < 8) {
-    return 'Password must be at least 8 characters'
-  }
-  return undefined
-}
-
-// ============================================================================
-// Background Component
-// ============================================================================
-
-function AnimatedBackground(): JSX.Element {
-  return (
-    <div className="fixed inset-0 -z-10 overflow-hidden">
-      {/* Base gradient */}
-      <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900" />
-
-      {/* Animated gradient orbs */}
-      <div className="absolute -top-40 -right-40 h-80 w-80 rounded-full bg-gradient-to-br from-amber-500/30 to-orange-500/20 blur-3xl animate-float" />
-      <div className="absolute -bottom-40 -left-40 h-80 w-80 rounded-full bg-gradient-to-br from-violet-500/20 to-purple-500/20 blur-3xl animate-float animation-delay-200" />
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-96 w-96 rounded-full bg-gradient-to-br from-amber-500/10 to-transparent blur-3xl" />
-
-      {/* Grid overlay */}
-      <div
-        className="absolute inset-0 opacity-[0.02]"
-        style={{
-          backgroundImage: `linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px)`,
-          backgroundSize: '50px 50px',
-        }}
-      />
-
-      {/* Noise texture */}
-      <div className="absolute inset-0 bg-noise opacity-[0.015]" />
-    </div>
-  )
-}
-
-// ============================================================================
 // Component
 // ============================================================================
 
-export function LoginPage({ onNavigateToRegister }: LoginPageProps): JSX.Element {
+export function LoginPage({ onNavigateToRegister, onNavigateToForgotPassword }: LoginPageProps): JSX.Element {
   const { login, isLoading, error, clearError } = useAuth()
 
   const [email, setEmail] = useState('')
@@ -213,7 +161,7 @@ export function LoginPage({ onNavigateToRegister }: LoginPageProps): JSX.Element
           <form onSubmit={handleSubmit} className="space-y-5">
             {/* API Error Message */}
             {error && (
-              <div className={cn(
+              <div role="alert" className={cn(
                 'flex items-center gap-3 rounded-xl p-4',
                 'bg-red-500/10 border border-red-500/20',
                 'text-sm text-red-400',
@@ -318,6 +266,21 @@ export function LoginPage({ onNavigateToRegister }: LoginPageProps): JSX.Element
               {formErrors.password && touched.password && (
                 <p className="text-xs text-red-400 animate-fade-in">{formErrors.password}</p>
               )}
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={onNavigateToForgotPassword}
+                  disabled={isLoading}
+                  className={cn(
+                    'text-xs text-slate-400 underline-offset-4',
+                    'transition-colors duration-200',
+                    'hover:text-amber-400 hover:underline',
+                    'disabled:pointer-events-none disabled:opacity-50'
+                  )}
+                >
+                  Forgot password?
+                </button>
+              </div>
             </div>
 
             {/* Submit Button */}

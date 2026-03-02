@@ -15,7 +15,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { MessageSquare, Loader2, AlertCircle } from 'lucide-react'
 import { useCommentsList, useCreateComment } from '@/hooks/use-comments'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthUserId } from '@/contexts/auth-context'
 import { queryKeys } from '@/lib/query-client'
 import { CommentItem } from './CommentItem'
 import { CommentInput, type MentionSuggestion, type UploadedAttachment } from './CommentInput'
@@ -49,7 +49,7 @@ export function CommentThread({
   className,
 }: CommentThreadProps): JSX.Element {
   const queryClient = useQueryClient()
-  const userId = useAuthStore((state) => state.user?.id)
+  const userId = useAuthUserId()
 
   // TanStack Query hooks
   const {
@@ -234,7 +234,7 @@ export function CommentThread({
               <CommentItem
                 key={comment.id}
                 comment={comment}
-                currentUserId={userId}
+                currentUserId={userId ?? undefined}
                 disabled={isCreating}
               />
             ))}

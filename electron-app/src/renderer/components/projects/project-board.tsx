@@ -17,8 +17,7 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
-import { useAuthStore } from '@/contexts/auth-context'
-import { getAuthHeaders } from '@/contexts/auth-context'
+import { useAuthToken, getAuthHeaders } from '@/contexts/auth-context'
 import {
   Plus,
   AlertCircle,
@@ -594,7 +593,7 @@ export function ProjectBoard({
   const [realtimeNotice, setRealtimeNotice] = useState<string | null>(null)
 
   // Auth
-  const token = useAuthStore((state) => state.token)
+  const token = useAuthToken()
 
   // WebSocket status
   const { status } = useWebSocket()

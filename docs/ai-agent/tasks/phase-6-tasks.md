@@ -6,7 +6,7 @@
 **Spec**: [phase-6-document-import.md](../phase-6-document-import.md)
 
 > **Depends on**: Phase 1 (LLM providers for vision), Phase 2 (embedding pipeline)
-> **Parallel with**: Phase 3 (independent work)
+> **Parallel with**: Phase 3.1 (independent work)
 > **Blocks**: Phase 4 (agent uses image understanding tool)
 
 ## Task Count Summary

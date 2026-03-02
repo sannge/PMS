@@ -1,7 +1,7 @@
 # Phase 1: LLM Abstraction Layer + Database Setup — Task Breakdown
 
 **Depends on**: Nothing (foundation phase)
-**Blocks**: Phase 2, Phase 3, Phase 4, Phase 5, Phase 6, Phase 7
+**Blocks**: Phase 2, Phase 3.1, Phase 4, Phase 5, Phase 6, Phase 7
 **Target files**: `fastapi-backend/app/ai/`, `fastapi-backend/app/routers/ai_config.py`, `fastapi-backend/app/schemas/ai_config.py`, `fastapi-backend/alembic/versions/`, `fastapi-backend/tests/`
 
 ---

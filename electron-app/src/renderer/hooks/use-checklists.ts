@@ -17,7 +17,7 @@ import {
   UseQueryResult,
   UseMutationResult,
 } from '@tanstack/react-query'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthToken } from '@/contexts/auth-context'
 import { queryKeys } from '@/lib/query-client'
 
 // ============================================================================
@@ -107,7 +107,7 @@ function sortByRank<T extends { rank: string }>(items: T[]): T[] {
  * Fetch checklists for a task.
  */
 export function useChecklists(taskId: string | undefined): UseQueryResult<Checklist[], Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useQuery({
     queryKey: queryKeys.checklists(taskId || ''),
@@ -166,7 +166,7 @@ export function useChecklistProgress(taskId: string | undefined): {
 export function useCreateChecklist(
   taskId: string
 ): UseMutationResult<Checklist, Error, ChecklistCreate, { previous?: Checklist[] }> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -234,7 +234,7 @@ export function useUpdateChecklist(
   { checklistId: string; title: string },
   { previous?: Checklist[] }
 > {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -283,7 +283,7 @@ export function useUpdateChecklist(
 export function useDeleteChecklist(
   taskId: string
 ): UseMutationResult<void, Error, string, { previous?: Checklist[] }> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -329,7 +329,7 @@ export function useDeleteChecklist(
 export function useReorderChecklists(
   taskId: string
 ): UseMutationResult<void, Error, string[], { previous?: Checklist[] }> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -389,7 +389,7 @@ export function useCreateChecklistItem(
   { checklistId: string; data: ChecklistItemCreate },
   { previous?: Checklist[] }
 > {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -460,7 +460,7 @@ export function useUpdateChecklistItem(
   { itemId: string; content: string },
   { previous?: Checklist[] }
 > {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -512,7 +512,7 @@ export function useUpdateChecklistItem(
 export function useToggleChecklistItem(
   taskId: string
 ): UseMutationResult<ChecklistItem, Error, string, { previous?: Checklist[] }> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -572,7 +572,7 @@ export function useToggleChecklistItem(
 export function useDeleteChecklistItem(
   taskId: string
 ): UseMutationResult<void, Error, string, { previous?: Checklist[] }> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -634,7 +634,7 @@ export function useReorderChecklistItems(
   { checklistId: string; itemIds: string[] },
   { previous?: Checklist[] }
 > {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({

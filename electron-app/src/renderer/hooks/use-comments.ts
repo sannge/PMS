@@ -18,7 +18,7 @@ import {
   UseQueryResult,
   UseMutationResult,
 } from '@tanstack/react-query'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthToken, useAuthUser } from '@/contexts/auth-context'
 import { queryKeys } from '@/lib/query-client'
 
 // ============================================================================
@@ -146,7 +146,7 @@ function parseApiError(status: number, data: unknown): ApiError {
 export function useComments(
   taskId: string | undefined
 ) {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useInfiniteQuery({
     queryKey: queryKeys.comments(taskId || ''),
@@ -208,7 +208,7 @@ export function useCommentsList(taskId: string | undefined): {
  * Fetch a single comment by ID (rarely needed, but available).
  */
 export function useComment(id: string | undefined): UseQueryResult<Comment, Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useQuery({
     queryKey: queryKeys.comment(id || ''),
@@ -244,8 +244,8 @@ export function useComment(id: string | undefined): UseQueryResult<Comment, Erro
 export function useCreateComment(
   taskId: string
 ): UseMutationResult<Comment, Error, CommentCreate, { previousData?: CommentListResponse[] }> {
-  const token = useAuthStore((s) => s.token)
-  const user = useAuthStore((s) => s.user)
+  const token = useAuthToken()
+  const user = useAuthUser()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -365,7 +365,7 @@ export function useUpdateComment(
   commentId: string,
   taskId: string
 ): UseMutationResult<Comment, Error, CommentUpdate, { previousData?: { pages: CommentListResponse[] } }> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -438,7 +438,7 @@ export function useDeleteComment(
   commentId: string,
   taskId: string
 ): UseMutationResult<void, Error, void, { previousData?: { pages: CommentListResponse[] } }> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({

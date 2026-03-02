@@ -11,7 +11,7 @@ import {
   useQuery,
   type UseQueryResult,
 } from '@tanstack/react-query'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthToken, useAuthUserId } from '@/contexts/auth-context'
 import { queryKeys } from '@/lib/query-client'
 
 // ============================================================================
@@ -92,8 +92,8 @@ export function useDocumentTags(
   scope: string,
   scopeId: string | null
 ): UseQueryResult<DocumentTag[], Error> {
-  const token = useAuthStore((s) => s.token)
-  const userId = useAuthStore((s) => s.user?.id ?? null)
+  const token = useAuthToken()
+  const userId = useAuthUserId()
 
   return useQuery({
     queryKey: queryKeys.documentTags(scope, scopeId ?? ''),

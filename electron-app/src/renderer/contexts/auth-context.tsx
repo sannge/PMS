@@ -17,6 +17,7 @@ import {
   useReducer,
   useCallback,
   useEffect,
+  useMemo,
   type ReactNode,
 } from 'react'
 
@@ -29,6 +30,8 @@ export interface User {
   email: string
   display_name: string | null
   avatar_url: string | null
+  email_verified: boolean
+  is_developer: boolean
   created_at: string
   updated_at: string
 }
@@ -62,6 +65,8 @@ interface AuthState {
   isLoading: boolean
   isInitialized: boolean
   error: AuthError | null
+  pendingVerificationEmail: string | null
+  pendingVerificationContext: 'registration' | 'login' | null
 }
 
 interface AuthContextValue extends AuthState {
@@ -74,6 +79,12 @@ interface AuthContextValue extends AuthState {
   setToken: (token: string | null) => void
   setUser: (user: User | null) => void
   reset: () => void
+  verifyEmail: (email: string, code: string) => Promise<boolean>
+  verifyLogin: (email: string, code: string) => Promise<boolean>
+  resendVerification: (email: string) => Promise<boolean>
+  forgotPassword: (email: string) => Promise<boolean>
+  resetPassword: (email: string, code: string, newPassword: string) => Promise<boolean>
+  clearPendingVerification: () => void
 }
 
 // ============================================================================
@@ -93,7 +104,7 @@ export function getAuthHeaders(token: string | null): Record<string, string> {
   }
 }
 
-function parseApiError(status: number, data: unknown): AuthError {
+export function parseApiError(status: number, data: unknown): AuthError {
   if (typeof data === 'object' && data !== null) {
     const errorData = data as Record<string, unknown>
     if (typeof errorData.detail === 'string') {
@@ -163,6 +174,8 @@ type AuthAction =
   | { type: 'SET_AUTHENTICATED'; payload: boolean }
   | { type: 'SET_INITIALIZED'; payload: boolean }
   | { type: 'LOGIN_SUCCESS'; payload: { token: string; user?: User } }
+  | { type: 'SET_PENDING_VERIFICATION'; payload: string | null }
+  | { type: 'SET_PENDING_CONTEXT'; payload: 'registration' | 'login' | null }
   | { type: 'LOGOUT' }
   | { type: 'RESET' }
 
@@ -173,6 +186,8 @@ const initialState: AuthState = {
   isLoading: false,
   isInitialized: false,
   error: null,
+  pendingVerificationEmail: null,
+  pendingVerificationContext: null,
 }
 
 function authReducer(state: AuthState, action: AuthAction): AuthState {
@@ -197,6 +212,18 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
         isAuthenticated: true,
         isLoading: false,
         error: null,
+        pendingVerificationEmail: null,
+        pendingVerificationContext: null,
+      }
+    case 'SET_PENDING_VERIFICATION':
+      return {
+        ...state,
+        pendingVerificationEmail: action.payload,
+      }
+    case 'SET_PENDING_CONTEXT':
+      return {
+        ...state,
+        pendingVerificationContext: action.payload,
       }
     case 'LOGOUT':
       return {
@@ -205,6 +232,8 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
         token: null,
         isAuthenticated: false,
         error: null,
+        pendingVerificationEmail: null,
+        pendingVerificationContext: null,
       }
     case 'RESET':
       return { ...initialState, token: null }
@@ -214,9 +243,35 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
 }
 
 // ============================================================================
+// Split Context Types
+// ============================================================================
+
+interface AuthActions {
+  login: (credentials: LoginCredentials) => Promise<boolean>
+  register: (data: RegisterData) => Promise<boolean>
+  logout: () => Promise<void>
+  fetchCurrentUser: () => Promise<void>
+  checkAuth: () => Promise<boolean>
+  clearError: () => void
+  setToken: (token: string | null) => void
+  setUser: (user: User | null) => void
+  reset: () => void
+  verifyEmail: (email: string, code: string) => Promise<boolean>
+  verifyLogin: (email: string, code: string) => Promise<boolean>
+  resendVerification: (email: string) => Promise<boolean>
+  forgotPassword: (email: string) => Promise<boolean>
+  resetPassword: (email: string, code: string, newPassword: string) => Promise<boolean>
+  clearPendingVerification: () => void
+}
+
+// ============================================================================
 // Context
 // ============================================================================
 
+const AuthStateContext = createContext<AuthState | null>(null)
+const AuthActionsContext = createContext<AuthActions | null>(null)
+
+// Legacy single context for backwards compatibility during migration
 const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }): JSX.Element {
@@ -274,6 +329,14 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
         body: formData.toString(),
       })
 
+      if (response.status === 403) {
+        // Email not verified — redirect to verification page
+        dispatch({ type: 'SET_PENDING_VERIFICATION', payload: credentials.email })
+        dispatch({ type: 'SET_PENDING_CONTEXT', payload: 'registration' })
+        dispatch({ type: 'SET_LOADING', payload: false })
+        return false
+      }
+
       if (response.status !== 200) {
         const error = parseApiError(response.status, response.data)
         dispatch({ type: 'SET_ERROR', payload: error })
@@ -281,8 +344,17 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
         return false
       }
 
-      const tokenData = response.data
-      dispatch({ type: 'LOGIN_SUCCESS', payload: { token: tokenData.access_token } })
+      const tokenData = response.data as Record<string, unknown>
+
+      // Check if 2FA is required (login returns requires_2fa instead of access_token)
+      if ('requires_2fa' in tokenData && tokenData.requires_2fa) {
+        dispatch({ type: 'SET_PENDING_VERIFICATION', payload: credentials.email })
+        dispatch({ type: 'SET_PENDING_CONTEXT', payload: 'login' })
+        dispatch({ type: 'SET_LOADING', payload: false })
+        return false
+      }
+
+      dispatch({ type: 'LOGIN_SUCCESS', payload: { token: tokenData.access_token as string } })
 
       // Fetch user profile
       const userResponse = await window.electronAPI.get<User>(
@@ -314,7 +386,7 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
         throw new Error('Electron API not available')
       }
 
-      const response = await window.electronAPI.post<User>('/auth/register', {
+      const response = await window.electronAPI.post<{ message: string; email: string }>('/auth/register', {
         email: data.email,
         password: data.password,
         display_name: data.display_name || null,
@@ -327,6 +399,8 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
         return false
       }
 
+      dispatch({ type: 'SET_PENDING_VERIFICATION', payload: data.email })
+      dispatch({ type: 'SET_PENDING_CONTEXT', payload: 'registration' })
       dispatch({ type: 'SET_LOADING', payload: false })
       return true
     } catch (err) {
@@ -346,6 +420,13 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
       }
     } catch {
       // Ignore logout errors
+    }
+    // Clear module-level AI navigation state to prevent cross-session leaks
+    try {
+      const { resetAiNavigation } = await import('@/lib/ai-navigation')
+      resetAiNavigation()
+    } catch {
+      // Non-critical
     }
     dispatch({ type: 'LOGOUT' })
   }, [state.token])
@@ -404,8 +485,202 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
     dispatch({ type: 'RESET' })
   }, [])
 
-  const value: AuthContextValue = {
-    ...state,
+  const verifyEmail = useCallback(async (email: string, code: string): Promise<boolean> => {
+    dispatch({ type: 'SET_LOADING', payload: true })
+    dispatch({ type: 'SET_ERROR', payload: null })
+
+    try {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      const response = await window.electronAPI.post<TokenResponse>('/auth/verify-email', {
+        email,
+        code,
+      })
+
+      if (response.status !== 200) {
+        const error = parseApiError(response.status, response.data)
+        dispatch({ type: 'SET_ERROR', payload: error })
+        dispatch({ type: 'SET_LOADING', payload: false })
+        return false
+      }
+
+      const tokenData = response.data
+      dispatch({ type: 'LOGIN_SUCCESS', payload: { token: tokenData.access_token } })
+
+      // Fetch user profile
+      const userResponse = await window.electronAPI.get<User>(
+        '/auth/me',
+        getAuthHeaders(tokenData.access_token)
+      )
+
+      if (userResponse.status === 200) {
+        dispatch({ type: 'SET_USER', payload: userResponse.data })
+      }
+
+      return true
+    } catch (err) {
+      const error: AuthError = {
+        message: err instanceof Error ? err.message : 'Verification failed',
+      }
+      dispatch({ type: 'SET_ERROR', payload: error })
+      dispatch({ type: 'SET_LOADING', payload: false })
+      return false
+    }
+  }, [])
+
+  const verifyLogin = useCallback(async (email: string, code: string): Promise<boolean> => {
+    dispatch({ type: 'SET_LOADING', payload: true })
+    dispatch({ type: 'SET_ERROR', payload: null })
+
+    try {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      const response = await window.electronAPI.post<TokenResponse>('/auth/verify-login', {
+        email,
+        code,
+      })
+
+      if (response.status !== 200) {
+        const error = parseApiError(response.status, response.data)
+        dispatch({ type: 'SET_ERROR', payload: error })
+        dispatch({ type: 'SET_LOADING', payload: false })
+        return false
+      }
+
+      const tokenData = response.data
+      dispatch({ type: 'LOGIN_SUCCESS', payload: { token: tokenData.access_token } })
+
+      // Fetch user profile
+      const userResponse = await window.electronAPI.get<User>(
+        '/auth/me',
+        getAuthHeaders(tokenData.access_token)
+      )
+
+      if (userResponse.status === 200) {
+        dispatch({ type: 'SET_USER', payload: userResponse.data })
+      }
+
+      return true
+    } catch (err) {
+      const error: AuthError = {
+        message: err instanceof Error ? err.message : 'Verification failed',
+      }
+      dispatch({ type: 'SET_ERROR', payload: error })
+      dispatch({ type: 'SET_LOADING', payload: false })
+      return false
+    }
+  }, [])
+
+  const resendVerification = useCallback(async (email: string): Promise<boolean> => {
+    dispatch({ type: 'SET_ERROR', payload: null })
+    dispatch({ type: 'SET_LOADING', payload: true })
+
+    try {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      const response = await window.electronAPI.post<{ message: string }>('/auth/resend-verification', {
+        email,
+      })
+
+      if (response.status !== 200) {
+        const error = parseApiError(response.status, response.data)
+        dispatch({ type: 'SET_ERROR', payload: error })
+        dispatch({ type: 'SET_LOADING', payload: false })
+        return false
+      }
+
+      dispatch({ type: 'SET_LOADING', payload: false })
+      return true
+    } catch (err) {
+      const error: AuthError = {
+        message: err instanceof Error ? err.message : 'Failed to resend code',
+      }
+      dispatch({ type: 'SET_ERROR', payload: error })
+      dispatch({ type: 'SET_LOADING', payload: false })
+      return false
+    }
+  }, [])
+
+  const forgotPassword = useCallback(async (email: string): Promise<boolean> => {
+    dispatch({ type: 'SET_LOADING', payload: true })
+    dispatch({ type: 'SET_ERROR', payload: null })
+
+    try {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      const response = await window.electronAPI.post<{ message: string }>('/auth/forgot-password', {
+        email,
+      })
+
+      if (response.status !== 200) {
+        const error = parseApiError(response.status, response.data)
+        dispatch({ type: 'SET_ERROR', payload: error })
+        dispatch({ type: 'SET_LOADING', payload: false })
+        return false
+      }
+
+      dispatch({ type: 'SET_LOADING', payload: false })
+      return true
+    } catch (err) {
+      const error: AuthError = {
+        message: err instanceof Error ? err.message : 'Failed to send reset code',
+      }
+      dispatch({ type: 'SET_ERROR', payload: error })
+      dispatch({ type: 'SET_LOADING', payload: false })
+      return false
+    }
+  }, [])
+
+  const resetPassword = useCallback(async (email: string, code: string, newPassword: string): Promise<boolean> => {
+    dispatch({ type: 'SET_LOADING', payload: true })
+    dispatch({ type: 'SET_ERROR', payload: null })
+
+    try {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available')
+      }
+
+      const response = await window.electronAPI.post<{ message: string }>('/auth/reset-password', {
+        email,
+        code,
+        new_password: newPassword,
+      })
+
+      if (response.status !== 200) {
+        const error = parseApiError(response.status, response.data)
+        dispatch({ type: 'SET_ERROR', payload: error })
+        dispatch({ type: 'SET_LOADING', payload: false })
+        return false
+      }
+
+      dispatch({ type: 'SET_LOADING', payload: false })
+      return true
+    } catch (err) {
+      const error: AuthError = {
+        message: err instanceof Error ? err.message : 'Password reset failed',
+      }
+      dispatch({ type: 'SET_ERROR', payload: error })
+      dispatch({ type: 'SET_LOADING', payload: false })
+      return false
+    }
+  }, [])
+
+  const clearPendingVerification = useCallback((): void => {
+    dispatch({ type: 'SET_PENDING_VERIFICATION', payload: null })
+  }, [])
+
+  // Actions are stable (created via useCallback with [] or [state.token] deps).
+  // Memoize the actions object so AuthActionsContext consumers don't re-render
+  // when state changes -- only when action functions themselves change.
+  const actions: AuthActions = useMemo(() => ({
     login,
     register,
     logout,
@@ -415,15 +690,43 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
     setToken,
     setUser,
     reset,
+    verifyEmail,
+    verifyLogin,
+    resendVerification,
+    forgotPassword,
+    resetPassword,
+    clearPendingVerification,
+  }), [
+    login, register, logout, fetchCurrentUser, checkAuth, clearError,
+    setToken, setUser, reset, verifyEmail, verifyLogin, resendVerification,
+    forgotPassword, resetPassword, clearPendingVerification,
+  ])
+
+  const value: AuthContextValue = {
+    ...state,
+    ...actions,
   }
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
+  return (
+    <AuthContext.Provider value={value}>
+      <AuthStateContext.Provider value={state}>
+        <AuthActionsContext.Provider value={actions}>
+          {children}
+        </AuthActionsContext.Provider>
+      </AuthStateContext.Provider>
+    </AuthContext.Provider>
+  )
 }
 
 // ============================================================================
 // Hook
 // ============================================================================
 
+/**
+ * @deprecated Use `useAuthState()` for state or `useAuthActions()` for actions.
+ * This hook reads from the legacy monolithic AuthContext and does not benefit
+ * from the split-context re-render optimization.
+ */
 export function useAuthStore(): AuthContextValue
 export function useAuthStore<T>(selector: (state: AuthContextValue) => T): T
 export function useAuthStore<T>(selector?: (state: AuthContextValue) => T): AuthContextValue | T {
@@ -434,8 +737,58 @@ export function useAuthStore<T>(selector?: (state: AuthContextValue) => T): Auth
   return selector ? selector(context) : context
 }
 
+/**
+ * Hook for auth state only. Consumers re-render only when state changes,
+ * NOT when action functions are recreated.
+ */
+export function useAuthState(): AuthState {
+  const context = useContext(AuthStateContext)
+  if (!context) {
+    throw new Error('useAuthState must be used within an AuthProvider')
+  }
+  return context
+}
+
+/**
+ * Hook for auth actions only. Actions are stable (memoized),
+ * so consumers almost never re-render from this context.
+ */
+export function useAuthActions(): AuthActions {
+  const context = useContext(AuthActionsContext)
+  if (!context) {
+    throw new Error('useAuthActions must be used within an AuthProvider')
+  }
+  return context
+}
+
 // ============================================================================
-// Selectors
+// Convenience Hooks (thin wrappers over split contexts)
+// ============================================================================
+
+/**
+ * Hook for the auth token. Components using this only re-render when state changes,
+ * NOT when action callbacks are recreated.
+ */
+export function useAuthToken(): string | null {
+  return useAuthState().token
+}
+
+/**
+ * Hook for the current user's ID.
+ */
+export function useAuthUserId(): string | null {
+  return useAuthState().user?.id ?? null
+}
+
+/**
+ * Hook for the current user object.
+ */
+export function useAuthUser(): User | null {
+  return useAuthState().user
+}
+
+// ============================================================================
+// Selectors (kept for backwards compatibility with tests)
 // ============================================================================
 
 export const selectUser = (state: AuthContextValue): User | null => state.user

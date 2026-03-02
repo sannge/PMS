@@ -13,7 +13,7 @@
 
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthToken } from '@/contexts/auth-context'
 import { queryKeys } from '@/lib/query-client'
 import { useApplicationsWithDocs, useProjectsWithContent } from './use-documents'
 import type { ScopeType } from '@/contexts/knowledge-base-context'
@@ -60,7 +60,7 @@ export function useKnowledgePermissions(
   scope: ScopeType | null,
   scopeId: string | null
 ): KnowledgePermissions {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   // Application scope: derive from scopes-summary (which already has user_role)
   const { data: scopesSummary, isLoading: isScopesLoading } = useApplicationsWithDocs()

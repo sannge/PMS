@@ -19,7 +19,7 @@ import {
   UseQueryResult,
   UseMutationResult,
 } from '@tanstack/react-query'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthToken } from '@/contexts/auth-context'
 import { queryKeys } from '@/lib/query-client'
 
 // ============================================================================
@@ -124,7 +124,7 @@ function parseApiError(status: number, data: unknown): ApiError {
 export function useReceivedInvitations(
   status?: InvitationStatus
 ): UseQueryResult<InvitationWithDetails[], Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useQuery({
     queryKey: queryKeys.receivedInvitations(status),
@@ -162,7 +162,7 @@ export function useReceivedInvitations(
 export function useSentInvitations(
   applicationId?: string
 ): UseQueryResult<InvitationWithDetails[], Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useQuery({
     queryKey: queryKeys.sentInvitations(applicationId),
@@ -196,7 +196,7 @@ export function useSentInvitations(
  * Fetch pending invitation count.
  */
 export function usePendingInvitationCount(): UseQueryResult<number, Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useQuery({
     queryKey: queryKeys.pendingInvitationCount,
@@ -232,7 +232,7 @@ export function usePendingInvitationCount(): UseQueryResult<number, Error> {
 export function useSendInvitation(
   applicationId: string
 ): UseMutationResult<InvitationWithDetails, Error, InvitationCreate, { previous?: InvitationWithDetails[] }> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -273,7 +273,7 @@ export function useAcceptInvitation(): UseMutationResult<
   string,
   { previous?: InvitationWithDetails[]; previousCount?: number }
 > {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -342,7 +342,7 @@ export function useRejectInvitation(): UseMutationResult<
   string,
   { previous?: InvitationWithDetails[]; previousCount?: number }
 > {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -406,7 +406,7 @@ export function useRejectInvitation(): UseMutationResult<
 export function useCancelInvitation(
   applicationId?: string
 ): UseMutationResult<void, Error, string, { previous?: InvitationWithDetails[] }> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({

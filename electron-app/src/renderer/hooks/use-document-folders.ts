@@ -14,7 +14,7 @@ import {
   type UseQueryResult,
   type UseMutationResult,
 } from '@tanstack/react-query'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthToken, useAuthUserId } from '@/contexts/auth-context'
 import { queryKeys } from '@/lib/query-client'
 import { TEMP_ID_PREFIX } from './use-documents'
 
@@ -129,8 +129,8 @@ export function useFolderTree(
   scope: string,
   scopeId: string | null
 ): UseQueryResult<FolderTreeNode[], Error> {
-  const token = useAuthStore((s) => s.token)
-  const userId = useAuthStore((s) => s.user?.id ?? null)
+  const token = useAuthToken()
+  const userId = useAuthUserId()
 
   // For personal scope, use userId as the cache key so WebSocket invalidation works
   const effectiveScopeId = scope === 'personal' ? (userId ?? '') : (scopeId ?? '')
@@ -234,8 +234,8 @@ function removeFolderFromTree(tree: FolderTreeNode[], folderId: string): FolderT
  * Create a new folder with optimistic update.
  */
 export function useCreateFolder(): UseMutationResult<DocumentFolder, Error, CreateFolderParams> {
-  const token = useAuthStore((s) => s.token)
-  const userId = useAuthStore((s) => s.user?.id ?? null)
+  const token = useAuthToken()
+  const userId = useAuthUserId()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -316,9 +316,9 @@ export function useCreateFolder(): UseMutationResult<DocumentFolder, Error, Crea
  * Rename a folder with optimistic update.
  */
 export function useRenameFolder(): UseMutationResult<DocumentFolder, Error, RenameFolderParams> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
-  const userId = useAuthStore((s) => s.user?.id ?? null)
+  const userId = useAuthUserId()
 
   return useMutation({
     mutationFn: async ({ folderId, name }: RenameFolderParams) => {
@@ -365,9 +365,9 @@ export function useRenameFolder(): UseMutationResult<DocumentFolder, Error, Rena
  * Move a folder to a new parent with optimistic update.
  */
 export function useMoveFolder(): UseMutationResult<DocumentFolder, Error, MoveFolderParams> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
-  const userId = useAuthStore((s) => s.user?.id ?? null)
+  const userId = useAuthUserId()
 
   return useMutation({
     mutationFn: async ({ folderId, parent_id }: MoveFolderParams) => {
@@ -441,9 +441,9 @@ export function useMoveFolder(): UseMutationResult<DocumentFolder, Error, MoveFo
  * Delete a folder with optimistic update.
  */
 export function useDeleteFolder(): UseMutationResult<void, Error, { folderId: string; scope: string; scopeId: string }> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
-  const userId = useAuthStore((s) => s.user?.id ?? null)
+  const userId = useAuthUserId()
 
   return useMutation({
     mutationFn: async ({ folderId }: { folderId: string; scope: string; scopeId: string }) => {
@@ -519,9 +519,9 @@ export function useReorderFolder(
   scope: string,
   scopeId: string
 ): UseMutationResult<DocumentFolder, Error, ReorderFolderParams> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
-  const userId = useAuthStore((s) => s.user?.id ?? null)
+  const userId = useAuthUserId()
 
   const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
 

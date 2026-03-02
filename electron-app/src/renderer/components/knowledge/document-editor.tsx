@@ -16,7 +16,7 @@ import { DOMParser } from '@tiptap/pm/model'
 import { useCallback, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthToken } from '@/contexts/auth-context'
 import { createDocumentExtensions, type SetImageAttrs, updateImagePlaceholder, removeImagePlaceholder } from './editor-extensions'
 import { EditorToolbar } from './editor-toolbar'
 import { DocumentTimestamp } from './document-header'
@@ -71,11 +71,12 @@ export function DocumentEditor({
   documentId,
   searchTerms,
   scrollToOccurrence,
+  isEmbeddingStale,
 }: DocumentEditorProps) {
   const onChangeRef = useRef(onChange)
   const editableRef = useRef(editable)
   const onBaselineSyncRef = useRef(onBaselineSync)
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   // Keep refs current
   useEffect(() => {
@@ -245,19 +246,18 @@ export function DocumentEditor({
           }
         }
 
-        // ---- TSV fallback (no usable HTML, but tab-separated text) ----
-        // Catches cases where Excel HTML is missing/garbled but TSV is available,
-        // AND plain tab-separated data from other sources.
-        if (textData.includes('\t') && textData.includes('\n')) {
-          const MAX_ROWS = 100
-          const MAX_COLS = 50
-          const allRows = textData.trim().split('\n')
-          const rows = allRows.slice(0, MAX_ROWS).map(row => row.split('\t').slice(0, MAX_COLS))
-          if (rows.length > 1 || (rows[0] && rows[0].length > 1)) {
-            // Only use TSV when there's no non-spreadsheet HTML (otherwise we'd
-            // clobber rich content like formatted text with tabs from other apps)
-            const hasNonSpreadsheetHtml = htmlData && !isSpreadsheetHtml
-            if (!hasNonSpreadsheetHtml) {
+        // ---- TSV paste (tab-separated text from spreadsheets) ----
+        // On Windows Electron, clipboardData.getData('text/html') is often
+        // empty for native apps like Excel.  The text/plain TSV is the only
+        // reliable signal.  Also handles single-row copies (tabs, no newlines).
+        if (textData && textData.includes('\t')) {
+          const hasNonSpreadsheetHtml = htmlData && !isSpreadsheetHtml
+          if (!hasNonSpreadsheetHtml) {
+            const MAX_ROWS = 100
+            const MAX_COLS = 50
+            const allRows = textData.trim().split(/\r?\n/)
+            const rows = allRows.slice(0, MAX_ROWS).map(row => row.split('\t').slice(0, MAX_COLS))
+            if (rows.length > 1 || (rows[0] && rows[0].length > 1)) {
               const rowsTruncated = allRows.length > MAX_ROWS
               const colsTruncated = allRows.some(row => row.split('\t').length > MAX_COLS)
               if (rowsTruncated || colsTruncated) {
@@ -515,7 +515,7 @@ export function DocumentEditor({
     <div className={cn('overflow-hidden bg-background flex flex-col min-h-0', className)}>
       {editable && <EditorToolbar editor={editor} onImageUpload={handleToolbarImageUpload} />}
       <div className="h-0 flex-grow overflow-y-auto overflow-x-hidden">
-        {updatedAt && <DocumentTimestamp updatedAt={updatedAt} />}
+        {updatedAt && <DocumentTimestamp updatedAt={updatedAt} documentId={documentId} isEmbeddingStale={isEmbeddingStale} />}
         <EditorContent editor={editor} className="prose prose-sm max-w-none" />
       </div>
       <EditorStatusBar editor={editor} />

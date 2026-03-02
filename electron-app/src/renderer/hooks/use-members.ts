@@ -14,7 +14,7 @@ import {
   UseQueryResult,
   UseMutationResult,
 } from '@tanstack/react-query'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthToken } from '@/contexts/auth-context'
 import { queryKeys } from '@/lib/query-client'
 
 // ============================================================================
@@ -133,7 +133,7 @@ function parseApiError(status: number, data: unknown): ApiError {
 export function useAppMembers(
   applicationId: string | undefined
 ): UseQueryResult<ApplicationMember[], Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useQuery({
     queryKey: queryKeys.appMembers(applicationId || ''),
@@ -166,7 +166,7 @@ export function useAppMembers(
 export function useInviteAppMember(
   applicationId: string
 ): UseMutationResult<void, Error, AddMemberPayload> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -203,7 +203,7 @@ export function useUpdateAppMemberRole(
   UpdateRolePayload,
   { previous?: ApplicationMember[] }
 > {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -259,7 +259,7 @@ export function useUpdateAppMemberRole(
 export function useRemoveAppMember(
   applicationId: string
 ): UseMutationResult<void, Error, string> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -293,7 +293,7 @@ export function useRemoveAppMember(
 export function useProjectMembers(
   projectId: string | undefined
 ): UseQueryResult<ProjectMember[], Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useQuery({
     queryKey: queryKeys.projectMembers(projectId || ''),
@@ -325,7 +325,7 @@ export function useProjectMembers(
 export function useAddProjectMember(
   projectId: string
 ): UseMutationResult<ProjectMember, Error, AddProjectMemberPayload> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -362,7 +362,7 @@ export function useAddProjectMember(
 export function useUpdateProjectMemberRole(
   projectId: string
 ): UseMutationResult<ProjectMember, Error, UpdateRolePayload, { previous?: ProjectMember[] }> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -418,7 +418,7 @@ export function useUpdateProjectMemberRole(
 export function useRemoveProjectMember(
   projectId: string
 ): UseMutationResult<void, Error, string> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({

@@ -19,7 +19,9 @@ import { ApplicationDetailPage } from '@/pages/applications/[id]'
 import { ProjectsPage } from '@/pages/projects/index'
 import { ProjectDetailPage } from '@/pages/projects/[id]'
 import { NotesPage } from '@/pages/notes/index'
+import { AiSettingsPanel, AiToggleButton, AiSidebar } from '@/components/ai'
 import { checkScreenGuard } from '@/lib/screen-navigation-guard'
+import { setScreenSwitcher, clearScreenSwitcher } from '@/lib/ai-navigation'
 import { MyProjectsPanel } from '@/components/dashboard/MyProjectsPanel'
 import { DashboardTasksList } from '@/components/dashboard/DashboardTasksList'
 import { useInvitationNotifications, useWebSocket, useNotificationReadSync, useProjectDeletedSync, useNotifications } from '@/hooks/use-websocket'
@@ -756,6 +758,12 @@ export function DashboardPage({
     proceed()
   }, [])
 
+  // Register screen switcher for AI navigation bridge
+  useEffect(() => {
+    setScreenSwitcher((screen: string) => handleNavigate(screen as NavItem))
+    return () => clearScreenSwitcher()
+  }, [handleNavigate])
+
   const handleSelectApplication = useCallback((application: Application) => {
     setSelectedApplicationId(application.id)
     setSelectedApplicationName(application.name)
@@ -924,14 +932,11 @@ export function DashboardPage({
           <NotesPage />
         )
       case 'settings':
-        return (
+        return currentUser?.is_developer ? (
+          <AiSettingsPanel />
+        ) : (
           <div className="flex flex-1 items-center justify-center">
-            <div className="text-center animate-fade-in">
-              <h2 className="text-xl font-semibold text-foreground">Settings</h2>
-              <p className="mt-2 text-muted-foreground">
-                Settings page coming soon...
-              </p>
-            </div>
+            <p className="text-muted-foreground">No settings available</p>
           </div>
         )
       default:
@@ -942,7 +947,7 @@ export function DashboardPage({
   return (
     <div className="flex h-screen flex-col bg-background">
       {/* Unified Title Bar with utility controls */}
-      <WindowTitleBar theme={theme} onThemeChange={onThemeChange} />
+      <WindowTitleBar theme={theme} onThemeChange={onThemeChange} extraControls={<AiToggleButton />} />
 
       {/* Main Layout */}
       <div className="flex flex-1 overflow-hidden">
@@ -958,6 +963,9 @@ export function DashboardPage({
         <main className={cn("flex-1 overflow-auto p-4 lg:p-5", activeItem === 'tasks' && "relative", activeItem === 'notes' && "p-0 overflow-hidden")}>
           {renderContent()}
         </main>
+
+        {/* Blair AI Sidebar */}
+        <AiSidebar />
       </div>
 
       {/* Notification Panel */}

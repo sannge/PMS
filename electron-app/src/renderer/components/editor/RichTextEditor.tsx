@@ -17,6 +17,7 @@
 import { useEditor, EditorContent, Editor, Extension, NodeViewWrapper, NodeViewProps, ReactNodeViewRenderer } from '@tiptap/react'
 import type { RawCommands } from '@tiptap/core'
 import type { Transaction, EditorState } from '@tiptap/pm/state'
+import { DOMParser as PmDOMParser } from '@tiptap/pm/model'
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import StarterKit from '@tiptap/starter-kit'
 import Underline from '@tiptap/extension-underline'
@@ -270,7 +271,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthToken } from '@/contexts/auth-context'
 
 // ============================================================================
 // Types
@@ -886,7 +887,7 @@ export function RichTextEditor({
   // Whether content exceeds max length
   const [isOverLimit, setIsOverLimit] = useState(false)
   // Token for image upload
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   // Image upload function for paste and drop
   const uploadImage = useCallback(async (file: File): Promise<string | null> => {
@@ -1018,20 +1019,90 @@ export function RichTextEditor({
         ),
         style: `font-family: ${DEFAULT_FONT_FAMILY}; max-height: ${maxHeight};`,
       },
-      // Handle paste for images (Ctrl+V with image in clipboard)
+      // Handle paste for spreadsheet data and images
       handlePaste: (view, event) => {
+        const htmlData = event.clipboardData?.getData('text/html') || ''
+        const textData = event.clipboardData?.getData('text/plain') || ''
+
+        // ---- Spreadsheet HTML paste (Excel / Google Sheets) ----
+        // Excel/Sheets put BOTH an HTML table AND a PNG screenshot on the
+        // clipboard.  We must handle the table explicitly and return true,
+        // otherwise the Image extension intercepts the PNG screenshot.
+        const isSpreadsheetHtml =
+          htmlData.includes('xmlns:x="urn:schemas-microsoft-com:office:excel"') ||
+          htmlData.includes('ProgId="Excel') ||
+          htmlData.includes('google-sheets-html-origin')
+
+        if (isSpreadsheetHtml) {
+          const tableMatch = htmlData.match(/<table[\s\S]*<\/table>/i)
+          if (tableMatch) {
+            event.preventDefault()
+            const cleanHtml = tableMatch[0]
+              .replace(/<!--[\s\S]*?-->/g, '')
+              .replace(/<col[^>]*\/?>/gi, '')
+              .replace(/<colgroup[^>]*>[\s\S]*?<\/colgroup>/gi, '')
+              .replace(/<\/?(?:font|span)[^>]*>/gi, '')
+              .replace(/\s*class="[^"]*"/gi, '')
+              .replace(/\s*style="[^"]*"/gi, '')
+              .replace(/\s*(?:width|height|border|cellpadding|cellspacing|align|valign)="[^"]*"/gi, '')
+              .replace(/\s*xmlns:[a-z]+="[^"]*"/gi, '')
+            const parser = PmDOMParser.fromSchema(view.state.schema)
+            const tmpDoc = document.implementation.createHTMLDocument()
+            tmpDoc.body.innerHTML = cleanHtml
+            const slice = parser.parseSlice(tmpDoc.body)
+            const tr = view.state.tr.replaceSelection(slice)
+            view.dispatch(tr)
+            return true
+          }
+        }
+
+        // ---- TSV paste (tab-separated text from spreadsheets) ----
+        // On Windows Electron, clipboardData.getData('text/html') is often
+        // empty for native apps like Excel.  The text/plain TSV is the only
+        // reliable signal.  Also handles single-row copies (tabs, no newlines).
+        if (textData && textData.includes('\t')) {
+          const hasNonSpreadsheetHtml = htmlData && !isSpreadsheetHtml
+          if (!hasNonSpreadsheetHtml) {
+            const MAX_ROWS = 100
+            const MAX_COLS = 50
+            const allRows = textData.trim().split(/\r?\n/)
+            const rows = allRows.slice(0, MAX_ROWS).map(row => row.split('\t').slice(0, MAX_COLS))
+            if (rows.length > 1 || (rows[0] && rows[0].length > 1)) {
+              event.preventDefault()
+              const tableHtml = '<table>' +
+                rows.map((row, i) =>
+                  '<tr>' + row.map(cell => {
+                    const escaped = cell.trim()
+                      .replace(/&/g, '&amp;')
+                      .replace(/</g, '&lt;')
+                      .replace(/>/g, '&gt;')
+                      .replace(/"/g, '&quot;')
+                    return `<${i === 0 ? 'th' : 'td'}>${escaped}</${i === 0 ? 'th' : 'td'}>`
+                  }).join('') + '</tr>'
+                ).join('') + '</table>'
+              const parser = PmDOMParser.fromSchema(view.state.schema)
+              const tmpDoc = document.implementation.createHTMLDocument()
+              tmpDoc.body.innerHTML = tableHtml
+              const slice = parser.parseSlice(tmpDoc.body)
+              const tr = view.state.tr.replaceSelection(slice)
+              view.dispatch(tr)
+              return true
+            }
+          }
+        }
+
+        // ---- Image paste (only when clipboard has NO HTML) ----
+        const hasHtml = !!htmlData
         const items = event.clipboardData?.items
         if (!items) return false
 
         for (const item of items) {
-          if (item.type.startsWith('image/')) {
+          if (item.type.startsWith('image/') && !hasHtml) {
             event.preventDefault()
             const file = item.getAsFile()
             if (file) {
-              // Show a placeholder while uploading
               uploadImage(file).then((url) => {
                 if (url) {
-                  // Insert image at current cursor position
                   const node = view.state.schema.nodes.image?.create({ src: url })
                   if (node) {
                     const tr = view.state.tr.replaceSelectionWith(node)

@@ -13,7 +13,7 @@
 
 import { useEffect, useCallback, useState, useRef } from 'react'
 import { useWebSocket } from './use-websocket'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthUser } from '@/contexts/auth-context'
 
 // ============================================================================
 // Types
@@ -62,7 +62,7 @@ export function usePresence({
   idleTimeout = DEFAULT_IDLE_TIMEOUT,
 }: UsePresenceOptions): UsePresenceReturn {
   const { send: sendMessage, status, subscribe } = useWebSocket()
-  const user = useAuthStore((state) => state.user)
+  const user = useAuthUser()
 
   const [viewers, setViewers] = useState<PresenceUser[]>([])
   const [isTyping, setIsTyping] = useState<Record<string, { user_name: string; expires_at: number }>>({})
@@ -120,9 +120,13 @@ export function usePresence({
       })
     }
 
-    // Track activity function
+    // Track activity function (throttled to at most once per 2s to avoid
+    // excessive work from high-frequency DOM events like mousemove)
+    const ACTIVITY_THROTTLE_MS = 2000
     const trackActivity = () => {
-      lastActivityRef.current = Date.now()
+      const now = Date.now()
+      if (now - lastActivityRef.current < ACTIVITY_THROTTLE_MS) return
+      lastActivityRef.current = now
       if (isIdleRef.current && fullRoomId) {
         isIdleRef.current = false
         sendMessageRef.current('presence_heartbeat', {

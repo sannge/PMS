@@ -3,15 +3,21 @@
  *
  * Small static timestamp display rendered inside the editor area.
  * Shows the document's last-updated time. Not editable.
+ * Optionally shows the embedding index status badge.
  *
  * The document title is rendered as an h1 heading inside the TipTap
  * editor content itself (see ensureContentHeading in content-utils.ts).
  */
 
 import { parseBackendDate } from '@/lib/time-utils'
+import { DocumentStatusBadge } from './document-status-badge'
 
 export interface DocumentTimestampProps {
   updatedAt: string
+  /** When provided, renders the unified embedding status badge */
+  documentId?: string
+  /** Whether embeddings are out of date */
+  isEmbeddingStale?: boolean
 }
 
 /** Format an ISO timestamp as "Feb 8, 2026 3:45 PM" */
@@ -27,10 +33,20 @@ function formatTimestamp(iso: string): string {
   }).format(date)
 }
 
-export function DocumentTimestamp({ updatedAt }: DocumentTimestampProps): JSX.Element {
+export function DocumentTimestamp({ updatedAt, documentId, isEmbeddingStale }: DocumentTimestampProps): JSX.Element {
   return (
-    <p className="px-6 pt-3 pb-1 text-xs text-muted-foreground">
-      {formatTimestamp(updatedAt)}
-    </p>
+    <div className="flex items-center gap-2 px-6 pt-3 pb-1">
+      <p className="text-xs text-muted-foreground">
+        {formatTimestamp(updatedAt)}
+      </p>
+      {documentId && (
+        <DocumentStatusBadge
+          documentId={documentId}
+          documentUpdatedAt={updatedAt}
+          isEmbeddingStale={isEmbeddingStale}
+          variant="badge"
+        />
+      )}
+    </div>
   )
 }

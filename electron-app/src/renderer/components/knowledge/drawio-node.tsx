@@ -16,7 +16,7 @@ import { cn } from '@/lib/utils'
 import { DrawioModal } from './drawio-modal'
 import { useGetDownloadUrls } from '@/hooks/use-attachments'
 import { requestBatchUrl } from './editor-extensions'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthToken } from '@/contexts/auth-context'
 import { toast } from 'sonner'
 
 // ============================================================================
@@ -71,7 +71,7 @@ function DrawioNodeView({ node, updateAttributes, selected, editor }: NodeViewPr
   // Tracks active document listeners for cleanup on unmount (prevents leak during mid-drag unmount)
   const resizeCleanupRef = useRef<(() => void) | null>(null)
   const getDownloadUrls = useGetDownloadUrls()
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   // Revoke object URL on cleanup / when localPreviewUrl changes
   useEffect(() => {

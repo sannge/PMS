@@ -23,7 +23,7 @@ import {
   Calendar,
   Info,
 } from 'lucide-react'
-import { useAuthStore, getAuthHeaders } from '@/contexts/auth-context'
+import { useAuthToken, getAuthHeaders } from '@/contexts/auth-context'
 
 // ============================================================================
 // Types
@@ -79,7 +79,7 @@ export function ProjectStatusOverride({
   onOverrideCleared,
   className,
 }: ProjectStatusOverrideProps): JSX.Element {
-  const token = useAuthStore((state) => state.token)
+  const token = useAuthToken()
 
   const [isEditing, setIsEditing] = useState(false)
   const [selectedStatusId, setSelectedStatusId] = useState<string | null>(null)

@@ -5,7 +5,7 @@
 **Status**: NOT STARTED
 **Spec**: [phase-4-langgraph-agent.md](../phase-4-langgraph-agent.md)
 
-> **Depends on**: Phase 1 (LLM providers), Phase 2 (retrieval), Phase 3 (graph search)
+> **Depends on**: Phase 1 (LLM providers), Phase 2 (retrieval), Phase 3.1 (SQL access + agent tools)
 > **Blocks**: Phase 5 (frontend needs agent backend)
 > **Goal**: ReAct agent with all READ/WRITE tools. Testable via API (no frontend yet).
 
@@ -77,7 +77,7 @@
 |---|------|-------|--------|-------|
 | 4.1.1 | Create package `app/ai/agent/__init__.py` — empty init file for the agent subpackage | BE | [ ] | |
 | 4.1.2 | Define `AgentState` TypedDict in `app/ai/agent/graph.py` — fields: `messages` (Annotated with `add_messages`), `user_id` (str), `accessible_app_ids` (list[str]), `accessible_project_ids` (list[str]) | BE | [ ] | Uses `langgraph.graph.message.add_messages` reducer |
-| 4.1.3 | Write `SYSTEM_PROMPT` constant — friendly Blair persona, guidelines for tool usage, source citation rules, clarification guidelines, image analysis instructions | BE | [ ] | Multi-line string, ~40 lines |
+| 4.1.3 | Write `SYSTEM_PROMPT` constant — concise professional Blair persona, tool usage rules, source citation rules, step-by-step clarification guidelines | BE | [ ] | Multi-line string, ~25 lines |
 | 4.1.4 | Verify SYSTEM_PROMPT includes rule: "always confirm before write actions" | CR1 | [ ] | Prevents silent mutations |
 | 4.1.5 | Verify SYSTEM_PROMPT includes instruction: "include source references when citing content" | CR1 | [ ] | Required for SourceReference flow |
 | 4.1.6 | Verify SYSTEM_PROMPT includes clarification guidelines — when to ask vs. when to just answer, use `request_clarification` for structured options | CR1 | [ ] | |
@@ -118,11 +118,11 @@
 
 | # | Task | Owner | Status | Notes |
 |---|------|-------|--------|-------|
-| 4.4.1 | Implement `query_entities(query, entity_name?, entity_type?)` — if `entity_name` provided: find entity via `KnowledgeGraphService.search_entities()`, get full context via `get_entity_context()` including relationships and source documents; else: search entities matching query, include relationship summaries for top results; format as readable text | BE | [ ] | `@tool` decorator, async |
-| 4.4.2 | Add RBAC enforcement — scope entity search to documents within user's accessible applications/projects | BE | [ ] | Entities sourced from documents inherit document-level RBAC |
-| 4.4.3 | **SA Review**: Verify RBAC enforcement — confirm entity results do not leak information from documents the user cannot access | SA | [ ] | |
-| 4.4.4 | **CR1 Review**: Docstring quality — verify tool describes when to use (entity relationships, "who works on what", concept connections) vs. `query_knowledge` (content search) | CR1 | [ ] | |
-| 4.4.5 | Write test: `test_query_entities_returns_entities` — mock `KnowledgeGraphService`, verify entity name/type/description and relationship formatting | TE | [ ] | |
+| 4.4.1 | Implement `sql_query(question)` — wraps Phase 3.1 `sql_query_tool()`: NL question → SQL generation → validation → execution against scoped views → formatted markdown result | BE | [ ] | `@tool` decorator, async; **replaces `query_entities` (Phase 3 KG removed)** |
+| 4.4.2 | Add RBAC enforcement — scoped views enforce RBAC via `SET LOCAL app.current_user_id` (deterministic, not LLM-dependent) | BE | [ ] | Inherits Phase 3.1 scoped view security |
+| 4.4.3 | **SA Review**: Verify RBAC enforcement — confirm SQL results only include data from user's accessible applications (enforced by scoped views) | SA | [ ] | |
+| 4.4.4 | **CR1 Review**: Docstring quality — verify tool describes when to use (structural questions: task counts, assignments, project status) vs. `query_knowledge` (content search) | CR1 | [ ] | |
+| 4.4.5 | Write test: `test_sql_query_returns_results` — mock `sql_query_tool`, verify formatted output with columns and rows | TE | [ ] | Replaces old `test_query_entities_returns_entities` |
 
 ---
 
@@ -301,10 +301,10 @@
 | 4.18.1 | Define `SourceReference` dataclass in `app/ai/agent/source_references.py` — fields: `document_id` (str), `document_title` (str), `document_type` (str: "document" or "canvas"), `heading_context` (str or None, for scroll-to navigation), `chunk_text` (str, cited text snippet for highlighting), `chunk_index` (int, position in document), `score` (float, retrieval relevance), `source_type` (str: "semantic"/"keyword"/"fuzzy"/"graph"), `entity_name` (str or None, if from entity search) | BE | [ ] | |
 | 4.18.2 | Define `ToolResultWithSources` class — fields: `text` (str, formatted text response for the LLM), `sources` (list[SourceReference], structured references for frontend) | BE | [ ] | |
 | 4.18.3 | Update `query_knowledge` tool to return `ToolResultWithSources` instead of plain string — build `SourceReference` for each retrieval result from `HybridRetrievalService` | BE | [ ] | Depends on 4.3.1 |
-| 4.18.4 | Update `query_entities` tool to return `ToolResultWithSources` — build `SourceReference` with `entity_name` populated for entity-linked sources | BE | [ ] | Depends on 4.4.1 |
+| 4.18.4 | Update `sql_query` tool to return `ToolResultWithSources` — build `SourceReference` with query metadata for SQL-linked sources | BE | [ ] | Depends on 4.4.1; **replaces `query_entities` (Phase 3 KG removed)** |
 | 4.18.5 | Implement source flow through `STATE_SNAPSHOT` AG-UI event — agent graph collects sources from tool results and includes them in the snapshot payload for frontend rendering | BE | [ ] | Sources -> STATE_SNAPSHOT -> frontend clickable links |
 | 4.18.6 | Ensure canvas documents include `element_id` in `SourceReference` for element-level navigation (canvas nodes are individually addressable) | BE | [ ] | Canvas-specific source targeting |
-| 4.18.7 | **CR1 Review**: Verify source type labels correctly distinguish retrieval method — "semantic" (vector similarity), "keyword" (Meilisearch), "fuzzy" (fuzzy match), "graph" (knowledge graph traversal) | CR1 | [ ] | |
+| 4.18.7 | **CR1 Review**: Verify source type labels correctly distinguish retrieval method — "semantic" (vector similarity), "keyword" (Meilisearch), "fuzzy" (fuzzy match), "sql" (Phase 3.1 SQL query) | CR1 | [ ] | "graph" label removed (Phase 3 KG replaced by Phase 3.1) |
 
 ---
 
@@ -417,10 +417,10 @@
 | 4.26.1 | `test_query_knowledge_returns_results` — mock `HybridRetrievalService`, verify formatted text output includes document titles and snippets | TE | [ ] | File: `tests/test_agent_tools_read.py` |
 | 4.26.2 | `test_query_knowledge_respects_scope_filter` — verify `application_id` and `project_id` filters are passed to retrieval service | TE | [ ] | |
 | 4.26.3 | `test_query_knowledge_rbac_denied` — set `accessible_app_ids` to exclude target app, verify "Access denied" message returned | TE | [ ] | |
-| 4.26.4 | `test_query_entities_returns_entities` — mock `KnowledgeGraphService`, verify entity name/type/description formatting | TE | [ ] | |
-| 4.26.5 | `test_query_entities_entity_context` — verify `entity_name` parameter triggers full context retrieval with relationships | TE | [ ] | |
-| 4.26.6 | `test_query_entities_filters_by_type` — verify `entity_type` parameter filters results correctly | TE | [ ] | |
-| 4.26.7 | `test_query_entities_traverses_relationships` — verify outgoing + incoming relationships included in formatted output | TE | [ ] | |
+| 4.26.4 | `test_sql_query_returns_results` — mock `sql_query_tool`, verify formatted output with columns and rows | TE | [ ] | Replaces `test_query_entities_returns_entities` (Phase 3→3.1) |
+| 4.26.5 | `test_sql_query_validation_failure` — verify graceful error when SQL generation/validation fails | TE | [ ] | Replaces entity_context test |
+| 4.26.6 | `test_sql_query_rbac_enforced` — verify scoped views restrict data to user's accessible apps | TE | [ ] | RBAC via SET LOCAL, not LLM filtering |
+| 4.26.7 | `test_sql_query_timeout` — verify query timeout returns error ToolResult | TE | [ ] | Replaces relationship traversal test |
 | 4.26.8 | `test_get_projects_filters_by_status` — verify status filter ("active", "completed", "archived") applied correctly | TE | [ ] | |
 | 4.26.9 | `test_get_projects_rbac_denied` — verify unauthorized application returns "Access denied" | TE | [ ] | |
 | 4.26.10 | `test_get_tasks_overdue_only` — verify `overdue_only=True` filters to tasks past due date | TE | [ ] | |

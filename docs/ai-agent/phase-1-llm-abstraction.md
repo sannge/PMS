@@ -3,7 +3,7 @@
 **Goal**: Provider-agnostic LLM infrastructure with encrypted API key storage. No user-facing AI yet.
 
 **Depends on**: Nothing (foundation phase)
-**Blocks**: Phase 2, Phase 3, Phase 4, Phase 5, Phase 6, Phase 7
+**Blocks**: Phase 2, Phase 3.1, Phase 4, Phase 5, Phase 6, Phase 7
 
 ---
 

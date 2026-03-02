@@ -162,6 +162,9 @@ export interface ElectronAPI {
   openExternal: (url: string) => Promise<void>
   openPath: (path: string) => Promise<string>
 
+  // OAuth
+  initiateOAuth: (authUrl: string) => Promise<{ code: string; state: string; redirectUri: string }>
+
   // Before-quit save coordination
   onBeforeQuit: (callback: () => void) => () => void
   confirmQuitSave: () => void
@@ -355,6 +358,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Shell operations
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url) as Promise<void>,
   openPath: (path: string) => ipcRenderer.invoke('shell:openPath', path) as Promise<string>,
+
+  // OAuth
+  initiateOAuth: (authUrl: string) =>
+    ipcRenderer.invoke('oauth:initiate', authUrl) as Promise<{ code: string; state: string; redirectUri: string }>,
 
   // Before-quit save coordination
   onBeforeQuit: (callback: () => void) => {

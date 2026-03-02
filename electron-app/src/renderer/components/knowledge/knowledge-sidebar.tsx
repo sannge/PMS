@@ -15,7 +15,7 @@ import { PanelLeftClose, PanelLeftOpen, FilePlus, FolderPlus, GripVertical } fro
 import { cn } from '@/lib/utils'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useKnowledgeBase } from '@/contexts/knowledge-base-context'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthUserId } from '@/contexts/auth-context'
 import { useCreateDocument } from '@/hooks/use-documents'
 import { useCreateFolder } from '@/hooks/use-document-folders'
 import { useKnowledgePermissions } from '@/hooks/use-knowledge-permissions'
@@ -36,7 +36,7 @@ export function KnowledgeSidebar(): JSX.Element {
     activeTab,
     selectedFolderId,
   } = useKnowledgeBase()
-  const userId = useAuthStore((s) => s.user?.id ?? null)
+  const userId = useAuthUserId()
   const createDocument = useCreateDocument()
   const createFolder = useCreateFolder()
 

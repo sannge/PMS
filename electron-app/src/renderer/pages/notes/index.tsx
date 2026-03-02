@@ -14,14 +14,19 @@
  * then "Save" to persist or "Cancel" to discard.
  */
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { KnowledgeBaseProvider, useKnowledgeBase } from '@/contexts/knowledge-base-context'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthUserId } from '@/contexts/auth-context'
 import { useApplicationsWithDocs, useDocument } from '@/hooks/use-documents'
 import { useKnowledgePermissions } from '@/hooks/use-knowledge-permissions'
 import { useWebSocket, WebSocketClient, MessageType } from '@/hooks/use-websocket'
 import { queryKeys } from '@/lib/query-client'
+import {
+  consumePendingAiNavigation,
+  subscribePendingAiNavigation,
+} from '@/lib/ai-navigation'
+import type { NavigationTarget } from '@/components/ai/types'
 import { KnowledgeSidebar } from '@/components/knowledge/knowledge-sidebar'
 import { KnowledgeTabBar } from '@/components/knowledge/knowledge-tab-bar'
 import { SearchBar } from '@/components/knowledge/search-bar'
@@ -31,9 +36,9 @@ import { EditorPanel } from '@/components/knowledge/editor-panel'
  * NotesPageContent - Inner component that needs context access.
  */
 function NotesPageContent(): JSX.Element {
-  const { activeTab, setActiveTab, selectedDocumentId, selectDocument } = useKnowledgeBase()
+  const { activeTab, setActiveTab, selectedDocumentId, selectDocument, navigateToDocument } = useKnowledgeBase()
   const { data: scopesSummary, isLoading: isAppsLoading } = useApplicationsWithDocs()
-  const userId = useAuthStore((s) => s.user?.id ?? null)
+  const userId = useAuthUserId()
   const { joinRoom, leaveRoom, status: wsStatus, subscribe } = useWebSocket()
   const queryClient = useQueryClient()
 
@@ -129,6 +134,50 @@ function NotesPageContent(): JSX.Element {
       unsubDocUpdated()
     }
   }, [wsStatus.isConnected, subscribe, userId, queryClient])
+
+  // Handle AI navigation: navigate to a document with highlight when Blair source is clicked
+  const handleAiNavigation = useCallback(
+    (target: NavigationTarget) => {
+      if (target.type !== 'document') return
+
+      const { documentId, applicationId, highlight } = target
+      // Determine the correct tab from applicationId.
+      // Guard against empty strings (truthy in JS but invalid as UUID).
+      const hasValidAppId = applicationId && applicationId.length > 8
+      const targetTab = hasValidAppId ? `app:${applicationId}` : 'personal'
+
+      // Build search terms from highlight params for the search-highlight extension
+      const searchTerms: string[] = []
+      if (highlight?.headingContext) {
+        searchTerms.push(highlight.headingContext)
+      } else if (highlight?.chunkText) {
+        // Use first 50 chars of chunk text as search term
+        searchTerms.push(highlight.chunkText.slice(0, 50))
+      }
+
+      navigateToDocument(targetTab, documentId, searchTerms.length > 0 ? searchTerms : undefined)
+    },
+    [navigateToDocument],
+  )
+
+  // Consume pending AI navigation on mount + subscribe for live navigations
+  useEffect(() => {
+    const pending = consumePendingAiNavigation()
+    if (pending) {
+      // Use double-rAF to ensure knowledge tree is mounted and rendered
+      let cancelled = false
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (!cancelled) handleAiNavigation(pending)
+        })
+      })
+      return () => { cancelled = true }
+    }
+  }, [handleAiNavigation])
+
+  useEffect(() => {
+    return subscribePendingAiNavigation(handleAiNavigation)
+  }, [handleAiNavigation])
 
   return (
     <div className="flex flex-col h-full">

@@ -12,7 +12,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import { parseBackendDate } from '@/lib/time-utils'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthUserId } from '@/contexts/auth-context'
 import { useWebSocket } from '@/hooks/use-websocket'
 import { WebSocketClient } from '@/lib/websocket'
 import {
@@ -383,7 +383,7 @@ export function ApplicationDetailPage({
   onSelectProject,
 }: ApplicationDetailPageProps): JSX.Element {
   // Get current user ID
-  const currentUserId = useAuthStore((state) => state.user?.id)
+  const currentUserId = useAuthUserId()
 
   // TanStack Query hooks for application
   const {
@@ -1183,7 +1183,7 @@ export function ApplicationDetailPage({
         members={members}
         isLoading={isLoadingMembers}
         totalCount={members.length}
-        currentUserId={currentUserId}
+        currentUserId={currentUserId ?? undefined}
         currentUserRole={userRole ?? undefined}
         originalOwnerId={application?.owner_id ?? undefined}
         isUpdatingRole={isUpdatingMemberRole}

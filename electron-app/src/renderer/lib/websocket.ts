@@ -123,6 +123,17 @@ export enum MessageType {
   FOLDER_UPDATED = 'folder_updated',
   FOLDER_DELETED = 'folder_deleted',
 
+  // AI indexing events
+  EMBEDDING_UPDATED = 'embedding_updated',
+  ENTITIES_EXTRACTED = 'entities_extracted',
+
+  // AI import events
+  IMPORT_COMPLETED = 'import_completed',
+  IMPORT_FAILED = 'import_failed',
+
+  // AI reindex events
+  REINDEX_PROGRESS = 'reindex_progress',
+
   // Keepalive
   PING = 'ping',
   PONG = 'pong',
@@ -177,7 +188,6 @@ export interface EntityUpdateEventData<T = unknown> {
   action: 'created' | 'updated' | 'deleted' | 'status_changed' | 'content_changed'
   timestamp: string
   changed_by?: string
-  [key: string]: unknown
   entity?: T
 }
 
@@ -599,6 +609,7 @@ export class WebSocketClient {
 
     this.setState(WebSocketState.CLOSED)
     this.rooms.clear()
+    this.roomRefs.clear()
 
     // Restore autoReconnect setting so future connections work
     this.config.autoReconnect = wasAutoReconnect
@@ -667,13 +678,10 @@ export class WebSocketClient {
     // Only actually leave if no more references
     if (newRefs === 0) {
       this.roomRefs.delete(roomId)
-      // Only remove from local set if we can actually send the leave message
-      // This ensures rooms persist across reconnections
+      this.rooms.delete(roomId)
       if (this.isConnected()) {
-        this.rooms.delete(roomId)
         this.send(MessageType.LEAVE_ROOM, { room_id: roomId })
       }
-      // If not connected, keep in rooms set so it's rejoined on reconnection
     }
   }
 

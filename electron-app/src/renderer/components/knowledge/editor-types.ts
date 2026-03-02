@@ -39,6 +39,8 @@ export interface DocumentEditorProps {
   searchTerms?: string[]
   /** Which occurrence (0-based) to scroll to after highlights are applied. -1 = no scroll. */
   scrollToOccurrence?: number
+  /** Whether the document's embeddings are out of date */
+  isEmbeddingStale?: boolean
 }
 
 /** Props for the EditorToolbar component */

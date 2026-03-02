@@ -22,7 +22,7 @@ import {
   UseMutationResult,
   InfiniteData,
 } from '@tanstack/react-query'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthToken } from '@/contexts/auth-context'
 import { queryKeys } from '@/lib/query-client'
 
 // ============================================================================
@@ -155,7 +155,7 @@ function transformNotification(n: NotificationApiResponse): Notification {
  * Loads 20 notifications per page, persisted to IndexedDB automatically.
  */
 export function useNotificationsInfinite(): UseInfiniteQueryResult<InfiniteData<NotificationPage>, Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useInfiniteQuery({
     queryKey: queryKeys.notifications,
@@ -245,7 +245,7 @@ export function useNotifications(): {
  * Polls more frequently than full notification list.
  */
 export function useUnreadCount(): UseQueryResult<number, Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useQuery({
     queryKey: queryKeys.unreadCount,
@@ -287,7 +287,7 @@ export function useMarkAsRead(): UseMutationResult<
   string,
   { previousData?: InfiniteNotificationData; previousCount?: number }
 > {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -373,7 +373,7 @@ export function useMarkAllAsRead(): UseMutationResult<
   void,
   { previousData?: InfiniteNotificationData; previousCount?: number }
 > {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -438,7 +438,7 @@ export function useDeleteNotification(): UseMutationResult<
   string,
   { previousData?: InfiniteNotificationData; previousCount?: number }
 > {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -520,7 +520,7 @@ export function useClearAllNotifications(): UseMutationResult<
   void,
   { previousData?: InfiniteNotificationData; previousCount?: number }
 > {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({

@@ -19,7 +19,7 @@ import * as Dialog from '@radix-ui/react-dialog'
 import * as Select from '@radix-ui/react-select'
 import { cn } from '@/lib/utils'
 import { X, UserPlus, ChevronDown, Check, Search, Loader2, AlertCircle } from 'lucide-react'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthToken } from '@/contexts/auth-context'
 import { useSendInvitation, type ApplicationRole } from '@/hooks/use-invitations'
 
 // ============================================================================
@@ -116,7 +116,7 @@ export function InvitationModal({
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Store hooks
-  const token = useAuthStore((state) => state.token)
+  const token = useAuthToken()
 
   // TanStack Query mutation
   const sendInvitation = useSendInvitation(applicationId)

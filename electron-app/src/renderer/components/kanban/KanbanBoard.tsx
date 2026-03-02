@@ -23,7 +23,7 @@ import {
   type CollisionDetection,
 } from '@dnd-kit/core'
 import { cn } from '@/lib/utils'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthUserId } from '@/contexts/auth-context'
 import { useMoveTask, useTasks, useArchivedTasksCount, useTaskStatuses, type Task } from '@/hooks/use-queries'
 import {
   LayoutGrid,
@@ -140,7 +140,7 @@ export function KanbanBoard({
   canEdit = true,
 }: KanbanBoardProps): JSX.Element {
   // Current user (for filtering self-initiated WS notices)
-  const currentUserId = useAuthStore((s) => s.user?.id)
+  const currentUserId = useAuthUserId()
 
   // State
   const [tasks, setTasks] = useState<Task[]>([])

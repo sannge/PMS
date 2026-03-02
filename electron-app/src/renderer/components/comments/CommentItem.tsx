@@ -16,7 +16,7 @@ import { cn } from '@/lib/utils'
 import { parseBackendDate } from '@/lib/time-utils'
 import { User, Edit2, Trash2, Check, X, FileText, FileImage, File, Download, Maximize2 } from 'lucide-react'
 import type { Comment, CommentAttachment } from '@/hooks/use-comments'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthToken } from '@/contexts/auth-context'
 import { useGetDownloadUrl, useGetDownloadUrls } from '@/hooks/use-attachments'
 import { formatFileSize, isImageFile } from '@/lib/file-utils'
 import { queryKeys } from '@/lib/query-client'
@@ -301,7 +301,7 @@ export function CommentItem({
   className,
 }: CommentItemProps): JSX.Element {
   const queryClient = useQueryClient()
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const [showActions, setShowActions] = useState(false)
   const [editMode, setEditMode] = useState(false)
   const [editText, setEditText] = useState(comment.body_text || '')

@@ -111,47 +111,89 @@ export function ContainerEditor({
           .replace(/\s*(?:width|height|border|cellpadding|cellspacing|align|valign)="[^"]*"/gi, '')
           .replace(/\s*xmlns:[a-z]+="[^"]*"/gi, '')
       },
-      // Handle paste for spreadsheet TSV and images
+      // Handle paste for spreadsheet data and images.
+      //
+      // Priority order:
+      // 1. Spreadsheet HTML (when available — macOS/Linux browsers)
+      // 2. Tab-separated text (TSV) — always available from Excel/Sheets,
+      //    and the ONLY reliable format on Windows Electron where
+      //    clipboardData.getData('text/html') returns empty for native apps
+      // 3. Image paste (only when clipboard has NO table data)
       handlePaste: (view, event) => {
-        // TSV fallback for spreadsheet data
         const htmlData = event.clipboardData?.getData('text/html') || ''
         const textData = event.clipboardData?.getData('text/plain') || ''
-        if (!htmlData && textData && textData.includes('\t') && textData.includes('\n')) {
-          const MAX_ROWS = 100
-          const MAX_COLS = 50
-          const allRows = textData.trim().split('\n')
-          const rows = allRows.slice(0, MAX_ROWS).map(row => row.split('\t').slice(0, MAX_COLS))
-          if (rows.length > 1 || (rows[0] && rows[0].length > 1)) {
-            const rowsTruncated = allRows.length > MAX_ROWS
-            const colsTruncated = allRows.some(row => row.split('\t').length > MAX_COLS)
-            if (rowsTruncated || colsTruncated) {
-              toast.info(`Table truncated to ${MAX_ROWS} rows × ${MAX_COLS} columns`)
-            }
+
+        // ---- 1. Spreadsheet HTML paste (Excel / Google Sheets) ----
+        const isSpreadsheetHtml =
+          htmlData.includes('xmlns:x="urn:schemas-microsoft-com:office:excel"') ||
+          htmlData.includes('ProgId="Excel') ||
+          htmlData.includes('google-sheets-html-origin')
+
+        if (isSpreadsheetHtml) {
+          const tableMatch = htmlData.match(/<table[\s\S]*<\/table>/i)
+          if (tableMatch) {
             event.preventDefault()
-            const tableHtml = '<table>' +
-              rows.map((row, i) =>
-                '<tr>' + row.map(cell =>
-                  `<${i === 0 ? 'th' : 'td'}>${escapeHtml(cell.trim())}</${i === 0 ? 'th' : 'td'}>`
-                ).join('') + '</tr>'
-              ).join('') + '</table>'
+            const cleanHtml = tableMatch[0]
+              .replace(/<!--[\s\S]*?-->/g, '')
+              .replace(/<col[^>]*\/?>/gi, '')
+              .replace(/<colgroup[^>]*>[\s\S]*?<\/colgroup>/gi, '')
+              .replace(/<\/?(?:font|span)[^>]*>/gi, '')
+              .replace(/\s*class="[^"]*"/gi, '')
+              .replace(/\s*style="[^"]*"/gi, '')
+              .replace(/\s*(?:width|height|border|cellpadding|cellspacing|align|valign)="[^"]*"/gi, '')
+              .replace(/\s*xmlns:[a-z]+="[^"]*"/gi, '')
             const parser = DOMParser.fromSchema(view.state.schema)
-            const doc = document.implementation.createHTMLDocument()
-            doc.body.innerHTML = tableHtml
-            const slice = parser.parseSlice(doc.body)
+            const tmpDoc = document.implementation.createHTMLDocument()
+            tmpDoc.body.innerHTML = cleanHtml
+            const slice = parser.parseSlice(tmpDoc.body)
             const tr = view.state.tr.replaceSelection(slice)
             view.dispatch(tr)
             return true
           }
         }
 
-        // Image paste
+        // ---- 2. TSV paste (tab-separated text from spreadsheets) ----
+        // On Windows Electron, clipboardData.getData('text/html') is often
+        // empty for native apps like Excel.  The text/plain TSV is the only
+        // reliable signal.  Detect tab characters → convert to table.
+        // Also handles single-row copies (tabs but no newlines).
+        if (textData && textData.includes('\t')) {
+          // Guard: skip if clipboard has non-spreadsheet HTML (e.g. rich text
+          // from Word that happens to contain tabs)
+          const hasNonSpreadsheetHtml = htmlData && !isSpreadsheetHtml
+          if (!hasNonSpreadsheetHtml) {
+            const MAX_ROWS = 100
+            const MAX_COLS = 50
+            const allRows = textData.trim().split(/\r?\n/)
+            const rows = allRows.slice(0, MAX_ROWS).map(row => row.split('\t').slice(0, MAX_COLS))
+            if (rows.length > 1 || (rows[0] && rows[0].length > 1)) {
+              const rowsTruncated = allRows.length > MAX_ROWS
+              const colsTruncated = allRows.some(row => row.split('\t').length > MAX_COLS)
+              if (rowsTruncated || colsTruncated) {
+                toast.info(`Table truncated to ${MAX_ROWS} rows × ${MAX_COLS} columns`)
+              }
+              event.preventDefault()
+              const tableHtml = '<table>' +
+                rows.map((row, i) =>
+                  '<tr>' + row.map(cell =>
+                    `<${i === 0 ? 'th' : 'td'}>${escapeHtml(cell.trim())}</${i === 0 ? 'th' : 'td'}>`
+                  ).join('') + '</tr>'
+                ).join('') + '</table>'
+              const parser = DOMParser.fromSchema(view.state.schema)
+              const tmpDoc = document.implementation.createHTMLDocument()
+              tmpDoc.body.innerHTML = tableHtml
+              const slice = parser.parseSlice(tmpDoc.body)
+              const tr = view.state.tr.replaceSelection(slice)
+              view.dispatch(tr)
+              return true
+            }
+          }
+        }
+
+        // ---- 3. Image paste (only when NO table data on clipboard) ----
         const uploadFn = onImageUploadRef.current
         if (!uploadFn) return false
 
-        // When clipboard contains HTML (e.g. Excel/Sheets table), let TipTap's
-        // transformPastedHTML handle it instead of intercepting the image.
-        // Windows puts both HTML table data AND a PNG screenshot on the clipboard
-        // when copying from Excel — we want the table, not the screenshot.
         const hasHtml = !!htmlData
         const items = event.clipboardData?.items
         if (items) {
@@ -191,7 +233,6 @@ export function ContainerEditor({
         }
 
         // Fallback: clipboardData.files (File Explorer paste)
-        // Also skip when HTML is present (same Excel/Sheets guard as above)
         const clipFiles = event.clipboardData?.files
         if (clipFiles && clipFiles.length > 0 && !hasHtml) {
           const clipFile = clipFiles[0]

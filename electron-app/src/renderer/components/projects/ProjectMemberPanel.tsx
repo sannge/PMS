@@ -38,7 +38,7 @@ import {
   type ApplicationMember,
   type ProjectRole as ProjectMemberRole,
 } from '@/hooks/use-members'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthUserId } from '@/contexts/auth-context'
 
 // ============================================================================
 // Types
@@ -78,7 +78,7 @@ export function ProjectMemberPanel({
   creatorId = null,
   className,
 }: ProjectMemberPanelProps): JSX.Element {
-  const currentUserId = useAuthStore((state) => state.user?.id)
+  const currentUserId = useAuthUserId()
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [localError, setLocalError] = useState<Error | null>(null)
 

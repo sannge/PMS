@@ -17,7 +17,7 @@ import {
   UseInfiniteQueryResult,
   InfiniteData,
 } from '@tanstack/react-query'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthToken } from '@/contexts/auth-context'
 import { queryKeys } from '@/lib/query-client'
 
 // ============================================================================
@@ -294,7 +294,7 @@ function parseApiError(status: number, data: unknown): ApiError {
  * Uses 5 min stale time, 24h cache for offline support.
  */
 export function useApplications(): UseQueryResult<Application[], Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useQuery({
     queryKey: queryKeys.applications,
@@ -324,7 +324,7 @@ export function useApplications(): UseQueryResult<Application[], Error> {
  * Fetch a single application by ID.
  */
 export function useApplication(id: string | undefined): UseQueryResult<Application, Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useQuery({
     queryKey: queryKeys.application(id || ''),
@@ -354,7 +354,7 @@ export function useApplication(id: string | undefined): UseQueryResult<Applicati
  * Create a new application.
  */
 export function useCreateApplication(): UseMutationResult<Application, Error, ApplicationCreate> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -390,7 +390,7 @@ export function useCreateApplication(): UseMutationResult<Application, Error, Ap
 export function useUpdateApplication(
   id: string
 ): UseMutationResult<Application, Error, ApplicationUpdate> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -426,7 +426,7 @@ export function useUpdateApplication(
  * Delete an application.
  */
 export function useDeleteApplication(id: string): UseMutationResult<void, Error, void> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -467,7 +467,7 @@ export function useProjects(
   applicationId: string | undefined,
   options?: { includeArchived?: boolean }
 ): UseQueryResult<Project[], Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useQuery({
     queryKey: queryKeys.projects(applicationId || '', options?.includeArchived),
@@ -501,7 +501,7 @@ export function useProjects(
  * Fetch a single project by ID.
  */
 export function useProject(id: string | undefined): UseQueryResult<Project, Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useQuery({
     queryKey: queryKeys.project(id || ''),
@@ -530,7 +530,7 @@ export function useProject(id: string | undefined): UseQueryResult<Project, Erro
 export function useCreateProject(
   applicationId: string
 ): UseMutationResult<Project, Error, ProjectCreate> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -575,7 +575,7 @@ export function useUpdateProject(
   id: string,
   applicationId: string
 ): UseMutationResult<Project, Error, ProjectUpdate> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -616,7 +616,7 @@ export function useDeleteProject(
   id: string,
   applicationId: string
 ): UseMutationResult<void, Error, void> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -664,7 +664,7 @@ export function useDeleteProject(
  * Uses 30 sec stale time since tasks change frequently.
  */
 export function useTasks(projectId: string | undefined): UseQueryResult<Task[], Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useQuery({
     queryKey: queryKeys.tasks(projectId || ''),
@@ -694,7 +694,7 @@ export function useTasks(projectId: string | undefined): UseQueryResult<Task[], 
  * Fetch a single task by ID.
  */
 export function useTask(id: string | undefined): UseQueryResult<Task, Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useQuery({
     queryKey: queryKeys.task(id || ''),
@@ -721,7 +721,7 @@ export function useTask(id: string | undefined): UseQueryResult<Task, Error> {
  * Create a new task.
  */
 export function useCreateTask(projectId: string): UseMutationResult<Task, Error, TaskCreate> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -779,7 +779,7 @@ export function useUpdateTask(
   taskId: string,
   projectId: string
 ): UseMutationResult<Task, Error, TaskUpdate, { previous?: Task }> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -846,7 +846,7 @@ export function useDeleteTask(
   taskId: string,
   projectId: string
 ): UseMutationResult<void, Error, void> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -918,7 +918,7 @@ export function useDeleteTask(
 export function useMoveTask(
   projectId: string
 ): UseMutationResult<Task, Error, TaskMovePayload, { previous?: Task[] }> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -1010,7 +1010,7 @@ export function useMoveTask(
  * Fetch task statuses for a project.
  */
 export function useTaskStatuses(projectId: string | undefined): UseQueryResult<TaskStatus[], Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useQuery({
     queryKey: queryKeys.statuses(projectId || ''),
@@ -1047,7 +1047,7 @@ export function useTaskStatuses(projectId: string | undefined): UseQueryResult<T
 export function useArchivedTasksCount(
   projectId: string | undefined
 ): UseQueryResult<number, Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useQuery({
     queryKey: [...queryKeys.archivedTasks(projectId || ''), 'count'],
@@ -1082,7 +1082,7 @@ export function useArchivedTasks(
   projectId: string | undefined,
   search?: string
 ): UseInfiniteQueryResult<InfiniteData<TaskCursorPage>, Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useInfiniteQuery({
     queryKey: [...queryKeys.archivedTasks(projectId || ''), search || ''],
@@ -1126,7 +1126,7 @@ export function useArchivedTasks(
 export function useUnarchiveTask(
   projectId: string
 ): UseMutationResult<Task, Error, string, { removedTask: Task | undefined }> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -1262,7 +1262,7 @@ export function useUnarchiveTask(
 export function useArchivedProjectsCount(
   applicationId: string | undefined
 ): UseQueryResult<number, Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useQuery({
     queryKey: [...queryKeys.archivedProjects(applicationId || ''), 'count'],
@@ -1297,7 +1297,7 @@ export function useArchivedProjects(
   applicationId: string | undefined,
   search?: string
 ): UseInfiniteQueryResult<InfiniteData<ProjectCursorPage>, Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useInfiniteQuery({
     queryKey: [...queryKeys.archivedProjects(applicationId || ''), search || ''],
@@ -1346,7 +1346,7 @@ export function useMyPendingTasks(
   applicationId: string | undefined,
   search?: string
 ): UseInfiniteQueryResult<InfiniteData<TaskCursorPage>, Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useInfiniteQuery({
     queryKey: [...queryKeys.myPendingTasks(applicationId || ''), search || ''],
@@ -1391,7 +1391,7 @@ export function useMyCompletedTasks(
   applicationId: string | undefined,
   search?: string
 ): UseInfiniteQueryResult<InfiniteData<TaskCursorPage>, Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useInfiniteQuery({
     queryKey: [...queryKeys.myCompletedTasks(applicationId || ''), search || ''],
@@ -1459,7 +1459,7 @@ export function useSaveDocumentContent(): UseMutationResult<
   Error,
   SaveDocumentContentInput
 > {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useMutation({
     mutationFn: async ({ documentId, content_json, row_version }: SaveDocumentContentInput) => {
@@ -1490,7 +1490,7 @@ export function useMyArchivedTasks(
   applicationId: string | undefined,
   search?: string
 ): UseInfiniteQueryResult<InfiniteData<TaskCursorPage>, Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useInfiniteQuery({
     queryKey: [...queryKeys.myArchivedTasks(applicationId || ''), search || ''],
@@ -1546,7 +1546,7 @@ export function useMyProjects(
   applicationId: string | undefined,
   params?: MyProjectsParams
 ): UseInfiniteQueryResult<InfiniteData<ProjectCursorPage>, Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useInfiniteQuery({
     queryKey: [
@@ -1605,7 +1605,7 @@ export function useMyProjects(
 export function useMyProjectsCrossApp(
   params?: MyProjectsParams
 ): UseInfiniteQueryResult<InfiniteData<ProjectCursorPage>, Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useInfiniteQuery({
     queryKey: [
@@ -1674,7 +1674,7 @@ export interface MyTasksParams {
 export function useMyTasksCrossApp(
   params?: MyTasksParams
 ): UseInfiniteQueryResult<InfiniteData<TaskCursorPage>, Error> {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
 
   return useInfiniteQuery({
     queryKey: [
@@ -1803,7 +1803,7 @@ export interface DashboardData {
  * - gcTime 24h for IndexedDB persistence
  */
 export function useDashboardStats(): UseQueryResult<DashboardData> {
-  const token = useAuthStore((state) => state.token)
+  const token = useAuthToken()
 
   return useQuery<DashboardData>({
     queryKey: queryKeys.dashboard,

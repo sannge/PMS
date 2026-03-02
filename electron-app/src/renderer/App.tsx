@@ -15,10 +15,14 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
 import { LoginPage } from '@/pages/login'
 import { RegisterPage } from '@/pages/register'
+import { VerifyEmailPage } from '@/pages/verify-email'
+import { ForgotPasswordPage } from '@/pages/forgot-password'
+import { ResetPasswordPage } from '@/pages/reset-password'
 import { DashboardPage } from '@/pages/dashboard'
 import { AuthGate } from '@/components/protected-route'
 import { queryClient, initializeQueryPersistence, clearQueryCache } from '@/lib/query-client'
-import { AuthProvider, useAuthStore, NotificationUIProvider } from '@/contexts'
+import { AuthProvider, useAuthState, useAuthActions, useAuthToken, NotificationUIProvider } from '@/contexts'
+import { clearEventDedup } from '@/hooks/use-websocket-cache'
 import { Toaster } from 'sonner'
 
 // ============================================================================
@@ -26,7 +30,7 @@ import { Toaster } from 'sonner'
 // ============================================================================
 
 type Theme = 'light' | 'dark' | 'system'
-type AuthView = 'login' | 'register'
+type AuthView = 'login' | 'register' | 'verify-email' | 'forgot-password' | 'reset-password'
 
 interface ThemeContextValue {
   theme: Theme
@@ -82,34 +86,28 @@ function ThemeProvider({ children }: { children: ReactNode }): JSX.Element {
     // Save theme preference
     localStorage.setItem('pm-desktop-theme', theme)
 
-    // Determine resolved theme
-    let resolved: 'light' | 'dark'
+    // Helper to apply resolved theme to DOM and state
+    const applyResolved = (resolved: 'light' | 'dark') => {
+      setResolvedTheme(resolved)
+      const root = document.documentElement
+      root.classList.remove('light', 'dark')
+      root.classList.add(resolved)
+    }
+
+    // Determine and apply resolved theme
     if (theme === 'system') {
-      resolved = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+      applyResolved(mediaQuery.matches ? 'dark' : 'light')
+
+      // Listen for system theme changes
+      const handleChange = (e: MediaQueryListEvent): void => {
+        applyResolved(e.matches ? 'dark' : 'light')
+      }
+      mediaQuery.addEventListener('change', handleChange)
+      return () => mediaQuery.removeEventListener('change', handleChange)
     } else {
-      resolved = theme
+      applyResolved(theme)
     }
-    setResolvedTheme(resolved)
-
-    // Apply theme to document
-    const root = document.documentElement
-    root.classList.remove('light', 'dark')
-    root.classList.add(resolved)
-  }, [theme])
-
-  // Listen for system theme changes
-  useEffect(() => {
-    if (theme !== 'system') return
-
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
-    const handleChange = (e: MediaQueryListEvent): void => {
-      setResolvedTheme(e.matches ? 'dark' : 'light')
-      document.documentElement.classList.remove('light', 'dark')
-      document.documentElement.classList.add(e.matches ? 'dark' : 'light')
-    }
-
-    mediaQuery.addEventListener('change', handleChange)
-    return () => mediaQuery.removeEventListener('change', handleChange)
   }, [theme])
 
   return (
@@ -201,20 +199,69 @@ function LoadingScreen(): JSX.Element {
  */
 function AuthPages(): JSX.Element {
   const [authView, setAuthView] = useState<AuthView>('login')
+  const [resetEmail, setResetEmail] = useState('')
+  const { pendingVerificationEmail, pendingVerificationContext } = useAuthState()
+  const { clearPendingVerification, clearError } = useAuthActions()
 
   // Navigation handlers
   const navigateToRegister = useCallback(() => {
+    clearError()
     setAuthView('register')
-  }, [])
+  }, [clearError])
 
   const navigateToLogin = useCallback(() => {
+    clearPendingVerification()
+    clearError()
     setAuthView('login')
-  }, [])
+  }, [clearPendingVerification, clearError])
 
-  if (authView === 'register') {
-    return <RegisterPage onNavigateToLogin={navigateToLogin} />
+  const navigateToForgotPassword = useCallback(() => {
+    clearError()
+    setAuthView('forgot-password')
+  }, [clearError])
+
+  const navigateToResetPassword = useCallback((email: string) => {
+    clearError()
+    setResetEmail(email)
+    setAuthView('reset-password')
+  }, [clearError])
+
+  // Show verify-email page when pending verification email is set
+  if (pendingVerificationEmail) {
+    return (
+      <VerifyEmailPage
+        email={pendingVerificationEmail}
+        context={pendingVerificationContext ?? 'registration'}
+        onNavigateToLogin={navigateToLogin}
+      />
+    )
   }
-  return <LoginPage onNavigateToRegister={navigateToRegister} />
+
+  switch (authView) {
+    case 'register':
+      return <RegisterPage onNavigateToLogin={navigateToLogin} />
+    case 'forgot-password':
+      return (
+        <ForgotPasswordPage
+          onNavigateToLogin={navigateToLogin}
+          onNavigateToResetPassword={navigateToResetPassword}
+        />
+      )
+    case 'reset-password':
+      return (
+        <ResetPasswordPage
+          email={resetEmail}
+          onNavigateToLogin={navigateToLogin}
+        />
+      )
+    default:
+      return (
+        <LoginPage
+          onNavigateToRegister={navigateToRegister}
+          onNavigateToForgotPassword={navigateToForgotPassword}
+        />
+      )
+  }
 }
 
 // ============================================================================
@@ -226,13 +273,14 @@ function AuthPages(): JSX.Element {
  * This ensures sensitive data is not persisted after logout.
  */
 function useCacheClearOnLogout(): void {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthToken()
   const prevTokenRef = useRef<string | null>(null)
 
   useEffect(() => {
     // Check if user just logged out (had token, now doesn't)
     if (prevTokenRef.current !== null && token === null) {
       clearQueryCache()
+      clearEventDedup()
     }
     prevTokenRef.current = token
   }, [token])

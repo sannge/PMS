@@ -11,7 +11,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import { parseBackendDate } from '@/lib/time-utils'
-import { useAuthStore } from '@/contexts/auth-context'
+import { useAuthUserId } from '@/contexts/auth-context'
 import {
   useProject,
   useUpdateProject,
@@ -430,7 +430,7 @@ export function ProjectDetailPage({
   onInitialTaskConsumed,
 }: ProjectDetailPageProps): JSX.Element {
   // Auth state
-  const currentUserId = useAuthStore((state) => state.user?.id)
+  const currentUserId = useAuthUserId()
 
   // TanStack Query hooks
   const {

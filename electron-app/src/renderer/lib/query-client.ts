@@ -150,6 +150,30 @@ export const queryKeys = {
   // Document Search
   documentSearch: (query: string, applicationId?: string, projectId?: string) =>
     ['search', 'documents', query, applicationId ?? null, projectId ?? null] as const,
+
+  // AI Configuration
+  aiConfig: ['ai', 'config'] as const,
+  aiProviders: ['ai', 'providers'] as const,
+  aiModels: ['ai', 'models'] as const,
+  aiConfigSummary: ['ai', 'config', 'summary'] as const,
+  capabilityConfig: (capability: string) => ['ai', 'config', 'capability', capability] as const,
+  userOverrides: ['ai', 'config', 'me', 'providers'] as const,
+  userEffectiveConfig: ['ai', 'config', 'me', 'effective'] as const,
+
+  // AI Import
+  importJob: (jobId: string) => ['ai', 'import', jobId] as const,
+  importJobs: ['ai', 'import', 'jobs'] as const,
+
+  // AI Indexing
+  documentIndexStatus: (docId: string) => ['ai', 'index-status', docId] as const,
+  applicationIndexStatus: (appId: string) => ['ai', 'index-status', 'application', appId] as const,
+  indexProgress: ['ai', 'index-progress'] as const,
+
+  // AI Chat
+  aiChatHistory: (threadId: string) => ['ai', 'chat', 'history', threadId] as const,
+
+  // AI OAuth
+  oauthStatus: ['ai', 'oauth', 'status'] as const,
 }
 
 // ============================================================================
