@@ -47,7 +47,8 @@ _VISION_PROMPT = (
 )
 
 # Processing limits
-_MAX_IMAGES_PER_DOCUMENT = 10
+from .config_service import get_agent_config as _get_agent_config
+_MAX_IMAGES_PER_DOCUMENT = _get_agent_config().get_int("embedding.max_images_per_document", 10)
 _MIN_IMAGE_SIZE_BYTES = 10 * 1024  # 10KB
 _VISION_TIMEOUT_S = 30  # Per-image vision API timeout
 

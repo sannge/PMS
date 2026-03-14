@@ -79,7 +79,7 @@ def create_access_token(
         expire = utc_now() + expires_delta
     else:
         expire = utc_now() + timedelta(
-            minutes=settings.jwt_expiration_minutes
+            minutes=settings.jwt_access_expiration_minutes
         )
 
     # Add unique token ID for blacklist support
@@ -93,6 +93,106 @@ def create_access_token(
     )
 
     return encoded_jwt
+
+
+def _refresh_secret() -> str:
+    """Return the secret used for refresh tokens (falls back to jwt_secret)."""
+    return settings.jwt_refresh_secret or settings.jwt_secret
+
+
+def create_refresh_token(user_id: str, email: str) -> str:
+    """Create a long-lived JWT refresh token with type claim.
+
+    Uses a separate secret (jwt_refresh_secret) so that access tokens
+    cannot be used as refresh tokens and vice versa.
+
+    Args:
+        user_id: The user's UUID as a string.
+        email: The user's email.
+
+    Returns:
+        Encoded JWT refresh token string.
+    """
+    expire = utc_now() + timedelta(days=settings.jwt_refresh_expiration_days)
+    to_encode = {
+        "sub": user_id,
+        "email": email,
+        "type": "refresh",
+        "exp": expire,
+        "jti": uuid4().hex,
+    }
+    return jwt.encode(
+        to_encode,
+        _refresh_secret(),
+        algorithm=settings.jwt_algorithm,
+    )
+
+
+def validate_refresh_token(token: str) -> Optional[TokenData]:
+    """Decode and validate a refresh token.
+
+    Verifies the ``type`` claim is ``"refresh"`` and decodes with the
+    refresh-specific secret.
+
+    Returns:
+        TokenData on success, None if invalid.
+    """
+    try:
+        payload = jwt.decode(
+            token,
+            _refresh_secret(),
+            algorithms=[settings.jwt_algorithm],
+        )
+        if payload.get("type") != "refresh":
+            return None
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            return None
+        exp_timestamp = payload.get("exp")
+        exp_dt = (
+            datetime.fromtimestamp(exp_timestamp, tz=timezone.utc)
+            if exp_timestamp
+            else None
+        )
+        return TokenData(
+            user_id=user_id,
+            email=payload.get("email"),
+            jti=payload.get("jti"),
+            exp=exp_dt,
+        )
+    except JWTError:
+        return None
+
+
+async def rotate_refresh_token(
+    old_refresh_token: str,
+) -> Optional[tuple[str, str]]:
+    """Blacklist the old refresh token and issue a new access + refresh pair.
+
+    Args:
+        old_refresh_token: The current refresh token to rotate.
+
+    Returns:
+        ``(new_access_token, new_refresh_token)`` on success, or None.
+    """
+    token_data = validate_refresh_token(old_refresh_token)
+    if token_data is None or token_data.user_id is None:
+        return None
+
+    # Check blacklist
+    if token_data.jti and await is_token_blacklisted(token_data.jti):
+        return None
+
+    # Blacklist the old refresh token
+    if token_data.jti and token_data.exp:
+        await blacklist_token(token_data.jti, token_data.exp)
+
+    # Issue new pair
+    new_access = create_access_token(
+        data={"sub": token_data.user_id, "email": token_data.email}
+    )
+    new_refresh = create_refresh_token(token_data.user_id, token_data.email or "")
+    return (new_access, new_refresh)
 
 
 async def blacklist_token(jti: str, expires_at: datetime) -> None:
@@ -124,21 +224,49 @@ async def blacklist_token(jti: str, expires_at: datetime) -> None:
 async def is_token_blacklisted(jti: str) -> bool:
     """Check whether a token JTI has been blacklisted.
 
-    Returns False if Redis is unavailable (fail-open to avoid locking
-    out all users during a Redis outage).
+    When redis_required=True (production multi-worker deployment):
+        Fail-closed — returns True if Redis is unavailable, forcing
+        re-authentication rather than allowing revoked tokens through.
+
+    When redis_required=False (dev/single-server):
+        Fail-open — returns False if Redis is unavailable to avoid
+        locking out all users during development.
     """
     from .redis_service import redis_service
+    from ..config import settings
 
     if not redis_service.is_connected:
-        logger.warning("Redis unavailable — token blacklist check skipped (fail-open) for jti=%s", jti)
-        return False
+        if settings.redis_required:
+            logger.warning(
+                "SECURITY: Redis unavailable — token blacklist fail-closed for jti=%s",
+                jti,
+            )
+            return True
+        else:
+            logger.warning(
+                "Redis unavailable — token blacklist check skipped (redis_required=False) for jti=%s",
+                jti,
+            )
+            return False
 
     try:
         result = await redis_service.get(f"token_blacklist:{jti}")
         return result is not None
     except Exception:
-        logger.warning("Failed to check token blacklist for jti=%s", jti, exc_info=True)
-        return False
+        if settings.redis_required:
+            logger.warning(
+                "SECURITY: Failed to check token blacklist (fail-closed) for jti=%s",
+                jti,
+                exc_info=True,
+            )
+            return True
+        else:
+            logger.warning(
+                "Failed to check token blacklist (fail-open, redis_required=False) for jti=%s",
+                jti,
+                exc_info=True,
+            )
+            return False
 
 
 def decode_access_token(token: str) -> Optional[TokenData]:
@@ -257,12 +385,12 @@ async def create_user(db: AsyncSession, user_data: UserCreate) -> User:
     Raises:
         HTTPException: If email already exists
     """
-    # Check if user already exists
+    # Check if user already exists — generic error to prevent email enumeration
     existing_user = await get_user_by_email(db, user_data.email)
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered",
+            detail="Registration failed. Please check your details and try again.",
         )
 
     # Hash the password
@@ -293,7 +421,7 @@ async def create_user(db: AsyncSession, user_data: UserCreate) -> User:
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered",
+            detail="Registration failed. Please check your details and try again.",
         )
 
     # Send verification email (fire-and-forget, don't block response)
@@ -699,6 +827,58 @@ async def get_current_user(
     set_cached_user(user)
 
     return user
+
+
+async def create_ws_connection_token(user_id: str) -> str:
+    """Generate a short-lived opaque connection token for WebSocket auth.
+
+    Stored in Redis with 30-second TTL. Single-use: consumed on first validation.
+
+    Args:
+        user_id: The user's UUID as a string.
+
+    Returns:
+        Opaque hex token.
+    """
+    from .redis_service import redis_service
+
+    token = secrets.token_hex(32)
+    key = f"ws_conn_token:{token}"
+    await redis_service.set(key, user_id, ttl=30)
+    return token
+
+
+async def validate_ws_connection_token(token: str) -> Optional[str]:
+    """Validate and consume a WebSocket connection token.
+
+    Returns the user_id if valid, None otherwise. The token is deleted on
+    first use (single-use).
+
+    Args:
+        token: The opaque connection token.
+
+    Returns:
+        user_id string if valid, None otherwise.
+    """
+    from .redis_service import redis_service
+
+    if not redis_service.is_connected:
+        return None
+
+    key = f"ws_conn_token:{token}"
+    try:
+        # Atomic GET+DELETE via pipeline to support Redis < 6.2
+        async with redis_service.client.pipeline(transaction=True) as pipe:
+            pipe.get(key)
+            pipe.delete(key)
+            results = await pipe.execute()
+        user_id = results[0]
+        if user_id:
+            # Redis returns bytes; decode to str
+            return user_id.decode() if isinstance(user_id, bytes) else user_id
+    except Exception:
+        logger.warning("Failed to validate WS connection token", exc_info=True)
+    return None
 
 
 async def get_current_active_user(

@@ -21,9 +21,12 @@ from .provider_registry import ProviderRegistry
 from .schema_context import get_schema_prompt
 from .sql_validator import ValidationResult, validate
 
+from .config_service import get_agent_config
+
 logger = logging.getLogger(__name__)
 
-MAX_RETRIES = 2
+_cfg = get_agent_config()
+MAX_RETRIES = _cfg.get_int("agent.sql_max_retries", 2)
 
 # Cached system prompt — built once at first use since the schema is static.
 _cached_system_prompt: str | None = None

@@ -21,6 +21,7 @@ import {
 } from '@tanstack/react-query'
 import { useAuthToken } from '@/contexts/auth-context'
 import { queryKeys } from '@/lib/query-client'
+import { authGet, authPost, authDelete, getAccessToken } from '@/lib/api-client'
 
 // ============================================================================
 // Types
@@ -71,11 +72,6 @@ export interface ApiError {
 // Helper Functions
 // ============================================================================
 
-function getAuthHeaders(token: string | null): Record<string, string> {
-  if (!token) return {}
-  return { Authorization: `Bearer ${token}` }
-}
-
 function parseApiError(status: number, data: unknown): ApiError {
   if (typeof data === 'object' && data !== null) {
     const errorData = data as Record<string, unknown>
@@ -122,13 +118,8 @@ export function useAttachments(taskId: string | undefined): UseQueryResult<Attac
   return useQuery({
     queryKey: queryKeys.attachments(taskId || ''),
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<Attachment[]>(
-        `/api/tasks/${taskId}/attachments`,
-        getAuthHeaders(token)
+      const response = await authGet<Attachment[]>(
+        `/api/tasks/${taskId}/attachments`
       )
 
       if (response.status !== 200) {
@@ -140,6 +131,7 @@ export function useAttachments(taskId: string | undefined): UseQueryResult<Attac
     enabled: !!token && !!taskId,
     staleTime: 30 * 1000, // 30 seconds - attachments can change when comments are deleted
     gcTime: 24 * 60 * 60 * 1000, // 24 hours for offline
+    refetchOnWindowFocus: false, // WS real-time invalidation handles freshness
   })
 }
 
@@ -156,13 +148,8 @@ export function useEntityAttachments(
   return useQuery({
     queryKey: entityType && entityId ? getEntityQueryKey(entityType, entityId) : ['attachments', 'none'],
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<Attachment[]>(
-        `/api/files/entity/${entityType}/${entityId}`,
-        getAuthHeaders(token)
+      const response = await authGet<Attachment[]>(
+        `/api/files/entity/${entityType}/${entityId}`
       )
 
       if (response.status !== 200) {
@@ -189,13 +176,8 @@ export function useDownloadUrl(
   return useQuery({
     queryKey: queryKeys.downloadUrl(attachmentId || ''),
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<{ download_url: string }>(
-        `/api/files/${attachmentId}/download-url`,
-        getAuthHeaders(token)
+      const response = await authGet<{ download_url: string }>(
+        `/api/files/${attachmentId}/download-url`
       )
 
       if (response.status !== 200) {
@@ -223,14 +205,9 @@ export function useDownloadUrls(
   return useQuery({
     queryKey: queryKeys.downloadUrls(sortedIds),
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<Record<string, string>>(
+      const response = await authPost<Record<string, string>>(
         '/api/files/download-urls',
-        { ids: sortedIds },
-        getAuthHeaders(token)
+        { ids: sortedIds }
       )
 
       if (response.status !== 200) {
@@ -327,7 +304,6 @@ interface UploadFilePayload {
  * Supports both legacy task-specific and generic entity uploads.
  */
 export function useUploadFile(): UseMutationResult<Attachment, Error, UploadFilePayload> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -354,10 +330,11 @@ export function useUploadFile(): UseMutationResult<Attachment, Error, UploadFile
       // Simulate progress updates
       onProgress?.(10)
 
+      const accessToken = getAccessToken()
       const response = await fetch(`${apiUrl}/api/files/upload${queryString}`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${token}`,
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         },
         body: formData,
       })
@@ -424,18 +401,12 @@ export function useDeleteAttachment(): UseMutationResult<
   { attachmentId: string; entityType?: EntityType; entityId?: string; taskId?: string },
   { previous?: Attachment[] }
 > {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async ({ attachmentId }) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.delete<void>(
-        `/api/files/${attachmentId}`,
-        getAuthHeaders(token)
+      const response = await authDelete<void>(
+        `/api/files/${attachmentId}`
       )
 
       if (response.status !== 204 && response.status !== 200) {
@@ -530,18 +501,11 @@ export function useDeleteAttachments(): UseMutationResult<void, Error, string[]>
  * Helper hook to get attachment download URL and trigger download.
  */
 export function useDownloadAttachment(): UseMutationResult<void, Error, Attachment> {
-  const token = useAuthToken()
-
   return useMutation({
     mutationFn: async (attachment: Attachment) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
       // Get presigned URL
-      const response = await window.electronAPI.get<{ download_url: string }>(
-        `/api/files/${attachment.id}/download-url`,
-        getAuthHeaders(token)
+      const response = await authGet<{ download_url: string }>(
+        `/api/files/${attachment.id}/download-url`
       )
 
       if (response.status !== 200) {
@@ -564,7 +528,6 @@ export function useDownloadAttachment(): UseMutationResult<void, Error, Attachme
  * Returns a function that fetches the URL.
  */
 export function useGetDownloadUrl(): (attachmentId: string) => Promise<string | null> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useCallback(
@@ -573,15 +536,9 @@ export function useGetDownloadUrl(): (attachmentId: string) => Promise<string | 
       const cached = queryClient.getQueryData<string>(queryKeys.downloadUrl(attachmentId))
       if (cached) return cached
 
-      if (!window.electronAPI) {
-        console.error('[Attachments] Electron API not available')
-        return null
-      }
-
       try {
-        const response = await window.electronAPI.get<{ download_url: string }>(
-          `/api/files/${attachmentId}/download-url`,
-          getAuthHeaders(token)
+        const response = await authGet<{ download_url: string }>(
+          `/api/files/${attachmentId}/download-url`
         )
 
         if (response.status !== 200 || !response.data?.download_url) {
@@ -599,7 +556,7 @@ export function useGetDownloadUrl(): (attachmentId: string) => Promise<string | 
         return null
       }
     },
-    [token, queryClient]
+    [queryClient]
   )
 }
 
@@ -610,7 +567,6 @@ export function useGetDownloadUrl(): (attachmentId: string) => Promise<string | 
 export function useGetDownloadUrls(): (
   attachmentIds: string[]
 ) => Promise<Record<string, string>> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useCallback(
@@ -633,16 +589,10 @@ export function useGetDownloadUrls(): (
       // If all cached, return immediately
       if (uncachedIds.length === 0) return result
 
-      if (!window.electronAPI) {
-        console.error('[Attachments] Electron API not available')
-        return result
-      }
-
       try {
-        const response = await window.electronAPI.post<Record<string, string>>(
+        const response = await authPost<Record<string, string>>(
           '/api/files/download-urls',
-          { ids: uncachedIds },
-          getAuthHeaders(token)
+          { ids: uncachedIds }
         )
 
         if (response.status === 200 && response.data) {
@@ -658,6 +608,6 @@ export function useGetDownloadUrls(): (
 
       return result
     },
-    [token, queryClient]
+    [queryClient]
   )
 }

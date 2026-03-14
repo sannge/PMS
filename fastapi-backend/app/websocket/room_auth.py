@@ -25,7 +25,11 @@ from ..models.project_member import ProjectMember
 from ..models.document import Document
 from ..models.task import Task
 
+from ..ai.config_service import get_agent_config
+
 logger = logging.getLogger(__name__)
+
+_cfg = get_agent_config()
 
 # ============================================================================
 # Auth Result Caching
@@ -34,8 +38,8 @@ logger = logging.getLogger(__name__)
 # This prevents DB overload during reconnection storms (5000 users × 5 rooms each)
 
 _auth_cache: Dict[Tuple[str, str], Tuple[bool, float]] = {}
-_AUTH_CACHE_TTL = 300  # 5 minutes TTL
-_AUTH_CACHE_MAX_SIZE = 50000  # Max cache entries
+_AUTH_CACHE_TTL = _cfg.get_int("cache.room_auth_ttl", 300)
+_AUTH_CACHE_MAX_SIZE = _cfg.get_int("cache.room_auth_max_size", 50000)
 _cache_lock = asyncio.Lock()
 
 

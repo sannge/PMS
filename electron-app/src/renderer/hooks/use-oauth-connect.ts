@@ -1,11 +1,13 @@
 /**
- * OAuth Subscription Connect Hooks
+ * Subscription Token Connect Hooks
  *
  * React Query hooks for connecting/disconnecting AI provider
- * subscriptions via OAuth. Uses the Electron main process
- * BrowserWindow flow for the OAuth authorization step.
+ * subscriptions via session tokens. Users obtain tokens from
+ * their provider CLI (e.g. `claude setup-token`) and paste them
+ * into the app.
  *
- * @see electron-app/src/main/oauth-handler.ts
+ * Replaces the previous OAuth BrowserWindow flow.
+ *
  * @see fastapi-backend/app/routers/ai_oauth.py
  */
 
@@ -16,37 +18,37 @@ import {
   type UseQueryResult,
   type UseMutationResult,
 } from '@tanstack/react-query'
-import { useAuthToken, getAuthHeaders } from '@/contexts/auth-context'
+import { useAuthToken } from '@/contexts/auth-context'
 import { queryKeys } from '@/lib/query-client'
+import { authGet, authPost, authDelete } from '@/lib/api-client'
 
 // ============================================================================
 // Types
 // ============================================================================
 
-export interface OAuthConnectionStatus {
+export interface SubscriptionTokenStatus {
   connected: boolean
   provider_type: string | null
-  auth_method: 'api_key' | 'oauth' | null
-  provider_user_id: string | null
+  auth_method: 'api_key' | 'oauth' | 'session_token' | null
   connected_at: string | null
-  token_expires_at: string | null
-  scopes: string[]
+  model_id: string | null
 }
 
-interface OAuthInitiateResponse {
-  auth_url: string
-  state: string
-  expires_in: number
+interface SubscriptionTokenTestResult {
+  success: boolean
+  message: string | null
+  latency_ms: number | null
 }
 
-interface OAuthDisconnectResponse {
+interface SaveTokenRequest {
+  provider_type: 'openai' | 'anthropic'
+  token: string
+  preferred_model?: string
+}
+
+interface DisconnectResponse {
   disconnected: boolean
   fallback: string
-}
-
-export interface OAuthConnectResult {
-  connected: boolean
-  provider_type: string
 }
 
 // ============================================================================
@@ -54,148 +56,111 @@ export interface OAuthConnectResult {
 // ============================================================================
 
 /**
- * Fetch current OAuth connection status.
- * refetchOnWindowFocus: true — token may expire while user is away.
+ * Fetch current subscription token status.
  */
-export function useOAuthStatus(): UseQueryResult<OAuthConnectionStatus, Error> {
+export function useSubscriptionTokenStatus(): UseQueryResult<SubscriptionTokenStatus, Error> {
   const token = useAuthToken()
 
   return useQuery({
     queryKey: queryKeys.oauthStatus,
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<OAuthConnectionStatus>(
-        '/api/ai/config/me/oauth/status',
-        getAuthHeaders(token)
+      const response = await authGet<SubscriptionTokenStatus>(
+        '/api/ai/config/me/subscription-token/status'
       )
 
       if (response.status !== 200) {
-        throw new Error('Failed to fetch OAuth status')
+        throw new Error('Failed to fetch subscription status')
       }
 
       return response.data
     },
     enabled: !!token,
-    refetchOnWindowFocus: true,
-    staleTime: 60 * 1000, // 1 minute
+    staleTime: 60 * 1000,
   })
 }
 
 /**
- * Initiate OAuth flow:
- * 1. POST /initiate to get auth URL from backend
- * 2. Call electronAPI.initiateOAuth() to open BrowserWindow
- * 3. POST /callback with code + state to complete connection
- *
- * Handles: timeout, window closed, provider rejection.
+ * Save a subscription token.
+ * Validates the token server-side before saving.
  */
-export function useOAuthInitiate(): UseMutationResult<
-  OAuthConnectResult,
+export function useSaveSubscriptionToken(): UseMutationResult<
+  SubscriptionTokenStatus,
   Error,
-  { provider_type: 'openai' | 'anthropic' }
+  SaveTokenRequest
 > {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ provider_type }) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      // Step 1: Get auth URL from backend
-      // Note: redirect_uri is a placeholder — the Electron oauth-handler
-      // will replace it with the actual localhost:PORT/oauth/callback
-      const initiateResponse = await window.electronAPI.post<OAuthInitiateResponse>(
-        '/api/ai/config/me/oauth/initiate',
-        {
-          provider_type,
-          redirect_uri: 'http://127.0.0.1:0/oauth/callback',
-        },
-        getAuthHeaders(token)
-      )
-
-      if (initiateResponse.status !== 200) {
-        throw new Error('Failed to initiate OAuth flow')
-      }
-
-      const { auth_url, state } = initiateResponse.data
-
-      // Step 2: Open BrowserWindow via Electron main process
-      // This blocks until callback is received, window is closed, or timeout
-      let oauthResult: { code: string; state: string; redirectUri: string }
-      try {
-        oauthResult = await window.electronAPI.initiateOAuth(auth_url)
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'OAuth flow failed'
-        if (message.includes('closed by user')) {
-          throw new Error('OAuth flow was cancelled')
-        }
-        if (message.includes('timed out')) {
-          throw new Error('OAuth flow timed out. Please try again.')
-        }
-        throw new Error(message)
-      }
-
-      // Step 3: Exchange code for tokens via backend
-      // Use the actual redirect_uri returned by Electron (with real port)
-      const callbackResponse = await window.electronAPI.post<OAuthConnectResult>(
-        '/api/ai/config/me/oauth/callback',
-        {
-          provider_type,
-          code: oauthResult.code,
-          state: oauthResult.state || state,
-          redirect_uri: oauthResult.redirectUri,
-        },
-        getAuthHeaders(token)
-      )
-
-      if (callbackResponse.status !== 200) {
-        throw new Error('Failed to complete OAuth connection')
-      }
-
-      return callbackResponse.data
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.oauthStatus })
-      queryClient.invalidateQueries({ queryKey: queryKeys.userOverrides })
-      queryClient.invalidateQueries({ queryKey: queryKeys.userEffectiveConfig })
-    },
-  })
-}
-
-/**
- * Disconnect OAuth provider.
- * Revokes tokens and falls back to company default.
- */
-export function useOAuthDisconnect(): UseMutationResult<OAuthDisconnectResponse, Error, void> {
-  const token = useAuthToken()
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.delete<OAuthDisconnectResponse>(
-        '/api/ai/config/me/oauth/disconnect',
-        getAuthHeaders(token)
+    mutationFn: async (body) => {
+      const response = await authPost<SubscriptionTokenStatus>(
+        '/api/ai/config/me/subscription-token',
+        body
       )
 
       if (response.status !== 200) {
-        throw new Error('Failed to disconnect OAuth provider')
+        const errData = response.data as unknown as { detail?: string }
+        throw new Error(errData?.detail || 'Failed to save subscription token')
       }
 
       return response.data
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.oauthStatus })
-      queryClient.invalidateQueries({ queryKey: queryKeys.userOverrides })
       queryClient.invalidateQueries({ queryKey: queryKeys.userEffectiveConfig })
     },
   })
 }
+
+/**
+ * Test the stored subscription token.
+ */
+export function useTestSubscriptionToken(): UseMutationResult<
+  SubscriptionTokenTestResult,
+  Error,
+  void
+> {
+  return useMutation({
+    mutationFn: async () => {
+      const response = await authPost<SubscriptionTokenTestResult>(
+        '/api/ai/config/me/subscription-token/test',
+        {}
+      )
+
+      if (response.status !== 200) {
+        throw new Error('Failed to test subscription token')
+      }
+
+      return response.data
+    },
+  })
+}
+
+/**
+ * Remove subscription token.
+ * Falls back to company default.
+ */
+export function useDisconnectSubscription(): UseMutationResult<DisconnectResponse, Error, void> {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async () => {
+      const response = await authDelete<DisconnectResponse>(
+        '/api/ai/config/me/subscription-token'
+      )
+
+      if (response.status !== 200) {
+        throw new Error('Failed to remove subscription token')
+      }
+
+      return response.data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.oauthStatus })
+      queryClient.invalidateQueries({ queryKey: queryKeys.userEffectiveConfig })
+    },
+  })
+}
+
+// Legacy hooks — kept as aliases for backwards compatibility
+export const useOAuthStatus = useSubscriptionTokenStatus
+export const useOAuthDisconnect = useDisconnectSubscription

@@ -12,6 +12,7 @@ import {
   type UseQueryResult,
 } from '@tanstack/react-query'
 import { useAuthToken, useAuthUserId } from '@/contexts/auth-context'
+import { authGet } from '@/lib/api-client'
 import { queryKeys } from '@/lib/query-client'
 
 // ============================================================================
@@ -30,11 +31,6 @@ export interface DocumentTag {
 // ============================================================================
 // Helper Functions
 // ============================================================================
-
-function getAuthHeaders(token: string | null): Record<string, string> {
-  if (!token) return {}
-  return { Authorization: `Bearer ${token}` }
-}
 
 function parseApiError(status: number, data: unknown): string {
   if (typeof data === 'object' && data !== null) {
@@ -98,10 +94,6 @@ export function useDocumentTags(
   return useQuery({
     queryKey: queryKeys.documentTags(scope, scopeId ?? ''),
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
       const resolved = resolveTagScope(scope, scopeId, userId)
       if (!resolved) {
         return []
@@ -111,9 +103,8 @@ export function useDocumentTags(
       params.set('scope', resolved.apiScope)
       params.set('scope_id', resolved.apiScopeId)
 
-      const response = await window.electronAPI.get<DocumentTag[]>(
-        `/api/document-tags?${params.toString()}`,
-        getAuthHeaders(token)
+      const response = await authGet<DocumentTag[]>(
+        `/api/document-tags?${params.toString()}`
       )
 
       if (response.status !== 200) {

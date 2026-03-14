@@ -17,11 +17,15 @@ from typing import Optional
 
 from .redis_service import redis_service
 
+from ..ai.config_service import get_agent_config
+
 logger = logging.getLogger(__name__)
+
+_cfg = get_agent_config()
 
 # Lock configuration
 LOCK_KEY_PREFIX = "doc_lock:"
-LOCK_TTL_SECONDS = 300  # 5 minutes
+LOCK_TTL_SECONDS = _cfg.get_int("cache.document_lock_ttl", 300)
 
 
 def _lock_key(document_id: str) -> str:

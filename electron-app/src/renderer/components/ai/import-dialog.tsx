@@ -64,6 +64,10 @@ interface ImportDialogProps {
   trigger?: React.ReactNode
   /** Called when import completes successfully */
   onImportComplete?: (documentId: string) => void
+  /** Controlled mode: external open state */
+  open?: boolean
+  /** Controlled mode: external open state change handler */
+  onOpenChange?: (open: boolean) => void
 }
 
 type ImportStep = {
@@ -400,9 +404,23 @@ export function ImportDialog({
   defaultFolderId,
   trigger,
   onImportComplete,
+  open: controlledOpen,
+  onOpenChange: controlledOnOpenChange,
 }: ImportDialogProps) {
-  // Dialog state
-  const [open, setOpen] = useState(false)
+  // Dialog state - supports both controlled and uncontrolled modes
+  const [internalOpen, setInternalOpen] = useState(false)
+  const isControlled = controlledOpen !== undefined
+  const open = isControlled ? controlledOpen : internalOpen
+  const setOpen = useCallback(
+    (value: boolean) => {
+      if (isControlled) {
+        controlledOnOpenChange?.(value)
+      } else {
+        setInternalOpen(value)
+      }
+    },
+    [isControlled, controlledOnOpenChange]
+  )
 
   // Upload form state
   const [file, setFile] = useState<File | null>(null)
@@ -443,7 +461,7 @@ export function ImportDialog({
         resetState()
       }
     },
-    [resetState]
+    [setOpen, resetState]
   )
 
   // ---- File selection ----
@@ -530,7 +548,7 @@ export function ImportDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      {trigger ? (
+      {!isControlled && (trigger ? (
         <DialogTrigger asChild>{trigger}</DialogTrigger>
       ) : (
         <DialogTrigger asChild>
@@ -539,7 +557,7 @@ export function ImportDialog({
             Import
           </Button>
         </DialogTrigger>
-      )}
+      ))}
 
       <DialogContent className="sm:max-w-md">
         <DialogHeader>

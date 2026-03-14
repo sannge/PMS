@@ -20,11 +20,9 @@ import { useAuthToken } from '@/contexts/auth-context'
 import { createDocumentExtensions, type SetImageAttrs, updateImagePlaceholder, removeImagePlaceholder } from './editor-extensions'
 import { EditorToolbar } from './editor-toolbar'
 import { DocumentTimestamp } from './document-header'
+import { useImageUpload } from './use-image-upload'
 import type { DocumentEditorProps } from './editor-types'
 import './editor-styles.css'
-
-/** Allowed image MIME types for client-side validation */
-const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
 
 /** Escape HTML special characters for safe insertion */
 function escapeHtml(text: string): string {
@@ -71,7 +69,7 @@ export function DocumentEditor({
   documentId,
   searchTerms,
   scrollToOccurrence,
-  isEmbeddingStale,
+  embeddingStatus,
 }: DocumentEditorProps) {
   const onChangeRef = useRef(onChange)
   const editableRef = useRef(editable)
@@ -91,66 +89,8 @@ export function DocumentEditor({
     onBaselineSyncRef.current = onBaselineSync
   }, [onBaselineSync])
 
-  // Image upload: POST to /api/files/upload, return presigned URL + attachmentId
-  const uploadImage = useCallback(async (file: File): Promise<{ url: string; attachmentId: string } | null> => {
-    if (!token) {
-      toast.error('Session expired. Please sign in again.')
-      return null
-    }
-    if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
-      toast.error('Unsupported image format. Use PNG, JPEG, GIF, or WebP.')
-      return null
-    }
-    if (file.size > 10 * 1024 * 1024) {
-      toast.error('Image must be less than 10 MB')
-      return null
-    }
-
-    const toastId = toast.loading('Uploading image...')
-    try {
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8001'
-      const params = new URLSearchParams()
-      if (documentId) {
-        params.append('entity_type', 'document')
-        params.append('entity_id', documentId)
-      }
-      const queryString = params.toString() ? `?${params.toString()}` : ''
-
-      const formData = new FormData()
-      formData.append('file', file)
-
-      const uploadResponse = await fetch(`${apiUrl}/api/files/upload${queryString}`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: formData,
-      })
-
-      if (!uploadResponse.ok) {
-        const errorData = await uploadResponse.json().catch(() => ({}))
-        throw new Error((errorData as { detail?: string }).detail || 'Failed to upload image')
-      }
-
-      const attachment = await uploadResponse.json() as { id: string }
-
-      // Fetch presigned download URL
-      const downloadResponse = await fetch(`${apiUrl}/api/files/${attachment.id}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-
-      if (!downloadResponse.ok) {
-        throw new Error('Failed to get image download URL')
-      }
-
-      const downloadData = await downloadResponse.json() as { download_url: string }
-      toast.dismiss(toastId)
-      return { url: downloadData.download_url, attachmentId: attachment.id }
-    } catch (err) {
-      toast.dismiss(toastId)
-      toast.error('Failed to upload image. Please try again.')
-      console.error('[DocumentEditor] Failed to upload image:', err)
-      return null
-    }
-  }, [token, documentId])
+  // Shared image upload hook (M4: extracted to eliminate duplication with CanvasEditor)
+  const uploadImage = useImageUpload(token, documentId)
 
   // Stable onUpdate handler — immediately captures editor state for save.
   // No debounce: handleContentChange is just JSON.stringify + ref compare (fast),
@@ -515,7 +455,7 @@ export function DocumentEditor({
     <div className={cn('overflow-hidden bg-background flex flex-col min-h-0', className)}>
       {editable && <EditorToolbar editor={editor} onImageUpload={handleToolbarImageUpload} />}
       <div className="h-0 flex-grow overflow-y-auto overflow-x-hidden">
-        {updatedAt && <DocumentTimestamp updatedAt={updatedAt} documentId={documentId} isEmbeddingStale={isEmbeddingStale} />}
+        {updatedAt && <DocumentTimestamp updatedAt={updatedAt} documentId={documentId} embeddingStatus={embeddingStatus} />}
         <EditorContent editor={editor} className="prose prose-sm max-w-none" />
       </div>
       <EditorStatusBar editor={editor} />

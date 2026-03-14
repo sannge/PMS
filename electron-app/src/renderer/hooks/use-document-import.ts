@@ -18,8 +18,9 @@ import {
   type UseMutationResult,
   type UseQueryResult,
 } from '@tanstack/react-query'
-import { useAuthToken, getAuthHeaders } from '@/contexts/auth-context'
+import { useAuthToken } from '@/contexts/auth-context'
 import { queryKeys } from '@/lib/query-client'
+import { authGet, getAccessToken } from '@/lib/api-client'
 
 // ============================================================================
 // Types
@@ -70,8 +71,6 @@ interface ImportDocumentPayload {
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8001'
 
-// getAuthHeaders imported from @/contexts/auth-context
-
 // ============================================================================
 // Mutations
 // ============================================================================
@@ -87,7 +86,6 @@ export function useImportDocument(): UseMutationResult<
   Error,
   ImportDocumentPayload
 > {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -103,10 +101,11 @@ export function useImportDocument(): UseMutationResult<
 
       // Use fetch directly for multipart/form-data
       // Do NOT set Content-Type header — browser sets it with boundary
+      const accessToken = getAccessToken()
       const response = await fetch(`${API_BASE}/api/ai/import/`, {
         method: 'POST',
         headers: {
-          ...getAuthHeaders(token),
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         },
         body: formData,
       })
@@ -146,13 +145,8 @@ export function useImportJobStatus(
   return useQuery({
     queryKey: queryKeys.importJob(jobId ?? ''),
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<ImportJobResponse>(
-        `/api/ai/import/${jobId}`,
-        getAuthHeaders(token)
+      const response = await authGet<ImportJobResponse>(
+        `/api/ai/import/${jobId}`
       )
 
       if (response.status !== 200) {
@@ -194,19 +188,14 @@ export function useImportJobs(
       ? [...queryKeys.importJobs, status]
       : queryKeys.importJobs,
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
       const params = new URLSearchParams()
       if (status) {
         params.set('status', status)
       }
       const queryString = params.toString() ? `?${params.toString()}` : ''
 
-      const response = await window.electronAPI.get<ImportJobListResponse>(
-        `/api/ai/import/jobs${queryString}`,
-        getAuthHeaders(token)
+      const response = await authGet<ImportJobListResponse>(
+        `/api/ai/import/jobs${queryString}`
       )
 
       if (response.status !== 200) {

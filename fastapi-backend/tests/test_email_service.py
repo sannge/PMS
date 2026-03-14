@@ -31,7 +31,9 @@ class TestGenerateVerificationCode:
 
     def test_codes_are_not_all_same(self):
         """Generated codes should have some randomness."""
-        codes = {generate_verification_code() for _ in range(50)}
+        with patch("app.services.email_service.settings") as mock_settings:
+            mock_settings.smtp_enabled = True
+            codes = {generate_verification_code() for _ in range(50)}
         # With 50 codes from 1M possible values, they should all be unique
         assert len(codes) > 1
 

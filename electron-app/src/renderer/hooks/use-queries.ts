@@ -18,6 +18,7 @@ import {
   InfiniteData,
 } from '@tanstack/react-query'
 import { useAuthToken } from '@/contexts/auth-context'
+import { authGet, authPost, authPut, authDelete } from '@/lib/api-client'
 import { queryKeys } from '@/lib/query-client'
 
 // ============================================================================
@@ -238,14 +239,6 @@ export interface TaskStatus {
 // ============================================================================
 
 /**
- * Get authorization headers with bearer token
- */
-function getAuthHeaders(token: string | null): Record<string, string> {
-  if (!token) return {}
-  return { Authorization: `Bearer ${token}` }
-}
-
-/**
  * Parse API error response
  */
 function parseApiError(status: number, data: unknown): ApiError {
@@ -299,14 +292,8 @@ export function useApplications(): UseQueryResult<Application[], Error> {
   return useQuery({
     queryKey: queryKeys.applications,
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<Application[]>(
-        '/api/applications',
-        getAuthHeaders(token)
-      )
+      const response = await authGet<Application[]>(
+        '/api/applications'      )
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -329,14 +316,8 @@ export function useApplication(id: string | undefined): UseQueryResult<Applicati
   return useQuery({
     queryKey: queryKeys.application(id || ''),
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<Application>(
-        `/api/applications/${id}`,
-        getAuthHeaders(token)
-      )
+      const response = await authGet<Application>(
+        `/api/applications/${id}`      )
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -354,20 +335,13 @@ export function useApplication(id: string | undefined): UseQueryResult<Applicati
  * Create a new application.
  */
 export function useCreateApplication(): UseMutationResult<Application, Error, ApplicationCreate> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (data: ApplicationCreate) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<Application>(
+      const response = await authPost<Application>(
         '/api/applications',
-        data,
-        getAuthHeaders(token)
-      )
+        data      )
 
       if (response.status !== 201) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -390,20 +364,13 @@ export function useCreateApplication(): UseMutationResult<Application, Error, Ap
 export function useUpdateApplication(
   id: string
 ): UseMutationResult<Application, Error, ApplicationUpdate> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (data: ApplicationUpdate) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.put<Application>(
+      const response = await authPut<Application>(
         `/api/applications/${id}`,
-        data,
-        getAuthHeaders(token)
-      )
+        data      )
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -426,19 +393,12 @@ export function useUpdateApplication(
  * Delete an application.
  */
 export function useDeleteApplication(id: string): UseMutationResult<void, Error, void> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.delete<void>(
-        `/api/applications/${id}`,
-        getAuthHeaders(token)
-      )
+      const response = await authDelete<void>(
+        `/api/applications/${id}`      )
 
       if (response.status !== 204 && response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -472,18 +432,13 @@ export function useProjects(
   return useQuery({
     queryKey: queryKeys.projects(applicationId || '', options?.includeArchived),
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
 
       const url = options?.includeArchived
         ? `/api/applications/${applicationId}/projects?include_archived=true`
         : `/api/applications/${applicationId}/projects`
 
-      const response = await window.electronAPI.get<Project[]>(
-        url,
-        getAuthHeaders(token)
-      )
+      const response = await authGet<Project[]>(
+        url      )
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -506,11 +461,7 @@ export function useProject(id: string | undefined): UseQueryResult<Project, Erro
   return useQuery({
     queryKey: queryKeys.project(id || ''),
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<Project>(`/api/projects/${id}`, getAuthHeaders(token))
+      const response = await authGet<Project>(`/api/projects/${id}`)
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -530,20 +481,13 @@ export function useProject(id: string | undefined): UseQueryResult<Project, Erro
 export function useCreateProject(
   applicationId: string
 ): UseMutationResult<Project, Error, ProjectCreate> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (data: ProjectCreate) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<Project>(
+      const response = await authPost<Project>(
         `/api/applications/${applicationId}/projects`,
-        data,
-        getAuthHeaders(token)
-      )
+        data      )
 
       if (response.status !== 201) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -575,20 +519,13 @@ export function useUpdateProject(
   id: string,
   applicationId: string
 ): UseMutationResult<Project, Error, ProjectUpdate> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (data: ProjectUpdate) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.put<Project>(
+      const response = await authPut<Project>(
         `/api/projects/${id}`,
-        data,
-        getAuthHeaders(token)
-      )
+        data      )
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -616,19 +553,12 @@ export function useDeleteProject(
   id: string,
   applicationId: string
 ): UseMutationResult<void, Error, void> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.delete<void>(
-        `/api/projects/${id}`,
-        getAuthHeaders(token)
-      )
+      const response = await authDelete<void>(
+        `/api/projects/${id}`      )
 
       if (response.status !== 204 && response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -669,14 +599,8 @@ export function useTasks(projectId: string | undefined): UseQueryResult<Task[], 
   return useQuery({
     queryKey: queryKeys.tasks(projectId || ''),
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<Task[]>(
-        `/api/projects/${projectId}/tasks`,
-        getAuthHeaders(token)
-      )
+      const response = await authGet<Task[]>(
+        `/api/projects/${projectId}/tasks`      )
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -699,11 +623,7 @@ export function useTask(id: string | undefined): UseQueryResult<Task, Error> {
   return useQuery({
     queryKey: queryKeys.task(id || ''),
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<Task>(`/api/tasks/${id}`, getAuthHeaders(token))
+      const response = await authGet<Task>(`/api/tasks/${id}`)
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -721,20 +641,13 @@ export function useTask(id: string | undefined): UseQueryResult<Task, Error> {
  * Create a new task.
  */
 export function useCreateTask(projectId: string): UseMutationResult<Task, Error, TaskCreate> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (data: TaskCreate) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<Task>(
+      const response = await authPost<Task>(
         `/api/projects/${projectId}/tasks`,
-        { ...data, project_id: projectId },
-        getAuthHeaders(token)
-      )
+        { ...data, project_id: projectId }      )
 
       if (response.status !== 201) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -779,20 +692,13 @@ export function useUpdateTask(
   taskId: string,
   projectId: string
 ): UseMutationResult<Task, Error, TaskUpdate, { previous?: Task }> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (data: TaskUpdate) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.put<Task>(
+      const response = await authPut<Task>(
         `/api/tasks/${taskId}`,
-        data,
-        getAuthHeaders(token)
-      )
+        data      )
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -846,19 +752,12 @@ export function useDeleteTask(
   taskId: string,
   projectId: string
 ): UseMutationResult<void, Error, void> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.delete<void>(
-        `/api/tasks/${taskId}`,
-        getAuthHeaders(token)
-      )
+      const response = await authDelete<void>(
+        `/api/tasks/${taskId}`      )
 
       if (response.status !== 204 && response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -918,14 +817,10 @@ export function useDeleteTask(
 export function useMoveTask(
   projectId: string
 ): UseMutationResult<Task, Error, TaskMovePayload, { previous?: Task[] }> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async ({ taskId, targetStatusId, targetRank, beforeTaskId, afterTaskId }: TaskMovePayload) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
 
       // Build request body matching backend API
       const body: Record<string, unknown> = {
@@ -941,11 +836,9 @@ export function useMoveTask(
         body.after_task_id = afterTaskId
       }
 
-      const response = await window.electronAPI.put<Task>(
+      const response = await authPut<Task>(
         `/api/tasks/${taskId}/move`,
-        body,
-        getAuthHeaders(token)
-      )
+        body      )
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -1015,14 +908,8 @@ export function useTaskStatuses(projectId: string | undefined): UseQueryResult<T
   return useQuery({
     queryKey: queryKeys.statuses(projectId || ''),
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<TaskStatus[]>(
-        `/api/projects/${projectId}/statuses`,
-        getAuthHeaders(token)
-      )
+      const response = await authGet<TaskStatus[]>(
+        `/api/projects/${projectId}/statuses`      )
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -1052,15 +939,10 @@ export function useArchivedTasksCount(
   return useQuery({
     queryKey: [...queryKeys.archivedTasks(projectId || ''), 'count'],
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
 
       // Fetch with limit=1 just to get the total count
-      const response = await window.electronAPI.get<TaskCursorPage>(
-        `/api/projects/${projectId}/tasks/archived?limit=1`,
-        getAuthHeaders(token)
-      )
+      const response = await authGet<TaskCursorPage>(
+        `/api/projects/${projectId}/tasks/archived?limit=1`      )
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -1087,9 +969,6 @@ export function useArchivedTasks(
   return useInfiniteQuery({
     queryKey: [...queryKeys.archivedTasks(projectId || ''), search || ''],
     queryFn: async ({ pageParam }) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
 
       const params = new URLSearchParams()
       params.set('limit', '30')
@@ -1100,10 +979,8 @@ export function useArchivedTasks(
         params.set('search', search)
       }
 
-      const response = await window.electronAPI.get<TaskCursorPage>(
-        `/api/projects/${projectId}/tasks/archived?${params.toString()}`,
-        getAuthHeaders(token)
-      )
+      const response = await authGet<TaskCursorPage>(
+        `/api/projects/${projectId}/tasks/archived?${params.toString()}`      )
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -1126,20 +1003,13 @@ export function useArchivedTasks(
 export function useUnarchiveTask(
   projectId: string
 ): UseMutationResult<Task, Error, string, { removedTask: Task | undefined }> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (taskId: string) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<Task>(
+      const response = await authPost<Task>(
         `/api/tasks/${taskId}/unarchive`,
-        {},
-        getAuthHeaders(token)
-      )
+        {}      )
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -1267,15 +1137,10 @@ export function useArchivedProjectsCount(
   return useQuery({
     queryKey: [...queryKeys.archivedProjects(applicationId || ''), 'count'],
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
 
       // Fetch with limit=1 just to get the total count
-      const response = await window.electronAPI.get<ProjectCursorPage>(
-        `/api/applications/${applicationId}/projects/archived?limit=1`,
-        getAuthHeaders(token)
-      )
+      const response = await authGet<ProjectCursorPage>(
+        `/api/applications/${applicationId}/projects/archived?limit=1`      )
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -1302,9 +1167,6 @@ export function useArchivedProjects(
   return useInfiniteQuery({
     queryKey: [...queryKeys.archivedProjects(applicationId || ''), search || ''],
     queryFn: async ({ pageParam }) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
 
       const params = new URLSearchParams()
       params.set('limit', '30')
@@ -1315,10 +1177,8 @@ export function useArchivedProjects(
         params.set('search', search)
       }
 
-      const response = await window.electronAPI.get<ProjectCursorPage>(
-        `/api/applications/${applicationId}/projects/archived?${params.toString()}`,
-        getAuthHeaders(token)
-      )
+      const response = await authGet<ProjectCursorPage>(
+        `/api/applications/${applicationId}/projects/archived?${params.toString()}`      )
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -1351,9 +1211,6 @@ export function useMyPendingTasks(
   return useInfiniteQuery({
     queryKey: [...queryKeys.myPendingTasks(applicationId || ''), search || ''],
     queryFn: async ({ pageParam }) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
 
       const params = new URLSearchParams()
       params.set('limit', '30')
@@ -1364,10 +1221,8 @@ export function useMyPendingTasks(
         params.set('search', search)
       }
 
-      const response = await window.electronAPI.get<TaskCursorPage>(
-        `/api/applications/${applicationId}/tasks/my?${params.toString()}`,
-        getAuthHeaders(token)
-      )
+      const response = await authGet<TaskCursorPage>(
+        `/api/applications/${applicationId}/tasks/my?${params.toString()}`      )
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -1396,9 +1251,6 @@ export function useMyCompletedTasks(
   return useInfiniteQuery({
     queryKey: [...queryKeys.myCompletedTasks(applicationId || ''), search || ''],
     queryFn: async ({ pageParam }) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
 
       const params = new URLSearchParams()
       params.set('limit', '30')
@@ -1409,10 +1261,8 @@ export function useMyCompletedTasks(
         params.set('search', search)
       }
 
-      const response = await window.electronAPI.get<TaskCursorPage>(
-        `/api/applications/${applicationId}/tasks/my/completed?${params.toString()}`,
-        getAuthHeaders(token)
-      )
+      const response = await authGet<TaskCursorPage>(
+        `/api/applications/${applicationId}/tasks/my/completed?${params.toString()}`      )
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -1459,19 +1309,11 @@ export function useSaveDocumentContent(): UseMutationResult<
   Error,
   SaveDocumentContentInput
 > {
-  const token = useAuthToken()
-
   return useMutation({
     mutationFn: async ({ documentId, content_json, row_version }: SaveDocumentContentInput) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.put<DocumentContentResponse>(
+      const response = await authPut<DocumentContentResponse>(
         `/api/documents/${documentId}/content`,
-        { content_json, row_version },
-        getAuthHeaders(token)
-      )
+        { content_json, row_version }      )
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -1495,9 +1337,6 @@ export function useMyArchivedTasks(
   return useInfiniteQuery({
     queryKey: [...queryKeys.myArchivedTasks(applicationId || ''), search || ''],
     queryFn: async ({ pageParam }) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
 
       const params = new URLSearchParams()
       params.set('limit', '30')
@@ -1508,10 +1347,8 @@ export function useMyArchivedTasks(
         params.set('search', search)
       }
 
-      const response = await window.electronAPI.get<TaskCursorPage>(
-        `/api/applications/${applicationId}/tasks/my/archived?${params.toString()}`,
-        getAuthHeaders(token)
-      )
+      const response = await authGet<TaskCursorPage>(
+        `/api/applications/${applicationId}/tasks/my/archived?${params.toString()}`      )
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -1557,9 +1394,6 @@ export function useMyProjects(
       params?.status || '',
     ],
     queryFn: async ({ pageParam }) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
 
       const searchParams = new URLSearchParams()
       searchParams.set('limit', '30')
@@ -1579,10 +1413,8 @@ export function useMyProjects(
         searchParams.set('status', params.status)
       }
 
-      const response = await window.electronAPI.get<ProjectCursorPage>(
-        `/api/applications/${applicationId}/projects/my?${searchParams.toString()}`,
-        getAuthHeaders(token)
-      )
+      const response = await authGet<ProjectCursorPage>(
+        `/api/applications/${applicationId}/projects/my?${searchParams.toString()}`      )
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -1616,9 +1448,6 @@ export function useMyProjectsCrossApp(
       params?.status || '',
     ],
     queryFn: async ({ pageParam }) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
 
       const searchParams = new URLSearchParams()
       searchParams.set('limit', '30')
@@ -1638,10 +1467,8 @@ export function useMyProjectsCrossApp(
         searchParams.set('status', params.status)
       }
 
-      const response = await window.electronAPI.get<ProjectCursorPage>(
-        `/api/me/projects?${searchParams.toString()}`,
-        getAuthHeaders(token)
-      )
+      const response = await authGet<ProjectCursorPage>(
+        `/api/me/projects?${searchParams.toString()}`      )
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -1685,9 +1512,6 @@ export function useMyTasksCrossApp(
       params?.status || '',
     ],
     queryFn: async ({ pageParam }) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
 
       const searchParams = new URLSearchParams()
       searchParams.set('limit', '30')
@@ -1707,10 +1531,8 @@ export function useMyTasksCrossApp(
         searchParams.set('status_name', params.status)
       }
 
-      const response = await window.electronAPI.get<TaskCursorPage>(
-        `/api/me/tasks?${searchParams.toString()}`,
-        getAuthHeaders(token)
-      )
+      const response = await authGet<TaskCursorPage>(
+        `/api/me/tasks?${searchParams.toString()}`      )
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -1808,14 +1630,8 @@ export function useDashboardStats(): UseQueryResult<DashboardData> {
   return useQuery<DashboardData>({
     queryKey: queryKeys.dashboard,
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<DashboardData>(
-        '/api/me/dashboard',
-        getAuthHeaders(token)
-      )
+      const response = await authGet<DashboardData>(
+        '/api/me/dashboard'      )
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)

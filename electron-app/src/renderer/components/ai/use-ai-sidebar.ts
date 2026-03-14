@@ -11,7 +11,7 @@
  */
 
 import { useSyncExternalStore, useRef, useCallback } from 'react'
-import type { ChatMessage } from './types'
+import type { ChatMessage, TokenUsage } from './types'
 
 // ============================================================================
 // Types
@@ -25,6 +25,15 @@ interface AiSidebarData {
   chatKey: number
   rewindCheckpointId: string | null
   rewindMessageIndex: number | null
+  activeSessionId: string | null
+  activeSessionTitle: string | null
+  view: 'sessions' | 'chat'
+  hasMoreMessages: boolean
+  isLoadingMore: boolean
+  tokenUsage: TokenUsage | null
+  contextSummary: string | null
+  summarizedAtSequence: number | null
+  lastPersistedSequence: number | null
 }
 
 interface AiSidebarActions {
@@ -33,12 +42,24 @@ interface AiSidebarActions {
   close: () => void
   resetChat: () => void
   addMessage: (msg: ChatMessage) => void
+  updateMessage: (id: string, updater: (msg: ChatMessage) => ChatMessage) => void
   updateLastAssistantMessage: (partial: Partial<ChatMessage>) => void
   setThreadId: (id: string) => void
   setIsStreaming: (val: boolean) => void
   enterRewindMode: (checkpointId: string, messageIndex: number) => void
   exitRewindMode: () => void
   trimMessagesAfter: (index: number) => void
+  setActiveSession: (sessionId: string, threadId: string | null, title?: string) => void
+  setView: (view: 'sessions' | 'chat') => void
+  setHasMoreMessages: (val: boolean) => void
+  setIsLoadingMore: (val: boolean) => void
+  setTokenUsage: (usage: TokenUsage) => void
+  setContextSummary: (summary: string, atSequence: number) => void
+  setLastPersistedSequence: (seq: number) => void
+  setActiveSessionTitle: (title: string) => void
+  linkSession: (sessionId: string) => void
+  loadMessages: (messages: ChatMessage[]) => void
+  prependMessages: (messages: ChatMessage[]) => void
 }
 
 export type AiSidebarState = AiSidebarData & AiSidebarActions
@@ -72,6 +93,9 @@ function persistSidebarOpen(isOpen: boolean): void {
 
 type Listener = () => void
 
+/** Tracks the index of the last assistant message to avoid scanning on every update */
+let lastAssistantIdx = -1
+
 let state: AiSidebarData = {
   isOpen: loadSidebarOpen(),
   messages: [],
@@ -80,6 +104,15 @@ let state: AiSidebarData = {
   chatKey: 0,
   rewindCheckpointId: null,
   rewindMessageIndex: null,
+  activeSessionId: null,
+  activeSessionTitle: null,
+  view: 'sessions' as const,
+  hasMoreMessages: false,
+  isLoadingMore: false,
+  tokenUsage: null,
+  contextSummary: null,
+  summarizedAtSequence: null,
+  lastPersistedSequence: null,
 }
 
 const listeners = new Set<Listener>()
@@ -114,6 +147,7 @@ const actions: AiSidebarActions = {
     setState({ isOpen: false })
   },
   resetChat: () => {
+    lastAssistantIdx = -1
     setState({
       messages: [],
       threadId: null,
@@ -121,19 +155,47 @@ const actions: AiSidebarActions = {
       rewindCheckpointId: null,
       rewindMessageIndex: null,
       chatKey: state.chatKey + 1,
+      activeSessionId: null,
+      activeSessionTitle: null,
+      view: 'sessions' as const,
+      tokenUsage: null,
+      contextSummary: null,
+      summarizedAtSequence: null,
+      lastPersistedSequence: null,
+      hasMoreMessages: false,
+      isLoadingMore: false,
     })
   },
   addMessage: (msg: ChatMessage) => {
-    setState({ messages: [...state.messages, msg] })
+    const newMessages = [...state.messages, msg]
+    const trimmed = newMessages.length > 200 ? newMessages.slice(-200) : newMessages
+    if (msg.role === 'assistant') {
+      lastAssistantIdx = trimmed.length - 1
+    }
+    setState({ messages: trimmed })
+  },
+  updateMessage: (id: string, updater: (msg: ChatMessage) => ChatMessage) => {
+    setState({
+      messages: state.messages.map((m) => (m.id === id ? updater(m) : m)),
+    })
   },
   updateLastAssistantMessage: (partial: Partial<ChatMessage>) => {
-    const msgs = [...state.messages]
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i].role === 'assistant') {
-        msgs[i] = { ...msgs[i], ...partial }
-        break
+    const idx = lastAssistantIdx
+    if (idx < 0 || idx >= state.messages.length || state.messages[idx].role !== 'assistant') {
+      // Fallback: scan backward if tracked index is stale
+      for (let i = state.messages.length - 1; i >= 0; i--) {
+        if (state.messages[i].role === 'assistant') {
+          lastAssistantIdx = i
+          const msgs = [...state.messages]
+          msgs[i] = { ...msgs[i], ...partial }
+          setState({ messages: msgs })
+          return
+        }
       }
+      return
     }
+    const msgs = [...state.messages]
+    msgs[idx] = { ...msgs[idx], ...partial }
     setState({ messages: msgs })
   },
   setThreadId: (id: string) => {
@@ -149,7 +211,76 @@ const actions: AiSidebarActions = {
     setState({ rewindCheckpointId: null, rewindMessageIndex: null })
   },
   trimMessagesAfter: (index: number) => {
-    setState({ messages: state.messages.slice(0, index + 1) })
+    const trimmed = state.messages.slice(0, index + 1)
+    // Recompute lastAssistantIdx for the trimmed set
+    lastAssistantIdx = -1
+    for (let i = trimmed.length - 1; i >= 0; i--) {
+      if (trimmed[i].role === 'assistant') {
+        lastAssistantIdx = i
+        break
+      }
+    }
+    setState({ messages: trimmed })
+  },
+  setActiveSession: (sessionId: string, threadId: string | null, title?: string) => {
+    lastAssistantIdx = -1
+    setState({
+      activeSessionId: sessionId,
+      activeSessionTitle: title ?? null,
+      threadId,
+      messages: [],
+      tokenUsage: null,
+      contextSummary: null,
+      summarizedAtSequence: null,
+      lastPersistedSequence: null,
+    })
+  },
+  setView: (view: 'sessions' | 'chat') => {
+    setState({ view })
+  },
+  setHasMoreMessages: (val: boolean) => {
+    setState({ hasMoreMessages: val })
+  },
+  setIsLoadingMore: (val: boolean) => {
+    setState({ isLoadingMore: val })
+  },
+  setTokenUsage: (usage: TokenUsage) => {
+    setState({ tokenUsage: usage })
+  },
+  setContextSummary: (summary: string, atSequence: number) => {
+    setState({ contextSummary: summary, summarizedAtSequence: atSequence })
+  },
+  setLastPersistedSequence: (seq: number) => {
+    setState({ lastPersistedSequence: seq })
+  },
+  setActiveSessionTitle: (title: string) => {
+    setState({ activeSessionTitle: title })
+  },
+  linkSession: (sessionId: string) => {
+    // Associate current chat with a session ID without clearing messages.
+    // Used when the backend assigns a session_id to a new conversation.
+    setState({ activeSessionId: sessionId })
+  },
+  loadMessages: (messages: ChatMessage[]) => {
+    lastAssistantIdx = -1
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant') {
+        lastAssistantIdx = i
+        break
+      }
+    }
+    setState({ messages })
+  },
+  prependMessages: (messages: ChatMessage[]) => {
+    const combined = [...messages, ...state.messages]
+    lastAssistantIdx = -1
+    for (let i = combined.length - 1; i >= 0; i--) {
+      if (combined[i].role === 'assistant') {
+        lastAssistantIdx = i
+        break
+      }
+    }
+    setState({ messages: combined })
   },
 }
 

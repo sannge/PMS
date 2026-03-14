@@ -11,7 +11,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { PanelLeftClose, PanelLeftOpen, FilePlus, FolderPlus, GripVertical } from 'lucide-react'
+import { PanelLeftClose, PanelLeftOpen, FilePlus, FolderPlus, Upload, GripVertical } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useKnowledgeBase } from '@/contexts/knowledge-base-context'
@@ -22,6 +22,7 @@ import { useKnowledgePermissions } from '@/hooks/use-knowledge-permissions'
 import { KnowledgeTree } from './knowledge-tree'
 import { TagFilterList } from './tag-filter-list'
 import { CreateDialog } from './create-dialog'
+import { ImportDialog } from '@/components/ai/import-dialog'
 import { createEmptyCanvas } from './canvas-types'
 
 const SIDEBAR_WIDTH_KEY = 'knowledge-sidebar-width'
@@ -48,6 +49,7 @@ export function KnowledgeSidebar(): JSX.Element {
   // Dialog state
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [createType, setCreateType] = useState<'document' | 'folder'>('document')
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
 
   // Resizable width state
   const [sidebarWidth, setSidebarWidth] = useState(() => {
@@ -191,6 +193,14 @@ export function KnowledgeSidebar(): JSX.Element {
               >
                 <FolderPlus className="h-3.5 w-3.5" />
               </button>
+              <button
+                onClick={() => setImportDialogOpen(true)}
+                className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                title="Import document"
+                aria-label="Import document"
+              >
+                <Upload className="h-3.5 w-3.5" />
+              </button>
             </div>
           )}
 
@@ -200,6 +210,16 @@ export function KnowledgeSidebar(): JSX.Element {
             onOpenChange={setCreateDialogOpen}
             type={createType}
             onSubmit={handleCreateSubmit}
+          />
+
+          {/* Import dialog */}
+          <ImportDialog
+            open={importDialogOpen}
+            onOpenChange={setImportDialogOpen}
+            defaultScope={activeTab === 'personal' ? 'personal' : 'application'}
+            defaultScopeId={activeTab === 'personal' ? (userId ?? '') : activeTab.slice(4)}
+            defaultFolderId={selectedFolderId ?? undefined}
+            onImportComplete={() => setImportDialogOpen(false)}
           />
 
           {/* Folder tree section */}

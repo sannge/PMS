@@ -28,10 +28,10 @@ print("=" * 60 + "\n", flush=True)
 from contextlib import asynccontextmanager
 
 from .database import warmup_connection_pool
-from .routers import ai_chat_router, ai_config_router, ai_import_router, ai_oauth_router, ai_query_router, application_members_router, applications_router, auth_router, checklists_router, comments_router, dashboard_router, document_folders_router, document_locks_router, document_search_router, document_tags_router, documents_router, files_router, invitations_router, notifications_router, project_assignments_router, project_members_router, projects_router, tasks_router, users_router
+from .routers import admin_config_router, ai_chat_router, ai_config_router, ai_import_router, ai_oauth_router, ai_query_router, application_members_router, applications_router, auth_router, chat_sessions_router, checklists_router, comments_router, dashboard_router, document_folders_router, document_locks_router, document_search_router, document_tags_router, documents_router, files_router, folder_files_router, invitations_router, notifications_router, project_assignments_router, project_members_router, projects_router, tasks_router, users_router
 from .websocket import manager, route_incoming_message, check_room_access
 from .models.user import User
-from .services.auth_service import decode_access_token, get_current_user, is_token_blacklisted
+from .services.auth_service import decode_access_token, get_current_user, is_token_blacklisted, validate_ws_connection_token
 from .services.redis_service import redis_service
 from .services.archive_service import archive_service
 
@@ -67,6 +67,54 @@ async def lifespan(app: FastAPI):
     # Note: Background jobs (archive, presence cleanup) are handled by ARQ worker
     # Run separately with: arq app.worker.WorkerSettings
 
+    # Initialize LangGraph checkpointer (required for interrupt/resume in clarify node)
+    # Uses Postgres for production (survives restarts, works with multiple workers)
+    # Falls back to in-memory MemorySaver if Postgres checkpointer fails
+    #
+    # Connection budget per worker:
+    # - SQLAlchemy pool: pool_size(50) + max_overflow(100) = 150 max
+    # - Checkpointer pool: 5 connections (psycopg_pool)
+    # - Total per worker: 155
+    # - With 4 workers: 620 total (ensure Postgres max_connections >= 700)
+    from .ai.agent.graph import set_checkpointer
+    try:
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+        from psycopg_pool import AsyncConnectionPool
+        from psycopg.rows import dict_row
+        from urllib.parse import quote_plus
+        pg_uri = (
+            f"postgresql://{settings.db_user}:{quote_plus(settings.db_password)}"
+            f"@{settings.db_server}:{settings.db_port}/{settings.db_name}"
+        )
+        # Use a bounded connection pool (max 5) instead of the default single
+        # connection to limit Postgres connection consumption (DB-002).
+        _checkpointer_pool = AsyncConnectionPool(
+            pg_uri,
+            min_size=1,
+            max_size=5,
+            kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
+            open=False,
+        )
+        await _checkpointer_pool.open()
+        pg_checkpointer = AsyncPostgresSaver(conn=_checkpointer_pool)
+        await pg_checkpointer.setup()
+        set_checkpointer(pg_checkpointer)
+        app.state._checkpointer_pool = _checkpointer_pool  # prevent GC, clean up on shutdown
+        logger.info("LangGraph checkpointer initialized (AsyncPostgresSaver → Postgres, pool_size=5)")
+    except Exception as e:
+        if getattr(settings, 'redis_required', False):
+            logger.critical(
+                "Postgres checkpointer failed and redis_required=True "
+                "(multi-worker mode). Cannot use MemorySaver fallback: %s", e,
+            )
+            raise RuntimeError(
+                f"Checkpointer initialization failed in multi-worker mode: {e}"
+            ) from e
+        logger.warning(f"Postgres checkpointer failed, falling back to MemorySaver: {e}")
+        from langgraph.checkpoint.memory import MemorySaver
+        set_checkpointer(MemorySaver())
+        logger.info("LangGraph checkpointer initialized (MemorySaver — in-memory fallback, single-worker only)")
+
     # Initialize Meilisearch (non-critical -- app starts even if Meilisearch is down)
     try:
         from .services.search_service import init_meilisearch
@@ -75,9 +123,37 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Meilisearch initialization failed (search degraded): {e}")
 
+    # Initialize AgentConfigService (load all config from DB into memory cache)
+    try:
+        from .ai.config_service import get_agent_config
+        from .database import async_session_maker as _asm
+        _agent_cfg = get_agent_config()
+        _agent_cfg.set_db_session_factory(_asm)
+        await _agent_cfg.load_all()
+        logger.info("AgentConfigService initialized")
+
+        # Reload rate limits now that config is available from DB
+        from .ai.rate_limiter import reload_rate_limits
+        reload_rate_limits()
+        logger.info("Rate limits reloaded from config")
+
+        # Start Redis invalidation listener as background task
+        asyncio.create_task(_agent_cfg.subscribe_invalidation())
+    except Exception as e:
+        logger.warning(f"AgentConfigService initialization failed: {e}")
+
     yield
 
     # Shutdown
+    # Close Postgres checkpointer connection pool (DB-002: bounded psycopg_pool)
+    checkpointer_pool = getattr(app.state, "_checkpointer_pool", None)
+    if checkpointer_pool:
+        try:
+            await checkpointer_pool.close()
+            logger.info("Postgres checkpointer connection pool closed")
+        except Exception:
+            pass
+
     logger.info("Disconnecting from Redis...")
     await redis_service.disconnect()
     logger.info("Redis disconnected")
@@ -97,11 +173,29 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
+    allow_origin_regex=r"^http://localhost:(5173|5174|8001|3000)$",
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Cache-Control", "X-Requested-With"],
     expose_headers=["Content-Type", "Cache-Control", "X-Accel-Buffering"],
 )
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """Add security headers to all responses."""
+    response = await call_next(request)
+    # Swagger/ReDoc UI needs permissive CSP to load scripts/styles
+    path = request.url.path
+    if path in ("/docs", "/redoc", "/openapi.json"):
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+    else:
+        response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
 
 
 # Database pool exhaustion handler - return 503 so clients can retry
@@ -155,11 +249,14 @@ app.include_router(document_search_router, tags=["document-search"])
 app.include_router(documents_router, prefix="/api", tags=["documents"])
 app.include_router(document_tags_router, prefix="/api", tags=["document-tags"])
 app.include_router(document_folders_router, prefix="/api", tags=["document-folders"])
+app.include_router(admin_config_router)
 app.include_router(ai_config_router)
 app.include_router(ai_oauth_router)
 app.include_router(ai_query_router)
 app.include_router(ai_chat_router)
 app.include_router(ai_import_router)
+app.include_router(chat_sessions_router)
+app.include_router(folder_files_router)
 
 # TODO: Mount CopilotKit AG-UI endpoint at startup when the agent graph is
 # built.  Requires a compiled graph instance which depends on provider config
@@ -206,6 +303,13 @@ async def health_check():
     # AI health sub-checks (each independently timed out)
     ai_health = await _build_ai_health()
 
+    # QE-R2-001: Include AI agent semaphore utilization
+    from .routers.ai_chat import _agent_semaphore, _MAX_CONCURRENT_AGENTS
+    ai_agent_slots = {
+        "used": _MAX_CONCURRENT_AGENTS - _agent_semaphore._value,
+        "max": _MAX_CONCURRENT_AGENTS,
+    }
+
     return {
         "status": "healthy",
         "database": db_health,
@@ -219,6 +323,7 @@ async def health_check():
             "note": "Run ARQ worker separately: arq app.worker.WorkerSettings",
         },
         "ai": ai_health,
+        "ai_agent_slots": ai_agent_slots,
     }
 
 
@@ -407,24 +512,35 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = None):
     Usage:
         ws://localhost:8000/ws?token=<jwt_token>
     """
-    # Validate token
+    # Validate token — try opaque connection token first, fall back to JWT
     if not token:
         logger.debug("WebSocket connection attempt without token")
         await websocket.close(code=4001, reason="Authentication required")
         return
 
+    user_id: UUID | None = None
+    using_jwt_directly = False
+
     try:
-        token_data = decode_access_token(token)
-        if token_data is None or token_data.user_id is None:
-            logger.debug("WebSocket connection with invalid token")
-            await websocket.close(code=4001, reason="Invalid token")
-            return
-        # Check blacklist on initial connection (logout support)
-        if token_data.jti and await is_token_blacklisted(token_data.jti):
-            logger.warning(f"WebSocket connection with blacklisted token (jti={token_data.jti})")
-            await websocket.close(code=4001, reason="Token revoked")
-            return
-        user_id = UUID(token_data.user_id)
+        # Try opaque connection token first (preferred, keeps JWT out of URL)
+        ws_user_id = await validate_ws_connection_token(token)
+        if ws_user_id:
+            user_id = UUID(ws_user_id)
+        else:
+            # Fall back to JWT (backwards compat during migration)
+            using_jwt_directly = True
+            token_data = decode_access_token(token)
+            if token_data is None or token_data.user_id is None:
+                logger.debug("WebSocket connection with invalid token")
+                await websocket.close(code=4001, reason="Invalid token")
+                return
+            # Check blacklist on initial connection (logout support)
+            if token_data.jti and await is_token_blacklisted(token_data.jti):
+                logger.warning(f"WebSocket connection with blacklisted token (jti={token_data.jti})")
+                await websocket.close(code=4001, reason="Token revoked")
+                return
+            user_id = UUID(token_data.user_id)
+            logger.info("WebSocket using JWT directly — migrate to POST /auth/ws-token")
     except Exception as e:
         logger.warning(f"WebSocket token validation error: {e}")
         await websocket.close(code=4001, reason="Invalid token")
@@ -438,12 +554,14 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = None):
 
     logger.info(f"WebSocket connection established for user: {user_id}")
 
-    # Connection configuration
-    RECEIVE_TIMEOUT = 45  # 45s timeout for receiving messages
-    SERVER_PING_INTERVAL = 30  # Send server ping every 30s
-    TOKEN_REVALIDATION_INTERVAL = 1800  # Re-validate token every 30 minutes
-    RATE_LIMIT_MESSAGES = 100  # Max messages per window
-    RATE_LIMIT_WINDOW = 10  # Window in seconds (100 msg/10s = 10 msg/sec avg)
+    # Connection configuration (read from AgentConfigService with hardcoded fallbacks)
+    from .ai.config_service import get_agent_config as _get_ws_cfg
+    _ws_cfg = _get_ws_cfg()
+    RECEIVE_TIMEOUT = _ws_cfg.get_int("websocket.receive_timeout", 45)
+    SERVER_PING_INTERVAL = _ws_cfg.get_int("websocket.ping_interval", 30)
+    TOKEN_REVALIDATION_INTERVAL = _ws_cfg.get_int("websocket.token_revalidation_interval", 1800)
+    RATE_LIMIT_MESSAGES = _ws_cfg.get_int("websocket.rate_limit_messages", 100)
+    RATE_LIMIT_WINDOW = _ws_cfg.get_int("websocket.rate_limit_window", 10)
 
     # Rate limiting state
     message_timestamps: list[float] = []
@@ -462,9 +580,10 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = None):
                     # Send ping
                     await websocket.send_json({"type": "ping", "data": {}})
 
-                    # Check if token needs re-validation
+                    # Check if token needs re-validation (only for JWT-based connections;
+                    # opaque connection tokens are single-use and cannot be re-validated)
                     current_time = asyncio.get_event_loop().time()
-                    if current_time - last_token_check > TOKEN_REVALIDATION_INTERVAL:
+                    if using_jwt_directly and current_time - last_token_check > TOKEN_REVALIDATION_INTERVAL:
                         # Re-validate token
                         token_data = decode_access_token(token)
                         if token_data is None or token_data.user_id is None:

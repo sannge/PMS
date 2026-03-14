@@ -17,10 +17,14 @@ from typing import Any, Optional
 
 from ..services.redis_service import redis_service
 
+from ..ai.config_service import get_agent_config
+
 logger = logging.getLogger(__name__)
 
+_cfg = get_agent_config()
+
 # Presence TTL in seconds (45s allows for network jitter with 30s heartbeat)
-PRESENCE_TTL = 45
+PRESENCE_TTL = _cfg.get_int("websocket.presence_ttl", 45)
 HEARTBEAT_INTERVAL = 30
 
 

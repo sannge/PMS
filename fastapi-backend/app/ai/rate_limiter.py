@@ -8,9 +8,10 @@ on each check, giving accurate per-window counts.
 A Lua script executes the check-and-increment atomically in Redis, avoiding
 TOCTOU race conditions that could occur with pipelined commands.
 
-Fallback: when Redis is unavailable, an in-memory counter with a generous
-limit (2x normal) is used.  This prevents complete bypass while tolerating
-brief Redis outages.  A warning is logged on each fallback hit.
+Fallback: when Redis is unavailable, an in-memory counter with the same
+limit is used per-worker.  This prevents complete bypass while tolerating
+brief Redis outages.  A CRITICAL log is emitted on each fallback hit so
+operators can detect and resolve Redis connectivity issues quickly.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
 from ..models.user import User
@@ -87,11 +88,45 @@ return redis.call('ZCARD', key)
 # In-memory fallback counter (used when Redis is unavailable)
 # ---------------------------------------------------------------------------
 
+# Per-key locks to avoid serializing all fallback checks behind one lock.
+# The dict is capped at _INMEMORY_LOCK_MAX_KEYS to prevent unbounded growth;
+# stale entries are pruned when the cap is hit.
+_inmemory_locks: dict[str, asyncio.Lock] = {}
+_INMEMORY_LOCK_MAX_KEYS = 20_000
+
+# Backward-compatible alias: tests import ``_inmemory_lock`` by name.
+# This is no longer used internally but kept so existing test imports work.
 _inmemory_lock = asyncio.Lock()
+
+
+def _get_key_lock(key: str) -> asyncio.Lock:
+    """Return a per-key asyncio.Lock, creating one if needed.
+
+    When the lock dict exceeds ``_INMEMORY_LOCK_MAX_KEYS``, removes all
+    entries whose corresponding counter key has already been evicted from
+    ``_inmemory_counters``, then trims the oldest half if still over limit.
+    """
+    if key not in _inmemory_locks:
+        # Cleanup when dict grows too large
+        if len(_inmemory_locks) >= _INMEMORY_LOCK_MAX_KEYS:
+            # Remove locks for keys no longer in the counter dict
+            stale = [k for k in _inmemory_locks if k not in _inmemory_counters]
+            for k in stale:
+                del _inmemory_locks[k]
+            # If still over limit, drop the oldest half (arbitrary but bounded)
+            if len(_inmemory_locks) >= _INMEMORY_LOCK_MAX_KEYS:
+                to_remove = list(_inmemory_locks.keys())[: len(_inmemory_locks) // 2]
+                for k in to_remove:
+                    del _inmemory_locks[k]
+        _inmemory_locks[key] = asyncio.Lock()
+    return _inmemory_locks[key]
+
+
 # { key: [(timestamp, ...)] }  -- list of request timestamps within window
 _inmemory_counters: dict[str, list[float]] = {}
-# Multiplier for in-memory limits (more generous since less accurate)
-_INMEMORY_LIMIT_MULTIPLIER = 2
+# HIGH-3 fix: use same limit as Redis (1x) -- previously 2x which multiplied
+# by worker count, allowing far more requests than intended during outages.
+_INMEMORY_LIMIT_MULTIPLIER = 1
 # Safety limit: clear the entire dict if it grows beyond this many keys
 _INMEMORY_MAX_KEYS = 10_000
 
@@ -123,11 +158,20 @@ RATE_LIMITS: dict[str, tuple[int, int]] = {
     "ai_import": (10, 3600),
     "ai_reindex": (20, 3600),
     "ai_test": (10, 60),
+    "session_crud": (120, 60),
+    "session_summarize": (5, 60),
+    "web_search": (20, 60),    # 20 searches per 60s per user
+    "web_scrape": (10, 60),    # 10 scrapes per 60s per user
+    "auth_login": (10, 60),
+    "auth_register": (5, 60),
+    "auth_verify": (10, 60),
+    "auth_reset": (5, 60),
+    "file_upload": (20, 60),    # 20 uploads per 60s per user
 }
 
 
 def _load_rate_limits() -> dict[str, tuple[int, int]]:
-    """Load rate limits, allowing env-var overrides.
+    """Load rate limits with priority: env var > DB config > hardcoded default.
 
     Environment variables follow the pattern:
         RATE_LIMIT_AI_CHAT=30,60
@@ -135,7 +179,9 @@ def _load_rate_limits() -> dict[str, tuple[int, int]]:
         RATE_LIMIT_AI_IMPORT=10,3600
         RATE_LIMIT_AI_REINDEX=20,3600
 
-    Falls back to ``RATE_LIMITS`` defaults when not set.
+    DB config keys follow the pattern: rate_limit.ai_chat -> "30,60"
+
+    Falls back to ``RATE_LIMITS`` hardcoded defaults when neither is set.
 
     .. note::
         Called once at module import time.  Changes to env vars take
@@ -143,18 +189,31 @@ def _load_rate_limits() -> dict[str, tuple[int, int]]:
     """
     import os
 
+    from .config_service import get_agent_config
+
+    cfg = get_agent_config()
     limits = dict(RATE_LIMITS)
+
     for key in limits:
+        # Priority 1: Environment variable
         env_key = f"RATE_LIMIT_{key.upper()}"
         env_val = os.environ.get(env_key)
         if env_val:
             try:
                 parts = env_val.split(",")
                 limits[key] = (int(parts[0].strip()), int(parts[1].strip()))
+                continue
             except (IndexError, ValueError):
                 logger.warning(
                     "Invalid rate limit env var %s=%s, using default", env_key, env_val
                 )
+
+        # Priority 2: DB config (AgentConfigurations table)
+        config_key = f"rate_limit.{key}"
+        db_val = cfg.get_rate_limit(config_key, limits[key])
+        if db_val != limits[key]:
+            limits[key] = db_val
+
     return limits
 
 
@@ -169,7 +228,8 @@ class AIRateLimiter:
     Key format: ``ratelimit:{endpoint}:{scope_id}:{window}``
 
     When Redis is unavailable, falls back to an in-memory counter with
-    a generous limit (2x normal) to prevent complete bypass during outages.
+    the same limit to prevent bypass during outages.  A CRITICAL log is
+    emitted on each fallback so operators can detect Redis issues.
     """
 
     def __init__(self, redis: Any) -> None:
@@ -194,11 +254,14 @@ class AIRateLimiter:
         Prunes expired entries on each call.  If the dict grows beyond
         ``_INMEMORY_MAX_KEYS``, evicts expired entries first, then the
         oldest 25% of remaining keys.
+
+        Uses a per-key lock so concurrent requests to different keys
+        do not serialize behind a single global lock.
         """
         now = time.time()
         cutoff = now - window_seconds
 
-        async with _inmemory_lock:
+        async with _get_key_lock(key):
             # Safety valve: prevent unbounded memory growth
             if len(_inmemory_counters) > _INMEMORY_MAX_KEYS:
                 # BE-P9: Evict expired entries first, then oldest 25%
@@ -243,8 +306,8 @@ class AIRateLimiter:
         """Build a RateLimitResult from in-memory counters.
 
         Uses ``_INMEMORY_LIMIT_MULTIPLIER`` times the normal limit as the
-        threshold, providing a safety net while being more forgiving than
-        the Redis-backed limit (since in-memory counts are per-process).
+        threshold.  With the multiplier set to 1, this enforces the same
+        limit as Redis but per-worker (not globally shared).
         """
         fallback_limit = limit * _INMEMORY_LIMIT_MULTIPLIER
         count = await self._inmemory_count_and_add(key, window_seconds, add=add)
@@ -283,7 +346,10 @@ class AIRateLimiter:
                 keys=[key], args=[now, window_seconds, ttl]
             )
         except Exception as exc:
-            logger.warning("Rate limit Redis unavailable, using in-memory fallback: %s", exc)
+            logger.critical(
+                "Rate limit fallback: Redis unavailable, using in-memory counters (per-worker): %s",
+                exc,
+            )
             return await self._fallback_result(key, limit, window_seconds, add=False)
 
         remaining = max(0, limit - current_count)
@@ -326,7 +392,10 @@ class AIRateLimiter:
                 keys=[key], args=[now, window_seconds, limit, member, ttl]
             )
         except Exception as exc:
-            logger.warning("Rate limit Redis unavailable, using in-memory fallback: %s", exc)
+            logger.critical(
+                "Rate limit fallback: Redis unavailable, using in-memory counters (per-worker): %s",
+                exc,
+            )
             return await self._fallback_result(key, limit, window_seconds, add=True)
 
         if result == -1:
@@ -377,26 +446,39 @@ class AIRateLimiter:
             )
             return count
         except Exception as exc:
-            logger.warning("Rate limit Redis unavailable, using in-memory fallback: %s", exc)
+            logger.critical(
+                "Rate limit fallback: Redis unavailable, using in-memory counters (per-worker): %s",
+                exc,
+            )
             return await self._inmemory_count_and_add(key, window_seconds, add=True)
 
 
 # ---------------------------------------------------------------------------
-# FastAPI dependency
+# FastAPI dependency (singleton-cached)
 # ---------------------------------------------------------------------------
+
+_cached_rate_limiter: AIRateLimiter | None = None
+_cached_redis_client: Any = None
 
 
 def get_rate_limiter() -> AIRateLimiter:
     """FastAPI dependency that provides an :class:`AIRateLimiter` instance.
 
-    Uses the global ``redis_service`` singleton.  When Redis is not
-    connected, returns a limiter whose Redis attribute is ``None`` — the
-    limiter methods will catch the resulting exceptions and fail open.
+    Uses the global ``redis_service`` singleton.  The limiter is cached as
+    a module-level singleton and only recreated when the underlying Redis
+    client changes (e.g. reconnection).  When Redis is not connected,
+    returns a limiter whose Redis attribute is ``None`` -- the limiter
+    methods will catch the resulting exceptions and fall back to in-memory.
     """
+    global _cached_rate_limiter, _cached_redis_client
+
     from ..services.redis_service import redis_service
 
     client = redis_service.client if redis_service.is_connected else None
-    return AIRateLimiter(client)
+    if _cached_rate_limiter is None or client is not _cached_redis_client:
+        _cached_rate_limiter = AIRateLimiter(client)
+        _cached_redis_client = client
+    return _cached_rate_limiter
 
 
 # ---------------------------------------------------------------------------
@@ -404,7 +486,35 @@ def get_rate_limiter() -> AIRateLimiter:
 # ---------------------------------------------------------------------------
 
 
-_limits = _load_rate_limits()
+_limits: dict[str, tuple[int, int]] | None = None
+
+
+def _get_limits() -> dict[str, tuple[int, int]]:
+    """Lazy accessor for rate limits -- defers loading until first use.
+
+    This avoids the problem of ``_load_rate_limits()`` being called at
+    import time before the config cache (AgentConfigService) has been
+    loaded from the database.  The first call after ``config.load_all()``
+    completes will populate the limits; subsequent calls return the
+    cached dict.
+
+    Call ``reload_rate_limits()`` after startup to force a refresh.
+    """
+    global _limits
+    if _limits is None:
+        _limits = _load_rate_limits()
+    return _limits
+
+
+def reload_rate_limits() -> None:
+    """Force a reload of rate limits from config/env.
+
+    Should be called from ``main.py`` lifespan after
+    ``AgentConfigService.load_all()`` completes, so that DB-configured
+    rate limits take effect.
+    """
+    global _limits
+    _limits = _load_rate_limits()
 
 
 def _raise_rate_limit(result: RateLimitResult, detail_prefix: str) -> None:
@@ -420,38 +530,108 @@ def _raise_rate_limit(result: RateLimitResult, detail_prefix: str) -> None:
     )
 
 
-async def check_chat_rate_limit(
-    current_user: User = Depends(get_current_user),
-    rate_limiter: AIRateLimiter = Depends(get_rate_limiter),
-) -> None:
-    """Dependency for AI chat endpoints -- 30 req/min per user."""
-    limit, window = _limits["ai_chat"]
-    result = await rate_limiter.check_and_increment(
-        endpoint="ai_chat",
-        scope_id=str(current_user.id),
-        limit=limit,
-        window_seconds=window,
-    )
-    if not result.allowed:
-        _raise_rate_limit(result, "Rate limit exceeded")
+# ---------------------------------------------------------------------------
+# Factory helpers (HIGH-18: eliminate near-identical boilerplate)
+# ---------------------------------------------------------------------------
+
+
+def _make_user_rate_limit_dep(
+    key_suffix: str, detail_prefix: str
+) -> Any:
+    """Factory for user-scoped rate limit dependencies.
+
+    Returns an async callable suitable for use with ``Depends()``.
+    Reads limit/window from ``_get_limits()`` at call time (not at
+    import time) so that reloaded config takes effect without restart.
+    """
+    async def _check(
+        current_user: User = Depends(get_current_user),
+        rate_limiter: AIRateLimiter = Depends(get_rate_limiter),
+    ) -> None:
+        limit, window = _get_limits()[key_suffix]
+        result = await rate_limiter.check_and_increment(
+            endpoint=key_suffix,
+            scope_id=str(current_user.id),
+            limit=limit,
+            window_seconds=window,
+        )
+        if not result.allowed:
+            _raise_rate_limit(result, f"{detail_prefix}: rate limit exceeded")
+
+    # Preserve a useful name for debugging / introspection
+    _check.__name__ = f"check_{key_suffix}_rate_limit"
+    _check.__qualname__ = f"check_{key_suffix}_rate_limit"
+    return _check
+
+
+def _make_ip_rate_limit_dep(
+    key_suffix: str, detail_prefix: str
+) -> Any:
+    """Factory for IP-scoped rate limit dependencies.
+
+    Returns an async callable suitable for use with ``Depends()``.
+    Reads limit/window from ``_get_limits()`` at call time (not at
+    import time) so that reloaded config takes effect without restart.
+    """
+    async def _check(
+        request: Request,
+        rate_limiter: AIRateLimiter = Depends(get_rate_limiter),
+    ) -> None:
+        client_ip = request.client.host if request.client else "unknown"
+        limit, window = _get_limits()[key_suffix]
+        result = await rate_limiter.check_and_increment(
+            endpoint=key_suffix,
+            scope_id=client_ip,
+            limit=limit,
+            window_seconds=window,
+        )
+        if not result.allowed:
+            _raise_rate_limit(result, f"{detail_prefix}: rate limit exceeded")
+
+    _check.__name__ = f"check_{key_suffix}_rate_limit"
+    _check.__qualname__ = f"check_{key_suffix}_rate_limit"
+    return _check
+
+
+# ---------------------------------------------------------------------------
+# User-scoped rate limit dependencies
+# ---------------------------------------------------------------------------
+
+check_chat_rate_limit = _make_user_rate_limit_dep("ai_chat", "AI chat")
+
+check_query_rate_limit = _make_user_rate_limit_dep("ai_query", "AI query")
+
+check_import_rate_limit = _make_user_rate_limit_dep("ai_import", "Import")
+
+check_reindex_rate_limit = _make_user_rate_limit_dep("ai_reindex", "Reindex")
+
+check_test_rate_limit = _make_user_rate_limit_dep("ai_test", "Test")
+
+check_session_crud_rate_limit = _make_user_rate_limit_dep("session_crud", "Session CRUD")
+
+check_summarize_rate_limit = _make_user_rate_limit_dep("session_summarize", "Summarize")
+
+
+# ---------------------------------------------------------------------------
+# Embedding rate limit (HIGH-4: keyed by user_id, not application_id)
+# ---------------------------------------------------------------------------
 
 
 async def check_embedding_rate_limit(
-    application_id: str,
+    user_id: str,
     rate_limiter: AIRateLimiter = Depends(get_rate_limiter),
 ) -> None:
-    """Dependency for embedding endpoints -- 100 docs/min per application.
+    """Dependency for embedding endpoints -- 100 docs/min per user.
 
-    **RBAC note:** ``application_id`` is taken from the path/body parameter.
-    The calling router MUST validate that the current user has access to this
-    application (via ``get_current_user`` + membership check) *before* this
-    dependency runs.  This dependency only enforces rate limits, not access
-    control.
+    Rate-limits by ``user_id`` rather than ``application_id`` to avoid
+    trusting an unvalidated path/body parameter for rate limiting.  The
+    caller should pass the authenticated user's ID (from ``get_current_user``
+    or the worker context) to ensure the limit is applied correctly.
     """
-    limit, window = _limits["ai_embed"]
+    limit, window = _get_limits()["ai_embed"]
     result = await rate_limiter.check_and_increment(
         endpoint="ai_embed",
-        scope_id=application_id,
+        scope_id=str(user_id),
         limit=limit,
         window_seconds=window,
     )
@@ -459,65 +639,22 @@ async def check_embedding_rate_limit(
         _raise_rate_limit(result, "Embedding rate limit exceeded")
 
 
-async def check_import_rate_limit(
-    current_user: User = Depends(get_current_user),
-    rate_limiter: AIRateLimiter = Depends(get_rate_limiter),
-) -> None:
-    """Dependency for document import -- 10 files/hr per user."""
-    limit, window = _limits["ai_import"]
-    result = await rate_limiter.check_and_increment(
-        endpoint="ai_import",
-        scope_id=str(current_user.id),
-        limit=limit,
-        window_seconds=window,
-    )
-    if not result.allowed:
-        _raise_rate_limit(result, "Import rate limit exceeded")
+# ---------------------------------------------------------------------------
+# IP-based rate limits for auth endpoints (no authenticated user)
+# ---------------------------------------------------------------------------
 
+check_auth_login_rate_limit = _make_ip_rate_limit_dep(
+    "auth_login", "Too many login attempts"
+)
 
-async def check_query_rate_limit(
-    current_user: User = Depends(get_current_user),
-    rate_limiter: AIRateLimiter = Depends(get_rate_limiter),
-) -> None:
-    """Dependency for AI SQL query endpoints -- 30 req/min per user."""
-    limit, window = _limits["ai_query"]
-    result = await rate_limiter.check_and_increment(
-        endpoint="ai_query",
-        scope_id=str(current_user.id),
-        limit=limit,
-        window_seconds=window,
-    )
-    if not result.allowed:
-        _raise_rate_limit(result, "Query rate limit exceeded")
+check_auth_register_rate_limit = _make_ip_rate_limit_dep(
+    "auth_register", "Too many registration attempts"
+)
 
+check_auth_verify_rate_limit = _make_ip_rate_limit_dep(
+    "auth_verify", "Too many verification attempts"
+)
 
-async def check_reindex_rate_limit(
-    current_user: User = Depends(get_current_user),
-    rate_limiter: AIRateLimiter = Depends(get_rate_limiter),
-) -> None:
-    """Dependency for manual reindex -- 20 req/hr per user."""
-    limit, window = _limits["ai_reindex"]
-    result = await rate_limiter.check_and_increment(
-        endpoint="ai_reindex",
-        scope_id=str(current_user.id),
-        limit=limit,
-        window_seconds=window,
-    )
-    if not result.allowed:
-        _raise_rate_limit(result, "Reindex rate limit exceeded")
-
-
-async def check_test_rate_limit(
-    current_user: User = Depends(get_current_user),
-    rate_limiter: AIRateLimiter = Depends(get_rate_limiter),
-) -> None:
-    """Dependency for provider/capability test endpoints -- 10 req/min per user."""
-    limit, window = _limits["ai_test"]
-    result = await rate_limiter.check_and_increment(
-        endpoint="ai_test",
-        scope_id=str(current_user.id),
-        limit=limit,
-        window_seconds=window,
-    )
-    if not result.allowed:
-        _raise_rate_limit(result, "Test rate limit exceeded")
+check_auth_reset_rate_limit = _make_ip_rate_limit_dep(
+    "auth_reset", "Too many reset attempts"
+)

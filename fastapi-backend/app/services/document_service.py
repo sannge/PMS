@@ -489,6 +489,8 @@ async def save_document_content(
     user_id: UUID,
     db: AsyncSession,
     minio: MinIOService | None = None,
+    *,
+    check_edit_permission: bool = False,
 ) -> Tuple[Document, dict | None]:
     """
     Save document content with optimistic concurrency control.
@@ -503,6 +505,8 @@ async def save_document_content(
         row_version: Expected current row_version (for optimistic concurrency)
         user_id: UUID of the user performing the save
         db: Database session
+        check_edit_permission: If True, verify edit permission before saving
+            (eliminates the double-load in the save_content endpoint).
 
     Returns:
         Tuple of (updated Document instance, search_doc_data dict or None).
@@ -510,8 +514,36 @@ async def save_document_content(
         AFTER db.commit() to ensure Meilisearch receives data only after PostgreSQL commits.
 
     Raises:
-        HTTPException: 404 if document not found, 409 if row_version mismatch
+        HTTPException: 404 if document not found, 403 if no edit permission,
+                       409 if row_version mismatch
     """
+    # Permission check (when called from save_content endpoint, avoids double-load)
+    if check_edit_permission:
+        from .permission_service import PermissionService
+        doc_check = await db.scalar(
+            select(Document.id).where(
+                Document.id == document_id,
+                Document.deleted_at.is_(None),
+            )
+        )
+        if doc_check is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Document {document_id} not found",
+            )
+        # Load the document briefly for scope resolution
+        result_perm = await db.execute(
+            select(Document).where(Document.id == document_id)
+        )
+        doc_for_perm = result_perm.scalar_one()
+        perm_service = PermissionService(db)
+        scope_type, scope_id = PermissionService.resolve_entity_scope(doc_for_perm)
+        if not await perm_service.check_can_edit_knowledge(user_id, scope_type, scope_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to edit this document",
+            )
+
     # Run content conversion BEFORE the atomic update
     content_dict = json.loads(content_json)
     from .content_converter import tiptap_json_to_markdown, tiptap_json_to_plain_text
@@ -530,6 +562,7 @@ async def save_document_content(
             content_plain=content_plain,
             row_version=Document.row_version + 1,
             updated_at=utc_now(),
+            embedding_status="stale",
         )
         .returning(Document)
     )

@@ -117,7 +117,9 @@ class TestPasswordReset:
             },
         )
         assert login_response.status_code == 200
-        assert "access_token" in login_response.json()
+        login_data = login_response.json()
+        assert login_data["requires_2fa"] is True
+        assert login_data["email"] == "reset_valid@example.com"
 
     @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
     async def test_reset_with_wrong_code(self, client: AsyncClient, db_session: AsyncSession):

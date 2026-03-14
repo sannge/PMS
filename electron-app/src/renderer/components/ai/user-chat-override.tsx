@@ -1,21 +1,20 @@
 /**
- * User Chat Override Component — OAuth Subscription Connect
+ * User Chat Override Component — Subscription Token Connect
  *
- * Allows any authenticated user to connect their AI subscription via OAuth
- * or fall back to a manual API key. Accessible from the chat sidebar gear icon.
+ * Allows any authenticated user to connect their AI subscription via
+ * a session token (obtained from CLI like `claude setup-token`) or
+ * fall back to a manual API key. Accessible from the chat sidebar gear icon.
  *
  * Features:
- * - Provider cards for OpenAI (green) and Anthropic (amber + warning)
- * - OAuth connect flow via Electron BrowserWindow
- * - Connected state with model selector, test, disconnect
+ * - Token paste form for OpenAI and Anthropic
+ * - Server-side token validation before saving
+ * - Connected state with test, disconnect
  * - Collapsible "Advanced: Use API Key Instead" section
  * - Status line showing effective configuration
  * - ConfirmDialog for disconnect confirmation
- * - Loading spinner during OAuth flow
- * - Error states with retry / fallback suggestions
  */
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback } from 'react'
 import {
   Settings,
   Loader2,
@@ -26,9 +25,9 @@ import {
   Trash2,
   ChevronDown,
   ChevronRight,
-  ExternalLink,
-  Zap,
   Key,
+  Clipboard,
+  Terminal,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -56,10 +55,11 @@ import {
   type AiModelResponse,
 } from '@/hooks/use-ai-config'
 import {
-  useOAuthStatus,
-  useOAuthInitiate,
-  useOAuthDisconnect,
-  type OAuthConnectionStatus,
+  useSubscriptionTokenStatus,
+  useSaveSubscriptionToken,
+  useTestSubscriptionToken,
+  useDisconnectSubscription,
+  type SubscriptionTokenStatus,
 } from '@/hooks/use-oauth-connect'
 import { cn } from '@/lib/utils'
 
@@ -74,9 +74,8 @@ type TestStatus = 'idle' | 'testing' | 'success' | 'error'
 // Status Line
 // ============================================================================
 
-function EffectiveConfigStatus() {
+function EffectiveConfigStatus({ tokenStatus }: { tokenStatus: SubscriptionTokenStatus | undefined }) {
   const { data: effectiveConfig, isLoading } = useUserEffectiveConfig()
-  const { data: oauthStatus } = useOAuthStatus()
   const { data: overrides } = useUserOverrides()
 
   if (isLoading) {
@@ -88,9 +87,9 @@ function EffectiveConfigStatus() {
     )
   }
 
-  // OAuth connected
-  if (oauthStatus?.connected) {
-    const provider = oauthStatus.provider_type
+  // Subscription token connected
+  if (tokenStatus?.connected) {
+    const provider = tokenStatus.provider_type
     const providerLabel = provider === 'openai' ? 'OpenAI' : provider === 'anthropic' ? 'Anthropic' : provider
     return (
       <div className="flex items-center gap-1.5 text-xs">
@@ -139,82 +138,150 @@ function EffectiveConfigStatus() {
 }
 
 // ============================================================================
-// Provider Card (Disconnected State)
+// Subscription Token Form (Disconnected State)
 // ============================================================================
 
-interface ProviderCardProps {
-  providerType: ProviderType
-  label: string
-  description: string
-  accentColor: 'green' | 'amber'
-  warning?: string
-  isConnecting: boolean
-  onConnect: () => void
-}
+function SubscriptionTokenForm() {
+  const [providerType, setProviderType] = useState<ProviderType | ''>('')
+  const [token, setToken] = useState('')
+  const [error, setError] = useState<string | null>(null)
 
-function ProviderCard({
-  providerType,
-  label,
-  description,
-  accentColor,
-  warning,
-  isConnecting,
-  onConnect,
-}: ProviderCardProps) {
-  const colors = {
-    green: {
-      border: 'border-green-500/20 hover:border-green-500/40',
-      bg: 'bg-green-500/5',
-      icon: 'text-green-500',
-      button: 'bg-green-600 hover:bg-green-700 text-white',
-    },
-    amber: {
-      border: 'border-amber-500/20 hover:border-amber-500/40',
-      bg: 'bg-amber-500/5',
-      icon: 'text-amber-500',
-      button: 'bg-amber-600 hover:bg-amber-700 text-white',
-    },
-  }
+  const { mutateAsync: saveTokenAsync, isPending: isSavePending } = useSaveSubscriptionToken()
 
-  const c = colors[accentColor]
+  const handleSave = useCallback(async () => {
+    if (!providerType || !token.trim()) return
+    setError(null)
+
+    try {
+      await saveTokenAsync({
+        provider_type: providerType,
+        token: token.trim(),
+      })
+      setToken('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save token')
+    }
+  }, [providerType, token, saveTokenAsync])
+
+  const providerLabel = providerType === 'openai' ? 'OpenAI' : 'Anthropic'
+  const cliCommand = providerType === 'anthropic'
+    ? 'claude setup-token'
+    : 'openai auth token'
 
   return (
-    <div className={cn(
-      'rounded-lg border p-3 transition-colors',
-      c.border,
-      c.bg,
-    )}>
-      <div className="flex items-center gap-2 mb-2">
-        <Zap className={cn('h-4 w-4', c.icon)} />
-        <span className="text-sm font-semibold">{label}</span>
+    <div className="space-y-3">
+      <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
+        <div className="flex items-center gap-2 mb-2">
+          <Terminal className="h-4 w-4 text-primary" />
+          <span className="text-sm font-semibold">Connect Your Subscription</span>
+        </div>
+        <p className="text-xs text-muted-foreground mb-3">
+          Use your AI subscription instead of the company default.
+          Get a session token from your provider&apos;s CLI and paste it below.
+        </p>
       </div>
 
-      <p className="text-xs text-muted-foreground mb-3">
-        {description}
-      </p>
+      {/* Provider Selection */}
+      <div className="space-y-1.5">
+        <Label>Provider</Label>
+        <div className="flex items-center gap-4" role="radiogroup" aria-label="AI provider">
+          {(['openai', 'anthropic'] as const).map((p) => (
+            <label
+              key={p}
+              className="flex items-center gap-2 text-xs cursor-pointer"
+            >
+              <input
+                type="radio"
+                name="token-provider"
+                value={p}
+                checked={providerType === p}
+                onChange={() => {
+                  setProviderType(p)
+                  setToken('')
+                  setError(null)
+                }}
+                className="h-3 w-3 accent-primary"
+              />
+              {p === 'openai' ? 'OpenAI' : 'Anthropic'}
+            </label>
+          ))}
+        </div>
+      </div>
 
-      {warning && (
-        <div className="flex items-start gap-1.5 mb-3 rounded-md bg-amber-500/10 border border-amber-500/20 p-2">
-          <AlertTriangle className="h-3 w-3 text-amber-500 mt-0.5 shrink-0" />
-          <p className="text-[10px] text-amber-700 dark:text-amber-300 leading-relaxed">
-            {warning}
+      {/* CLI Instruction */}
+      {providerType && (
+        <div className="rounded-md bg-muted/50 border border-border p-2.5">
+          <p className="text-[10px] text-muted-foreground mb-1.5">
+            Run this in your terminal to get a token:
+          </p>
+          <div className="flex items-center gap-2">
+            <code className="text-xs bg-background rounded px-2 py-1 font-mono flex-1">
+              {cliCommand}
+            </code>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 shrink-0"
+              onClick={() => navigator.clipboard.writeText(cliCommand)}
+              aria-label="Copy command"
+            >
+              <Clipboard className="h-3 w-3" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Token Input */}
+      {providerType && (
+        <div className="space-y-1.5">
+          <Label htmlFor="subscription-token">
+            {providerLabel} Session Token <span className="text-destructive">*</span>
+          </Label>
+          <Input
+            id="subscription-token"
+            type="password"
+            value={token}
+            onChange={(e) => {
+              setToken(e.target.value)
+              setError(null)
+            }}
+            placeholder="Paste your session token here..."
+            aria-required="true"
+            aria-describedby="subscription-token-hint"
+          />
+          <p id="subscription-token-hint" className="sr-only">
+            Paste the session token obtained from your provider CLI
           </p>
         </div>
       )}
 
-      <Button
-        size="sm"
-        className={cn('w-full', c.button)}
-        onClick={onConnect}
-        disabled={isConnecting}
-      >
-        {isConnecting ? (
-          <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
-        ) : (
-          <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
-        )}
-        Connect with {label}
-      </Button>
+      {/* Error */}
+      {error && (
+        <div
+          role="alert"
+          className="flex items-start gap-1.5 rounded-md bg-red-500/10 border border-red-500/20 p-2.5"
+        >
+          <XCircle className="h-3.5 w-3.5 text-red-500 mt-0.5 shrink-0" />
+          <p className="text-xs text-red-700 dark:text-red-300">{error}</p>
+        </div>
+      )}
+
+      {/* Save Button */}
+      {providerType && (
+        <Button
+          size="sm"
+          className="w-full"
+          onClick={handleSave}
+          disabled={!token.trim() || isSavePending}
+        >
+          {isSavePending ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+          ) : (
+            <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />
+          )}
+          Validate & Connect
+        </Button>
+      )}
     </div>
   )
 }
@@ -224,43 +291,43 @@ function ProviderCard({
 // ============================================================================
 
 interface ConnectedCardProps {
-  status: OAuthConnectionStatus
+  providerType: string
+  modelId: string | null
+  connectedAt: string | null
   onDisconnect: () => void
   isDisconnecting: boolean
 }
 
-function ConnectedCard({ status, onDisconnect, isDisconnecting }: ConnectedCardProps) {
+function ConnectedCard({ providerType, modelId, connectedAt, onDisconnect, isDisconnecting }: ConnectedCardProps) {
   const [testStatus, setTestStatus] = useState<TestStatus>('idle')
   const [testMessage, setTestMessage] = useState<string | null>(null)
   const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false)
 
-  const providerType = (status.provider_type || 'openai') as ProviderType
   const providerLabel = providerType === 'openai' ? 'OpenAI' : 'Anthropic'
-
-  const testOverride = useTestUserOverride()
+  const { mutateAsync: testTokenAsync } = useTestSubscriptionToken()
 
   const handleTest = useCallback(async () => {
     setTestStatus('testing')
     setTestMessage(null)
     try {
-      const result = await testOverride.mutateAsync(providerType)
+      const result = await testTokenAsync()
       if (result.success) {
         setTestStatus('success')
         setTestMessage(
-          `Connection successful${result.latency_ms != null ? ` (${result.latency_ms}ms)` : ''}`
+          `Connection valid${result.latency_ms != null ? ` (${result.latency_ms}ms)` : ''}`
         )
       } else {
         setTestStatus('error')
-        setTestMessage(result.error || 'Connection failed')
+        setTestMessage(result.message || 'Token validation failed')
       }
     } catch (err) {
       setTestStatus('error')
       setTestMessage(err instanceof Error ? err.message : 'Test failed')
     }
-  }, [providerType, testOverride])
+  }, [testTokenAsync])
 
-  const connectedAt = status.connected_at
-    ? new Date(status.connected_at).toLocaleDateString('en-US', {
+  const formattedDate = connectedAt
+    ? new Date(connectedAt).toLocaleDateString('en-US', {
         month: 'short',
         day: 'numeric',
         year: 'numeric',
@@ -275,11 +342,18 @@ function ConnectedCard({ status, onDisconnect, isDisconnecting }: ConnectedCardP
           <span className="text-sm font-semibold">Connected to {providerLabel}</span>
         </div>
 
-        {connectedAt && (
-          <p className="text-xs text-muted-foreground">
-            Connected: {connectedAt}
-          </p>
-        )}
+        <div className="space-y-1">
+          {modelId && (
+            <p className="text-xs text-muted-foreground">
+              Model: {modelId}
+            </p>
+          )}
+          {formattedDate && (
+            <p className="text-xs text-muted-foreground">
+              Connected: {formattedDate}
+            </p>
+          )}
+        </div>
 
         {/* Test result */}
         {testMessage && (
@@ -331,7 +405,11 @@ function ConnectedCard({ status, onDisconnect, isDisconnecting }: ConnectedCardP
 
       <ConfirmDialog
         open={showDisconnectConfirm}
-        onOpenChange={setShowDisconnectConfirm}
+        onOpenChange={(open) => {
+          // Prevent dismiss (backdrop click / Escape) while disconnect is in-flight
+          if (!open && isDisconnecting) return
+          setShowDisconnectConfirm(open)
+        }}
         title="Disconnect AI Subscription?"
         description={`Your ${providerLabel} subscription will be disconnected. You'll fall back to the company default AI provider.`}
         confirmLabel="Disconnect"
@@ -351,35 +429,35 @@ function ConnectedCard({ status, onDisconnect, isDisconnecting }: ConnectedCardP
 // ============================================================================
 
 function ApiKeyFallback() {
-  const [expanded, setExpanded] = useState(false)
-  const [providerType, setProviderType] = useState<ProviderType | ''>('')
+  const { data: overrides } = useUserOverrides()
+
+  // Hydrate initial state from existing override (survives unmount/remount
+  // because overrides come from TanStack cache and are available synchronously)
+  const [expanded, setExpanded] = useState(() => {
+    return overrides != null && overrides.length > 0
+  })
+  const [providerType, setProviderType] = useState<ProviderType | ''>(() => {
+    const existing = overrides?.[0]
+    if (existing?.provider_type === 'openai' || existing?.provider_type === 'anthropic') {
+      return existing.provider_type
+    }
+    return ''
+  })
   const [apiKey, setApiKey] = useState('')
-  const [modelId, setModelId] = useState('')
+  const [modelId, setModelId] = useState(() => {
+    return overrides?.[0]?.models?.[0]?.model_id ?? ''
+  })
   const [testStatus, setTestStatus] = useState<TestStatus>('idle')
   const [testMessage, setTestMessage] = useState<string | null>(null)
   const [showRemoveConfirm, setShowRemoveConfirm] = useState(false)
 
-  const { data: overrides } = useUserOverrides()
-  const createOverride = useCreateUserOverride()
-  const deleteOverride = useDeleteUserOverride()
-  const testOverride = useTestUserOverride()
+  const { mutateAsync: createOverrideAsync, isPending: isCreatePending } = useCreateUserOverride()
+  const { mutateAsync: deleteOverrideAsync, isPending: isDeletePending } = useDeleteUserOverride()
+  const { mutateAsync: testOverrideAsync, isPending: isTestPending } = useTestUserOverride()
 
   const { data: models } = useAvailableModels(
     providerType ? { provider_type: providerType, capability: 'chat' } : undefined
   )
-
-  // Populate from existing override
-  useEffect(() => {
-    if (overrides && overrides.length > 0) {
-      const existing = overrides[0]
-      setProviderType(existing.provider_type as ProviderType)
-      if (existing.models?.length > 0) {
-        setModelId(existing.models[0].model_id)
-      }
-      // Auto-expand if user has an existing API key override
-      setExpanded(true)
-    }
-  }, [overrides])
 
   const handleProviderChange = useCallback((value: string) => {
     setProviderType(value as ProviderType)
@@ -392,7 +470,7 @@ function ApiKeyFallback() {
   const handleSave = useCallback(async () => {
     if (!providerType || !apiKey) return
     try {
-      await createOverride.mutateAsync({
+      await createOverrideAsync({
         provider_type: providerType,
         api_key: apiKey,
         preferred_model: modelId || undefined,
@@ -403,7 +481,7 @@ function ApiKeyFallback() {
     } catch {
       // Error handled by mutation
     }
-  }, [providerType, apiKey, modelId, createOverride])
+  }, [providerType, apiKey, modelId, createOverrideAsync])
 
   const handleTest = useCallback(async () => {
     if (!providerType) return
@@ -415,7 +493,7 @@ function ApiKeyFallback() {
         return
       }
       try {
-        await createOverride.mutateAsync({
+        await createOverrideAsync({
           provider_type: providerType,
           api_key: apiKey,
           preferred_model: modelId || undefined,
@@ -430,7 +508,7 @@ function ApiKeyFallback() {
     setTestStatus('testing')
     setTestMessage(null)
     try {
-      const result = await testOverride.mutateAsync(providerType)
+      const result = await testOverrideAsync(providerType)
       if (result.success) {
         setTestStatus('success')
         setTestMessage(result.message || 'Connection successful')
@@ -442,12 +520,12 @@ function ApiKeyFallback() {
       setTestStatus('error')
       setTestMessage(err instanceof Error ? err.message : 'Test failed')
     }
-  }, [providerType, apiKey, modelId, overrides, createOverride, testOverride])
+  }, [providerType, apiKey, modelId, overrides, createOverrideAsync, testOverrideAsync])
 
   const handleRemove = useCallback(async () => {
     if (!providerType) return
     try {
-      await deleteOverride.mutateAsync(providerType)
+      await deleteOverrideAsync(providerType)
       setProviderType('')
       setApiKey('')
       setModelId('')
@@ -457,10 +535,10 @@ function ApiKeyFallback() {
     } catch {
       // Error handled by mutation
     }
-  }, [providerType, deleteOverride])
+  }, [providerType, deleteOverrideAsync])
 
   const hasExistingOverride = overrides && overrides.length > 0
-  const isMutating = createOverride.isPending || deleteOverride.isPending || testOverride.isPending
+  const isMutating = isCreatePending || isDeletePending || isTestPending
 
   return (
     <div className="border-t border-border pt-3">
@@ -469,6 +547,7 @@ function ApiKeyFallback() {
         onClick={() => setExpanded((prev) => !prev)}
         className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors w-full text-left"
         aria-expanded={expanded}
+        aria-controls="api-key-section"
       >
         {expanded ? (
           <ChevronDown className="h-3 w-3" />
@@ -480,7 +559,7 @@ function ApiKeyFallback() {
       </button>
 
       {expanded && (
-        <div className="mt-3 space-y-3 animate-fade-in">
+        <div id="api-key-section" className="mt-3 space-y-3 animate-fade-in">
           {/* Provider Selection */}
           <div className="space-y-1.5">
             <Label>Provider</Label>
@@ -575,7 +654,7 @@ function ApiKeyFallback() {
               variant="outline"
               size="sm"
               onClick={handleTest}
-              disabled={!providerType || testStatus === 'testing' || createOverride.isPending}
+              disabled={!providerType || testStatus === 'testing' || isCreatePending}
             >
               {testStatus === 'testing' ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
@@ -585,9 +664,9 @@ function ApiKeyFallback() {
             <Button
               size="sm"
               onClick={handleSave}
-              disabled={!providerType || !apiKey || createOverride.isPending}
+              disabled={!providerType || !apiKey || isCreatePending}
             >
-              {createOverride.isPending ? (
+              {isCreatePending ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
               ) : null}
               Save
@@ -610,9 +689,9 @@ function ApiKeyFallback() {
                       variant="destructive"
                       size="sm"
                       onClick={handleRemove}
-                      disabled={deleteOverride.isPending}
+                      disabled={isDeletePending}
                     >
-                      {deleteOverride.isPending ? (
+                      {isDeletePending ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
                       ) : null}
                       Remove
@@ -639,31 +718,17 @@ function ApiKeyFallback() {
 // UserChatOverride (main content)
 // ============================================================================
 
-function UserChatOverrideContent(_props: { onClose: () => void }) {
-  const { data: oauthStatus } = useOAuthStatus()
-  const initiate = useOAuthInitiate()
-  const disconnect = useOAuthDisconnect()
-  const [oauthError, setOAuthError] = useState<string | null>(null)
-
-  const handleConnect = useCallback(async (providerType: ProviderType) => {
-    setOAuthError(null)
-    try {
-      await initiate.mutateAsync({ provider_type: providerType })
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'OAuth flow failed'
-      setOAuthError(message)
-    }
-  }, [initiate])
+function UserChatOverrideContent() {
+  const { data: tokenStatus } = useSubscriptionTokenStatus()
+  const { mutateAsync: disconnectAsync, isPending: isDisconnecting } = useDisconnectSubscription()
 
   const handleDisconnect = useCallback(async () => {
     try {
-      await disconnect.mutateAsync()
+      await disconnectAsync()
     } catch {
       // Error handled by mutation
     }
-  }, [disconnect])
-
-  const isConnecting = initiate.isPending
+  }, [disconnectAsync])
 
   return (
     <div className="w-80 space-y-3">
@@ -678,67 +743,27 @@ function UserChatOverrideContent(_props: { onClose: () => void }) {
         Otherwise, the company default will be used.
       </p>
 
-      {/* OAuth Error Banner */}
-      {oauthError && (
-        <div role="alert" className="flex items-start gap-2 rounded-md bg-red-500/10 border border-red-500/20 p-2.5">
-          <XCircle className="h-3.5 w-3.5 text-red-500 mt-0.5 shrink-0" />
-          <div className="space-y-1">
-            <p className="text-xs text-red-700 dark:text-red-300">{oauthError}</p>
-            {oauthError.includes('cancelled') || oauthError.includes('timed out') ? (
-              <button
-                type="button"
-                onClick={() => setOAuthError(null)}
-                className="text-[10px] text-red-600 dark:text-red-400 underline hover:no-underline"
-              >
-                Try again
-              </button>
-            ) : (
-              <p className="text-[10px] text-red-600 dark:text-red-400">
-                Try using an API key instead (expand "Advanced" below).
-              </p>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* Connected State */}
-      {oauthStatus?.connected && (
+      {tokenStatus?.connected && (
         <ConnectedCard
-          status={oauthStatus}
+          providerType={tokenStatus.provider_type || 'openai'}
+          modelId={tokenStatus.model_id}
+          connectedAt={tokenStatus.connected_at}
           onDisconnect={handleDisconnect}
-          isDisconnecting={disconnect.isPending}
+          isDisconnecting={isDisconnecting}
         />
       )}
 
-      {/* Provider Cards (disconnected state) */}
-      {!oauthStatus?.connected && (
-        <div className="space-y-2">
-          <ProviderCard
-            providerType="openai"
-            label="OpenAI"
-            description="Connect your ChatGPT Plus or Pro subscription to use GPT models."
-            accentColor="green"
-            isConnecting={isConnecting}
-            onConnect={() => handleConnect('openai')}
-          />
-
-          <ProviderCard
-            providerType="anthropic"
-            label="Anthropic"
-            description="Connect your Claude subscription."
-            accentColor="amber"
-            warning="Anthropic may block third-party apps from using subscription tokens. If connection fails, use an API key instead."
-            isConnecting={isConnecting}
-            onConnect={() => handleConnect('anthropic')}
-          />
-        </div>
+      {/* Token Form (disconnected state) */}
+      {!tokenStatus?.connected && (
+        <SubscriptionTokenForm />
       )}
 
       {/* API Key Fallback */}
       <ApiKeyFallback />
 
       {/* Status Line */}
-      <EffectiveConfigStatus />
+      <EffectiveConfigStatus tokenStatus={tokenStatus} />
 
       {/* Security Note */}
       <div className="flex items-start gap-1.5">
@@ -771,7 +796,7 @@ export function UserChatOverrideButton() {
         </Button>
       </PopoverTrigger>
       <PopoverContent side="bottom" align="end" className="w-auto p-4">
-        <UserChatOverrideContent onClose={() => setOpen(false)} />
+        <UserChatOverrideContent />
       </PopoverContent>
     </Popover>
   )

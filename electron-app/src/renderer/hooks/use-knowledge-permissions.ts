@@ -14,6 +14,7 @@
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useAuthToken } from '@/contexts/auth-context'
+import { authGet } from '@/lib/api-client'
 import { queryKeys } from '@/lib/query-client'
 import { useApplicationsWithDocs, useProjectsWithContent } from './use-documents'
 import type { ScopeType } from '@/contexts/knowledge-base-context'
@@ -34,15 +35,6 @@ interface PermissionResponse {
   can_view: boolean
   can_edit: boolean
   is_owner: boolean
-}
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-function getAuthHeaders(token: string | null): Record<string, string> {
-  if (!token) return {}
-  return { Authorization: `Bearer ${token}` }
 }
 
 // ============================================================================
@@ -69,17 +61,16 @@ export function useKnowledgePermissions(
   const projectQuery = useQuery({
     queryKey: queryKeys.knowledgePermissions('project', scopeId ?? ''),
     queryFn: async () => {
-      if (!window.electronAPI || !scopeId) {
-        throw new Error('Electron API not available or no scope ID')
+      if (!scopeId) {
+        throw new Error('No scope ID')
       }
 
       const params = new URLSearchParams()
       params.set('scope', 'project')
       params.set('scope_id', scopeId)
 
-      const response = await window.electronAPI.get<PermissionResponse>(
+      const response = await authGet<PermissionResponse>(
         `/api/documents/knowledge-permissions?${params.toString()}`,
-        getAuthHeaders(token)
       )
 
       if (response.status !== 200) {

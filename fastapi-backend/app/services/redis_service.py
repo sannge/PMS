@@ -40,6 +40,7 @@ class RedisService:
         self._listener_task: Optional[asyncio.Task] = None
         self._handlers: dict[str, list[Callable]] = {}
         self._running = False
+        self._connected = False
 
     async def connect(self) -> None:
         """Initialize Redis connection with connection pooling."""
@@ -52,11 +53,13 @@ class RedisService:
         )
         # Test connection
         await self._redis.ping()
+        self._connected = True
         logger.info("Redis connected successfully")
 
     async def disconnect(self) -> None:
         """Close Redis connection and cleanup resources."""
         self._running = False
+        self._connected = False
         if self._listener_task:
             self._listener_task.cancel()
             try:
@@ -81,8 +84,8 @@ class RedisService:
 
     @property
     def is_connected(self) -> bool:
-        """Check if Redis is connected."""
-        return self._redis is not None
+        """Check if Redis is connected and last known state is healthy."""
+        return self._redis is not None and self._connected
 
     # =========================================================================
     # Pub/Sub Methods
@@ -127,7 +130,13 @@ class RedisService:
         Returns:
             Number of subscribers that received the message
         """
-        return await self.client.publish(channel, json.dumps(message))
+        try:
+            result = await self.client.publish(channel, json.dumps(message))
+            self._connected = True
+            return result
+        except Exception:
+            self._connected = False
+            raise
 
     async def start_listening(self) -> None:
         """Start the pub/sub listener background task."""
@@ -189,7 +198,13 @@ class RedisService:
         Returns:
             The cached value or None if not found
         """
-        return await self.client.get(key)
+        try:
+            result = await self.client.get(key)
+            self._connected = True
+            return result
+        except Exception:
+            self._connected = False
+            raise
 
     async def get_json(self, key: str) -> Optional[dict]:
         """
@@ -201,8 +216,13 @@ class RedisService:
         Returns:
             The cached dictionary or None if not found
         """
-        value = await self.client.get(key)
-        return json.loads(value) if value else None
+        try:
+            value = await self.client.get(key)
+            self._connected = True
+            return json.loads(value) if value else None
+        except Exception:
+            self._connected = False
+            raise
 
     async def set(
         self,
@@ -220,10 +240,15 @@ class RedisService:
         """
         if isinstance(value, (dict, list)):
             value = json.dumps(value)
-        if ttl:
-            await self.client.setex(key, ttl, value)
-        else:
-            await self.client.set(key, value)
+        try:
+            if ttl:
+                await self.client.setex(key, ttl, value)
+            else:
+                await self.client.set(key, value)
+            self._connected = True
+        except Exception:
+            self._connected = False
+            raise
 
     async def delete(self, key: str) -> None:
         """
@@ -232,11 +257,20 @@ class RedisService:
         Args:
             key: The cache key to delete
         """
-        await self.client.delete(key)
+        try:
+            await self.client.delete(key)
+            self._connected = True
+        except Exception:
+            self._connected = False
+            raise
 
     async def delete_pattern(self, pattern: str) -> int:
         """
-        Delete all keys matching a pattern using SCAN (non-blocking).
+        Delete all keys matching a pattern using SCAN + UNLINK (non-blocking).
+
+        Uses UNLINK instead of DEL to avoid blocking Redis when deleting
+        large numbers of keys. Processes in batches of 200 to bound per-call
+        memory and avoid long-running UNLINK commands.
 
         Args:
             pattern: The glob-style pattern to match
@@ -244,10 +278,23 @@ class RedisService:
         Returns:
             Number of keys deleted
         """
-        keys = await self.scan_keys(pattern)
-        if keys:
-            return await self.client.delete(*keys)
-        return 0
+        try:
+            total_deleted = 0
+            cursor = 0
+            batch_size = 200
+            while True:
+                cursor, keys = await self.client.scan(
+                    cursor=cursor, match=pattern, count=batch_size
+                )
+                if keys:
+                    total_deleted += await self.client.unlink(*keys)
+                if cursor == 0:
+                    break
+            self._connected = True
+            return total_deleted
+        except Exception:
+            self._connected = False
+            raise
 
     async def exists(self, key: str) -> bool:
         """
@@ -259,7 +306,13 @@ class RedisService:
         Returns:
             True if the key exists
         """
-        return await self.client.exists(key) > 0
+        try:
+            result = await self.client.exists(key) > 0
+            self._connected = True
+            return result
+        except Exception:
+            self._connected = False
+            raise
 
     # =========================================================================
     # Presence Methods (Sorted Sets)

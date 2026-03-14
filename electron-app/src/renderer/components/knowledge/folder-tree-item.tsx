@@ -17,7 +17,14 @@ import {
   ChevronRight,
   Folder,
   FileText,
+  FileSpreadsheet,
+  FileImage,
+  FileArchive,
+  FileCode,
+  File,
   Lock,
+  Loader2,
+  AlertCircle,
 } from 'lucide-react'
 import { DocumentStatusBadge } from './document-status-badge'
 import { useSortable } from '@dnd-kit/sortable'
@@ -27,6 +34,7 @@ import { useAuthUserId } from '@/contexts/auth-context'
 import type { ActiveLockInfo } from '@/hooks/use-document-lock'
 import type { FolderTreeNode } from '@/hooks/use-document-folders'
 import type { DocumentListItem } from '@/hooks/use-documents'
+import type { FolderFileListItem } from '@/hooks/use-folder-files'
 
 // ============================================================================
 // Lock Indicator Component (props-driven, no internal queries)
@@ -67,12 +75,72 @@ const DocumentLockIndicator = memo(function DocumentLockIndicator({
 })
 
 // ============================================================================
+// File Icon Helper
+// ============================================================================
+
+/**
+ * Returns the appropriate icon component for a file based on its extension.
+ */
+function getFileIcon(extension: string): typeof File {
+  const ext = extension.toLowerCase().replace('.', '')
+  switch (ext) {
+    case 'pdf':
+    case 'docx':
+    case 'doc':
+    case 'txt':
+    case 'rtf':
+    case 'odt':
+    case 'md':
+      return FileText
+    case 'xlsx':
+    case 'xls':
+    case 'csv':
+    case 'ods':
+      return FileSpreadsheet
+    case 'png':
+    case 'jpg':
+    case 'jpeg':
+    case 'gif':
+    case 'svg':
+    case 'webp':
+    case 'bmp':
+    case 'ico':
+      return FileImage
+    case 'zip':
+    case 'rar':
+    case '7z':
+    case 'tar':
+    case 'gz':
+      return FileArchive
+    case 'js':
+    case 'ts':
+    case 'jsx':
+    case 'tsx':
+    case 'py':
+    case 'java':
+    case 'cpp':
+    case 'c':
+    case 'rs':
+    case 'go':
+    case 'html':
+    case 'css':
+    case 'json':
+    case 'xml':
+    case 'yaml':
+    case 'yml':
+      return FileCode
+    default:
+      return File
+  }
+}
+
+// ============================================================================
 // Main Component
 // ============================================================================
 
 export interface FolderTreeItemProps {
-  node: FolderTreeNode | DocumentListItem
-  type: 'folder' | 'document'
+  node: FolderTreeNode | DocumentListItem | FolderFileListItem
+  type: 'folder' | 'document' | 'file'
   depth: number
   isExpanded?: boolean
   isSelected: boolean
@@ -92,7 +160,7 @@ export interface FolderTreeItemProps {
   onRenameCancel: () => void
 }
 
-export function FolderTreeItem({
+export const FolderTreeItem = memo(function FolderTreeItem({
   node,
   type,
   depth,
@@ -111,7 +179,9 @@ export function FolderTreeItem({
 }: FolderTreeItemProps): JSX.Element {
   const displayName = type === 'folder'
     ? (node as FolderTreeNode).name
-    : (node as DocumentListItem).title
+    : type === 'file'
+      ? (node as FolderFileListItem).display_name
+      : (node as DocumentListItem).title
 
   // Sortable hook for drag-and-drop
   const {
@@ -186,6 +256,10 @@ export function FolderTreeItem({
     }
   }, [type, onToggleExpand, onSelect])
 
+  // File-specific data
+  const fileNode = type === 'file' ? (node as FolderFileListItem) : null
+  const FileIcon = fileNode ? getFileIcon(fileNode.file_extension) : null
+
   // Indent guide width per level (px)
   const INDENT_SIZE = 16
   const INDENT_OFFSET = 8
@@ -242,6 +316,8 @@ export function FolderTreeItem({
       {/* Icon */}
       {type === 'folder' ? (
         <Folder className="h-4 w-4 shrink-0 mr-1 text-muted-foreground" />
+      ) : type === 'file' && FileIcon ? (
+        <FileIcon className="h-4 w-4 shrink-0 mr-1 text-muted-foreground" />
       ) : (
         <FileText className="h-4 w-4 shrink-0 mr-1 text-muted-foreground" />
       )}
@@ -265,11 +341,27 @@ export function FolderTreeItem({
         <span className="flex-1 min-w-0 text-[13px] leading-[22px] truncate">{displayName}</span>
       )}
 
+      {/* Extraction status indicator for files */}
+      {type === 'file' && !isRenaming && fileNode && (
+        <>
+          {(fileNode.extraction_status === 'pending' || fileNode.extraction_status === 'processing') && (
+            <span className="shrink-0" title="Processing...">
+              <Loader2 className="h-3 w-3 text-primary animate-spin" />
+            </span>
+          )}
+          {fileNode.extraction_status === 'failed' && (
+            <span className="shrink-0" title="Extraction failed">
+              <AlertCircle className="h-3 w-3 text-destructive" />
+            </span>
+          )}
+        </>
+      )}
+
       {/* Embedding status indicator for documents */}
-      {type === 'document' && !isRenaming && ((node as DocumentListItem).is_embedding_stale || (node as DocumentListItem).embedding_sync_pending) && (
+      {type === 'document' && !isRenaming && ((node as DocumentListItem).embedding_status === 'stale' || (node as DocumentListItem).embedding_status === 'syncing') && (
         <DocumentStatusBadge
           documentId={node.id}
-          isEmbeddingStale={(node as DocumentListItem).is_embedding_stale}
+          embeddingStatus={(node as DocumentListItem).embedding_status}
           variant="dot"
         />
       )}
@@ -280,6 +372,6 @@ export function FolderTreeItem({
       )}
     </div>
   )
-}
+})
 
 export default FolderTreeItem

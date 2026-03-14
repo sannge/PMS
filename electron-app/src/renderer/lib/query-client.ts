@@ -172,8 +172,17 @@ export const queryKeys = {
   // AI Chat
   aiChatHistory: (threadId: string) => ['ai', 'chat', 'history', threadId] as const,
 
+  // Chat Sessions
+  chatSessions: ['chat-sessions'] as const,
+  chatMessages: (sessionId: string) => ['chat-messages', sessionId] as const,
+
   // AI OAuth
   oauthStatus: ['ai', 'oauth', 'status'] as const,
+
+  // Folder Files (file uploads to document folders)
+  folderFiles: (folderId: string) => ['folderFiles', folderId] as const,
+  folderFile: (fileId: string) => ['folderFile', fileId] as const,
+  folderFileDownloadUrl: (fileId: string) => ['folderFileDownloadUrl', fileId] as const,
 }
 
 // ============================================================================

@@ -434,12 +434,13 @@ class TestConnectionManagerMessageHandling:
 
         connection = await mgr.connect(mock_ws, user_id)
 
+        room_id = f"user:{user_id}"
         await mgr.handle_message(
             connection,
-            {"type": MessageType.JOIN_ROOM, "data": {"room_id": "new_room"}},
+            {"type": MessageType.JOIN_ROOM, "data": {"room_id": room_id}},
         )
 
-        assert "new_room" in connection.rooms
+        assert room_id in connection.rooms
 
     @pytest.mark.asyncio
     async def test_handle_leave_room(self):

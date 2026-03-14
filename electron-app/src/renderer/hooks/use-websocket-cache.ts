@@ -18,7 +18,7 @@ import { wsClient, MessageType, type Unsubscribe } from '@/lib/websocket'
 import { queryKeys } from '@/lib/query-client'
 import type { Task } from '@/hooks/use-queries'
 import { showBrowserNotification } from '@/lib/notifications'
-import { useAuthUser } from '@/contexts/auth-context'
+import { useAuthUserId } from '@/contexts/auth-context'
 import type { DocumentListResponse } from './use-documents'
 import type { FolderTreeNode } from './use-document-folders'
 
@@ -86,6 +86,8 @@ interface DocumentEventData {
   /** For project-scoped items, the parent application ID */
   application_id?: string | null
   timestamp?: string
+  /** Set to "blair" when update originates from the AI agent */
+  source?: string
 }
 
 interface FolderEventData {
@@ -113,7 +115,7 @@ interface FolderEventData {
 // time window so each handler runs only once per unique event.
 
 const DEDUP_WINDOW_MS = 1000
-const DEDUP_CLEANUP_THRESHOLD = 50
+const DEDUP_CLEANUP_THRESHOLD = 20
 const DEDUP_CLEANUP_INTERVAL_MS = 5000
 
 /** Tracks recently seen event fingerprints with their arrival timestamps. */
@@ -185,8 +187,8 @@ export interface WebSocketCacheOptions {
 export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {}): void {
   const queryClient = useQueryClient()
   const optionsRef = useRef(options)
-  const currentUser = useAuthUser()
-  const currentUserRef = useRef(currentUser)
+  const currentUserId = useAuthUserId()
+  const currentUserRef = useRef(currentUserId)
 
   // Keep refs up to date
   useEffect(() => {
@@ -194,8 +196,13 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
   }, [options])
 
   useEffect(() => {
-    currentUserRef.current = currentUser
-  }, [currentUser])
+    const prev = currentUserRef.current
+    currentUserRef.current = currentUserId
+    // Clear event dedup cache on user switch to prevent stale fingerprints
+    if (prev && prev !== currentUserId) {
+      clearEventDedup()
+    }
+  }, [currentUserId])
 
   useEffect(() => {
     const unsubscribers: Unsubscribe[] = []
@@ -239,9 +246,8 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
           queryClient.invalidateQueries({ queryKey: queryKeys.projects(data.application_id) })
           queryClient.invalidateQueries({ queryKey: queryKeys.myProjects(data.application_id) })
           queryClient.invalidateQueries({ queryKey: queryKeys.myProjectsCrossApp })
-          // Also invalidate archived projects cache (project may have been archived/restored)
-          queryClient.invalidateQueries({ queryKey: queryKeys.archivedProjects(data.application_id) })
           // Invalidate application cache to update projects_count
+          // (archivedProjects not needed — archive/restore triggers PROJECT_STATUS_CHANGED)
           queryClient.invalidateQueries({ queryKey: queryKeys.application(data.application_id) })
           queryClient.invalidateQueries({ queryKey: queryKeys.applications })
         }
@@ -453,7 +459,7 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
         queryClient.invalidateQueries({ queryKey: queryKeys.appMembers(data.application_id) })
 
         // New member needs scopesSummary refreshed to show the new app tab
-        const isCurrentUser = data.user_id === currentUserRef.current?.id
+        const isCurrentUser = data.user_id === currentUserRef.current
         if (isCurrentUser) {
           queryClient.invalidateQueries({ queryKey: queryKeys.scopesSummary() })
         }
@@ -463,7 +469,7 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
     unsubscribers.push(
       wsClient.on<MemberEventData>(MessageType.MEMBER_REMOVED, (data) => {
         // Check if current user is the one being removed
-        const currentUserId = currentUserRef.current?.id
+        const currentUserId = currentUserRef.current
         const isCurrentUserRemoved = currentUserId === data.user_id
 
         // Always invalidate the members list
@@ -509,7 +515,7 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
         queryClient.invalidateQueries({ queryKey: queryKeys.application(data.application_id) })
 
         // Invalidate knowledge permission caches only for the affected user
-        const isCurrentUser = data.user_id === currentUserRef.current?.id
+        const isCurrentUser = data.user_id === currentUserRef.current
         if (isCurrentUser) {
           queryClient.invalidateQueries({ queryKey: queryKeys.scopesSummary() })
           queryClient.invalidateQueries({ queryKey: ['projects-with-content', data.application_id] })
@@ -526,7 +532,7 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
       wsClient.on<ProjectMemberEventData>(MessageType.PROJECT_MEMBER_ADDED, (data) => {
         queryClient.invalidateQueries({ queryKey: queryKeys.projectMembers(data.project_id) })
 
-        const isCurrentUser = data.user_id === currentUserRef.current?.id
+        const isCurrentUser = data.user_id === currentUserRef.current
         if (isCurrentUser) {
           // Scope to specific app if available, otherwise invalidate all
           if (data.application_id) {
@@ -545,7 +551,7 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
         // Also invalidate tasks since permissions may have changed
         queryClient.invalidateQueries({ queryKey: queryKeys.tasks(data.project_id) })
 
-        const isCurrentUser = data.user_id === currentUserRef.current?.id
+        const isCurrentUser = data.user_id === currentUserRef.current
         if (isCurrentUser) {
           if (data.application_id) {
             queryClient.invalidateQueries({ queryKey: ['projects-with-content', data.application_id] })
@@ -564,7 +570,7 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
         queryClient.invalidateQueries({ queryKey: queryKeys.tasks(data.project_id) })
 
         // Invalidate knowledge permission caches for the affected user
-        const isCurrentUser = data.user_id === currentUserRef.current?.id
+        const isCurrentUser = data.user_id === currentUserRef.current
         if (isCurrentUser) {
           // projects-with-content returns can_edit per project — stale after role change
           if (data.application_id) {
@@ -669,25 +675,60 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
     unsubscribers.push(
       wsClient.on<DocumentEventData>(MessageType.DOCUMENT_UPDATED, (data) => {
         if (isDuplicateEvent(`doc_updated:${data.document_id}`)) return
-        const isOwnAction = data.actor_id && data.actor_id === currentUserRef.current?.id
+        // Blair AI writes bypass the editor save mutation, so treat them
+        // as external changes even when actor_id matches the current user.
+        const isBlair = data.source === 'blair'
+        const isOwnAction = !isBlair && data.actor_id && data.actor_id === currentUserRef.current
 
         // For own actions, the save mutation already updates the individual document
         // cache via setQueryData + invalidateQueries (use-edit-mode.ts:313,329).
-        // Only refetch for OTHER users' changes.
+        // Only refetch for OTHER users' changes or Blair-initiated changes.
         if (!isOwnAction) {
           queryClient.invalidateQueries({ queryKey: queryKeys.document(data.document_id) })
         }
-        // Document list queries are NOT handled by the save mutation,
-        // so always invalidate them to keep tree/list views in sync.
-        queryClient.invalidateQueries({ queryKey: queryKeys.documents(data.scope, data.scope_id) })
+
+        if (isOwnAction) {
+          // QE-013: Own-action auto-saves should NOT invalidate the full document list.
+          // Invalidation triggers a refetch every few seconds during editing, causing
+          // unnecessary network traffic. Instead, surgically update just the updated_at
+          // timestamp in list caches so tree/list views stay in sync without refetching.
+          const ts = data.timestamp || new Date().toISOString()
+          queryClient.setQueriesData<DocumentListResponse>(
+            { queryKey: queryKeys.documents(data.scope, data.scope_id), exact: false },
+            (old) => {
+              if (!old?.items) return old
+              const idx = old.items.findIndex(i => i.id === data.document_id)
+              if (idx === -1) return old
+              const updated = [...old.items]
+              updated[idx] = { ...updated[idx], updated_at: ts }
+              return { ...old, items: updated }
+            }
+          )
+          if (data.scope === 'project' && data.application_id) {
+            queryClient.setQueriesData<DocumentListResponse>(
+              { queryKey: queryKeys.documents('application', data.application_id), exact: false },
+              (old) => {
+                if (!old?.items) return old
+                const idx = old.items.findIndex(i => i.id === data.document_id)
+                if (idx === -1) return old
+                const updated = [...old.items]
+                updated[idx] = { ...updated[idx], updated_at: ts }
+                return { ...old, items: updated }
+              }
+            )
+          }
+        } else {
+          // Other users' changes: full invalidation to fetch latest data
+          queryClient.invalidateQueries({ queryKey: queryKeys.documents(data.scope, data.scope_id) })
+          if (data.scope === 'project' && data.application_id) {
+            queryClient.invalidateQueries({ queryKey: queryKeys.documents('application', data.application_id) })
+          }
+        }
+
         queryClient.invalidateQueries({ queryKey: ['search'] })
         if (data.folder_id !== undefined) {
           queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders(data.scope, data.scope_id) })
-        }
-        // Also invalidate application queries for project-scoped updates
-        if (data.scope === 'project' && data.application_id) {
-          queryClient.invalidateQueries({ queryKey: queryKeys.documents('application', data.application_id) })
-          if (data.folder_id !== undefined) {
+          if (data.scope === 'project' && data.application_id) {
             queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders('application', data.application_id) })
           }
         }
@@ -700,7 +741,7 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
         // NOTE: Do NOT skip own actions here. Same IndexedDB rehydration issue
         // as FOLDER_DELETED — optimistic update only touches in-memory cache,
         // but stale data in IndexedDB can cause deleted documents to reappear.
-        const isOwnAction = data.actor_id && data.actor_id === currentUserRef.current?.id
+        const isOwnAction = data.actor_id && data.actor_id === currentUserRef.current
 
         queryClient.removeQueries({ queryKey: queryKeys.document(data.document_id) })
         // Directly remove from list caches to avoid race with DB commit
@@ -773,7 +814,7 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
         // still holds stale data. If we skip, the debounced persister writes stale data
         // to IndexedDB, and on remount/rehydration the deleted folder reappears.
         // Always run this handler to ensure the cache (and persisted state) stays consistent.
-        const isOwnAction = data.actor_id && data.actor_id === currentUserRef.current?.id
+        const isOwnAction = data.actor_id && data.actor_id === currentUserRef.current
 
         // Directly remove from tree cache to avoid race with DB commit
         const removeFolder = (nodes: FolderTreeNode[]): FolderTreeNode[] =>
@@ -839,18 +880,30 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
     // ========================================================================
 
     unsubscribers.push(
-      wsClient.on<{ document_id: string; chunk_count: number; timestamp: string }>(
+      wsClient.on<{ document_id: string; chunk_count: number; timestamp: string; embedding_status?: string }>(
         MessageType.EMBEDDING_UPDATED,
         (data) => {
           queryClient.invalidateQueries({
             queryKey: queryKeys.documentIndexStatus(data.document_id),
           })
-          // Surgically update is_embedding_stale instead of invalidating the full
+          // Surgically update embedding_status instead of invalidating the full
           // document query (which refetches content_json, potentially large).
           queryClient.setQueryData(
             queryKeys.document(data.document_id),
             (old: Record<string, unknown> | undefined) =>
-              old ? { ...old, is_embedding_stale: false, embedding_sync_pending: false } : old
+              old ? { ...old, embedding_status: data.embedding_status ?? 'synced' } : old
+          )
+          // Also update document list caches so tree-view dots clear immediately.
+          queryClient.setQueriesData<{ items: Array<Record<string, unknown>> }>(
+            { queryKey: ['documents'] },
+            (old) => {
+              if (!old?.items) return old
+              const idx = old.items.findIndex((d) => d.id === data.document_id)
+              if (idx === -1) return old
+              const updated = [...old.items]
+              updated[idx] = { ...updated[idx], embedding_status: data.embedding_status ?? 'synced' }
+              return { ...old, items: updated }
+            }
           )
         }
       )
@@ -906,6 +959,45 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
           })
         }
       )
+    )
+
+    // ========================================================================
+    // Folder File Events
+    // ========================================================================
+
+    unsubscribers.push(
+      wsClient.on<{ file_id: string; folder_id: string }>(MessageType.FILE_UPLOADED, (data) => {
+        if (isDuplicateEvent(`file_uploaded:${data.file_id}`)) return
+        queryClient.invalidateQueries({ queryKey: queryKeys.folderFiles(data.folder_id) })
+      })
+    )
+
+    unsubscribers.push(
+      wsClient.on<{ file_id: string; folder_id: string }>(MessageType.FILE_UPDATED, (data) => {
+        if (isDuplicateEvent(`file_updated:${data.file_id}`)) return
+        queryClient.invalidateQueries({ queryKey: queryKeys.folderFiles(data.folder_id) })
+      })
+    )
+
+    unsubscribers.push(
+      wsClient.on<{ file_id: string; folder_id: string }>(MessageType.FILE_DELETED, (data) => {
+        if (isDuplicateEvent(`file_deleted:${data.file_id}`)) return
+        queryClient.invalidateQueries({ queryKey: queryKeys.folderFiles(data.folder_id) })
+      })
+    )
+
+    unsubscribers.push(
+      wsClient.on<{ file_id: string; folder_id: string }>(MessageType.FILE_EXTRACTION_COMPLETED, (data) => {
+        if (isDuplicateEvent(`file_extraction_completed:${data.file_id}`)) return
+        queryClient.invalidateQueries({ queryKey: queryKeys.folderFiles(data.folder_id) })
+      })
+    )
+
+    unsubscribers.push(
+      wsClient.on<{ file_id: string; folder_id: string }>(MessageType.FILE_EXTRACTION_FAILED, (data) => {
+        if (isDuplicateEvent(`file_extraction_failed:${data.file_id}`)) return
+        queryClient.invalidateQueries({ queryKey: queryKeys.folderFiles(data.folder_id) })
+      })
     )
 
     // Cleanup on unmount

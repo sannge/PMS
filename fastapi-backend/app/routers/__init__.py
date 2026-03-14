@@ -4,6 +4,7 @@ This package contains all FastAPI routers for the application.
 Each router handles a specific domain of the API.
 """
 
+from .admin_config import router as admin_config_router
 from .ai_chat import router as ai_chat_router
 from .ai_config import router as ai_config_router
 from .ai_import import router as ai_import_router
@@ -12,6 +13,7 @@ from .ai_query import router as ai_query_router
 from .application_members import router as application_members_router
 from .applications import router as applications_router
 from .auth import router as auth_router
+from .chat_sessions import router as chat_sessions_router
 from .checklists import router as checklists_router
 from .comments import router as comments_router
 from .dashboard import router as dashboard_router
@@ -21,6 +23,7 @@ from .document_locks import router as document_locks_router
 from .document_search import router as document_search_router
 from .documents import router as documents_router
 from .files import router as files_router
+from .folder_files import router as folder_files_router
 from .invitations import router as invitations_router
 
 from .notifications import router as notifications_router
@@ -31,6 +34,7 @@ from .tasks import router as tasks_router
 from .users import router as users_router
 
 __all__ = [
+    "admin_config_router",
     "ai_chat_router",
     "ai_config_router",
     "ai_import_router",
@@ -39,6 +43,7 @@ __all__ = [
     "application_members_router",
     "applications_router",
     "auth_router",
+    "chat_sessions_router",
     "checklists_router",
     "comments_router",
     "dashboard_router",
@@ -48,6 +53,7 @@ __all__ = [
     "document_search_router",
     "documents_router",
     "files_router",
+    "folder_files_router",
     "invitations_router",
 
     "notifications_router",

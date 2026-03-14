@@ -20,6 +20,13 @@ from dataclasses import dataclass, field
 # functions push sources into this ContextVar, and the SSE stream handler
 # in ai_chat.py reads them after the run completes.
 #
+# ContextVar propagation: LangGraph's ToolNode.ainvoke() runs tool
+# coroutines in the same asyncio Task as the graph invocation. Since
+# they share the same Task, ContextVar mutations (push_sources) are
+# directly visible to the caller. Note: if tools were ever spawned via
+# asyncio.create_task(), ContextVar values would be copied at creation
+# time and mutations would NOT propagate back.
+#
 # Usage:
 #   - ai_chat.py: call reset_source_accumulator() before streaming,
 #     then read get_accumulated_sources() after streaming.
@@ -46,6 +53,18 @@ def push_sources(sources: list["SourceReference"]) -> None:
 def get_accumulated_sources() -> list[dict]:
     """Return all accumulated sources for the current request."""
     return _source_accumulator.get(None) or []
+
+
+def drain_accumulated_sources() -> list[dict]:
+    """Read all accumulated sources and clear the accumulator.
+
+    Sources are already serialized to dict by push_sources().
+    """
+    sources = _source_accumulator.get(None)
+    if not sources:
+        return []
+    _source_accumulator.set([])
+    return list(sources)  # Return a copy; sources are already dicts from push_sources()
 
 
 @dataclass

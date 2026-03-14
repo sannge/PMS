@@ -16,8 +16,8 @@ export interface DocumentTimestampProps {
   updatedAt: string
   /** When provided, renders the unified embedding status badge */
   documentId?: string
-  /** Whether embeddings are out of date */
-  isEmbeddingStale?: boolean
+  /** Backend-managed embedding status */
+  embeddingStatus?: 'none' | 'stale' | 'syncing' | 'synced'
 }
 
 /** Format an ISO timestamp as "Feb 8, 2026 3:45 PM" */
@@ -33,7 +33,7 @@ function formatTimestamp(iso: string): string {
   }).format(date)
 }
 
-export function DocumentTimestamp({ updatedAt, documentId, isEmbeddingStale }: DocumentTimestampProps): JSX.Element {
+export function DocumentTimestamp({ updatedAt, documentId, embeddingStatus }: DocumentTimestampProps): JSX.Element {
   return (
     <div className="flex items-center gap-2 px-6 pt-3 pb-1">
       <p className="text-xs text-muted-foreground">
@@ -42,8 +42,7 @@ export function DocumentTimestamp({ updatedAt, documentId, isEmbeddingStale }: D
       {documentId && (
         <DocumentStatusBadge
           documentId={documentId}
-          documentUpdatedAt={updatedAt}
-          isEmbeddingStale={isEmbeddingStale}
+          embeddingStatus={embeddingStatus}
           variant="badge"
         />
       )}

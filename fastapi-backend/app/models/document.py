@@ -183,12 +183,11 @@ class Document(Base):
         nullable=True,
     )
 
-    @property
-    def is_embedding_stale(self) -> bool:
-        """True when embeddings are out of date or have never been generated."""
-        if self.embedding_updated_at is None:
-            return True
-        return self.embedding_updated_at < self.updated_at
+    embedding_status = Column(
+        String(8),
+        nullable=False,
+        server_default="none",
+    )
 
     # Constraints and indexes
     __table_args__ = (
@@ -197,6 +196,10 @@ class Document(Base):
             " + CASE WHEN project_id IS NOT NULL THEN 1 ELSE 0 END"
             " + CASE WHEN user_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
             name="ck_documents_exactly_one_scope",
+        ),
+        CheckConstraint(
+            "embedding_status IN ('none', 'stale', 'syncing', 'synced')",
+            name="ck_documents_embedding_status",
         ),
         Index("ix_documents_app_folder", "application_id", "folder_id"),
         Index("ix_documents_project_folder", "project_id", "folder_id"),

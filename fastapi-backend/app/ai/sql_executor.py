@@ -21,11 +21,15 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .config_service import get_agent_config
+
 logger = logging.getLogger(__name__)
 
-MAX_ROWS = 100
-STATEMENT_TIMEOUT_MS = 5000
-APP_QUERY_TIMEOUT_S = 6.0  # Slightly above PG's 5s to let PG timeout first
+_cfg = get_agent_config()
+
+MAX_ROWS = _cfg.get_int("sql.max_limit", 100)
+STATEMENT_TIMEOUT_MS = _cfg.get_int("sql.statement_timeout_ms", 5000)
+APP_QUERY_TIMEOUT_S = _cfg.get_float("sql.app_query_timeout_s", 6.0)
 
 
 def _serialize_value(value: object) -> object:
@@ -144,7 +148,7 @@ async def execute(
                 db.execute(text(sql)),
                 timeout=APP_QUERY_TIMEOUT_S,
             )
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as exc:
             execution_ms = int((time.monotonic() - start_time) * 1000)
             logger.warning(
                 "Query execution timeout (app-level, %ds) after %dms: %.100s",
@@ -152,9 +156,14 @@ async def execute(
                 execution_ms,
                 sql,
             )
+            # Cancel any pending DB operations from the abandoned task
+            try:
+                await db.rollback()
+            except Exception:
+                pass
             raise ValueError(
                 "Query execution timeout exceeded (application-level)"
-            )
+            ) from exc
 
         # Get column names from result cursor
         columns = list(result.keys())
@@ -197,12 +206,14 @@ async def execute(
                 f"Try a simpler query or add more filters."
             ) from exc
 
+        # SA-003: Log the raw error details server-side but return a
+        # sanitized message to prevent leaking schema/internal info.
         logger.error(
-            "Query execution failed after %dms: %s | SQL: %.200s",
+            "SQL execution failed after %dms: %s | SQL: %.200s",
             execution_ms,
             error_msg,
             sql,
         )
         raise ValueError(
-            f"Query execution error: {error_msg}"
+            "Query execution error. Please check your query syntax and try again."
         ) from exc

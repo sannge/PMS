@@ -92,15 +92,21 @@ class ProviderRegistry:
         Raises:
             ConfigurationError: If the provider_type is unknown.
         """
-        # OAuth path: use access token instead of API key
+        # OAuth / session_token path: use access token instead of API key
         auth_method = getattr(provider, "auth_method", "api_key")
-        if auth_method == "oauth":
+        if auth_method in ("oauth", "session_token"):
             if not provider.oauth_access_token:
                 raise ConfigurationError(
-                    f"Provider '{provider.name}' uses OAuth but has no access token."
+                    f"Provider '{provider.name}' uses {auth_method} but has no access token."
                 )
             encryption = ApiKeyEncryption(settings.ai_encryption_key)
-            access_token = encryption.decrypt(provider.oauth_access_token)
+            try:
+                access_token = encryption.decrypt(provider.oauth_access_token)
+            except Exception:
+                raise ConfigurationError(
+                    f"Provider '{provider.name}' has a corrupt or "
+                    f"re-keyed access token — please reconnect."
+                )
 
             if provider.provider_type == "openai":
                 return CodexProvider(
@@ -108,14 +114,21 @@ class ProviderRegistry:
                     base_url=provider.base_url,
                 )
             elif provider.provider_type == "anthropic":
-                # Anthropic OAuth uses access token as API key
-                return AnthropicProvider(
-                    api_key=access_token,
-                    base_url=provider.base_url,
-                )
+                # oauth_scope stores "bearer" or "apikey" from validation
+                token_mode = getattr(provider, "oauth_scope", None) or "apikey"
+                if token_mode == "bearer":
+                    return AnthropicProvider(
+                        auth_token=access_token,
+                        base_url=provider.base_url,
+                    )
+                else:
+                    return AnthropicProvider(
+                        api_key=access_token,
+                        base_url=provider.base_url,
+                    )
             else:
                 raise ConfigurationError(
-                    f"OAuth not supported for provider type: {provider.provider_type}"
+                    f"{auth_method} not supported for provider type: {provider.provider_type}"
                 )
 
         # Standard API key path
@@ -219,7 +232,8 @@ class ProviderRegistry:
         """Check whether an OAuth provider's token needs refreshing.
 
         Returns True if the token expires within the buffer window or has
-        already expired. Returns False for non-OAuth providers.
+        already expired. Returns False for non-OAuth providers and session
+        tokens (which don't have refresh flows).
         """
         if getattr(provider, "auth_method", "api_key") != "oauth":
             return False

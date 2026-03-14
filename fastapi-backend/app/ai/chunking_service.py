@@ -92,12 +92,17 @@ class SemanticChunker:
         overlap_tokens: Token overlap between adjacent chunks (default 100).
     """
 
-    # Token bounds for merge/split logic
-    MIN_TOKENS = 500
-    MAX_TOKENS = 800
+    # Token bounds for merge/split logic — read from config at class init
+    from .config_service import get_agent_config as _get_cfg
+    _chunker_cfg = _get_cfg()
+    MIN_TOKENS = _chunker_cfg.get_int("embedding.min_chunk_tokens", 500)
+    MAX_TOKENS = _chunker_cfg.get_int("embedding.max_chunk_tokens", 800)
 
     # Spatial proximity threshold for canvas clustering (pixels)
-    CANVAS_PROXIMITY_THRESHOLD = 300.0
+    CANVAS_PROXIMITY_THRESHOLD = _chunker_cfg.get_float(
+        "embedding.canvas_proximity_threshold", 300.0
+    )
+    del _chunker_cfg, _get_cfg  # cleanup class namespace
 
     def __init__(self, target_tokens: int = 600, overlap_tokens: int = 100) -> None:
         self.target_tokens = target_tokens
@@ -456,7 +461,9 @@ class SemanticChunker:
             return m.group(1).strip()
         return None
 
-    def _merge_and_split(self, blocks: list[_TextBlock]) -> list[ChunkResult]:
+    def _merge_and_split(
+        self, blocks: list[_TextBlock], rows_per_chunk: int = 50
+    ) -> list[ChunkResult]:
         """Merge small blocks under same heading; split blocks exceeding MAX_TOKENS.
 
         Special handling:
@@ -464,6 +471,10 @@ class SemanticChunker:
           chunk with a preamble, bypass MAX_TOKENS.
         - Slide headings ("Slide N: ..."): flush buffer, enforce chunk boundary
           at slide breaks. Never merge content across slide boundaries.
+
+        Args:
+            blocks: List of _TextBlock to merge/split.
+            rows_per_chunk: Target rows per table chunk (MED-2).
         """
         chunks: list[ChunkResult] = []
         current_text = ""
@@ -499,9 +510,10 @@ class SemanticChunker:
                 table_tokens = self.count_tokens(table_text)
 
                 if table_tokens > self.MAX_TOKENS:
-                    # Split oversized table by row groups
+                    # Split oversized table by row groups (MED-2: thread rows_per_chunk)
                     table_chunks = self._split_table_by_rows(
-                        block.text.strip(), preamble, block.heading_context
+                        block.text.strip(), preamble, block.heading_context,
+                        rows_per_chunk=rows_per_chunk,
                     )
                     chunks.extend(table_chunks)
                 else:
@@ -798,6 +810,138 @@ class SemanticChunker:
 
         return result
 
+    # ---- Markdown Chunking (for file extraction output) ----
+
+    def chunk_markdown(
+        self,
+        markdown: str,
+        title: str,
+        rows_per_chunk: int = 50,
+    ) -> list[ChunkResult]:
+        """Chunk raw Markdown text into embedding-ready segments.
+
+        Designed for file extraction output (spreadsheets, Visio, PDF/DOCX).
+        Splits at heading boundaries, detects pipe tables and splits them
+        via _split_table_by_rows, merges small sections, splits large ones.
+
+        Args:
+            markdown: Raw Markdown text from extraction.
+            title: File title for heading context.
+            rows_per_chunk: Dynamic rows_per_chunk for table splitting.
+
+        Returns:
+            Ordered list of ChunkResult with sequential chunk_index.
+        """
+        if not markdown or not markdown.strip():
+            return []
+
+        blocks = self._extract_markdown_blocks(markdown, title)
+        if not blocks:
+            return []
+
+        # Count tokens
+        for block in blocks:
+            block.token_count = self.count_tokens(block.text)
+
+        # MED-2: Thread rows_per_chunk to _merge_and_split -> _split_table_by_rows
+        merged = self._merge_and_split(blocks, rows_per_chunk=rows_per_chunk)
+        if not merged:
+            return []
+
+        with_overlap = self._add_overlap(merged)
+
+        for i, chunk in enumerate(with_overlap):
+            chunk.chunk_index = i
+
+        return with_overlap
+
+    def _extract_markdown_blocks(
+        self,
+        markdown: str,
+        title: str,
+    ) -> list[_TextBlock]:
+        """Parse raw Markdown into TextBlocks split at heading boundaries.
+
+        Detects pipe tables and marks them with is_table=True so that
+        _merge_and_split can use table-specific splitting logic.
+        """
+        lines = markdown.split("\n")
+        blocks: list[_TextBlock] = []
+        current_heading = title
+        buffer_lines: list[str] = []
+        in_table = False
+        table_lines: list[str] = []
+        table_headers: list[str] = []
+
+        def flush_buffer() -> None:
+            nonlocal buffer_lines
+            text = "\n".join(buffer_lines).strip()
+            if text:
+                blocks.append(_TextBlock(
+                    text=text + "\n",
+                    heading_context=current_heading,
+                ))
+            buffer_lines = []
+
+        def flush_table() -> None:
+            nonlocal table_lines, table_headers, in_table
+            text = "\n".join(table_lines).strip()
+            if text:
+                blocks.append(_TextBlock(
+                    text=text + "\n",
+                    heading_context=current_heading,
+                    is_table=True,
+                    table_columns=table_headers if table_headers else None,
+                ))
+            table_lines = []
+            table_headers = []
+            in_table = False
+
+        for line in lines:
+            stripped = line.strip()
+
+            # Detect heading
+            if re.match(r'^#{1,6}\s+', stripped):
+                # Flush any accumulated content
+                if in_table:
+                    flush_table()
+                flush_buffer()
+                # Extract heading text
+                heading_match = re.match(r'^#{1,6}\s+(.*)', stripped)
+                if heading_match:
+                    current_heading = heading_match.group(1).strip()
+                buffer_lines.append(line)
+                continue
+
+            # Detect pipe table rows
+            is_pipe_row = stripped.startswith("|") and stripped.endswith("|")
+            is_separator = bool(re.match(r'^\|[\s\-:|]+\|$', stripped))
+
+            if is_pipe_row:
+                if not in_table:
+                    # Entering a table: flush text buffer
+                    flush_buffer()
+                    in_table = True
+                    # First pipe row is the header
+                    header_text = stripped.strip("|")
+                    table_headers = [h.strip() for h in header_text.split("|")]
+                if not is_separator:
+                    table_lines.append(line)
+                continue
+
+            # If we were in a table and hit a non-table line, flush table
+            if in_table:
+                flush_table()
+
+            buffer_lines.append(line)
+
+        # Flush remaining
+        if in_table:
+            flush_table()
+        flush_buffer()
+
+        return blocks
+
     # ---- Canvas Chunking ----
 
     def _chunk_canvas(
@@ -941,7 +1085,8 @@ class SemanticChunker:
             return []
 
         # Cap: skip O(n^2) clustering for very large canvases
-        _MAX_CLUSTER_ELEMENTS = 500
+        from .config_service import get_agent_config
+        _MAX_CLUSTER_ELEMENTS = get_agent_config().get_int("embedding.max_cluster_elements", 500)
         if len(elements) > _MAX_CLUSTER_ELEMENTS:
             logger.info(
                 "Canvas has %d elements (> %d), skipping spatial clustering",

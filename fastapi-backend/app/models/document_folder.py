@@ -27,6 +27,7 @@ from ..database import Base
 
 if TYPE_CHECKING:
     from .document import Document
+    from .folder_file import FolderFile
 
 
 class DocumentFolder(Base):
@@ -169,6 +170,13 @@ class DocumentFolder(Base):
 
     documents: List["Document"] = relationship(
         "Document",
+        back_populates="folder",
+        lazy="dynamic",
+        passive_deletes=True,
+    )
+
+    files: List["FolderFile"] = relationship(
+        "FolderFile",
         back_populates="folder",
         lazy="dynamic",
         passive_deletes=True,

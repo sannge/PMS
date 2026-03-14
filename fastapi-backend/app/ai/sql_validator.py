@@ -17,9 +17,12 @@ from dataclasses import dataclass, field
 import sqlglot
 from sqlglot import exp
 
+from .config_service import get_agent_config
+
 logger = logging.getLogger(__name__)
 
-MAX_LIMIT = 100
+_cfg = get_agent_config()
+MAX_LIMIT = _cfg.get_int("sql.max_limit", 100)
 
 # ---------------------------------------------------------------------------
 # Layer 1 — Regex blocklist

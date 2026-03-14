@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.document import Document
 from ..models.document_chunk import DocumentChunk
+from ..models.folder_file import FolderFile
 from ..utils.timezone import utc_now
 from .chunking_service import SemanticChunker
 from .embedding_normalizer import EmbeddingNormalizer
@@ -267,6 +268,145 @@ class EmbeddingService:
             errors=errors,
         )
 
+    async def embed_file(
+        self,
+        file_id: UUID,
+        markdown: str,
+        title: str,
+        scope_ids: dict,
+    ) -> EmbedResult:
+        """Full embedding pipeline for a FolderFile.
+
+        Same pipeline as embed_document but for file-sourced content:
+        1. Chunk markdown using SemanticChunker.chunk_markdown
+        2. Generate embeddings via provider
+        3. Normalize embeddings
+        4. Delete existing file chunks
+        5. Insert new DocumentChunk rows (with file_id, source_type="file")
+        6. Update FolderFile.embedding_updated_at
+        7. Return EmbedResult
+
+        Args:
+            file_id: UUID of the FolderFile.
+            markdown: Extracted Markdown content.
+            title: File display name for heading context.
+            scope_ids: Dict with application_id, project_id, user_id.
+
+        Returns:
+            EmbedResult with chunk_count, token_count, duration_ms.
+
+        Raises:
+            LLMProviderError: If embedding generation fails.
+        """
+        start_time = time.monotonic()
+
+        # Step 1: Chunk markdown
+        chunks = self.chunker.chunk_markdown(markdown, title)
+        if not chunks:
+            await self.delete_file_chunks(file_id)
+            await self._update_file_embedding_timestamp(file_id)
+            elapsed = int((time.monotonic() - start_time) * 1000)
+            return EmbedResult(chunk_count=0, token_count=0, duration_ms=elapsed)
+
+        # Step 2: Generate embeddings
+        provider, model_id = await self.provider_registry.get_embedding_provider(self.db)
+        texts = [chunk.text for chunk in chunks]
+
+        try:
+            raw_embeddings = await provider.generate_embeddings_batch(texts, model_id)
+        except LLMProviderError:
+            raise
+        except Exception as e:
+            raise LLMProviderError(
+                f"Embedding generation failed for file {file_id}: {e}",
+                provider="unknown",
+                original=e,
+            )
+
+        # Step 3: Normalize
+        normalized_embeddings = [
+            self.normalizer.normalize(emb) for emb in raw_embeddings
+        ]
+
+        # Step 4: Delete existing file chunks
+        await self.delete_file_chunks(file_id)
+
+        # Step 5: Insert new chunks
+        total_tokens = 0
+        new_chunks: list[DocumentChunk] = []
+        for i, (chunk, embedding) in enumerate(zip(chunks, normalized_embeddings)):
+            total_tokens += chunk.token_count
+            db_chunk = DocumentChunk(
+                file_id=file_id,
+                source_type="file",
+                chunk_index=chunk.chunk_index,
+                chunk_text=chunk.text,
+                chunk_type="text",
+                heading_context=chunk.heading_context,
+                embedding=embedding,
+                token_count=chunk.token_count,
+                application_id=scope_ids.get("application_id"),
+                project_id=scope_ids.get("project_id"),
+                user_id=scope_ids.get("user_id"),
+            )
+            new_chunks.append(db_chunk)
+
+        self.db.add_all(new_chunks)
+        await self.db.flush()
+
+        # Step 6: Update file embedding timestamp
+        await self._update_file_embedding_timestamp(file_id)
+
+        elapsed = int((time.monotonic() - start_time) * 1000)
+        logger.info(
+            "Embedded file %s: %d chunks, %d tokens, %dms",
+            file_id, len(chunks), total_tokens, elapsed,
+        )
+
+        return EmbedResult(
+            chunk_count=len(chunks),
+            token_count=total_tokens,
+            duration_ms=elapsed,
+        )
+
+    async def delete_file_chunks(self, file_id: UUID) -> int:
+        """Remove all chunks for a file.
+
+        Called when a file is deleted or before re-embedding.
+
+        Args:
+            file_id: UUID of the FolderFile.
+
+        Returns:
+            Count of deleted chunks.
+        """
+        result = await self.db.execute(
+            delete(DocumentChunk).where(
+                DocumentChunk.file_id == file_id
+            )
+        )
+        count = result.rowcount
+        if count > 0:
+            logger.debug("Deleted %d chunks for file %s", count, file_id)
+        return count
+
+    async def _update_file_embedding_timestamp(self, file_id: UUID) -> None:
+        """Set FolderFile.embedding_updated_at and status to synced.
+
+        Only transitions files that are still in 'syncing' state.
+        Explicitly preserves updated_at to avoid triggering onupdate.
+        """
+        await self.db.execute(
+            update(FolderFile)
+            .where(FolderFile.id == file_id)
+            .where(FolderFile.embedding_status == "syncing")
+            .values(
+                embedding_updated_at=utc_now(),
+                updated_at=FolderFile.updated_at,
+                embedding_status="synced",
+            )
+        )
+
     async def delete_document_chunks(self, document_id: UUID) -> int:
         """Remove all chunks for a document.
 
@@ -289,9 +429,21 @@ class EmbeddingService:
         return count
 
     async def _update_embedding_timestamp(self, document_id: UUID) -> None:
-        """Set Document.embedding_updated_at to current UTC time."""
+        """Set Document.embedding_updated_at and status to synced.
+
+        Only transitions documents that are still in 'syncing' state.
+        If content was saved during embedding (status became 'stale'),
+        the WHERE guard prevents overwriting that signal.
+        Explicitly preserves ``updated_at`` so the column's
+        ``onupdate=utc_now`` default does not fire.
+        """
         await self.db.execute(
             update(Document)
             .where(Document.id == document_id)
-            .values(embedding_updated_at=utc_now())
+            .where(Document.embedding_status == "syncing")
+            .values(
+                embedding_updated_at=utc_now(),
+                updated_at=Document.updated_at,
+                embedding_status="synced",
+            )
         )

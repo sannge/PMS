@@ -36,12 +36,16 @@ from ..services.auth_service import get_current_user
 from ..services.minio_service import MinIOService, MinIOServiceError, get_minio_service
 from ..websocket.manager import manager as ws_manager, MessageType
 
+from ..ai.config_service import get_agent_config
+
 router = APIRouter(prefix="/api/files", tags=["Files"])
 
+_cfg = get_agent_config()
+
 # Maximum file size (100 MB)
-MAX_FILE_SIZE = 100 * 1024 * 1024
+MAX_FILE_SIZE = _cfg.get_int("file.max_upload_size", 100 * 1024 * 1024)
 # Maximum image file size (10 MB)
-MAX_IMAGE_SIZE = 10 * 1024 * 1024
+MAX_IMAGE_SIZE = _cfg.get_int("file.max_image_size", 10 * 1024 * 1024)
 
 
 # ============================================================================
@@ -190,6 +194,57 @@ async def verify_document_attachment_access(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied. You do not have permission to upload files to this document.",
         )
+
+
+async def _verify_attachment_read_access(
+    attachment: Attachment,
+    current_user: User,
+    db: AsyncSession,
+) -> None:
+    """Verify that the current user has read access to an attachment.
+
+    Authorization rules:
+    - Uploader can always access their own attachments.
+    - Task attachments: check project membership via task's project.
+    - Document attachments: check document scope (view permission).
+    - Otherwise: only the uploader can access.
+
+    Raises:
+        HTTPException: 403 if access denied.
+    """
+    # The uploader always has access
+    if attachment.uploaded_by == current_user.id:
+        return
+
+    # Task-scoped attachments: check membership via task's project
+    if attachment.task_id:
+        has_permission, _ = await check_task_attachment_permission(
+            attachment.task_id, current_user, db
+        )
+        if has_permission:
+            return
+
+    # Document-scoped attachments: check document view permission
+    if attachment.entity_type == "document" and attachment.entity_id:
+        doc_result = await db.execute(
+            select(Document).where(
+                Document.id == attachment.entity_id,
+                Document.deleted_at.is_(None),
+            )
+        )
+        document = doc_result.scalar_one_or_none()
+        if document:
+            perm_service = PermissionService(db)
+            scope_type, scope_id = PermissionService.resolve_entity_scope(document)
+            if await perm_service.check_can_view_knowledge(
+                current_user.id, scope_type, scope_id
+            ):
+                return
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Access denied. You do not have permission to access this file.",
+    )
 
 
 @router.post(
@@ -521,8 +576,8 @@ async def get_file(
             detail=f"Attachment with ID {attachment_id} not found",
         )
 
-    # Access is allowed for any authenticated user
-    # Entity-level access control happens when listing attachments
+    # RBAC check: verify user has access to this attachment's scope
+    await _verify_attachment_read_access(attachment, current_user, db)
 
     # Generate presigned download URL
     if attachment.minio_bucket and attachment.minio_key:
@@ -582,8 +637,8 @@ async def get_attachment_info(
             detail=f"Attachment with ID {attachment_id} not found",
         )
 
-    # Access is allowed for any authenticated user
-    # Entity-level access control happens when listing attachments
+    # RBAC check: verify user has access to this attachment's scope
+    await _verify_attachment_read_access(attachment, current_user, db)
 
     return attachment
 
@@ -801,8 +856,8 @@ async def get_download_url(
             detail=f"Attachment with ID {attachment_id} not found",
         )
 
-    # Access is allowed for any authenticated user
-    # Entity-level access control happens when listing attachments
+    # RBAC check: verify user has access to this attachment's scope
+    await _verify_attachment_read_access(attachment, current_user, db)
 
     # Generate presigned download URL
     if not attachment.minio_bucket or not attachment.minio_key:
@@ -862,8 +917,17 @@ async def get_download_urls_batch(
     )
     attachments = result.scalars().all()
 
+    # Filter to only attachments user has access to
+    accessible_attachments: list[Attachment] = []
+    for att in attachments:
+        try:
+            await _verify_attachment_read_access(att, current_user, db)
+            accessible_attachments.append(att)
+        except HTTPException:
+            pass  # Silently skip inaccessible attachments
+
     result_dict: dict[str, str] = {}
-    for attachment in attachments:
+    for attachment in accessible_attachments:
         if attachment.minio_bucket and attachment.minio_key:
             try:
                 download_url = minio.get_presigned_download_url(

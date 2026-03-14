@@ -47,38 +47,61 @@ class ApiKeyEncryption:
         return Fernet.generate_key().decode()
 
     async def rotate_all(self, db: AsyncSession, new_key: str) -> int:
-        """Re-encrypt all stored API keys with a new encryption key.
+        """Re-encrypt all stored API keys and OAuth tokens with a new key.
 
-        Performs an atomic rotation: all keys are decrypted with the current
-        key and re-encrypted with *new_key* in a single transaction.
+        Performs an atomic rotation: all encrypted fields are decrypted with
+        the current key and re-encrypted with *new_key* in a single
+        transaction. Covers ``api_key_encrypted``, ``oauth_access_token``,
+        and ``oauth_refresh_token``.
 
         Args:
             db: Active database session (caller manages commit/rollback).
             new_key: The new Fernet key to encrypt with.
 
         Returns:
-            Number of API keys that were rotated.
+            Number of encrypted fields that were rotated.
 
         Raises:
             InvalidToken: If any existing ciphertext cannot be decrypted
                 with the current key.
         """
+        from sqlalchemy import or_
+
         new_fernet = Fernet(
             new_key.encode() if isinstance(new_key, str) else new_key
         )
 
         result = await db.execute(
-            select(AiProvider).where(AiProvider.api_key_encrypted.isnot(None))
+            select(AiProvider).where(
+                or_(
+                    AiProvider.api_key_encrypted.isnot(None),
+                    AiProvider.oauth_access_token.isnot(None),
+                    AiProvider.oauth_refresh_token.isnot(None),
+                )
+            )
         )
         providers = result.scalars().all()
 
         rotated = 0
         for provider in providers:
-            plaintext = self.decrypt(provider.api_key_encrypted)
-            provider.api_key_encrypted = new_fernet.encrypt(
-                plaintext.encode()
-            ).decode()
-            rotated += 1
+            if provider.api_key_encrypted:
+                plaintext = self.decrypt(provider.api_key_encrypted)
+                provider.api_key_encrypted = new_fernet.encrypt(
+                    plaintext.encode()
+                ).decode()
+                rotated += 1
+            if provider.oauth_access_token:
+                plaintext = self.decrypt(provider.oauth_access_token)
+                provider.oauth_access_token = new_fernet.encrypt(
+                    plaintext.encode()
+                ).decode()
+                rotated += 1
+            if provider.oauth_refresh_token:
+                plaintext = self.decrypt(provider.oauth_refresh_token)
+                provider.oauth_refresh_token = new_fernet.encrypt(
+                    plaintext.encode()
+                ).decode()
+                rotated += 1
 
-        logger.info("Rotated %d API key(s) to new encryption key", rotated)
+        logger.info("Rotated %d encrypted field(s) to new encryption key", rotated)
         return rotated

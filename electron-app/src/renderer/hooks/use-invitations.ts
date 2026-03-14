@@ -20,6 +20,7 @@ import {
   UseMutationResult,
 } from '@tanstack/react-query'
 import { useAuthToken } from '@/contexts/auth-context'
+import { authGet, authPost, authDelete } from '@/lib/api-client'
 import { queryKeys } from '@/lib/query-client'
 
 // ============================================================================
@@ -71,11 +72,6 @@ export interface ApiError {
 // ============================================================================
 // Helper Functions
 // ============================================================================
-
-function getAuthHeaders(token: string | null): Record<string, string> {
-  if (!token) return {}
-  return { Authorization: `Bearer ${token}` }
-}
 
 function parseApiError(status: number, data: unknown): ApiError {
   if (typeof data === 'object' && data !== null) {
@@ -129,20 +125,13 @@ export function useReceivedInvitations(
   return useQuery({
     queryKey: queryKeys.receivedInvitations(status),
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
       const params = new URLSearchParams()
       if (status) {
         params.append('status', status)
       }
 
       const url = `/api/invitations${params.toString() ? `?${params.toString()}` : ''}`
-      const response = await window.electronAPI.get<InvitationWithDetails[]>(
-        url,
-        getAuthHeaders(token)
-      )
+      const response = await authGet<InvitationWithDetails[]>(url)
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -153,6 +142,7 @@ export function useReceivedInvitations(
     enabled: !!token,
     staleTime: 5 * 60 * 1000, // 5 minutes
     gcTime: 24 * 60 * 60 * 1000,
+    refetchOnWindowFocus: false, // WS real-time invalidation handles freshness
   })
 }
 
@@ -167,18 +157,11 @@ export function useSentInvitations(
   return useQuery({
     queryKey: queryKeys.sentInvitations(applicationId),
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
       const url = applicationId
         ? `/api/invitations/applications/${applicationId}`
         : '/api/invitations/sent'
 
-      const response = await window.electronAPI.get<InvitationWithDetails[]>(
-        url,
-        getAuthHeaders(token)
-      )
+      const response = await authGet<InvitationWithDetails[]>(url)
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -189,6 +172,7 @@ export function useSentInvitations(
     enabled: !!token,
     staleTime: 5 * 60 * 1000,
     gcTime: 24 * 60 * 60 * 1000,
+    refetchOnWindowFocus: false, // WS real-time invalidation handles freshness
   })
 }
 
@@ -201,13 +185,8 @@ export function usePendingInvitationCount(): UseQueryResult<number, Error> {
   return useQuery({
     queryKey: queryKeys.pendingInvitationCount,
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<{ count: number }>(
+      const response = await authGet<{ count: number }>(
         '/api/invitations/count',
-        getAuthHeaders(token)
       )
 
       if (response.status !== 200) {
@@ -219,6 +198,7 @@ export function usePendingInvitationCount(): UseQueryResult<number, Error> {
     enabled: !!token,
     staleTime: 60 * 1000, // 1 minute
     refetchInterval: 60 * 1000, // Poll every minute
+    refetchOnWindowFocus: false, // WS real-time invalidation handles freshness
   })
 }
 
@@ -232,19 +212,13 @@ export function usePendingInvitationCount(): UseQueryResult<number, Error> {
 export function useSendInvitation(
   applicationId: string
 ): UseMutationResult<InvitationWithDetails, Error, InvitationCreate, { previous?: InvitationWithDetails[] }> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (data: InvitationCreate) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<InvitationWithDetails>(
+      const response = await authPost<InvitationWithDetails>(
         `/api/invitations/applications/${applicationId}`,
         data,
-        getAuthHeaders(token)
       )
 
       if (response.status !== 201) {
@@ -273,19 +247,13 @@ export function useAcceptInvitation(): UseMutationResult<
   string,
   { previous?: InvitationWithDetails[]; previousCount?: number }
 > {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (invitationId: string) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<InvitationWithDetails>(
+      const response = await authPost<InvitationWithDetails>(
         `/api/invitations/${invitationId}/accept`,
         {},
-        getAuthHeaders(token)
       )
 
       if (response.status !== 200) {
@@ -342,19 +310,13 @@ export function useRejectInvitation(): UseMutationResult<
   string,
   { previous?: InvitationWithDetails[]; previousCount?: number }
 > {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (invitationId: string) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<InvitationWithDetails>(
+      const response = await authPost<InvitationWithDetails>(
         `/api/invitations/${invitationId}/reject`,
         {},
-        getAuthHeaders(token)
       )
 
       if (response.status !== 200) {
@@ -406,18 +368,12 @@ export function useRejectInvitation(): UseMutationResult<
 export function useCancelInvitation(
   applicationId?: string
 ): UseMutationResult<void, Error, string, { previous?: InvitationWithDetails[] }> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (invitationId: string) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.delete<void>(
+      const response = await authDelete<void>(
         `/api/invitations/${invitationId}`,
-        getAuthHeaders(token)
       )
 
       if (response.status !== 204 && response.status !== 200) {

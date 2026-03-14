@@ -1,9 +1,10 @@
-"""Pydantic schemas for OAuth subscription connection endpoints."""
+"""Pydantic schemas for OAuth and subscription token connection endpoints."""
 
+import re
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class OAuthInitiateRequest(BaseModel):
@@ -74,7 +75,7 @@ class OAuthConnectionStatus(BaseModel):
         None,
         description="Connected provider type",
     )
-    auth_method: Optional[Literal["api_key", "oauth"]] = Field(
+    auth_method: Optional[Literal["api_key", "oauth", "session_token"]] = Field(
         None,
         description="Authentication method of the connection",
     )
@@ -106,4 +107,88 @@ class OAuthDisconnectResponse(BaseModel):
     fallback: str = Field(
         ...,
         description="What the user falls back to after disconnect",
+    )
+
+
+# ============================================================================
+# Subscription Token Schemas
+# ============================================================================
+
+
+class SubscriptionTokenRequest(BaseModel):
+    """Request to save a subscription session token."""
+
+    provider_type: Literal["openai", "anthropic"] = Field(
+        ...,
+        description="AI provider for the subscription token",
+    )
+    token: str = Field(
+        ...,
+        min_length=10,
+        max_length=4096,
+        description="Session token obtained from CLI (e.g. claude setup-token)",
+    )
+    preferred_model: Optional[str] = Field(
+        None,
+        max_length=100,
+        description="Preferred model ID (e.g. gpt-4o, claude-sonnet-4-20250514)",
+    )
+
+    @field_validator("token")
+    @classmethod
+    def strip_whitespace(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("token must not be blank")
+        return stripped
+
+    @field_validator("preferred_model")
+    @classmethod
+    def validate_model_id(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        if not re.fullmatch(r"[a-zA-Z0-9._-]{1,100}", v):
+            raise ValueError("preferred_model contains invalid characters")
+        return v
+
+
+class SubscriptionTokenStatus(BaseModel):
+    """Status of a user's subscription token connection."""
+
+    connected: bool = Field(
+        ...,
+        description="Whether the user has an active subscription token",
+    )
+    provider_type: Optional[str] = Field(
+        None,
+        description="Connected provider type",
+    )
+    auth_method: Optional[Literal["api_key", "oauth", "session_token"]] = Field(
+        None,
+        description="Authentication method",
+    )
+    connected_at: Optional[datetime] = Field(
+        None,
+        description="When the token was saved",
+    )
+    model_id: Optional[str] = Field(
+        None,
+        description="Active model ID",
+    )
+
+
+class SubscriptionTokenTestResult(BaseModel):
+    """Result of testing a subscription token."""
+
+    success: bool = Field(
+        ...,
+        description="Whether the token is valid",
+    )
+    message: Optional[str] = Field(
+        None,
+        description="Success or error message",
+    )
+    latency_ms: Optional[int] = Field(
+        None,
+        description="Response latency in milliseconds",
     )

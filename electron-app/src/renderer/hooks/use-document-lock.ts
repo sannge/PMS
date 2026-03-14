@@ -20,6 +20,7 @@
 import React, { useCallback, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuthToken, useAuthUserId } from "@/contexts/auth-context";
+import { authGet, authPost, authDelete } from "@/lib/api-client";
 import { useWebSocket } from "./use-websocket";
 import { MessageType, WebSocketClient } from "@/lib/websocket";
 import { queryKeys } from "@/lib/query-client";
@@ -73,11 +74,6 @@ export const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 // Helpers
 // ============================================================================
 
-function getAuthHeaders(token: string | null): Record<string, string> {
-  if (!token) return {};
-  return { Authorization: `Bearer ${token}` };
-}
-
 /** Normalize API response (field is `locked`) to frontend shape (`is_locked`). */
 function normalizeLockResponse(
   raw: Record<string, unknown>,
@@ -107,13 +103,11 @@ export function useDocumentLock({
   const lockReleasedRef = useRef(false);
   const heartbeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const documentIdRef = useRef(documentId);
-  const tokenRef = useRef(token);
   const userIdRef = useRef(userId);
 
   // Keep refs current
   useEffect(() => {
     documentIdRef.current = documentId;
-    tokenRef.current = token;
     userIdRef.current = userId;
   });
 
@@ -129,13 +123,8 @@ export function useDocumentLock({
   const lockQuery = useQuery({
     queryKey: queryKeys.documentLock(documentId || ""),
     queryFn: async (): Promise<LockStatusResponse> => {
-      if (!window.electronAPI) {
-        throw new Error("Electron API not available");
-      }
-
-      const response = await window.electronAPI.get<Record<string, unknown>>(
+      const response = await authGet<Record<string, unknown>>(
         `/api/documents/${documentId}/lock`,
-        getAuthHeaders(token),
       );
 
       if (response.status !== 200) {
@@ -169,12 +158,11 @@ export function useDocumentLock({
 
   const acquireMutation = useMutation({
     mutationFn: async (): Promise<boolean> => {
-      if (!window.electronAPI || !documentId) return false;
+      if (!documentId) return false;
 
-      const response = await window.electronAPI.post<LockStatusResponse>(
+      const response = await authPost<LockStatusResponse>(
         `/api/documents/${documentId}/lock`,
         {},
-        getAuthHeaders(token),
       );
 
       if (response.status === 200) {
@@ -207,14 +195,13 @@ export function useDocumentLock({
 
   const releaseMutation = useMutation({
     mutationFn: async (docId: string): Promise<void> => {
-      if (!window.electronAPI || lockReleasedRef.current) return;
+      if (lockReleasedRef.current) return;
 
       lockReleasedRef.current = true;
 
       try {
-        const response = await window.electronAPI.delete<void>(
+        const response = await authDelete<void>(
           `/api/documents/${docId}/lock`,
-          getAuthHeaders(tokenRef.current),
         );
 
         if (response.status !== 200 && response.status !== 204) {
@@ -238,12 +225,11 @@ export function useDocumentLock({
 
   const forceTakeMutation = useMutation({
     mutationFn: async (): Promise<boolean> => {
-      if (!window.electronAPI || !documentId) return false;
+      if (!documentId) return false;
 
-      const response = await window.electronAPI.post<LockStatusResponse>(
+      const response = await authPost<LockStatusResponse>(
         `/api/documents/${documentId}/lock/force-take`,
         {},
-        getAuthHeaders(token),
       );
 
       if (response.status === 200) {
@@ -306,7 +292,7 @@ export function useDocumentLock({
     }
 
     const sendHeartbeat = async () => {
-      if (!window.electronAPI || !documentIdRef.current) return;
+      if (!documentIdRef.current) return;
 
       // Activity gate: if lastActivityRef is provided and user has been idle
       // longer than the inactivity timeout, skip the heartbeat so the server
@@ -319,10 +305,9 @@ export function useDocumentLock({
       }
 
       try {
-        const response = await window.electronAPI.post<void>(
+        const response = await authPost<void>(
           `/api/documents/${documentIdRef.current}/lock/heartbeat`,
           {},
-          getAuthHeaders(tokenRef.current),
         );
 
         // 409 = lock lost (expired or taken)
@@ -430,13 +415,11 @@ export function useDocumentLock({
       if (
         isLockedByMeRef.current &&
         !lockReleasedRef.current &&
-        documentIdRef.current &&
-        window.electronAPI
+        documentIdRef.current
       ) {
         lockReleasedRef.current = true;
-        void window.electronAPI.delete<void>(
+        void authDelete<void>(
           `/api/documents/${documentIdRef.current}/lock`,
-          getAuthHeaders(tokenRef.current),
         );
       }
 
@@ -530,10 +513,6 @@ export function useActiveLocks(
   const { data } = useQuery({
     queryKey,
     queryFn: async (): Promise<ActiveLocksApiResponse> => {
-      if (!window.electronAPI) {
-        throw new Error("Electron API not available");
-      }
-
       const apiScopeId = scope === "personal" ? userId : scopeId;
       if (!apiScopeId) {
         return { locks: [] };
@@ -543,11 +522,9 @@ export function useActiveLocks(
       params.set("scope", scope);
       params.set("scope_id", apiScopeId);
 
-      const response =
-        await window.electronAPI.get<ActiveLocksApiResponse>(
-          `/api/documents/active-locks?${params.toString()}`,
-          token ? { Authorization: `Bearer ${token}` } : {},
-        );
+      const response = await authGet<ActiveLocksApiResponse>(
+        `/api/documents/active-locks?${params.toString()}`,
+      );
 
       if (response.status !== 200) {
         return { locks: [] };

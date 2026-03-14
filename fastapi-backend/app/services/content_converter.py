@@ -22,7 +22,7 @@ Design decisions:
 """
 
 import re
-import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as ET
 from typing import Any
 
 
@@ -36,6 +36,12 @@ _MARK_WRAPPERS: dict[str, str] = {
 }
 
 
+from ..ai.config_service import get_agent_config
+_cc_cfg = get_agent_config()
+_MAX_RECURSION_DEPTH = _cc_cfg.get_int("content.max_recursion_depth", 100)
+_MAX_NODE_COUNT = _cc_cfg.get_int("content.max_node_count", 50_000)
+
+
 def tiptap_json_to_markdown(doc: dict[str, Any] | None) -> str:
     """Convert TipTap JSON document to Markdown string.
 
@@ -46,13 +52,14 @@ def tiptap_json_to_markdown(doc: dict[str, Any] | None) -> str:
     Returns:
         Markdown string. Empty string for invalid/empty input.
     """
-    if not doc:
+    if not doc or not isinstance(doc, dict):
         return ""
     if doc.get("format") == "canvas":
         return _canvas_to_markdown(doc)
     if doc.get("type") != "doc":
         return ""
-    return _md_nodes(doc.get("content", []))
+    counter = [0]  # mutable counter for node tracking
+    return _md_nodes(doc.get("content", []), node_counter=counter)
 
 
 def _canvas_to_markdown(canvas: dict[str, Any]) -> str:
@@ -60,6 +67,7 @@ def _canvas_to_markdown(canvas: dict[str, Any]) -> str:
     containers = canvas.get("containers")
     if not containers or not isinstance(containers, list):
         return ""
+    counter = [0]
     parts: list[str] = []
     for i, container in enumerate(containers, 1):
         if not isinstance(container, dict):
@@ -67,16 +75,29 @@ def _canvas_to_markdown(canvas: dict[str, Any]) -> str:
         content = container.get("content")
         if not isinstance(content, dict) or content.get("type") != "doc":
             continue
-        md = _md_nodes(content.get("content", []))
+        md = _md_nodes(content.get("content", []), node_counter=counter)
         if md.strip():
             parts.append(f"## Section {i}\n\n{md}")
     return "\n".join(parts)
 
 
-def _md_nodes(nodes: list[dict[str, Any]], list_indent: int = 0) -> str:
+def _md_nodes(
+    nodes: list[dict[str, Any]],
+    list_indent: int = 0,
+    depth: int = 0,
+    node_counter: list[int] | None = None,
+) -> str:
     """Recursively convert a list of ProseMirror nodes to Markdown."""
+    if depth > _MAX_RECURSION_DEPTH:
+        return ""
+    if node_counter is None:
+        node_counter = [0]
     parts: list[str] = []
     for node in nodes:
+        node_counter[0] += 1
+        if node_counter[0] > _MAX_NODE_COUNT:
+            parts.append("\n... (content truncated — node limit reached)\n")
+            return "".join(parts)
         t = node.get("type", "")
 
         if t == "paragraph":
@@ -90,13 +111,13 @@ def _md_nodes(nodes: list[dict[str, Any]], list_indent: int = 0) -> str:
         elif t == "bulletList":
             for item in node.get("content", []):
                 prefix = "  " * list_indent + "- "
-                parts.append(prefix + _md_list_item(item, list_indent))
+                parts.append(prefix + _md_list_item(item, list_indent, depth, node_counter))
             parts.append("\n")
 
         elif t == "orderedList":
             for i, item in enumerate(node.get("content", []), 1):
                 prefix = "  " * list_indent + f"{i}. "
-                parts.append(prefix + _md_list_item(item, list_indent))
+                parts.append(prefix + _md_list_item(item, list_indent, depth, node_counter))
             parts.append("\n")
 
         elif t == "taskList":
@@ -104,7 +125,7 @@ def _md_nodes(nodes: list[dict[str, Any]], list_indent: int = 0) -> str:
                 checked = item.get("attrs", {}).get("checked", False)
                 marker = "[x]" if checked else "[ ]"
                 prefix = "  " * list_indent + f"- {marker} "
-                parts.append(prefix + _md_list_item(item, list_indent))
+                parts.append(prefix + _md_list_item(item, list_indent, depth, node_counter))
             parts.append("\n")
 
         elif t == "codeBlock":
@@ -116,7 +137,7 @@ def _md_nodes(nodes: list[dict[str, Any]], list_indent: int = 0) -> str:
             parts.append(f"```{lang}\n{code}\n```\n\n")
 
         elif t == "blockquote":
-            inner = _md_nodes(node.get("content", []))
+            inner = _md_nodes(node.get("content", []), depth=depth + 1, node_counter=node_counter)
             lines = inner.strip().split("\n")
             parts.append("\n".join("> " + line for line in lines) + "\n\n")
 
@@ -132,7 +153,7 @@ def _md_nodes(nodes: list[dict[str, Any]], list_indent: int = 0) -> str:
         else:
             # Unknown node -- render children if any (graceful degradation)
             if "content" in node:
-                parts.append(_md_nodes(node["content"], list_indent))
+                parts.append(_md_nodes(node["content"], list_indent, depth=depth + 1, node_counter=node_counter))
 
     return "".join(parts)
 
@@ -160,14 +181,19 @@ def _md_inline(nodes: list[dict[str, Any]]) -> str:
     return "".join(parts)
 
 
-def _md_list_item(item: dict[str, Any], parent_indent: int) -> str:
+def _md_list_item(
+    item: dict[str, Any],
+    parent_indent: int,
+    depth: int = 0,
+    node_counter: list[int] | None = None,
+) -> str:
     """Render a listItem/taskItem node, recursively handling nested lists."""
     content = item.get("content", [])
     parts: list[str] = []
     for i, child in enumerate(content):
         if child.get("type") in ("bulletList", "orderedList", "taskList"):
             # Nested list -- increase indent
-            parts.append("\n" + _md_nodes([child], parent_indent + 1))
+            parts.append("\n" + _md_nodes([child], parent_indent + 1, depth=depth + 1, node_counter=node_counter))
         elif child.get("type") == "paragraph":
             text = _md_inline(child.get("content", []))
             if i == 0:
@@ -176,7 +202,7 @@ def _md_list_item(item: dict[str, Any], parent_indent: int) -> str:
                 # Continuation paragraph in list item
                 parts.append("  " * (parent_indent + 1) + text + "\n")
         else:
-            parts.append(_md_nodes([child], parent_indent + 1))
+            parts.append(_md_nodes([child], parent_indent + 1, depth=depth + 1, node_counter=node_counter))
     return "".join(parts)
 
 
@@ -229,13 +255,14 @@ def tiptap_json_to_plain_text(doc: dict[str, Any] | None) -> str:
     Returns:
         Plain text string. Empty string for invalid/empty input.
     """
-    if not doc:
+    if not doc or not isinstance(doc, dict):
         return ""
     if doc.get("format") == "canvas":
         return _canvas_to_plain_text(doc)
     if doc.get("type") != "doc":
         return ""
-    return _extract_text_from_nodes(doc.get("content", [])).strip()
+    counter = [0]
+    return _extract_text_from_nodes(doc.get("content", []), depth=0, node_counter=counter).strip()
 
 
 def _canvas_to_plain_text(canvas: dict[str, Any]) -> str:
@@ -243,6 +270,7 @@ def _canvas_to_plain_text(canvas: dict[str, Any]) -> str:
     containers = canvas.get("containers")
     if not containers or not isinstance(containers, list):
         return ""
+    counter = [0]
     parts: list[str] = []
     for container in containers:
         if not isinstance(container, dict):
@@ -250,16 +278,27 @@ def _canvas_to_plain_text(canvas: dict[str, Any]) -> str:
         content = container.get("content")
         if not isinstance(content, dict) or content.get("type") != "doc":
             continue
-        text = _extract_text_from_nodes(content.get("content", []))
+        text = _extract_text_from_nodes(content.get("content", []), node_counter=counter)
         if text.strip():
             parts.append(text.strip())
     return "\n\n".join(parts)
 
 
-def _extract_text_from_nodes(nodes: list[dict[str, Any]]) -> str:
+def _extract_text_from_nodes(
+    nodes: list[dict[str, Any]],
+    depth: int = 0,
+    node_counter: list[int] | None = None,
+) -> str:
     """Recursively extract text from nodes, adding newlines after blocks."""
+    if depth > _MAX_RECURSION_DEPTH:
+        return ""
+    if node_counter is None:
+        node_counter = [0]
     parts: list[str] = []
     for node in nodes:
+        node_counter[0] += 1
+        if node_counter[0] > _MAX_NODE_COUNT:
+            return "".join(parts)
         if node.get("type") == "text":
             parts.append(node.get("text", ""))
         elif node.get("type") == "hardBreak":
@@ -268,7 +307,7 @@ def _extract_text_from_nodes(nodes: list[dict[str, Any]]) -> str:
             parts.append(_extract_drawio_text(node.get("attrs", {})))
             parts.append("\n")
         elif "content" in node:
-            parts.append(_extract_text_from_nodes(node["content"]))
+            parts.append(_extract_text_from_nodes(node["content"], depth=depth + 1, node_counter=node_counter))
             # Add newline after block-level nodes
             if node.get("type") in (
                 "paragraph", "heading", "listItem", "taskItem",

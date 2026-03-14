@@ -173,6 +173,26 @@ class Login2FAResponse(BaseModel):
     )
 
 
+class TokenWithRefresh(BaseModel):
+    """Token response with both access and refresh tokens."""
+
+    access_token: str = Field(..., description="Short-lived JWT access token")
+    refresh_token: str = Field(..., description="Long-lived JWT refresh token")
+    token_type: str = Field("bearer", description="Token type")
+
+
+class RefreshTokenRequest(BaseModel):
+    """Request to refresh an access token."""
+
+    refresh_token: str = Field(..., description="Current refresh token")
+
+
+class RevokeTokenRequest(BaseModel):
+    """Request to revoke a refresh token."""
+
+    refresh_token: str = Field(..., description="Refresh token to revoke")
+
+
 class VerifyLoginRequest(BaseModel):
     """Request to verify a login 2FA code."""
 

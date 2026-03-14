@@ -137,6 +137,10 @@ def include_object(object, name, type_, reflected, compare_to):
     Returns:
         bool: True to include the object in migrations
     """
+    # Skip objects marked with info={"skip_autogenerate": True}
+    if hasattr(object, "info") and object.info.get("skip_autogenerate"):
+        return False
+
     # Exclude system tables and internal tables
     if type_ == "table":
         # Exclude PostgreSQL system tables

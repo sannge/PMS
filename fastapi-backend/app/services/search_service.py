@@ -32,25 +32,30 @@ from app.models.application_member import ApplicationMember
 from app.models.document import Document
 from app.models.project import Project
 
+from ..ai.config_service import get_agent_config
+
 logger = logging.getLogger(__name__)
+
+_cfg = get_agent_config()
 
 # Control character pattern
 CONTROL_CHAR_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
 
 # Content size limit for indexing (~50K words)
-MAX_CONTENT_LENGTH = 300_000
+MAX_CONTENT_LENGTH = _cfg.get_int("search.max_content_length", 300_000)
 
 # RBAC scope cache TTL
-SCOPE_CACHE_TTL = 30  # seconds
+SCOPE_CACHE_TTL = _cfg.get_int("search.scope_cache_ttl", 30)
 
 # Snippet extraction settings
-SNIPPET_CONTEXT_CHARS = 60   # chars of context on each side of a match
+SNIPPET_CONTEXT_CHARS = _cfg.get_int("search.snippet_context_chars", 60)
 MAX_OCCURRENCES_PER_DOC = 5  # cap occurrences per document to avoid huge lists
 
 # Index settings (configure BEFORE adding documents)
 MEILISEARCH_INDEX_SETTINGS = {
     "searchableAttributes": [
         "title",           # Highest priority -- title matches rank first
+        "file_name",       # File names also searchable
         "content_plain",   # Main body text
     ],
     "filterableAttributes": [
@@ -58,6 +63,8 @@ MEILISEARCH_INDEX_SETTINGS = {
         "project_id",
         "user_id",
         "folder_id",
+        "content_type",
+        "mime_type",
         "deleted_at",
     ],
     "sortableAttributes": [
@@ -69,7 +76,10 @@ MEILISEARCH_INDEX_SETTINGS = {
     "displayedAttributes": [
         "id",
         "title",
+        "file_name",
         "content_plain",
+        "content_type",
+        "mime_type",
         "application_id",
         "project_id",
         "user_id",
@@ -92,6 +102,41 @@ MEILISEARCH_INDEX_SETTINGS = {
         disable_on_numbers=True,
     ),
 }
+
+
+# ---- Circuit Breaker for Meilisearch ----
+
+_meili_failure_count: int = 0
+_meili_circuit_open_until: float = 0.0  # Unix timestamp when circuit closes
+_MEILI_FAILURE_THRESHOLD = _cfg.get_int("search.circuit_failure_threshold", 3)
+_MEILI_CIRCUIT_OPEN_SECONDS = _cfg.get_int("search.circuit_open_seconds", 30)
+
+
+def _meili_circuit_is_open() -> bool:
+    """Check if the Meilisearch circuit breaker is open (service considered down)."""
+    if _meili_failure_count < _MEILI_FAILURE_THRESHOLD:
+        return False
+    return time.time() < _meili_circuit_open_until
+
+
+def _meili_record_success() -> None:
+    """Record a successful Meilisearch call, closing the circuit."""
+    global _meili_failure_count, _meili_circuit_open_until
+    _meili_failure_count = 0
+    _meili_circuit_open_until = 0.0
+
+
+def _meili_record_failure() -> None:
+    """Record a Meilisearch failure. Opens circuit after threshold consecutive failures."""
+    global _meili_failure_count, _meili_circuit_open_until
+    _meili_failure_count += 1
+    if _meili_failure_count >= _MEILI_FAILURE_THRESHOLD:
+        _meili_circuit_open_until = time.time() + _MEILI_CIRCUIT_OPEN_SECONDS
+        logger.warning(
+            "Meilisearch circuit breaker OPEN after %d failures (will retry in %ds)",
+            _meili_failure_count,
+            _MEILI_CIRCUIT_OPEN_SECONDS,
+        )
 
 
 # ---- Client Management ----
@@ -355,10 +400,15 @@ async def index_document_from_data(data: dict) -> None:
     Args:
         data: Dict with keys matching Meilisearch document schema.
     """
+    if _meili_circuit_is_open():
+        logger.debug("Skipping index for doc %s: circuit breaker open", data.get("id"))
+        return
     try:
         index = get_meili_index()
         await index.update_documents([data])
+        _meili_record_success()
     except Exception as exc:
+        _meili_record_failure()
         logger.error("Failed to index document %s: %s", data.get("id"), exc)
         # Document save still succeeds -- consistency checker will catch this
 
@@ -433,6 +483,77 @@ async def remove_document_from_index(doc_id: UUID) -> None:
         )
 
 
+# ---- File Indexing ----
+
+def build_search_file_data(
+    ff,
+    project_application_id: UUID | None = None,
+) -> dict:
+    """Extract all fields needed for search indexing from a FolderFile ORM object.
+
+    Call this BEFORE db.commit() while ORM attributes are still loaded.
+    The returned dict can safely be passed to index_document_from_data()
+    after commit.
+
+    The Meilisearch document id is prefixed with "file:" to distinguish
+    file entries from document entries in the shared index.
+
+    Args:
+        ff: FolderFile ORM instance (attributes must be loaded).
+        project_application_id: For project-scoped files, the parent application_id.
+
+    Returns:
+        Plain dict ready for Meilisearch indexing.
+    """
+    application_id = ff.application_id
+    if application_id is None and ff.project_id is not None and project_application_id is not None:
+        application_id = project_application_id
+
+    return {
+        "id": f"file:{ff.id}",
+        "title": ff.display_name,
+        "file_name": ff.display_name,
+        "content_plain": (ff.content_plain or "")[:MAX_CONTENT_LENGTH],
+        "content_type": "file",
+        "mime_type": ff.mime_type,
+        "application_id": str(application_id) if application_id else None,
+        "project_id": str(ff.project_id) if ff.project_id else None,
+        "user_id": str(ff.user_id) if ff.user_id else None,
+        "folder_id": str(ff.folder_id) if ff.folder_id else None,
+        "created_by": str(ff.created_by) if ff.created_by else None,
+        "updated_at": int(ff.updated_at.timestamp()),
+        "deleted_at": None,
+    }
+
+
+async def index_file_from_data(data: dict) -> None:
+    """Fire-and-forget file indexing from a pre-built dict.
+
+    Same as index_document_from_data but for files.
+
+    Args:
+        data: Dict with keys matching Meilisearch document schema (id prefixed with "file:").
+    """
+    await index_document_from_data(data)
+
+
+async def remove_file_from_index(file_id: UUID) -> None:
+    """Remove a file from the Meilisearch index.
+
+    Uses the "file:" prefixed ID to match the indexed document.
+    """
+    try:
+        index = get_meili_index()
+        task = await index.delete_document(f"file:{file_id}")
+        client = get_meili_client()
+        await client.wait_for_task(task.task_uid, timeout_in_ms=5000)
+    except Exception as exc:
+        logger.warning(
+            "Failed to remove file %s from search index: %s",
+            file_id, exc,
+        )
+
+
 # ---- Search ----
 
 
@@ -491,6 +612,11 @@ def _expand_hits(hits: list[dict]) -> list[dict]:
             if k not in ("content_plain", "_matchesPosition", "_formatted",
                          "_rankingScore", "_rankingScoreDetails")
         }
+        # Detect file entries (id prefixed with "file:")
+        hit_id = hit.get("id", "")
+        if isinstance(hit_id, str) and hit_id.startswith("file:"):
+            base["content_type"] = "file"
+            base["file_name"] = hit.get("file_name") or hit.get("title", "")
         base["_formatted"] = {"title": formatted.get("title", hit.get("title", ""))}
 
         # Collect actual matched text from title positions too
@@ -551,19 +677,34 @@ async def search_documents(
 
     Returns a plain dict with camelCase keys matching the frontend contract.
     Each document hit is expanded into one entry per content match occurrence.
+
+    Raises RuntimeError if the circuit breaker is open so the caller can
+    fall back to PostgreSQL FTS.
     """
-    index = get_meili_index()
-    results = await index.search(
-        query,
-        filter=filter_expr,
-        limit=limit,
-        offset=offset,
-        attributes_to_highlight=["title"],
-        highlight_pre_tag="<mark>",
-        highlight_post_tag="</mark>",
-        show_ranking_score=False,
-        show_matches_position=True,
-    )
+    if _meili_circuit_is_open():
+        raise RuntimeError("Meilisearch circuit breaker is open")
+
+    try:
+        index = get_meili_index()
+        results = await index.search(
+            query,
+            filter=filter_expr,
+            limit=limit,
+            offset=offset,
+            attributes_to_highlight=["title"],
+            highlight_pre_tag="<mark>",
+            highlight_post_tag="</mark>",
+            show_ranking_score=False,
+            show_matches_position=True,
+        )
+        _meili_record_success()
+    except RuntimeError:
+        # Re-raise RuntimeError (from get_meili_index or circuit breaker)
+        raise
+    except Exception:
+        _meili_record_failure()
+        raise
+
     expanded = _expand_hits(results.hits)
     return {
         "hits": expanded,
@@ -781,37 +922,47 @@ async def check_search_index_consistency(ctx: dict) -> None:
                 pg_total_count, meili_count, pg_active_count,
             )
 
-        # Find documents updated since last check
+        # Find documents updated since last check (DB-012: keyset pagination).
+        # Track the maximum updated_at actually processed rather than wall
+        # clock time, so no documents are missed if the job runs slowly or
+        # the clock drifts.
         last_check_key = "search:last_consistency_check"
         since_raw = await redis.get(last_check_key)
         since = float(since_raw) if since_raw else 0
 
         since_dt = datetime.fromtimestamp(since, tz=timezone.utc)
 
-        # Only select needed columns, limit to 1000 per run to bound memory.
-        # Outerjoin Project to resolve application_id for project-scoped docs.
-        result = await db.execute(
-            select(
-                Document.id,
-                Document.title,
-                Document.content_plain,
-                Document.application_id,
-                Document.project_id,
-                Document.user_id,
-                Document.folder_id,
-                Document.created_by,
-                Document.updated_at,
-                Document.deleted_at,
-                Project.application_id.label("project_app_id"),
-            )
-            .outerjoin(Project, Document.project_id == Project.id)
-            .where(Document.updated_at > since_dt)
-            .limit(1000)
-        )
-        stale_rows = result.all()
+        # Keyset pagination: process batches of 500 ordered by updated_at
+        # to avoid skipping documents when there are >1000 stale rows.
+        batch_size = 500
+        total_reindexed = 0
+        max_updated_at = since_dt
 
-        if stale_rows:
-            logger.info("Re-indexing %d stale documents", len(stale_rows))
+        while True:
+            result = await db.execute(
+                select(
+                    Document.id,
+                    Document.title,
+                    Document.content_plain,
+                    Document.application_id,
+                    Document.project_id,
+                    Document.user_id,
+                    Document.folder_id,
+                    Document.created_by,
+                    Document.updated_at,
+                    Document.deleted_at,
+                    Project.application_id.label("project_app_id"),
+                )
+                .outerjoin(Project, Document.project_id == Project.id)
+                .where(Document.updated_at > max_updated_at)
+                .order_by(Document.updated_at.asc())
+                .limit(batch_size)
+            )
+            stale_rows = result.all()
+
+            if not stale_rows:
+                break
+
             for row in stale_rows:
                 if row.deleted_at:
                     await index_document_soft_delete(row.id)
@@ -835,7 +986,80 @@ async def check_search_index_consistency(ctx: dict) -> None:
                     except Exception as exc:
                         logger.error("Failed to re-index document %s: %s", row.id, exc)
 
-        await redis.set(last_check_key, str(time.time()))
+                # Track the maximum updated_at we've actually processed
+                if row.updated_at and row.updated_at > max_updated_at:
+                    max_updated_at = row.updated_at
+
+            total_reindexed += len(stale_rows)
+
+            # Safety cap: don't process more than 5000 per run
+            if total_reindexed >= 5000:
+                logger.warning(
+                    "Consistency check hit 5000-row safety cap, will continue next run"
+                )
+                break
+
+            # If we got fewer than batch_size, we've processed everything
+            if len(stale_rows) < batch_size:
+                break
+
+        if total_reindexed:
+            logger.info("Re-indexed %d stale documents", total_reindexed)
+
+        # Store the max updated_at timestamp we actually processed
+        await redis.set(last_check_key, str(max_updated_at.timestamp()))
+
+        # MED-15: Also scan FolderFiles for consistency
+        try:
+            from app.models.folder_file import FolderFile
+
+            file_last_check_key = "search:last_file_consistency_check"
+            file_since_raw = await redis.get(file_last_check_key)
+            file_since = float(file_since_raw) if file_since_raw else 0
+            file_since_dt = datetime.fromtimestamp(file_since, tz=timezone.utc)
+
+            file_total_reindexed = 0
+            file_max_updated_at = file_since_dt
+
+            while True:
+                file_result = await db.execute(
+                    select(FolderFile)
+                    .where(FolderFile.updated_at > file_max_updated_at)
+                    .order_by(FolderFile.updated_at.asc())
+                    .limit(batch_size)
+                )
+                stale_files = file_result.scalars().all()
+
+                if not stale_files:
+                    break
+
+                for ff in stale_files:
+                    if ff.deleted_at:
+                        # Remove from index
+                        try:
+                            await remove_file_from_index(ff.id)
+                        except Exception as exc:
+                            logger.error("Failed to remove file %s from index: %s", ff.id, exc)
+                    elif ff.content_plain:
+                        # Re-index
+                        try:
+                            data = build_search_file_data(ff)
+                            await index_file_from_data(data)
+                        except Exception as exc:
+                            logger.error("Failed to re-index file %s: %s", ff.id, exc)
+
+                    if ff.updated_at and ff.updated_at > file_max_updated_at:
+                        file_max_updated_at = ff.updated_at
+
+                file_total_reindexed += len(stale_files)
+                if file_total_reindexed >= 2000 or len(stale_files) < batch_size:
+                    break
+
+            if file_total_reindexed:
+                logger.info("Re-indexed %d stale files", file_total_reindexed)
+            await redis.set(file_last_check_key, str(file_max_updated_at.timestamp()))
+        except Exception as file_exc:
+            logger.warning("File consistency check failed: %s", file_exc)
 
     except Exception as exc:
         logger.error("Consistency check failed: %s", exc)

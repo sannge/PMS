@@ -46,6 +46,8 @@ class RetrievalResult:
     snippet: str
     chunk_type: str = "text"  # "text" or "image"
     chunk_index: int | None = None
+    source_type: str = "document"  # "document" or "file"
+    file_id: UUID | None = None
 
 
 @dataclass
@@ -63,6 +65,8 @@ class _RankedResult:
     application_id: UUID | None = None
     project_id: UUID | None = None
     chunk_type: str = "text"
+    source_type: str = "document"  # "document" or "file"
+    file_id: UUID | None = None
 
 
 class HybridRetrievalService:
@@ -273,20 +277,27 @@ class HybridRetrievalService:
         # Columns in the WHERE clause are safe against SQL injection because
         # they are built from hardcoded strings above, not user input.
         # The scope_filter uses parameterized :app_ids, :project_ids, :user_id.
+        # LEFT JOIN both Documents and FolderFiles to support both source types.
         sql = text(f"""
             SELECT
                 dc.document_id,
+                dc.file_id,
+                dc.source_type,
                 dc.chunk_text,
                 dc.heading_context,
                 dc.chunk_index,
                 dc.chunk_type,
                 dc.application_id,
                 dc.project_id,
-                d.title AS document_title,
+                COALESCE(d.title, ff.display_name) AS document_title,
                 1 - (dc.embedding <=> CAST(:query_embedding AS vector)) AS similarity
             FROM "DocumentChunks" dc
-            JOIN "Documents" d ON d.id = dc.document_id
-            WHERE d.deleted_at IS NULL
+            LEFT JOIN "Documents" d ON d.id = dc.document_id
+            LEFT JOIN "FolderFiles" ff ON ff.id = dc.file_id
+            WHERE (
+                (dc.document_id IS NOT NULL AND d.deleted_at IS NULL)
+                OR (dc.file_id IS NOT NULL AND ff.deleted_at IS NULL)
+              )
               AND ({scope_filter})
             ORDER BY dc.embedding <=> CAST(:query_embedding AS vector)
             LIMIT :limit
@@ -297,8 +308,10 @@ class HybridRetrievalService:
 
         ranked: list[_RankedResult] = []
         for rank_pos, row in enumerate(rows, 1):
+            # Determine the effective ID for dedup
+            effective_id = row.document_id or row.file_id
             ranked.append(_RankedResult(
-                document_id=row.document_id,
+                document_id=effective_id,
                 document_title=row.document_title or "",
                 chunk_text=row.chunk_text or "",
                 heading_context=row.heading_context,
@@ -309,6 +322,8 @@ class HybridRetrievalService:
                 application_id=row.application_id,
                 project_id=row.project_id,
                 chunk_type=row.chunk_type or "text",
+                source_type=row.source_type or "document",
+                file_id=row.file_id,
             ))
 
         return ranked
@@ -369,8 +384,20 @@ class HybridRetrievalService:
             doc_id = hit.get("id", "")
             if not doc_id:
                 continue
+
+            # Handle file: prefixed IDs from Meilisearch
+            is_file = isinstance(doc_id, str) and doc_id.startswith("file:")
+            if is_file:
+                real_id = UUID(doc_id[5:])  # Strip "file:" prefix
+                source_type = "file"
+                file_id = real_id
+            else:
+                real_id = UUID(doc_id)
+                source_type = "document"
+                file_id = None
+
             ranked.append(_RankedResult(
-                document_id=UUID(doc_id),
+                document_id=real_id,
                 document_title=hit.get("title", ""),
                 chunk_text=hit.get("content_plain", "")[:500],
                 heading_context=None,
@@ -380,6 +407,8 @@ class HybridRetrievalService:
                 source="keyword",
                 application_id=UUID(hit["application_id"]) if hit.get("application_id") else None,
                 project_id=UUID(hit["project_id"]) if hit.get("project_id") else None,
+                source_type=source_type,
+                file_id=file_id,
             ))
 
         return ranked
@@ -394,7 +423,8 @@ class HybridRetrievalService:
         """pg_trgm fuzzy title matching.
 
         Uses PostgreSQL's similarity() function with the GIN trigram index
-        for fuzzy title matching.
+        for fuzzy title matching. Searches both Documents and FolderFiles
+        (HIGH-14) via UNION ALL.
 
         Args:
             query: Search query text.
@@ -413,7 +443,8 @@ class HybridRetrievalService:
         project_ids = scope_ids.get("project_ids", [])
         user_id = scope_ids["user_id"]
 
-        scope_conditions: list[str] = []
+        # Build scope conditions for Documents
+        doc_scope_conditions: list[str] = []
         params: dict = {
             "query": query,
             "threshold": threshold,
@@ -421,33 +452,67 @@ class HybridRetrievalService:
         }
 
         if app_ids:
-            scope_conditions.append('d.application_id = ANY(:app_ids)')
+            doc_scope_conditions.append('d.application_id = ANY(:app_ids)')
             params["app_ids"] = [str(aid) for aid in app_ids]
 
         if project_ids:
-            scope_conditions.append('d.project_id = ANY(:project_ids)')
+            doc_scope_conditions.append('d.project_id = ANY(:project_ids)')
             params["project_ids"] = [str(pid) for pid in project_ids]
 
         # Personal-scope: only match docs with no app/project assignment
-        scope_conditions.append(
+        doc_scope_conditions.append(
             'd.application_id IS NULL AND d.project_id IS NULL AND d.user_id = :user_id'
         )
         params["user_id"] = str(user_id)
 
-        scope_filter = " OR ".join(f"({c})" for c in scope_conditions)
+        doc_scope_filter = " OR ".join(f"({c})" for c in doc_scope_conditions)
 
+        # Build scope conditions for FolderFiles (HIGH-14)
+        file_scope_conditions: list[str] = []
+        if app_ids:
+            file_scope_conditions.append('ff.application_id = ANY(:app_ids)')
+        if project_ids:
+            file_scope_conditions.append('ff.project_id = ANY(:project_ids)')
+        file_scope_conditions.append(
+            'ff.application_id IS NULL AND ff.project_id IS NULL AND ff.user_id = :user_id'
+        )
+        file_scope_filter = " OR ".join(f"({c})" for c in file_scope_conditions)
+
+        # HIGH-14: UNION ALL Documents + FolderFiles for fuzzy search
         sql = text(f"""
-            SELECT
-                d.id,
-                d.title,
-                d.application_id,
-                d.project_id,
-                COALESCE(d.content_plain, '') AS content_plain,
-                similarity(d.title, :query) AS sim
-            FROM "Documents" d
-            WHERE similarity(d.title, :query) > :threshold
-              AND d.deleted_at IS NULL
-              AND ({scope_filter})
+            SELECT id, title, application_id, project_id, content_plain, sim,
+                   source_type, file_id
+            FROM (
+                SELECT
+                    d.id,
+                    d.title,
+                    d.application_id,
+                    d.project_id,
+                    COALESCE(d.content_plain, '') AS content_plain,
+                    similarity(d.title, :query) AS sim,
+                    'document' AS source_type,
+                    CAST(NULL AS uuid) AS file_id
+                FROM "Documents" d
+                WHERE similarity(d.title, :query) > :threshold
+                  AND d.deleted_at IS NULL
+                  AND ({doc_scope_filter})
+
+                UNION ALL
+
+                SELECT
+                    ff.id,
+                    ff.display_name AS title,
+                    ff.application_id,
+                    ff.project_id,
+                    COALESCE(ff.content_plain, '') AS content_plain,
+                    similarity(ff.display_name, :query) AS sim,
+                    'file' AS source_type,
+                    ff.id AS file_id
+                FROM "FolderFiles" ff
+                WHERE similarity(ff.display_name, :query) > :threshold
+                  AND ff.deleted_at IS NULL
+                  AND ({file_scope_filter})
+            ) combined
             ORDER BY sim DESC
             LIMIT :limit
         """)
@@ -468,6 +533,8 @@ class HybridRetrievalService:
                 source="fuzzy",
                 application_id=row.application_id,
                 project_id=row.project_id,
+                source_type=row.source_type or "document",
+                file_id=row.file_id,
             ))
 
         return ranked
@@ -493,15 +560,15 @@ class HybridRetrievalService:
         Returns:
             Merged and deduplicated list of RetrievalResult.
         """
-        # Key: document_id — ensures cross-source dedup (semantic chunk_index=0
-        # vs keyword chunk_index=None merge for the same document). Within a
-        # single source, duplicate chunks from the same doc accumulate RRF score
-        # but the highest-ranked chunk's text is preserved.
-        merged: dict[UUID, dict] = {}
+        # Key: (source_type, document_id) — ensures cross-source dedup while
+        # keeping document-sourced and file-sourced results separate.
+        # Within a single source, duplicate chunks from the same item
+        # accumulate RRF score but the highest-ranked chunk's text is preserved.
+        merged: dict[tuple[str, UUID], dict] = {}
 
         for ranked_list in ranked_lists:
             for result in ranked_list:
-                key = result.document_id
+                key = (result.source_type, result.document_id)
 
                 if key not in merged:
                     merged[key] = {
@@ -516,6 +583,8 @@ class HybridRetrievalService:
                         "sources": set(),
                         "application_id": result.application_id,
                         "project_id": result.project_id,
+                        "source_type": result.source_type,
+                        "file_id": result.file_id,
                     }
 
                 merged[key]["rrf_score"] += 1.0 / (k + result.rank)
@@ -548,6 +617,8 @@ class HybridRetrievalService:
                 snippet=snippet,
                 chunk_type=entry.get("chunk_type", "text"),
                 chunk_index=entry.get("chunk_index"),
+                source_type=entry.get("source_type", "document"),
+                file_id=entry.get("file_id"),
             ))
 
         return results

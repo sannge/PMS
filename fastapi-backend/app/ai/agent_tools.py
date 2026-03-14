@@ -19,12 +19,16 @@ from .embedding_normalizer import EmbeddingNormalizer
 from .provider_registry import ProviderRegistry
 from .retrieval_service import HybridRetrievalService
 
+from .config_service import get_agent_config
+
 logger = logging.getLogger(__name__)
 
+_cfg = get_agent_config()
+
 # Max characters for tool output text to prevent token budget overflow
-MAX_TOOL_OUTPUT_CHARS = 8000
+MAX_TOOL_OUTPUT_CHARS = _cfg.get_int("agent.max_tool_output_chars", 8000)
 # Knowledge search returns more content for LLM re-ranking (top-20 chunks)
-MAX_KNOWLEDGE_OUTPUT_CHARS = 16000
+MAX_KNOWLEDGE_OUTPUT_CHARS = _cfg.get_int("agent.max_knowledge_output_chars", 16000)
 
 # Module-level singleton — EmbeddingNormalizer is stateless
 _embedding_normalizer = EmbeddingNormalizer()
@@ -158,7 +162,9 @@ async def rag_search_tool(
         for i, r in enumerate(results, 1):
             heading = f" [{r.heading_context}]" if r.heading_context else ""
             type_tag = " [image description]" if r.chunk_type == "image" else ""
-            lines.append(f"[{i}] {r.document_title}{heading} (score: {r.score:.4f}, source: {r.source}){type_tag}")
+            # Tag file results so the agent knows the source is an uploaded file
+            source_tag = " [file]" if r.source_type == "file" else ""
+            lines.append(f"[{i}] {r.document_title}{heading} (score: {r.score:.4f}, source: {r.source}){type_tag}{source_tag}")
             lines.append(r.chunk_text.strip())
             lines.append("")
 
@@ -181,6 +187,8 @@ async def rag_search_tool(
                         "chunk_text": r.chunk_text[:200] if r.chunk_text else "",
                         "application_id": str(r.application_id) if r.application_id else "",
                         "chunk_index": r.chunk_index if r.chunk_index is not None else 0,
+                        "source_type": r.source_type,
+                        "file_id": str(r.file_id) if r.file_id else None,
                     }
                     for r in results
                 ],
@@ -224,7 +232,10 @@ async def export_to_excel_tool(
 
         return ToolResult(
             success=True,
-            data=f"Excel file ready for download: {export_result.download_url}",
+            data=(
+                f"Excel file ready ({export_result.row_count} rows). "
+                f"[Download {export_result.filename}]({export_result.download_url})"
+            ),
             metadata={
                 "filename": export_result.filename,
                 "download_url": export_result.download_url,

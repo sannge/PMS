@@ -13,6 +13,8 @@
  * - TypeScript type safety
  */
 
+import { getAccessToken, refreshTokens } from '@/lib/api-client'
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -130,6 +132,13 @@ export enum MessageType {
   // AI import events
   IMPORT_COMPLETED = 'import_completed',
   IMPORT_FAILED = 'import_failed',
+
+  // Folder file events
+  FILE_UPLOADED = 'file_uploaded',
+  FILE_UPDATED = 'file_updated',
+  FILE_DELETED = 'file_deleted',
+  FILE_EXTRACTION_COMPLETED = 'file_extraction_completed',
+  FILE_EXTRACTION_FAILED = 'file_extraction_failed',
 
   // AI reindex events
   REINDEX_PROGRESS = 'reindex_progress',
@@ -536,6 +545,49 @@ export class WebSocketClient {
   }
 
   /**
+   * Low-level fetch for ws-token endpoint.
+   */
+  private async _fetchWsToken(apiUrl: string, token: string): Promise<Response> {
+    return fetch(`${apiUrl}/auth/ws-token`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    })
+  }
+
+  /**
+   * Fetch a short-lived opaque connection token from the backend.
+   * If the current token is expired (401), attempts a refresh and retries.
+   * Falls back to using the JWT directly if the endpoint is unavailable.
+   */
+  private async fetchConnectionToken(): Promise<string> {
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8001'
+    try {
+      const res = await this._fetchWsToken(apiUrl, this.config.token)
+      if (res.ok) {
+        const data = await res.json()
+        return data.token as string
+      }
+      if (res.status === 401) {
+        const newToken = await refreshTokens()
+        if (newToken) {
+          this.config.token = newToken
+          const retryRes = await this._fetchWsToken(apiUrl, newToken)
+          if (retryRes.ok) {
+            const retryData = await retryRes.json()
+            return retryData.token as string
+          }
+        }
+      }
+    } catch {
+      // Endpoint unavailable — fall back to JWT
+    }
+    return this.config.token
+  }
+
+  /**
    * Connect to WebSocket server
    */
   connect(token?: string): void {
@@ -543,6 +595,12 @@ export class WebSocketClient {
     // Update token if provided
     if (token !== undefined) {
       this.config.token = token || ''
+    }
+
+    // Always sync with api-client module to pick up externally refreshed tokens
+    const moduleToken = getAccessToken()
+    if (moduleToken) {
+      this.config.token = moduleToken
     }
 
     // Don't connect without token
@@ -571,23 +629,30 @@ export class WebSocketClient {
 
     this.setState(WebSocketState.CONNECTING)
 
-    try {
-      // Build URL with token as query parameter
-      const url = new URL(this.config.url)
-      url.searchParams.set('token', this.config.token)
-      console.log('[WebSocket] Connecting to:', url.origin + url.pathname)
+    // Fetch opaque connection token, then open WebSocket
+    this.fetchConnectionToken().then((connToken) => {
+      // Guard: state may have changed while awaiting
+      if (this.state !== WebSocketState.CONNECTING) return
 
-      this.ws = new WebSocket(url.toString())
+      try {
+        const url = new URL(this.config.url)
+        url.searchParams.set('token', connToken)
+        console.log('[WebSocket] Connecting to:', url.origin + url.pathname)
 
-      // Set up event handlers
-      this.ws.onopen = this.handleOpen.bind(this)
-      this.ws.onclose = this.handleClose.bind(this)
-      this.ws.onerror = this.handleError.bind(this)
-      this.ws.onmessage = this.handleMessage.bind(this)
-    } catch (error) {
-      console.error('[WebSocket] Connection error:', error)
+        this.ws = new WebSocket(url.toString())
+
+        this.ws.onopen = this.handleOpen.bind(this)
+        this.ws.onclose = this.handleClose.bind(this)
+        this.ws.onerror = this.handleError.bind(this)
+        this.ws.onmessage = this.handleMessage.bind(this)
+      } catch (error) {
+        console.error('[WebSocket] Connection error:', error)
+        this.handleError(error as Event)
+      }
+    }).catch((error) => {
+      console.error('[WebSocket] Failed to fetch connection token:', error)
       this.handleError(error as Event)
-    }
+    })
   }
 
   /**
@@ -949,13 +1014,13 @@ export class WebSocketClient {
       }
     }
 
-    // If still too large, remove oldest entries
+    // If still too large, evict oldest entries using Map insertion order (O(n))
     if (this.processedMessageIds.size > this.MAX_DEDUP_CACHE_SIZE) {
-      const entries = Array.from(this.processedMessageIds.entries())
-        .sort((a, b) => a[1] - b[1])
-      const toRemove = entries.slice(0, entries.length - this.MAX_DEDUP_CACHE_SIZE)
-      for (const [id] of toRemove) {
-        this.processedMessageIds.delete(id)
+      const excess = this.processedMessageIds.size - this.MAX_DEDUP_CACHE_SIZE
+      const iter = this.processedMessageIds.keys()
+      for (let i = 0; i < excess; i++) {
+        const key = iter.next().value
+        if (key !== undefined) this.processedMessageIds.delete(key)
       }
     }
   }

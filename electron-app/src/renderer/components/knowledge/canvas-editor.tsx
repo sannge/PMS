@@ -8,7 +8,6 @@
 
 import { useState, useCallback, useRef, useEffect, useReducer, useMemo } from 'react'
 import type { Editor } from '@tiptap/core'
-import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { useAuthToken } from '@/contexts/auth-context'
 import type { CanvasDocument } from './canvas-types'
@@ -19,9 +18,8 @@ import { CanvasToolbar } from './canvas-toolbar'
 import { CanvasViewport } from './canvas-viewport'
 import { CanvasContainer } from './canvas-container'
 import { DocumentTimestamp } from './document-header'
+import { useImageUpload } from './use-image-upload'
 import './canvas-styles.css'
-
-const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
 
 interface CanvasEditorProps {
   canvasData: CanvasDocument
@@ -32,7 +30,8 @@ interface CanvasEditorProps {
   title?: string
   updatedAt?: string
   onBaselineSync?: (json: object) => void
-  isEmbeddingStale?: boolean
+  /** Backend-managed embedding status */
+  embeddingStatus?: 'none' | 'stale' | 'syncing' | 'synced'
 }
 
 export function CanvasEditor({
@@ -44,7 +43,7 @@ export function CanvasEditor({
   title,
   updatedAt,
   onBaselineSync,
-  isEmbeddingStale,
+  embeddingStatus,
 }: CanvasEditorProps) {
   const [activeEditor, setActiveEditor] = useState<Editor | null>(null)
   const measuredHeights = useRef<Map<string, number>>(new Map()).current
@@ -72,6 +71,10 @@ export function CanvasEditor({
   moveContainersBatchRef.current = state.moveContainersBatch
   const resizeAndPushRef = useRef(state.resizeAndPush)
   resizeAndPushRef.current = state.resizeAndPush
+
+  // H2 fix: Ref for editable to avoid stale closure in ResizeObserver callbacks
+  const editableRef = useRef(editable)
+  useEffect(() => { editableRef.current = editable }, [editable])
 
   // Sync baseline on mount for dirty detection
   const onBaselineSyncRef = useRef(onBaselineSync)
@@ -133,7 +136,7 @@ export function CanvasEditor({
       forceCanvasBoundsUpdate()
 
       // Auto-push overlapping containers to the right when content expands
-      if (!editable) return
+      if (!editableRef.current) return
       const containers = containersRef.current
       const expanded = containers.find((c) => c.id === id)
       if (!expanded) return
@@ -175,7 +178,7 @@ export function CanvasEditor({
         moveContainersBatchRef.current(moves)
       }
     }
-  }, [measuredWidths, measuredHeights, editable])
+  }, [measuredWidths, measuredHeights])
 
   // Atomically resize + push overlapping containers in one state update
   // (bypasses ResizeObserver → RAF chain for immediate response)
@@ -214,66 +217,8 @@ export function CanvasEditor({
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [state.activeContainerId, state.setActiveContainer])
 
-  // Pure image upload: POST file, return { url, attachmentId } or null.
-  // Used by both toolbar button and container paste/drop handlers.
-  const uploadImageFile = useCallback(async (file: File): Promise<{ url: string; attachmentId: string } | null> => {
-    if (!token) {
-      toast.error('Session expired. Please sign in again.')
-      return null
-    }
-    if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
-      toast.error('Unsupported image format. Use PNG, JPEG, GIF, or WebP.')
-      return null
-    }
-    if (file.size > 10 * 1024 * 1024) {
-      toast.error('Image must be less than 10 MB')
-      return null
-    }
-
-    const toastId = toast.loading('Uploading image...')
-    try {
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8001'
-      const params = new URLSearchParams()
-      if (documentId) {
-        params.append('entity_type', 'document')
-        params.append('entity_id', documentId)
-      }
-      const queryString = params.toString() ? `?${params.toString()}` : ''
-
-      const formData = new FormData()
-      formData.append('file', file)
-
-      const uploadResponse = await fetch(`${apiUrl}/api/files/upload${queryString}`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: formData,
-      })
-
-      if (!uploadResponse.ok) {
-        const errorData = await uploadResponse.json().catch(() => ({}))
-        throw new Error((errorData as { detail?: string }).detail || 'Failed to upload image')
-      }
-
-      const attachment = await uploadResponse.json() as { id: string }
-
-      const downloadResponse = await fetch(`${apiUrl}/api/files/${attachment.id}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-
-      if (!downloadResponse.ok) {
-        throw new Error('Failed to get image download URL')
-      }
-
-      const downloadData = await downloadResponse.json() as { download_url: string }
-      toast.dismiss(toastId)
-      return { url: downloadData.download_url, attachmentId: attachment.id }
-    } catch (err) {
-      toast.dismiss(toastId)
-      toast.error('Failed to upload image. Please try again.')
-      console.error('[CanvasEditor] Failed to upload image:', err)
-      return null
-    }
-  }, [token, documentId])
+  // Shared image upload hook (M4: extracted to eliminate duplication with DocumentEditor)
+  const uploadImageFile = useImageUpload(token, documentId)
 
   // Toolbar image upload: uploads and inserts into active editor
   const uploadImage = useCallback(async (file: File) => {
@@ -300,12 +245,13 @@ export function CanvasEditor({
 
       {/* Title section — mirrors normal document's h1 heading + timestamp */}
       <div className="px-6 pt-4 pb-2 border-b shrink-0">
-        {updatedAt && <DocumentTimestamp updatedAt={updatedAt} documentId={documentId} isEmbeddingStale={isEmbeddingStale} />}
+        {updatedAt && <DocumentTimestamp updatedAt={updatedAt} documentId={documentId} embeddingStatus={embeddingStatus} />}
         {editable ? (
           <input
             type="text"
             value={state.canvasTitle ?? title ?? ''}
             onChange={(e) => state.setCanvasTitle(e.target.value)}
+            maxLength={255}
             className="w-full text-2xl font-bold leading-tight bg-transparent border-none outline-none p-0 placeholder:text-muted-foreground/50"
             placeholder="Untitled"
           />

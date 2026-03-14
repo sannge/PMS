@@ -26,116 +26,68 @@ import pytest
 
 
 class TestAgentToolCallCounting:
-    """Tests for _count_total_tool_calls and MAX_TOOL_CALLS enforcement."""
+    """Tests for safety limit constants and state-counter enforcement.
 
-    def test_count_total_tool_calls_batched(self):
-        """LLM batching 20 tool_calls in one message counts as 20, not 1."""
-        from langchain_core.messages import AIMessage
-
-        from app.ai.agent.graph import _count_total_tool_calls
-
-        # Simulate 3 AIMessages, each with 20 tool calls
-        messages = []
-        for _ in range(3):
-            msg = AIMessage(
-                content="",
-                tool_calls=[
-                    {"id": f"call_{i}", "name": "test_tool", "args": {}}
-                    for i in range(20)
-                ],
-            )
-            messages.append(msg)
-
-        assert _count_total_tool_calls(messages) == 60
-
-    def test_count_total_tool_calls_sequential(self):
-        """Normal pattern: 1 tool call per message."""
-        from langchain_core.messages import AIMessage
-
-        from app.ai.agent.graph import _count_total_tool_calls
-
-        messages = [
-            AIMessage(
-                content="",
-                tool_calls=[{"id": f"call_{i}", "name": "tool", "args": {}}],
-            )
-            for i in range(5)
-        ]
-        assert _count_total_tool_calls(messages) == 5
-
-    def test_count_total_tool_calls_mixed(self):
-        """Messages without tool_calls are not counted."""
-        from langchain_core.messages import AIMessage, HumanMessage
-
-        from app.ai.agent.graph import _count_total_tool_calls
-
-        messages = [
-            HumanMessage(content="hello"),
-            AIMessage(
-                content="",
-                tool_calls=[
-                    {"id": "c1", "name": "t1", "args": {}},
-                    {"id": "c2", "name": "t2", "args": {}},
-                ],
-            ),
-            AIMessage(content="just text"),
-            AIMessage(
-                content="",
-                tool_calls=[{"id": "c3", "name": "t3", "args": {}}],
-            ),
-        ]
-        assert _count_total_tool_calls(messages) == 3
-
-    def test_count_tool_iterations_unchanged(self):
-        """Original _count_tool_iterations counts messages, not individual calls."""
-        from langchain_core.messages import AIMessage
-
-        from app.ai.agent.graph import _count_tool_iterations
-
-        messages = [
-            AIMessage(
-                content="",
-                tool_calls=[
-                    {"id": f"call_{i}", "name": "t", "args": {}}
-                    for i in range(20)
-                ],
-            )
-        ]
-        # 1 message with 20 calls = 1 iteration
-        assert _count_tool_iterations(messages) == 1
-
-    def test_should_continue_respects_max_tool_calls(self):
-        """should_continue returns 'end' when total tool calls >= MAX_TOOL_CALLS."""
-        from langchain_core.messages import AIMessage
-
-        from app.ai.agent.graph import MAX_TOOL_CALLS, build_agent_graph
-
-        # Build minimal graph to access should_continue via state check
-        # Instead, test the function directly
-        from app.ai.agent.graph import _count_total_tool_calls
-
-        # Create messages with exactly MAX_TOOL_CALLS tool calls
-        msgs = []
-        calls_per_msg = 10
-        num_msgs = MAX_TOOL_CALLS // calls_per_msg
-        for _ in range(num_msgs):
-            msgs.append(
-                AIMessage(
-                    content="",
-                    tool_calls=[
-                        {"id": f"c_{i}", "name": "t", "args": {}}
-                        for i in range(calls_per_msg)
-                    ],
-                )
-            )
-
-        assert _count_total_tool_calls(msgs) == MAX_TOOL_CALLS
+    The pipeline rewrite replaced message-based counting with state counters
+    (total_tool_calls, total_llm_calls, iteration_count) tracked per-node.
+    These tests verify the constants are correct and accessible.
+    """
 
     def test_max_tool_calls_value(self):
         """MAX_TOOL_CALLS should be 50."""
-        from app.ai.agent.graph import MAX_TOOL_CALLS
+        from app.ai.agent.constants import MAX_TOOL_CALLS
 
         assert MAX_TOOL_CALLS == 50
+
+    def test_max_llm_calls_value(self):
+        """MAX_LLM_CALLS should be 25."""
+        from app.ai.agent.constants import MAX_LLM_CALLS
+
+        assert MAX_LLM_CALLS == 25
+
+    def test_max_iterations_value(self):
+        """MAX_ITERATIONS should be 25."""
+        from app.ai.agent.constants import MAX_ITERATIONS
+
+        assert MAX_ITERATIONS == 25
+
+    def test_constants_importable_from_constants_module(self):
+        """Constants should be accessible via getter functions in constants module."""
+        from app.ai.agent.constants import (
+            get_max_iterations,
+            get_max_llm_calls,
+            get_max_tool_calls,
+        )
+
+        assert get_max_tool_calls() == 50
+        assert get_max_llm_calls() == 25
+        assert get_max_iterations() == 25
+
+    async def test_agent_node_stops_at_llm_limit(self):
+        """_agent_node returns limit message when total_llm_calls >= MAX_LLM_CALLS."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from langchain_core.messages import HumanMessage
+
+        from app.ai.agent.constants import MAX_LLM_CALLS
+        from app.ai.agent.graph import _agent_node
+
+        bound_model = AsyncMock()
+        state = {
+            "messages": [HumanMessage(content="query")],
+            "total_llm_calls": MAX_LLM_CALLS,
+            "iteration_count": 0,
+        }
+
+        result = await _agent_node(
+            state,
+            bound_model_cache=[bound_model],
+            chat_model_cache=[bound_model],
+            system_prompt_cache=[""],
+        )
+
+        assert "processing limit" in result["messages"][0].content
+        bound_model.ainvoke.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -153,8 +105,8 @@ class TestStreamingLimits:
             STREAM_OVERALL_TIMEOUT_S,
         )
 
-        assert STREAM_OVERALL_TIMEOUT_S == 120
-        assert STREAM_IDLE_TIMEOUT_S == 30
+        assert STREAM_OVERALL_TIMEOUT_S == 300
+        assert STREAM_IDLE_TIMEOUT_S == 60
         assert MAX_CHUNKS_PER_RESPONSE == 2000
 
 
@@ -236,39 +188,36 @@ class TestImportConcurrency:
 class TestManualSync:
     """Tests for manual-sync-only embedding pattern."""
 
-    def test_document_model_is_embedding_stale_null(self):
-        """Document with no embedding_updated_at is stale."""
+    def test_document_model_embedding_status_default(self):
+        """Document embedding_status column has server_default 'none'."""
+        from app.models.document import Document
+
+        col = Document.__table__.c.embedding_status
+        assert col.server_default.arg == "none"
+        assert col.nullable is False
+
+    def test_document_model_embedding_status_stale(self):
+        """Document embedding_status can be set to 'stale'."""
         from app.models.document import Document
 
         doc = Document()
-        doc.embedding_updated_at = None
-        doc.updated_at = datetime.now(timezone.utc)
-        assert doc.is_embedding_stale is True
+        doc.embedding_status = "stale"
+        assert doc.embedding_status == "stale"
 
-    def test_document_model_is_embedding_stale_old(self):
-        """Document with embedding older than content is stale."""
+    def test_document_model_embedding_status_synced(self):
+        """Document embedding_status can be set to 'synced'."""
         from app.models.document import Document
 
         doc = Document()
-        doc.embedding_updated_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
-        doc.updated_at = datetime(2026, 2, 1, tzinfo=timezone.utc)
-        assert doc.is_embedding_stale is True
+        doc.embedding_status = "synced"
+        assert doc.embedding_status == "synced"
 
-    def test_document_model_is_embedding_fresh(self):
-        """Document with embedding newer than content is not stale."""
-        from app.models.document import Document
-
-        doc = Document()
-        doc.embedding_updated_at = datetime(2026, 2, 1, tzinfo=timezone.utc)
-        doc.updated_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
-        assert doc.is_embedding_stale is False
-
-    def test_document_response_has_stale_field(self):
-        """DocumentResponse schema includes is_embedding_stale field."""
+    def test_document_response_has_embedding_status_field(self):
+        """DocumentResponse schema includes embedding_status field."""
         from app.schemas.document import DocumentResponse
 
         fields = DocumentResponse.model_fields
-        assert "is_embedding_stale" in fields
+        assert "embedding_status" in fields
 
     def test_no_auto_embed_on_save(self):
         """Verify the auto-embed code has been removed from the save_content endpoint.
@@ -458,7 +407,7 @@ class TestStreamingTimeoutBehavior:
     async def test_overall_timeout_fires(self, client, test_user, auth_headers):
         """Overall timeout fires and emits an error event near the limit."""
         # Mock _stream_agent to yield chunks slowly (one per second)
-        async def slow_stream(graph, state, config, thread_id=""):
+        async def slow_stream(graph, state, config, thread_id="", **kwargs):
             for i in range(200):
                 yield {"event": "text_delta", "data": json.dumps({"content": f"chunk {i}"})}
                 await asyncio.sleep(1)
@@ -491,7 +440,7 @@ class TestStreamingTimeoutBehavior:
     @pytest.mark.asyncio
     async def test_idle_timeout_fires(self, client, test_user, auth_headers):
         """Idle timeout fires when gap between chunks exceeds STREAM_IDLE_TIMEOUT_S."""
-        async def stalling_stream(graph, state, config, thread_id=""):
+        async def stalling_stream(graph, state, config, thread_id="", **kwargs):
             yield {"event": "text_delta", "data": json.dumps({"content": "first chunk"})}
             # Pause longer than idle timeout
             await asyncio.sleep(1.0)
@@ -524,7 +473,7 @@ class TestStreamingTimeoutBehavior:
     @pytest.mark.asyncio
     async def test_chunk_limit_fires(self, client, test_user, auth_headers):
         """Chunk limit fires when stream produces more than MAX_CHUNKS_PER_RESPONSE."""
-        async def verbose_stream(graph, state, config, thread_id=""):
+        async def verbose_stream(graph, state, config, thread_id="", **kwargs):
             for i in range(50):
                 yield {"event": "text_delta", "data": json.dumps({"content": f"c{i}"})}
 
@@ -554,7 +503,7 @@ class TestStreamingTimeoutBehavior:
     @pytest.mark.asyncio
     async def test_normal_stream_no_timeout(self, client, test_user, auth_headers):
         """Normal stream with 10 chunks in ~0s completes without timeout or errors."""
-        async def fast_stream(graph, state, config, thread_id=""):
+        async def fast_stream(graph, state, config, thread_id="", **kwargs):
             for i in range(10):
                 yield {"event": "text_delta", "data": json.dumps({"content": f"chunk {i}"})}
             yield {"event": "end", "data": "{}"}
@@ -1032,131 +981,59 @@ class TestImportConcurrencyLimiter:
 
 
 class TestAgentToolCallEnforcement:
-    """Behavioral test for tool call limit enforcement at graph level.
+    """Behavioral test for safety limit enforcement via _agent_node and _execute_tools.
 
-    Builds a real agent graph via build_agent_graph and invokes it with
-    state containing >= MAX_TOOL_CALLS to verify the graph routes to END
-    and agent_node returns a user-facing limit message.
+    The ReAct loop uses state counters (total_tool_calls,
+    total_llm_calls, iteration_count) in _agent_node and _execute_tools to enforce limits.
     """
 
-    @pytest.mark.asyncio
-    async def test_graph_stops_at_50_tool_calls(self):
-        """Build agent graph, invoke with 50+ tool calls, verify it stops with limit message."""
-        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-        from langchain_core.tools import tool as lc_tool
+    async def test_agent_node_stops_at_llm_call_limit(self):
+        """_agent_node returns limit message when total_llm_calls >= MAX_LLM_CALLS."""
+        from langchain_core.messages import HumanMessage
 
-        from app.ai.agent.graph import (
-            MAX_TOOL_CALLS,
-            _count_total_tool_calls,
-            build_agent_graph,
-        )
+        from app.ai.agent.constants import MAX_LLM_CALLS
+        from app.ai.agent.graph import _agent_node
 
-        # Create a dummy tool so build_agent_graph has at least one tool
-        @lc_tool
-        def dummy_tool(query: str) -> str:
-            """A dummy tool for testing."""
-            return "ok"
-
-        # Mock provider_registry and db_session_factory (not needed since
-        # agent_node will hit the tool call limit before invoking the LLM)
-        mock_registry = MagicMock()
-        mock_db_factory = MagicMock()
-
-        graph = build_agent_graph(
-            tools=[dummy_tool],
-            checkpointer=None,
-            provider_registry=mock_registry,
-            db_session_factory=mock_db_factory,
-        )
-
-        # Build message history with exactly MAX_TOOL_CALLS tool calls
-        messages = []
-        messages.append(HumanMessage(content="analyze everything"))
-        for batch in range(MAX_TOOL_CALLS // 10):
-            ai_msg = AIMessage(
-                content="",
-                tool_calls=[
-                    {"id": f"call_{batch}_{i}", "name": "dummy_tool", "args": {"query": "test"}}
-                    for i in range(10)
-                ],
-            )
-            messages.append(ai_msg)
-            for i in range(10):
-                messages.append(
-                    ToolMessage(content="ok", tool_call_id=f"call_{batch}_{i}")
-                )
-
-        assert _count_total_tool_calls(messages) == MAX_TOOL_CALLS
-
+        bound_model = AsyncMock()
         state = {
-            "messages": messages,
-            "user_id": "test-user",
-            "accessible_app_ids": [],
-            "accessible_project_ids": [],
+            "messages": [HumanMessage(content="query")],
+            "total_llm_calls": MAX_LLM_CALLS,
+            "iteration_count": 0,
         }
 
-        # Invoke the graph — agent_node should detect the limit and return
-        # a limit message without calling the LLM
-        result = await graph.ainvoke(state)
-
-        # The last message should be the limit-reached AIMessage
-        result_messages = result["messages"]
-        last_msg = result_messages[-1]
-        assert isinstance(last_msg, AIMessage)
-        assert "maximum number of operations" in last_msg.content
-
-    @pytest.mark.asyncio
-    async def test_agent_node_returns_user_message_at_limit(self):
-        """When at limit, agent_node returns a user-facing message (not silent stop)."""
-        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-        from langchain_core.tools import tool as lc_tool
-
-        from app.ai.agent.graph import MAX_TOOL_CALLS, build_agent_graph
-
-        @lc_tool
-        def noop_tool(input: str) -> str:
-            """A no-op tool."""
-            return "done"
-
-        graph = build_agent_graph(
-            tools=[noop_tool],
-            checkpointer=None,
-            provider_registry=MagicMock(),
-            db_session_factory=MagicMock(),
+        result = await _agent_node(
+            state,
+            bound_model_cache=[bound_model],
+            chat_model_cache=[bound_model],
+            system_prompt_cache=[""],
         )
 
-        # Build messages at exactly MAX_TOOL_CALLS
-        messages = [HumanMessage(content="do lots of things")]
-        for batch in range(MAX_TOOL_CALLS // 10):
-            messages.append(
-                AIMessage(
-                    content="",
-                    tool_calls=[
-                        {"id": f"c_{batch}_{i}", "name": "noop_tool", "args": {"input": "x"}}
-                        for i in range(10)
-                    ],
-                )
-            )
-            for i in range(10):
-                messages.append(
-                    ToolMessage(content="done", tool_call_id=f"c_{batch}_{i}")
-                )
+        assert "processing limit" in result["messages"][0].content
+        bound_model.ainvoke.assert_not_awaited()
 
+    async def test_agent_node_stops_at_iteration_limit(self):
+        """_agent_node returns limit message when iteration_count >= MAX_ITERATIONS."""
+        from langchain_core.messages import HumanMessage
+
+        from app.ai.agent.constants import MAX_ITERATIONS
+        from app.ai.agent.graph import _agent_node
+
+        bound_model = AsyncMock()
         state = {
-            "messages": messages,
-            "user_id": "test-user",
-            "accessible_app_ids": [],
-            "accessible_project_ids": [],
+            "messages": [HumanMessage(content="query")],
+            "total_llm_calls": 0,
+            "iteration_count": MAX_ITERATIONS,
         }
 
-        result = await graph.ainvoke(state)
+        result = await _agent_node(
+            state,
+            bound_model_cache=[bound_model],
+            chat_model_cache=[bound_model],
+            system_prompt_cache=[""],
+        )
 
-        # Verify the response contains the user-facing limit message
-        last_msg = result["messages"][-1]
-        assert isinstance(last_msg, AIMessage)
-        assert "maximum number of operations" in last_msg.content
-        # Verify it's not empty / silent stop
-        assert len(last_msg.content) > 20
+        assert "processing limit" in result["messages"][0].content
+        bound_model.ainvoke.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -1187,7 +1064,7 @@ class TestResumeChatEndpoint:
              patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock), \
              patch("app.ai.agent.graph.get_checkpointer", return_value=MagicMock()), \
              patch("app.routers.ai_chat.AITelemetry") as mock_telemetry, \
-             patch("app.ai.agent.tools_read.clear_tool_context") as mock_clear:
+             patch("app.ai.agent.tools.clear_tool_context") as mock_clear:
 
             resp = await client.post(
                 "/api/ai/chat/resume",
@@ -1220,7 +1097,7 @@ class TestResumeChatEndpoint:
              patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock), \
              patch("app.ai.agent.graph.get_checkpointer", return_value=MagicMock()), \
              patch("app.routers.ai_chat.AITelemetry") as mock_telemetry, \
-             patch("app.ai.agent.tools_read.clear_tool_context") as mock_clear:
+             patch("app.ai.agent.tools.clear_tool_context") as mock_clear:
 
             resp = await client.post(
                 "/api/ai/chat/resume",
@@ -1255,7 +1132,7 @@ class TestResumeChatEndpoint:
              patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock), \
              patch("app.ai.agent.graph.get_checkpointer", return_value=MagicMock()), \
              patch("app.routers.ai_chat.AITelemetry") as mock_telemetry, \
-             patch("app.ai.agent.tools_read.clear_tool_context") as mock_clear:
+             patch("app.ai.agent.tools.clear_tool_context") as mock_clear:
 
             resp = await client.post(
                 "/api/ai/chat/resume",
@@ -1340,7 +1217,7 @@ class TestReplayConversationGuards:
     @pytest.mark.asyncio
     async def test_guarded_replay_overall_timeout(self, client, test_user, auth_headers):
         """_guarded_replay emits error event on overall timeout."""
-        async def slow_stream(graph, state, config, thread_id=""):
+        async def slow_stream(graph, state, config, thread_id="", **kwargs):
             for i in range(200):
                 yield {"event": "text_delta", "data": json.dumps({"content": f"chunk {i}"})}
                 await asyncio.sleep(1)
@@ -1377,7 +1254,7 @@ class TestReplayConversationGuards:
     @pytest.mark.asyncio
     async def test_guarded_replay_chunk_limit(self, client, test_user, auth_headers):
         """_guarded_replay emits error event when chunk limit exceeded."""
-        async def verbose_stream(graph, state, config, thread_id=""):
+        async def verbose_stream(graph, state, config, thread_id="", **kwargs):
             for i in range(50):
                 yield {"event": "text_delta", "data": json.dumps({"content": f"c{i}"})}
 
@@ -1412,7 +1289,7 @@ class TestReplayConversationGuards:
     @pytest.mark.asyncio
     async def test_guarded_replay_idle_timeout(self, client, test_user, auth_headers):
         """_guarded_replay emits error event when a single chunk takes too long."""
-        async def stalling_stream(graph, state, config, thread_id=""):
+        async def stalling_stream(graph, state, config, thread_id="", **kwargs):
             yield {"event": "text_delta", "data": json.dumps({"content": "chunk 0"})}
             # Second chunk stalls longer than idle timeout
             await asyncio.sleep(3600)

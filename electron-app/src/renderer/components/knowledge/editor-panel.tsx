@@ -205,7 +205,7 @@ export function EditorPanel({ keyByDocumentId, canEdit: canEditProp, isOwner: is
           documentId={selectedDocumentId}
           title={currentDoc.title}
           updatedAt={currentDoc.updated_at}
-          isEmbeddingStale={currentDoc.is_embedding_stale}
+          embeddingStatus={currentDoc.embedding_status}
         />
       ) : (
         <DocumentEditor
@@ -220,7 +220,7 @@ export function EditorPanel({ keyByDocumentId, canEdit: canEditProp, isOwner: is
           documentId={selectedDocumentId}
           searchTerms={searchHighlightTerms}
           scrollToOccurrence={searchScrollToOccurrence}
-          isEmbeddingStale={currentDoc.is_embedding_stale}
+          embeddingStatus={currentDoc.embedding_status}
         />
       )}
 

@@ -18,10 +18,14 @@ from uuid import UUID, uuid4
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
+from .config_service import get_agent_config
+
 logger = logging.getLogger(__name__)
 
+_cfg = get_agent_config()
+
 EXPORT_DIR = Path(tempfile.gettempdir()) / "blair_exports"
-EXPORT_TTL_SECONDS = 3600  # 1 hour
+EXPORT_TTL_SECONDS = _cfg.get_int("export.excel_ttl_seconds", 3600)
 
 # Header styling
 HEADER_FONT = Font(bold=True, color="FFFFFF", size=11)

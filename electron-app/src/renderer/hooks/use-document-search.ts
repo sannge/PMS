@@ -15,6 +15,7 @@
 
 import { useInfiniteQuery, keepPreviousData } from '@tanstack/react-query'
 import { useAuthToken } from '@/contexts/auth-context'
+import { authGet } from '@/lib/api-client'
 import { queryKeys } from '@/lib/query-client'
 import { useState, useEffect, useMemo, useCallback } from 'react'
 
@@ -87,9 +88,8 @@ export function useDocumentSearch(query: string, options?: DocumentSearchOptions
       if (applicationId) params.set('application_id', applicationId)
       if (projectId) params.set('project_id', projectId)
 
-      const response = await window.electronAPI.get<SearchResponse>(
+      const response = await authGet<SearchResponse>(
         `/api/documents/search?${params.toString()}`,
-        { Authorization: `Bearer ${token}` },
       )
       if (response.status !== 200) {
         const detail = (response.data as unknown as { detail?: string })?.detail

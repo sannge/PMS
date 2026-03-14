@@ -1,6 +1,7 @@
 """Unit tests for authentication service and endpoints."""
 
 from datetime import timedelta
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
@@ -12,11 +13,16 @@ from app.services.auth_service import (
     Token,
     TokenData,
     authenticate_user,
+    blacklist_token,
     create_access_token,
+    create_refresh_token,
     create_user,
     decode_access_token,
     get_user_by_email,
     get_user_by_id,
+    is_token_blacklisted,
+    rotate_refresh_token,
+    validate_refresh_token,
 )
 from app.schemas.user import UserCreate
 
@@ -265,7 +271,7 @@ class TestAuthEndpoints:
         )
 
         assert response.status_code == 400
-        assert "already registered" in response.json()["detail"].lower()
+        assert "registration failed" in response.json()["detail"].lower()
 
     async def test_register_invalid_email(self, client: AsyncClient):
         """Test registration with invalid email fails."""
@@ -282,7 +288,7 @@ class TestAuthEndpoints:
 
     @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
     async def test_login_success(self, client: AsyncClient, test_user: User):
-        """Test successful login."""
+        """Test successful login returns 2FA response."""
         response = await client.post(
             "/auth/login",
             data={
@@ -293,8 +299,8 @@ class TestAuthEndpoints:
 
         assert response.status_code == 200
         data = response.json()
-        assert "access_token" in data
-        assert data["token_type"] == "bearer"
+        assert data["requires_2fa"] is True
+        assert data["email"] == test_user.email
 
     @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
     async def test_login_wrong_password(self, client: AsyncClient, test_user: User):
@@ -357,3 +363,73 @@ class TestAuthEndpoints:
         response = await client.post("/auth/logout")
 
         assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+class TestRefreshTokenRevocation:
+    """Tests for SA-007: refresh token revocation on rotation.
+
+    Uses an in-memory blacklist set to simulate Redis, since the test
+    environment runs without a live Redis instance.
+    """
+
+    async def test_rotate_blacklists_old_refresh_token(self):
+        """Old refresh token is blacklisted after rotation."""
+        blacklisted_jtis: set[str] = set()
+
+        async def mock_blacklist(jti, expires_at):
+            blacklisted_jtis.add(jti)
+
+        async def mock_is_blacklisted(jti):
+            return jti in blacklisted_jtis
+
+        user_id = str(uuid4())
+        email = "revoke@example.com"
+        old_token = create_refresh_token(user_id, email)
+
+        old_data = validate_refresh_token(old_token)
+        assert old_data is not None
+        assert old_data.jti is not None
+
+        with patch(
+            "app.services.auth_service.blacklist_token",
+            side_effect=mock_blacklist,
+        ), patch(
+            "app.services.auth_service.is_token_blacklisted",
+            side_effect=mock_is_blacklisted,
+        ):
+            # Rotate — this should blacklist the old token
+            result = await rotate_refresh_token(old_token)
+            assert result is not None
+
+            # Old token's JTI should now be blacklisted
+            assert old_data.jti in blacklisted_jtis
+
+            # Attempting to rotate the old token again should fail
+            result2 = await rotate_refresh_token(old_token)
+            assert result2 is None
+
+    async def test_rotate_returns_new_valid_pair(self):
+        """Rotation returns a new access + refresh token pair."""
+        user_id = str(uuid4())
+        email = "rotate@example.com"
+        old_token = create_refresh_token(user_id, email)
+
+        result = await rotate_refresh_token(old_token)
+        assert result is not None
+        new_access, new_refresh = result
+
+        # New access token should be decodable
+        access_data = decode_access_token(new_access)
+        assert access_data is not None
+        assert access_data.user_id == user_id
+
+        # New refresh token should be valid
+        refresh_data = validate_refresh_token(new_refresh)
+        assert refresh_data is not None
+        assert refresh_data.user_id == user_id
+
+    async def test_rotate_invalid_token_returns_none(self):
+        """Invalid refresh token returns None without error."""
+        result = await rotate_refresh_token("invalid.token.here")
+        assert result is None

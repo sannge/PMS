@@ -7,6 +7,7 @@
  * @see fastapi-backend/app/routers/documents.py
  */
 
+import { useCallback } from 'react'
 import {
   useQuery,
   useMutation,
@@ -15,6 +16,7 @@ import {
   type UseMutationResult,
 } from '@tanstack/react-query'
 import { useAuthToken, useAuthUserId } from '@/contexts/auth-context'
+import { authGet, authPost, authPut, authDelete, parseApiError } from '@/lib/api-client'
 import { queryKeys } from '@/lib/query-client'
 
 // ============================================================================
@@ -39,10 +41,8 @@ export interface Document {
   created_at: string
   updated_at: string
   tags: DocumentTagRef[]
-  /** True when document content has changed since last embedding sync */
-  is_embedding_stale?: boolean
-  /** True when an embedding sync job is queued or in-progress */
-  embedding_sync_pending?: boolean
+  /** Backend-managed embedding status */
+  embedding_status?: 'none' | 'stale' | 'syncing' | 'synced'
 }
 
 export interface DocumentTagRef {
@@ -64,10 +64,8 @@ export interface DocumentListItem {
   created_at: string
   updated_at: string
   deleted_at: string | null
-  /** True when document content has changed since last embedding sync */
-  is_embedding_stale?: boolean
-  /** True when an embedding sync job is queued or in-progress */
-  embedding_sync_pending?: boolean
+  /** Backend-managed embedding status */
+  embedding_status?: 'none' | 'stale' | 'syncing' | 'synced'
 }
 
 export interface DocumentListResponse {
@@ -104,38 +102,7 @@ interface DocumentsQueryOptions {
   includeUnfiled?: boolean
 }
 
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-function getAuthHeaders(token: string | null): Record<string, string> {
-  if (!token) return {}
-  return { Authorization: `Bearer ${token}` }
-}
-
-function parseApiError(status: number, data: unknown): string {
-  if (typeof data === 'object' && data !== null) {
-    const errorData = data as Record<string, unknown>
-    if (typeof errorData.detail === 'string') {
-      return errorData.detail
-    }
-  }
-
-  switch (status) {
-    case 400:
-      return 'Invalid request. Please check your input.'
-    case 401:
-      return 'Authentication required. Please log in again.'
-    case 403:
-      return 'Access denied.'
-    case 404:
-      return 'Document not found.'
-    case 409:
-      return 'Document has been modified by another user. Please refresh and try again.'
-    default:
-      return 'An unexpected error occurred.'
-  }
-}
+// parseApiError is imported from @/lib/api-client
 
 /**
  * Map frontend scope to API scope and scope_id.
@@ -171,6 +138,16 @@ export function useDocuments(
   // For personal scope, use userId as the cache key so WebSocket invalidation works
   const effectiveScopeId = scope === 'personal' ? (userId ?? '') : (scopeId ?? '')
 
+  const sortedSelect = useCallback(
+    (data: DocumentListResponse) => ({
+      ...data,
+      items: [...data.items].sort((a, b) =>
+        a.title.localeCompare(b.title, undefined, { sensitivity: 'base' })
+      ),
+    }),
+    []
+  )
+
   return useQuery({
     queryKey: [
       ...queryKeys.documents(scope, effectiveScopeId),
@@ -178,10 +155,6 @@ export function useDocuments(
       options?.includeUnfiled ?? false,
     ],
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
       const resolved = resolveScope(scope, scopeId, userId)
       if (!resolved) {
         return { items: [], next_cursor: null }
@@ -190,6 +163,7 @@ export function useDocuments(
       const params = new URLSearchParams()
       params.set('scope', resolved.apiScope)
       params.set('scope_id', resolved.apiScopeId)
+      params.set('limit', '200')
 
       if (options?.folderId) {
         params.set('folder_id', options.folderId)
@@ -198,13 +172,12 @@ export function useDocuments(
         params.set('include_unfiled', 'true')
       }
 
-      const response = await window.electronAPI.get<DocumentListResponse>(
-        `/api/documents?${params.toString()}`,
-        getAuthHeaders(token)
+      const response = await authGet<DocumentListResponse>(
+        `/api/documents?${params.toString()}`
       )
 
       if (response.status !== 200) {
-        throw new Error(parseApiError(response.status, response.data))
+        throw new Error(parseApiError(response.status, response.data, 'Document'))
       }
 
       return response.data
@@ -215,12 +188,7 @@ export function useDocuments(
       (scope === 'personal' || !!scopeId),
     // Sort items case-insensitively so order is consistent regardless of
     // backend collation, stale cache, or optimistic update timing.
-    select: (data) => ({
-      ...data,
-      items: [...data.items].sort((a, b) =>
-        a.title.localeCompare(b.title, undefined, { sensitivity: 'base' })
-      ),
-    }),
+    select: sortedSelect,
     // Use default staleTime (30s) - fresh data won't refetch on focus, stale data will
     gcTime: 24 * 60 * 60 * 1000,
     // WebSocket subscriptions keep cache fresh while mounted; window focus refetch is redundant.
@@ -238,17 +206,12 @@ export function useDocument(id: string | null): UseQueryResult<Document, Error> 
   return useQuery({
     queryKey: queryKeys.document(id ?? ''),
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<Document>(
-        `/api/documents/${id}`,
-        getAuthHeaders(token)
+      const response = await authGet<Document>(
+        `/api/documents/${id}`
       )
 
       if (response.status !== 200) {
-        throw new Error(parseApiError(response.status, response.data))
+        throw new Error(parseApiError(response.status, response.data, 'Document'))
       }
 
       return response.data
@@ -256,6 +219,7 @@ export function useDocument(id: string | null): UseQueryResult<Document, Error> 
     enabled: !!token && !!id,
     staleTime: 30 * 1000,
     gcTime: 24 * 60 * 60 * 1000,
+    refetchOnWindowFocus: false,
   })
 }
 
@@ -279,17 +243,12 @@ export function isTempId(id: string | null | undefined): boolean {
  * Adds document to cache immediately, replaces with server data on success.
  */
 export function useCreateDocument(): UseMutationResult<Document, Error, CreateDocumentParams> {
-  const token = useAuthToken()
   const userId = useAuthUserId()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (params: CreateDocumentParams) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<Document>(
+      const response = await authPost<Document>(
         '/api/documents',
         {
           title: params.title,
@@ -297,12 +256,11 @@ export function useCreateDocument(): UseMutationResult<Document, Error, CreateDo
           scope_id: params.scope_id,
           folder_id: params.folder_id ?? null,
           content_json: params.content_json ?? null,
-        },
-        getAuthHeaders(token)
+        }
       )
 
       if (response.status !== 201) {
-        throw new Error(parseApiError(response.status, response.data))
+        throw new Error(parseApiError(response.status, response.data, 'Document'))
       }
 
       return response.data
@@ -323,7 +281,7 @@ export function useCreateDocument(): UseMutationResult<Document, Error, CreateDo
       const previous = queryClient.getQueryData<DocumentListResponse>(queryKey)
 
       // Create optimistic document
-      const tempId = TEMP_ID_PREFIX + Date.now()
+      const tempId = TEMP_ID_PREFIX + crypto.randomUUID()
       const tempDoc: DocumentListItem = {
         id: tempId,
         title: params.title,
@@ -371,24 +329,18 @@ export function useCreateDocument(): UseMutationResult<Document, Error, CreateDo
  * Rename a document with optimistic update.
  */
 export function useRenameDocument(): UseMutationResult<Document, Error, RenameDocumentParams> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
   const userId = useAuthUserId()
 
   return useMutation({
     mutationFn: async ({ documentId, title, row_version }: RenameDocumentParams) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.put<Document>(
+      const response = await authPut<Document>(
         `/api/documents/${documentId}`,
-        { title, row_version },
-        getAuthHeaders(token)
+        { title, row_version }
       )
 
       if (response.status !== 200) {
-        throw new Error(parseApiError(response.status, response.data))
+        throw new Error(parseApiError(response.status, response.data, 'Document'))
       }
 
       return response.data
@@ -458,24 +410,18 @@ export function useRenameDocument(): UseMutationResult<Document, Error, RenameDo
  * Move a document to a different folder with optimistic update.
  */
 export function useMoveDocument(): UseMutationResult<Document, Error, MoveDocumentParams> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
   const userId = useAuthUserId()
 
   return useMutation({
     mutationFn: async ({ documentId, folder_id, row_version }: MoveDocumentParams) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.put<Document>(
+      const response = await authPut<Document>(
         `/api/documents/${documentId}`,
-        { folder_id, row_version },
-        getAuthHeaders(token)
+        { folder_id, row_version }
       )
 
       if (response.status !== 200) {
-        throw new Error(parseApiError(response.status, response.data))
+        throw new Error(parseApiError(response.status, response.data, 'Document'))
       }
 
       return response.data
@@ -579,23 +525,17 @@ export function useMoveDocument(): UseMutationResult<Document, Error, MoveDocume
  * Removes document from cache immediately, rollback on error.
  */
 export function useDeleteDocument(): UseMutationResult<void, Error, { documentId: string; scope: string; scopeId: string }> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
   const userId = useAuthUserId()
 
   return useMutation({
     mutationFn: async ({ documentId }: { documentId: string; scope: string; scopeId: string }) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.delete<void>(
-        `/api/documents/${documentId}`,
-        getAuthHeaders(token)
+      const response = await authDelete<void>(
+        `/api/documents/${documentId}`
       )
 
       if (response.status !== 204 && response.status !== 200) {
-        throw new Error(parseApiError(response.status, response.data))
+        throw new Error(parseApiError(response.status, response.data, 'Document'))
       }
     },
     onMutate: async ({ documentId, scope, scopeId }) => {
@@ -670,7 +610,6 @@ export function useReorderDocument(
   scope: string,
   scopeId: string
 ): UseMutationResult<Document, Error, ReorderDocumentParams> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
   const userId = useAuthUserId()
 
@@ -678,10 +617,6 @@ export function useReorderDocument(
 
   return useMutation({
     mutationFn: async ({ documentId, sortOrder, folderId, rowVersion }: ReorderDocumentParams) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
       const body: { sort_order: number; folder_id?: string | null; row_version: number } = {
         sort_order: sortOrder,
         row_version: rowVersion,
@@ -690,14 +625,13 @@ export function useReorderDocument(
         body.folder_id = folderId
       }
 
-      const response = await window.electronAPI.put<Document>(
+      const response = await authPut<Document>(
         `/api/documents/${documentId}`,
-        body,
-        getAuthHeaders(token)
+        body
       )
 
       if (response.status !== 200) {
-        throw new Error(parseApiError(response.status, response.data))
+        throw new Error(parseApiError(response.status, response.data, 'Document'))
       }
 
       return response.data
@@ -746,17 +680,12 @@ export function useApplicationsWithDocs(): UseQueryResult<ScopesSummaryResponse,
   return useQuery({
     queryKey: queryKeys.scopesSummary(),
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<ScopesSummaryResponse>(
-        '/api/documents/scopes-summary',
-        getAuthHeaders(token)
+      const response = await authGet<ScopesSummaryResponse>(
+        '/api/documents/scopes-summary'
       )
 
       if (response.status !== 200) {
-        throw new Error(parseApiError(response.status, response.data))
+        throw new Error(parseApiError(response.status, response.data, 'Document'))
       }
 
       return response.data
@@ -792,17 +721,12 @@ export function useProjectsWithContent(
   return useQuery({
     queryKey: ['projects-with-content', applicationId],
     queryFn: async () => {
-      if (!window.electronAPI || !applicationId) {
-        throw new Error('Electron API not available or no application ID')
-      }
-
-      const response = await window.electronAPI.get<ProjectsWithContentResponse>(
-        `/api/documents/projects-with-content?application_id=${applicationId}`,
-        getAuthHeaders(token)
+      const response = await authGet<ProjectsWithContentResponse>(
+        `/api/documents/projects-with-content?application_id=${applicationId}`
       )
 
       if (response.status !== 200) {
-        throw new Error(parseApiError(response.status, response.data))
+        throw new Error(parseApiError(response.status, response.data, 'Document'))
       }
 
       return response.data

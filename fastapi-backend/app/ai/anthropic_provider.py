@@ -78,8 +78,19 @@ class AnthropicProvider(LLMProvider, VisionProvider):
         base_url: Optional custom API endpoint.
     """
 
-    def __init__(self, api_key: str, base_url: str | None = None) -> None:
-        kwargs: dict[str, Any] = {"api_key": api_key}
+    def __init__(
+        self,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        auth_token: str | None = None,
+    ) -> None:
+        kwargs: dict[str, Any] = {}
+        if auth_token:
+            kwargs["auth_token"] = auth_token
+        elif api_key:
+            kwargs["api_key"] = api_key
+        else:
+            raise ValueError("Either api_key or auth_token must be provided")
         if base_url:
             kwargs["base_url"] = base_url
         self._client = AsyncAnthropic(**kwargs)

@@ -9,13 +9,14 @@
  */
 
 import React, { useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Sparkles, AlertCircle, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { MarkdownRenderer } from './markdown-renderer'
-import { ToolExecutionCard } from './tool-execution-card'
+import { ActivityTimeline } from './activity-timeline'
 import { SourceCitationList } from './source-citation'
 import { InterruptHandler } from './interrupt-handler'
-import type { ChatMessage, NavigationTarget } from './types'
+import type { ActivityItem, ChatMessage, NavigationTarget } from './types'
 
 // ============================================================================
 // Types
@@ -32,19 +33,23 @@ interface AiMessageRendererProps {
 // Entity Reference Detection
 // ============================================================================
 
-const TASK_KEY_PATTERN = /\b([A-Z]{2,10}-\d+)\b/g
-
 function renderContentWithEntities(
   content: string,
   onNavigate?: (target: NavigationTarget) => void
 ): React.ReactNode {
   if (!onNavigate) return content
 
+  // Fast-path: skip regex compilation if content cannot contain task keys
+  if (!content.includes('-')) return [content]
+
+  // Created fresh each call — avoids g-flag concurrent-mode safety issues with
+  // module-level regex (lastIndex state is shared). Uppercase-only to avoid
+  // false positives on strings like "COVID-19", "mb-4", "node-18".
+  const TASK_KEY_PATTERN = /\b([A-Z]{2,10}-\d+)\b/g
+
   const parts: React.ReactNode[] = []
   let lastIndex = 0
   let match: RegExpExecArray | null
-
-  TASK_KEY_PATTERN.lastIndex = 0
 
   while ((match = TASK_KEY_PATTERN.exec(content)) !== null) {
     if (match.index > lastIndex) {
@@ -60,8 +65,6 @@ function renderContentWithEntities(
           onNavigate({
             type: 'task',
             taskId: taskKey,
-            projectId: '',
-            applicationId: '',
           })
         }
         className={cn(
@@ -98,15 +101,20 @@ function ImageLightbox({
   alt: string
   onClose: () => void
 }): JSX.Element {
-  return (
+  // Portal to document.body so the overlay escapes the sidebar's overflow-hidden
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm"
       onClick={onClose}
+      onKeyDown={(e) => { if (e.key === 'Escape') onClose() }}
+      role="dialog"
+      aria-modal="true"
+      aria-label={alt}
     >
       <button
         type="button"
         onClick={onClose}
-        className="absolute top-4 right-4 flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20 transition-colors"
+        className="absolute top-4 right-4 flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20 transition-colors z-10"
         aria-label="Close image"
       >
         <X className="h-4 w-4" />
@@ -114,10 +122,11 @@ function ImageLightbox({
       <img
         src={src}
         alt={alt}
-        className="max-h-[85vh] max-w-[90vw] rounded-lg object-contain"
+        className="max-h-[85vh] max-w-[90vw] rounded-lg object-contain shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       />
-    </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -139,7 +148,10 @@ function ChatImageGallery({
           <button
             key={img.id}
             type="button"
-            onClick={() => setLightboxSrc({ src: img.previewUrl, alt: img.filename || 'Attached image' })}
+            onClick={() => setLightboxSrc({
+              src: ('lightboxUrl' in img && img.lightboxUrl) ? img.lightboxUrl : img.previewUrl,
+              alt: img.filename || 'Attached image',
+            })}
             className="cursor-pointer rounded-lg overflow-hidden ring-1 ring-white/20 hover:ring-white/40 transition-all hover:scale-[1.02]"
           >
             <img
@@ -197,6 +209,34 @@ function UserMessage({
 }
 
 // ============================================================================
+// Phase Labels (cognitive pipeline)
+// ============================================================================
+
+const PHASE_LABELS: Record<string, string> = {
+  understand: 'Understanding your request...',
+  clarify: 'Need some clarification...',
+  explore: 'Researching...',
+  synthesize: 'Analyzing results...',
+  respond: 'Preparing response...',
+}
+
+function getPhaseLabel(phase: string): string {
+  return PHASE_LABELS[phase] || phase
+}
+
+// ============================================================================
+// Activity Timeline Helpers
+// ============================================================================
+
+/** Returns true if the timeline only contains node steps with no tools — fast-path greeting. */
+function isSimpleGreeting(items: ActivityItem[]): boolean {
+  // Fast path: only understand + respond nodes (or legacy intake), no tools
+  return items.length <= 2 && items.every(item =>
+    item.type === 'node' && ['understand', 'respond', 'intake'].includes(item.node)
+  )
+}
+
+// ============================================================================
 // Assistant Message
 // ============================================================================
 
@@ -210,7 +250,8 @@ function AssistantMessage({
   onResolveInterrupt?: (response: Record<string, unknown>) => void
 }): JSX.Element {
   const hasContent = !!message.content
-  const hasTools = message.tool_calls && message.tool_calls.length > 0
+  const hasActivity = message.activity && message.activity.length > 0
+  const showTimeline = hasActivity && !isSimpleGreeting(message.activity!)
   const hasSources = message.sources && message.sources.length > 0
 
   return (
@@ -221,13 +262,16 @@ function AssistantMessage({
       </div>
 
       <div className="max-w-[calc(100%-2rem)] min-w-0 space-y-2 text-sm leading-relaxed overflow-hidden">
-        {/* Tool execution cards */}
-        {hasTools && (
-          <div className="space-y-1.5">
-            {message.tool_calls!.map((tc) => (
-              <ToolExecutionCard key={tc.id} tool={tc} />
-            ))}
+        {/* Phase indicator for cognitive pipeline */}
+        {message.current_phase && !hasContent && (
+          <div className="text-xs text-muted-foreground/70 animate-pulse">
+            {getPhaseLabel(message.current_phase)}
           </div>
+        )}
+
+        {/* Unified activity timeline — replaces PhaseIndicator + tool cards */}
+        {showTimeline && (
+          <ActivityTimeline items={message.activity!} />
         )}
 
         {/* Markdown-rendered content */}
@@ -286,7 +330,7 @@ function ErrorMessage({ message }: { message: ChatMessage }): JSX.Element {
 // Main Component
 // ============================================================================
 
-export function AiMessageRenderer({
+export const AiMessageRenderer = React.memo(function AiMessageRenderer({
   message,
   onNavigate,
   onResolveInterrupt,
@@ -316,4 +360,4 @@ export function AiMessageRenderer({
       )}
     </div>
   )
-}
+})

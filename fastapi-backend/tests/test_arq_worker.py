@@ -450,17 +450,20 @@ class TestWorkerSettings:
         """Cron jobs should be configured."""
         from app.worker import WorkerSettings
 
-        assert len(WorkerSettings.cron_jobs) == 4
+        assert len(WorkerSettings.cron_jobs) == 5
 
     def test_functions_registered(self):
         """Job functions should be registered."""
         from app.worker import WorkerSettings
 
-        assert len(WorkerSettings.functions) == 6
+        assert len(WorkerSettings.functions) == 9
         function_names = [f.__name__ for f in WorkerSettings.functions]
         assert "run_archive_jobs" in function_names
         assert "cleanup_stale_presence" in function_names
         assert "check_search_index_consistency" in function_names
         assert "embed_document_job" in function_names
+        assert "extract_and_embed_file_job" in function_names
         assert "batch_embed_stale_documents" in function_names
         assert "process_document_import" in function_names
+        assert "cleanup_checkpoints" in function_names
+        assert "generate_session_title" in function_names

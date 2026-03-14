@@ -19,6 +19,7 @@ import {
   UseMutationResult,
 } from '@tanstack/react-query'
 import { useAuthToken, useAuthUser } from '@/contexts/auth-context'
+import { authGet, authPost, authPut, authDelete } from '@/lib/api-client'
 import { queryKeys } from '@/lib/query-client'
 
 // ============================================================================
@@ -93,11 +94,6 @@ export interface ApiError {
 // Helper Functions
 // ============================================================================
 
-function getAuthHeaders(token: string | null): Record<string, string> {
-  if (!token) return {}
-  return { Authorization: `Bearer ${token}` }
-}
-
 function parseApiError(status: number, data: unknown): ApiError {
   if (typeof data === 'object' && data !== null) {
     const errorData = data as Record<string, unknown>
@@ -151,19 +147,12 @@ export function useComments(
   return useInfiniteQuery({
     queryKey: queryKeys.comments(taskId || ''),
     queryFn: async ({ pageParam }) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
       let url = `/api/tasks/${taskId}/comments`
       if (pageParam) {
         url += `?cursor=${encodeURIComponent(pageParam)}`
       }
 
-      const response = await window.electronAPI.get<CommentListResponse>(
-        url,
-        getAuthHeaders(token)
-      )
+      const response = await authGet<CommentListResponse>(url)
 
       if (response.status !== 200) {
         throw new Error(parseApiError(response.status, response.data).message)
@@ -176,6 +165,7 @@ export function useComments(
     enabled: !!token && !!taskId,
     staleTime: 30 * 1000, // 30 seconds - comments change frequently
     gcTime: 24 * 60 * 60 * 1000,
+    refetchOnWindowFocus: false, // WS real-time invalidation handles freshness
   })
 }
 
@@ -213,13 +203,8 @@ export function useComment(id: string | undefined): UseQueryResult<Comment, Erro
   return useQuery({
     queryKey: queryKeys.comment(id || ''),
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<Comment>(
+      const response = await authGet<Comment>(
         `/api/comments/${id}`,
-        getAuthHeaders(token)
       )
 
       if (response.status !== 200) {
@@ -244,23 +229,17 @@ export function useComment(id: string | undefined): UseQueryResult<Comment, Erro
 export function useCreateComment(
   taskId: string
 ): UseMutationResult<Comment, Error, CommentCreate, { previousData?: CommentListResponse[] }> {
-  const token = useAuthToken()
   const user = useAuthUser()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (data: CommentCreate) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
       // Strip client-only fields before sending to server
       const { _attachments, ...serverData } = data
 
-      const response = await window.electronAPI.post<Comment>(
+      const response = await authPost<Comment>(
         `/api/tasks/${taskId}/comments`,
         serverData,
-        getAuthHeaders(token)
       )
 
       if (response.status !== 201) {
@@ -365,19 +344,13 @@ export function useUpdateComment(
   commentId: string,
   taskId: string
 ): UseMutationResult<Comment, Error, CommentUpdate, { previousData?: { pages: CommentListResponse[] } }> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (data: CommentUpdate) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.put<Comment>(
+      const response = await authPut<Comment>(
         `/api/comments/${commentId}`,
         data,
-        getAuthHeaders(token)
       )
 
       if (response.status !== 200) {
@@ -438,18 +411,12 @@ export function useDeleteComment(
   commentId: string,
   taskId: string
 ): UseMutationResult<void, Error, void, { previousData?: { pages: CommentListResponse[] } }> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.delete<void>(
+      const response = await authDelete<void>(
         `/api/comments/${commentId}`,
-        getAuthHeaders(token)
       )
 
       if (response.status !== 204) {

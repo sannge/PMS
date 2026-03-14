@@ -10,7 +10,7 @@
  * Sending a new message in rewind mode branches the conversation from that point.
  */
 
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, useState } from 'react'
 import {
   X,
   RotateCcw,
@@ -20,6 +20,8 @@ import {
   Users,
   Lightbulb,
   ArrowRight,
+  ChevronLeft,
+  Plus,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -31,7 +33,14 @@ import { ChatInput, type ChatInputHandle } from './chat-input'
 import { AiMessageRenderer } from './ai-message-renderer'
 import { RewindBanner } from './rewind-ui'
 import { UserChatOverrideButton } from './user-chat-override'
-import type { NavigationTarget } from './types'
+import type { ChatSessionSummary, NavigationTarget } from './types'
+import { ChatSessionList } from './chat-session-list'
+import { ChatSkeleton } from './chat-skeleton'
+import { TokenUsageBar } from './token-usage-bar'
+import { ContextSummaryDivider } from './context-summary-divider'
+import { useChatMessages, useChatSessions } from '@/hooks/use-chat-sessions'
+import { useQueryClient } from '@tanstack/react-query'
+import { queryKeys } from '@/lib/query-client'
 import { setPendingAiNavigation, requestScreenSwitch } from '@/lib/ai-navigation'
 import './ai-styles.css'
 
@@ -75,34 +84,52 @@ function StreamingIndicator(): JSX.Element {
 // ============================================================================
 
 export function AiSidebar(): JSX.Element | null {
+  const queryClient = useQueryClient()
+  // HIGH-15 / MED-18: Single subscription instead of 10+ separate useAiSidebar
+  // selectors, each of which created its own useSyncExternalStore subscription.
   const {
-    isOpen,
-    close,
-    resetChat,
-    messages,
-    isStreaming,
-    chatKey,
-    threadId,
-    rewindMessageIndex,
-    rewindCheckpointId,
-    enterRewindMode,
-    exitRewindMode,
+    isOpen, close, resetChat, messages, isStreaming, chatKey,
+    threadId, rewindMessageIndex, rewindCheckpointId,
+    enterRewindMode, exitRewindMode,
+    activeSessionId, activeSessionTitle, view, setActiveSession, setView,
+    hasMoreMessages, contextSummary, loadMessages, setHasMoreMessages,
+    isLoadingMore, setIsLoadingMore,
   } = useAiSidebar()
   const { width, onResizeStart } = useAiSidebarWidth()
   const { sendMessage, resumeInterrupt, sendReplayMessage, cancelStream } = useAiChat()
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const chatInputRef = useRef<ChatInputHandle>(null)
+  const scrollContainerElRef = useRef<HTMLElement | null>(null)
+  const [scrollContainerVersion, setScrollContainerVersion] = useState(0)
+
+  const scrollAreaRef = useCallback((node: HTMLDivElement | null) => {
+    const viewport = node?.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement | null
+    if (!viewport && node) {
+      console.warn('[AiSidebar] Could not find scroll viewport — infinite scroll and auto-scroll disabled')
+    }
+    if (viewport !== scrollContainerElRef.current) {
+      scrollContainerElRef.current = viewport
+      // Bump version to re-trigger effects that depend on the scroll container
+      setScrollContainerVersion((v) => v + 1)
+    }
+  }, [])
+
+  const threadIdRef = useRef(threadId)
+  threadIdRef.current = threadId
+
+  const enterRewindModeRef = useRef(enterRewindMode)
+  enterRewindModeRef.current = enterRewindMode
 
   const handleResolveInterrupt = useCallback(
     async (response: Record<string, unknown>) => {
-      if (!threadId) return
+      if (!threadIdRef.current) return
       try {
-        await resumeInterrupt(threadId, response)
+        await resumeInterrupt(threadIdRef.current, response)
       } catch (err) {
         console.error('[AiSidebar] Resume failed:', err)
       }
     },
-    [threadId, resumeInterrupt]
+    [resumeInterrupt]
   )
 
   const handleNavigate = useCallback((target: NavigationTarget) => {
@@ -114,11 +141,11 @@ export function AiSidebar(): JSX.Element | null {
 
   const handleRewind = useCallback(
     (messageIndex: number) => {
-      const msg = messages[messageIndex]
+      const msg = useAiSidebar.getState().messages[messageIndex]
       if (!msg?.checkpoint_id) return
-      enterRewindMode(msg.checkpoint_id, messageIndex)
+      enterRewindModeRef.current(msg.checkpoint_id, messageIndex)
     },
-    [messages, enterRewindMode]
+    []
   )
 
   const handleReplaySend = useCallback(
@@ -132,6 +159,141 @@ export function AiSidebar(): JSX.Element | null {
     [rewindMessageIndex, rewindCheckpointId, sendReplayMessage]
   )
 
+  const handleSelectSession = useCallback(
+    (session: ChatSessionSummary) => {
+      cancelStream()
+      initialScrollSettledRef.current = false
+      // Remove potentially stale cached messages so the query refetches fresh
+      queryClient.removeQueries({ queryKey: queryKeys.chatMessages(session.id) })
+      setActiveSession(session.id, session.threadId, session.title)
+      setView('chat')
+      // Auto-focus chat input after switching to session
+      setTimeout(() => chatInputRef.current?.focus(), 150)
+    },
+    [cancelStream, queryClient, setActiveSession, setView]
+  )
+
+  const handleNewChat = useCallback(() => {
+    resetChat()
+    setView('chat')
+    setTimeout(() => chatInputRef.current?.focus(), 150)
+  }, [resetChat, setView])
+
+  const handleBackToSessions = useCallback(() => {
+    cancelStream()
+    prevSessionRef.current = null
+    // Clear active session so re-clicking the same session triggers message reload
+    useAiSidebar.getState().resetChat()
+  }, [cancelStream])
+
+  // Sync session title from the sessions list (picks up LLM-generated titles)
+  const sessionsQuery = useChatSessions()
+  useEffect(() => {
+    if (!activeSessionId || !sessionsQuery.data) return
+    const session = sessionsQuery.data.sessions.find((s) => s.id === activeSessionId)
+    if (session && session.title !== activeSessionTitle) {
+      useAiSidebar.getState().setActiveSessionTitle(session.title)
+    }
+  }, [activeSessionId, activeSessionTitle, sessionsQuery.data])
+
+  // Fetch messages when switching to a session
+  const messagesQuery = useChatMessages(view === 'chat' ? activeSessionId : null)
+
+  // Hydrate messages from query into store (only for user-selected sessions).
+  // Skip when messages already exist in memory — this prevents a newly linked
+  // session (created inline during streaming) from being overwritten by a DB
+  // fetch that returns 0 messages (not yet persisted).
+  const prevSessionRef = useRef<string | null>(null)
+  useEffect(() => {
+    // Reset tracking when user navigates back to session list so re-selecting
+    // the same session triggers hydration again.
+    if (!activeSessionId) {
+      prevSessionRef.current = null
+      return
+    }
+    if (activeSessionId !== prevSessionRef.current && messagesQuery.data) {
+      // If messages are already in memory (e.g. from an active or just-finished
+      // stream), don't overwrite them with the DB fetch.  The DB may not have
+      // the messages yet (persist happens in onRunFinished).
+      const currentMessages = useAiSidebar.getState().messages
+      if (currentMessages.length > 0) {
+        prevSessionRef.current = activeSessionId
+        return
+      }
+      prevSessionRef.current = activeSessionId
+      const allMessages = messagesQuery.data.pages.slice().reverse().flatMap((p) => p.messages)
+      const mapped = allMessages.map((m) => ({
+        id: m.id,
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+        sources: (m.sources as import('./types').SourceCitation[] | undefined) ?? undefined,
+        checkpoint_id: m.checkpoint_id ?? undefined,
+        isError: m.is_error,
+        timestamp: new Date(m.created_at).getTime(),
+      }))
+      loadMessages(mapped)
+      const lastPage = messagesQuery.data.pages[messagesQuery.data.pages.length - 1]
+      setHasMoreMessages(lastPage?.has_more ?? false)
+      // Delay sentinel observation until initial scroll settles
+      initialScrollSettledRef.current = false
+      requestAnimationFrame(() => {
+        initialScrollSettledRef.current = true
+      })
+    }
+    // StrictMode: reset ref on cleanup so the second mount re-evaluates hydration
+    return () => { prevSessionRef.current = null }
+  }, [activeSessionId, messagesQuery.data, loadMessages, setHasMoreMessages])
+
+  // Infinite scroll sentinel
+  const sentinelRef = useRef<HTMLDivElement>(null)
+  const initialScrollSettledRef = useRef(false)
+
+  // Stable refs for IntersectionObserver callback (avoid teardown on every render)
+  const hasMoreRef = useRef(hasMoreMessages)
+  hasMoreRef.current = hasMoreMessages
+  const isLoadingMoreRef = useRef(isLoadingMore)
+  isLoadingMoreRef.current = isLoadingMore
+  const messagesQueryRef = useRef(messagesQuery)
+  messagesQueryRef.current = messagesQuery
+
+  useEffect(() => {
+    const scrollEl = scrollContainerElRef.current
+    if (view !== 'chat' || !scrollEl) return
+    const sentinel = sentinelRef.current
+    if (!sentinel) return
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!initialScrollSettledRef.current) return
+        if (
+          entries[0].isIntersecting &&
+          hasMoreRef.current &&
+          !isLoadingMoreRef.current &&
+          !messagesQueryRef.current.isFetchingNextPage
+        ) {
+          setIsLoadingMore(true)
+          const el = scrollContainerElRef.current
+          if (!el) {
+            setIsLoadingMore(false)
+            return
+          }
+          const prevHeight = el.scrollHeight
+          messagesQueryRef.current.fetchNextPage().then(() => {
+            requestAnimationFrame(() => {
+              const newHeight = el.scrollHeight
+              el.scrollTop += newHeight - prevHeight
+              setIsLoadingMore(false)
+            })
+          }).catch(() => setIsLoadingMore(false))
+        }
+      },
+      { root: scrollEl, threshold: 0.1 }
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+    // scrollContainerVersion triggers re-creation only when the actual DOM element changes
+  }, [view, scrollContainerVersion, setIsLoadingMore])
+
   const handleSuggestionClick = useCallback(
     (text: string) => {
       sendMessage(text)
@@ -139,10 +301,26 @@ export function AiSidebar(): JSX.Element | null {
     [sendMessage]
   )
 
-  // Auto-scroll to bottom when messages are added or streaming
+  // Track whether the user is near the bottom of the scroll container.
+  // Only auto-scroll when they haven't scrolled up to read earlier messages.
+  const isNearBottomRef = useRef(true)
+
+  useEffect(() => {
+    const el = scrollContainerElRef.current
+    if (!el) return
+    const handleScroll = () => {
+      const threshold = 80 // px from bottom
+      isNearBottomRef.current =
+        el.scrollHeight - el.scrollTop - el.clientHeight < threshold
+    }
+    el.addEventListener('scroll', handleScroll, { passive: true })
+    return () => el.removeEventListener('scroll', handleScroll)
+  }, [scrollContainerVersion])
+
+  // Auto-scroll to bottom when messages are added or streaming, if user is near bottom
   const prevMsgCountRef = useRef(messages.length)
   useEffect(() => {
-    if (messages.length >= prevMsgCountRef.current || isStreaming) {
+    if (isNearBottomRef.current && (messages.length >= prevMsgCountRef.current || isStreaming)) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
     }
     prevMsgCountRef.current = messages.length
@@ -204,27 +382,48 @@ export function AiSidebar(): JSX.Element | null {
 
         <div className="flex items-center justify-between px-4 py-3 border-b border-border/40">
           <div className="flex items-center gap-2.5">
-            {/* Blair avatar with glow */}
-            <div className="relative">
-              <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-lg shadow-amber-500/25">
-                <Sparkles className="h-3.5 w-3.5 text-white" />
-              </div>
-              <span className="absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-emerald-400 ring-[1.5px] ring-background" />
-            </div>
-            <div>
-              <h2 className="text-sm font-semibold text-foreground leading-none">Blair</h2>
-              <p className="text-[10px] text-muted-foreground/60 mt-0.5">AI Assistant</p>
-            </div>
+            {view === 'chat' ? (
+              <>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleBackToSessions}
+                  className="h-7 w-7 rounded-lg hover:bg-muted/80"
+                  aria-label="Back to sessions"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                <div className="min-w-0">
+                  <h2 className="text-sm font-semibold text-foreground leading-none truncate max-w-[180px]">
+                    {activeSessionTitle || 'New Chat'}
+                  </h2>
+                  <p className="text-[10px] text-muted-foreground/60 mt-0.5">Blair</p>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="relative">
+                  <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-lg shadow-amber-500/25">
+                    <Sparkles className="h-3.5 w-3.5 text-white" />
+                  </div>
+                  <span className="absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-emerald-400 ring-[1.5px] ring-background" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-semibold text-foreground leading-none">Blair</h2>
+                  <p className="text-[10px] text-muted-foreground/60 mt-0.5">AI Assistant</p>
+                </div>
+              </>
+            )}
           </div>
           <div className="flex items-center gap-0.5">
             <Button
               variant="ghost"
               size="icon"
-              onClick={resetChat}
+              onClick={handleNewChat}
               className="h-7 w-7 rounded-lg hover:bg-muted/80"
               aria-label="New chat"
             >
-              <RotateCcw className="h-3.5 w-3.5" />
+              <Plus className="h-3.5 w-3.5" />
             </Button>
             <UserChatOverrideButton />
             <Button
@@ -240,11 +439,34 @@ export function AiSidebar(): JSX.Element | null {
         </div>
       </div>
 
-      {/* Messages */}
-      <ScrollArea className="flex-1" key={chatKey}>
+      {/* Body */}
+      {view === 'sessions' ? (
+        <ChatSessionList onSelectSession={handleSelectSession} />
+      ) : (
+      <>
+      <ScrollArea className="flex-1" key={chatKey} ref={scrollAreaRef}>
         <div className="flex flex-col gap-3 p-4 overflow-hidden select-text cursor-text" aria-live={isStreaming ? 'off' : 'polite'}>
+          {/* Infinite scroll sentinel */}
+          {hasMoreMessages && (
+            <div ref={sentinelRef} className="flex justify-center py-2">
+              {isLoadingMore && (
+                <div className="flex items-center gap-1">
+                  {[0, 1, 2].map((i) => (
+                    <span key={i} className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40 animate-pulse" style={{ animationDelay: `${i * 0.2}s` }} />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Context summary divider */}
+          {contextSummary && <ContextSummaryDivider summary={contextSummary} />}
+
+          {/* Loading skeleton for session switch */}
+          {activeSessionId && messagesQuery.isLoading && messages.length === 0 && <ChatSkeleton />}
+
           {/* Empty state with suggestions */}
-          {messages.length === 0 && (
+          {messages.length === 0 && !activeSessionId && !messagesQuery.isLoading && (
             <div className="flex flex-col items-center py-8 px-1">
               {/* Animated hero */}
               <div className="relative mb-6">
@@ -275,11 +497,11 @@ export function AiSidebar(): JSX.Element | null {
                 <p className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground/50 px-1">
                   Suggestions
                 </p>
-                {SUGGESTIONS.map((s, i) => {
+                {SUGGESTIONS.map((s) => {
                   const Icon = s.icon
                   return (
                     <button
-                      key={i}
+                      key={s.text}
                       type="button"
                       onClick={() => handleSuggestionClick(s.text)}
                       className={cn(
@@ -353,6 +575,9 @@ export function AiSidebar(): JSX.Element | null {
         </div>
       </ScrollArea>
 
+      {/* Token Usage Bar */}
+      <TokenUsageBar />
+
       {/* Rewind Banner */}
       {rewindMessageIndex !== null && messages[rewindMessageIndex] && (
         <RewindBanner
@@ -363,6 +588,8 @@ export function AiSidebar(): JSX.Element | null {
 
       {/* Chat Input */}
       <ChatInput ref={chatInputRef} onReplaySend={rewindMessageIndex !== null ? handleReplaySend : undefined} onCancelStream={cancelStream} />
+      </>
+      )}
     </div>
   )
 }

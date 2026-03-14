@@ -22,7 +22,7 @@ from ..schemas.sql_query import (
     SQLValidateRequest,
     SQLValidateResponse,
 )
-from ..ai.rate_limiter import check_query_rate_limit, check_reindex_rate_limit
+from ..ai.rate_limiter import check_query_rate_limit
 from ..ai.telemetry import AITelemetry, TelemetryTimer
 from ..services.auth_service import get_current_user
 
@@ -236,84 +236,12 @@ async def download_export(
             detail="Export file not found or expired",
         )
 
+    media_type = "application/pdf" if filename.endswith(".pdf") else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     return FileResponse(
         path=str(file_path),
         filename=filename,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        media_type=media_type,
     )
-
-
-# ---------------------------------------------------------------------------
-# POST /api/ai/reindex/{document_id}  --  Re-embed document
-# ---------------------------------------------------------------------------
-
-
-@router.post("/reindex/{document_id}", status_code=status.HTTP_202_ACCEPTED)
-async def reindex_document(
-    document_id: UUID,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-    _rate_limit: None = Depends(check_reindex_rate_limit),
-) -> dict[str, str]:
-    """Re-embed a document by enqueueing an embedding job.
-
-    The job runs asynchronously via the ARQ worker. Uses _job_id for
-    deduplication so multiple requests for the same document collapse
-    into a single job.
-    """
-    # Verify document exists and user has access
-    result = await db.execute(
-        select(Document).where(
-            Document.id == document_id,
-            Document.deleted_at.is_(None),
-        )
-    )
-    doc = result.scalar_one_or_none()
-    if doc is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Document {document_id} not found",
-        )
-
-    # RBAC: verify user has access to the document's scope
-    if not await _user_can_access_document(doc, current_user, db):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Document {document_id} not found",
-        )
-
-    # Enqueue embedding job via ARQ
-    try:
-        from ..services.arq_helper import get_arq_redis
-
-        arq_redis = await get_arq_redis()
-        await arq_redis.enqueue_job(
-            "embed_document_job",
-            str(document_id),
-            _job_id=f"embed:{document_id}",
-        )
-    except RuntimeError:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Background worker not available",
-        )
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception("Failed to enqueue embed_document_job for %s", document_id)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Failed to enqueue reindex job",
-        )
-
-    AITelemetry.log_reindex(
-        user_id=current_user.id,
-        document_count=1,
-        duration_ms=0,
-        success=True,
-    )
-
-    return {"status": "accepted", "document_id": str(document_id)}
 
 
 # ---------------------------------------------------------------------------

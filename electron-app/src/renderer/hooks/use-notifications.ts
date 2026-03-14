@@ -23,6 +23,7 @@ import {
   InfiniteData,
 } from '@tanstack/react-query'
 import { useAuthToken } from '@/contexts/auth-context'
+import { authGet, authPost, authPut, authDelete } from '@/lib/api-client'
 import { queryKeys } from '@/lib/query-client'
 
 // ============================================================================
@@ -108,11 +109,6 @@ export interface ApiError {
 // Helper Functions
 // ============================================================================
 
-function getAuthHeaders(token: string | null): Record<string, string> {
-  if (!token) return {}
-  return { Authorization: `Bearer ${token}` }
-}
-
 function parseApiError(status: number, data: unknown): ApiError {
   if (typeof data === 'object' && data !== null) {
     const errorData = data as Record<string, unknown>
@@ -160,13 +156,8 @@ export function useNotificationsInfinite(): UseInfiniteQueryResult<InfiniteData<
   return useInfiniteQuery({
     queryKey: queryKeys.notifications,
     queryFn: async ({ pageParam = 0 }) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<NotificationApiResponse[]>(
-        `/api/notifications?skip=${pageParam}&limit=${NOTIFICATIONS_PAGE_SIZE}`,
-        getAuthHeaders(token)
+      const response = await authGet<NotificationApiResponse[]>(
+        `/api/notifications?skip=${pageParam}&limit=${NOTIFICATIONS_PAGE_SIZE}`
       )
 
       if (response.status !== 200) {
@@ -188,6 +179,7 @@ export function useNotificationsInfinite(): UseInfiniteQueryResult<InfiniteData<
     enabled: !!token,
     staleTime: 60 * 1000,
     gcTime: 24 * 60 * 60 * 1000,
+    refetchOnWindowFocus: false, // WS real-time invalidation handles freshness
   })
 }
 
@@ -250,13 +242,8 @@ export function useUnreadCount(): UseQueryResult<number, Error> {
   return useQuery({
     queryKey: queryKeys.unreadCount,
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<{ total: number; unread: number }>(
-        '/api/notifications/count',
-        getAuthHeaders(token)
+      const response = await authGet<{ total: number; unread: number }>(
+        '/api/notifications/count'
       )
 
       if (response.status !== 200) {
@@ -269,6 +256,7 @@ export function useUnreadCount(): UseQueryResult<number, Error> {
     staleTime: 30 * 1000, // 30 seconds
     gcTime: 24 * 60 * 60 * 1000,
     refetchInterval: 30 * 1000, // Poll every 30 seconds
+    refetchOnWindowFocus: false, // WS real-time invalidation handles freshness
   })
 }
 
@@ -287,19 +275,13 @@ export function useMarkAsRead(): UseMutationResult<
   string,
   { previousData?: InfiniteNotificationData; previousCount?: number }
 > {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (notificationId: string) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.put<void>(
+      const response = await authPut<void>(
         `/api/notifications/${notificationId}`,
-        { is_read: true },
-        getAuthHeaders(token)
+        { is_read: true }
       )
 
       if (response.status !== 200 && response.status !== 204) {
@@ -373,19 +355,13 @@ export function useMarkAllAsRead(): UseMutationResult<
   void,
   { previousData?: InfiniteNotificationData; previousCount?: number }
 > {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<void>(
+      const response = await authPost<void>(
         '/api/notifications/mark-all-read',
-        {},
-        getAuthHeaders(token)
+        {}
       )
 
       if (response.status !== 200 && response.status !== 204) {
@@ -438,18 +414,12 @@ export function useDeleteNotification(): UseMutationResult<
   string,
   { previousData?: InfiniteNotificationData; previousCount?: number }
 > {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (notificationId: string) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.delete<void>(
-        `/api/notifications/${notificationId}`,
-        getAuthHeaders(token)
+      const response = await authDelete<void>(
+        `/api/notifications/${notificationId}`
       )
 
       if (response.status !== 204 && response.status !== 200) {
@@ -520,18 +490,12 @@ export function useClearAllNotifications(): UseMutationResult<
   void,
   { previousData?: InfiniteNotificationData; previousCount?: number }
 > {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.delete<void>(
-        '/api/notifications',
-        getAuthHeaders(token)
+      const response = await authDelete<void>(
+        '/api/notifications'
       )
 
       if (response.status !== 204 && response.status !== 200) {

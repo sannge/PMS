@@ -64,4 +64,6 @@ export const NON_PERSISTENT_KEYS = [
   'activeLocks',
   'documentLock',
   'knowledge-permissions',
+  'chat-sessions',
+  'chat-messages',
 ] as const

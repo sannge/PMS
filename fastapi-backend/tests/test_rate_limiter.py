@@ -601,13 +601,13 @@ class TestEmbeddingRateLimitMiddleware:
         )
 
         await check_embedding_rate_limit(
-            application_id="app-123",
+            user_id="user-123",
             rate_limiter=mock_limiter,
         )
 
         mock_limiter.check_and_increment.assert_awaited_once()
         call_kwargs = mock_limiter.check_and_increment.call_args
-        assert call_kwargs[1]["scope_id"] == "app-123"
+        assert call_kwargs[1]["scope_id"] == "user-123"
         assert call_kwargs[1]["endpoint"] == "ai_embed"
 
     @pytest.mark.asyncio
@@ -627,7 +627,7 @@ class TestEmbeddingRateLimitMiddleware:
 
         with pytest.raises(HTTPException) as exc_info:
             await check_embedding_rate_limit(
-                application_id="app-456",
+                user_id="user-456",
                 rate_limiter=mock_limiter,
             )
 
@@ -661,7 +661,7 @@ class TestImportRateLimitMiddleware:
             )
 
         assert exc_info.value.status_code == 429
-        assert "Import rate limit" in exc_info.value.detail
+        assert "Import: rate limit exceeded" in exc_info.value.detail
 
 
 class TestReindexRateLimitMiddleware:
@@ -690,4 +690,4 @@ class TestReindexRateLimitMiddleware:
             )
 
         assert exc_info.value.status_code == 429
-        assert "Reindex rate limit" in exc_info.value.detail
+        assert "Reindex: rate limit exceeded" in exc_info.value.detail

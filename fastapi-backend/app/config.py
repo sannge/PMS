@@ -37,14 +37,17 @@ class Settings(BaseSettings):
     # JWT settings
     jwt_secret: str
     jwt_algorithm: str = "HS256"
-    jwt_expiration_minutes: int = 1440
+    jwt_expiration_minutes: int = 1440  # Legacy: used as default if access not set
+    jwt_access_expiration_minutes: int = 15
+    jwt_refresh_expiration_days: int = 14
+    jwt_refresh_secret: str = ""  # Separate secret for refresh tokens; falls back to jwt_secret
 
     # Server settings
     host: str = "0.0.0.0"
     port: int = 8000
 
     # WebSocket settings (DDoS protection)
-    ws_max_connections_per_user: int = 50  # Normal user: ~5-10, attack: 100+
+    ws_max_connections_per_user: int = 15  # Normal user: ~5-10, attack: 100+
     ws_max_message_size: int = 65536  # 64KB max message size (DoS protection)
 
     # Redis settings (for WebSocket pub/sub and distributed caching)
@@ -153,12 +156,26 @@ class Settings(BaseSettings):
 # Global settings instance
 settings = Settings()
 
-# Warn at startup if AI encryption key is empty while AI provider is configured
+import os as _os
+
+# Enforce AI encryption key when AI provider is configured
 if not settings.ai_encryption_key and settings.ai_default_provider:
-    _msg = (
-        "AI_ENCRYPTION_KEY is empty but AI_DEFAULT_PROVIDER is set to "
-        f"'{settings.ai_default_provider}'. AI provider credentials stored in the "
-        "database will not be encrypted. Set AI_ENCRYPTION_KEY for production use."
-    )
-    _config_logger.warning(_msg)
-    warnings.warn(_msg, stacklevel=1)
+    if _os.environ.get("TESTING") == "1":
+        _config_logger.warning("AI_ENCRYPTION_KEY is empty (test mode)")
+    else:
+        raise ValueError(
+            "AI_ENCRYPTION_KEY must be set when AI_DEFAULT_PROVIDER is configured. "
+            "AI provider credentials cannot be stored without encryption."
+        )
+
+# Warn when refresh token secret falls back to access token secret
+if not settings.jwt_refresh_secret:
+    if settings.redis_required:
+        _config_logger.warning(
+            "SECURITY: JWT_REFRESH_SECRET is not set — refresh tokens share the "
+            "access token signing secret. Set JWT_REFRESH_SECRET for production."
+        )
+    elif _os.environ.get("TESTING") != "1":
+        _config_logger.info(
+            "JWT_REFRESH_SECRET not set — falling back to JWT_SECRET for refresh tokens."
+        )

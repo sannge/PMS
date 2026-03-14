@@ -66,6 +66,9 @@ import { DeleteDialog } from './delete-dialog'
 import { createEmptyCanvas } from './canvas-types'
 import { matchesSearch, filterFolderTree, findFolderById, isDescendantOf, collectAncestorIds } from './tree-utils'
 import { useProjectPermissionsMap } from '@/hooks/use-knowledge-permissions'
+import { ImportDialog } from '@/components/ai/import-dialog'
+import { useUploadFile, useRenameFile, useDeleteFile, fetchFileDownloadUrl, type FolderFileListItem, type UploadConflictError } from '@/hooks/use-folder-files'
+import { FileConflictDialog } from './file-conflict-dialog'
 import { parseSortableId, parsePrefixToScope, type ScopeInfo } from './dnd-utils'
 
 // ============================================================================
@@ -81,12 +84,14 @@ interface KnowledgeTreeProps {
 
 interface ContextMenuTarget {
   id: string
-  type: 'folder' | 'document'
+  type: 'folder' | 'document' | 'file'
   name: string
   x: number
   y: number
   scope: 'application' | 'project' | 'personal'
   scopeId: string
+  /** For file targets: the folder containing the file */
+  folderId?: string
 }
 
 interface ActiveDragItem {
@@ -446,6 +451,19 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
     return findDocInCache(documentId)?.row_version ?? null
   }, [queryClient, findDocInCache])
 
+  /** Find a file's list item data from TanStack Query cache (searches all folder file caches). */
+  const findFileInCache = useCallback((fileId: string): FolderFileListItem | null => {
+    const lists = queryClient.getQueriesData<{ items: FolderFileListItem[] }>({
+      queryKey: ['folderFiles'],
+      exact: false,
+    })
+    for (const [, data] of lists) {
+      const item = data?.items?.find(i => i.id === fileId)
+      if (item) return item
+    }
+    return null
+  }, [queryClient])
+
   /** Resolve DnD prefix to scope/scopeId for mutation params. */
   const getScopeFromPrefix = useCallback((prefix: string): ScopeInfo => {
     const parsed = parsePrefixToScope(prefix)
@@ -462,7 +480,7 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
 
   // UI state
   const [renamingItemId, setRenamingItemId] = useState<string | null>(null)
-  const [renamingItemType, setRenamingItemType] = useState<'folder' | 'document'>('folder')
+  const [renamingItemType, setRenamingItemType] = useState<'folder' | 'document' | 'file'>('folder')
   const [renamingItemScope, setRenamingItemScope] = useState<string | null>(null)
   const [renamingItemScopeId, setRenamingItemScopeId] = useState<string | null>(null)
   const [contextMenuTarget, setContextMenuTarget] = useState<ContextMenuTarget | null>(null)
@@ -475,6 +493,21 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
   const [createScopeId, setCreateScopeId] = useState<string>('')
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; type: 'document' | 'folder'; name: string; scope: string | null; scopeId: string | null } | null>(null)
+
+  // Import dialog state
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
+  const [importTarget, setImportTarget] = useState<{ folderId: string; scope: 'application' | 'project' | 'personal'; scopeId: string } | null>(null)
+
+  // File upload state
+  const uploadFileInputRef = useRef<HTMLInputElement>(null)
+  const uploadFolderIdRef = useRef<string | null>(null)
+  const uploadFileMutation = useUploadFile()
+  const renameFileMutation = useRenameFile()
+  const deleteFileMutation = useDeleteFile()
+  const [conflictDialogOpen, setConflictDialogOpen] = useState(false)
+  const [conflictFile, setConflictFile] = useState<File | null>(null)
+  const [conflictFolderId, setConflictFolderId] = useState<string | null>(null)
+  const [conflictExistingFileId, setConflictExistingFileId] = useState<string | null>(null)
 
   const folders = folderTree ?? []
   const unfiledDocs = unfiledResponse?.items ?? []
@@ -855,6 +888,88 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
     setCreateDialogOpen(true)
   }, [contextMenuTarget, scope, effectiveScopeId, handleCloseContextMenu])
 
+  const handleImport = useCallback((folderId: string) => {
+    handleCloseContextMenu()
+    const target = contextMenuTarget
+    const importScope = target?.scope ?? (scope as 'application' | 'project' | 'personal')
+    const importScopeId = target?.scopeId ?? effectiveScopeId ?? ''
+    setImportTarget({ folderId, scope: importScope, scopeId: importScopeId })
+    setImportDialogOpen(true)
+  }, [contextMenuTarget, scope, effectiveScopeId, handleCloseContextMenu])
+
+  const handleUploadFiles = useCallback((folderId: string) => {
+    handleCloseContextMenu()
+    uploadFolderIdRef.current = folderId
+    uploadFileInputRef.current?.click()
+  }, [handleCloseContextMenu])
+
+  const handleFileInputChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files
+    const folderId = uploadFolderIdRef.current
+    if (!files || files.length === 0 || !folderId) return
+
+    // Collect conflicts to show after all uploads complete
+    const conflicts: { file: File; existingFileId: string | null }[] = []
+
+    // Sequential upload - continue processing remaining files on conflict
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
+      try {
+        await uploadFileMutation.mutateAsync({ file, folderId })
+      } catch (err) {
+        const error = err as UploadConflictError
+        if (error.status === 409) {
+          conflicts.push({ file, existingFileId: error.existingFileId ?? null })
+        } else {
+          toast.error(`Failed to upload ${file.name}: ${error.message}`)
+        }
+      }
+    }
+
+    // Show conflict dialog for the first conflict (user resolves one at a time)
+    if (conflicts.length > 0) {
+      const first = conflicts[0]
+      setConflictFile(first.file)
+      setConflictFolderId(folderId)
+      setConflictExistingFileId(first.existingFileId)
+      setConflictDialogOpen(true)
+      if (conflicts.length > 1) {
+        toast.info(`${conflicts.length} files had conflicts. Resolve them one at a time.`)
+      }
+    }
+
+    // Reset input
+    e.target.value = ''
+  }, [uploadFileMutation])
+
+  const handleFileSelect = useCallback(async (file: FolderFileListItem) => {
+    // CRIT-4: Fetch presigned download URL via authenticated endpoint, then open
+    try {
+      const downloadUrl = await fetchFileDownloadUrl(file.id)
+      window.open(downloadUrl, '_blank')
+    } catch {
+      toast.error(`Failed to get download URL for ${file.display_name}`)
+    }
+  }, [])
+
+  const handleFileContextMenu = useCallback(
+    (e: React.MouseEvent, file: FolderFileListItem) => {
+      e.preventDefault()
+      e.stopPropagation()
+      setContextMenuTarget({
+        id: file.id,
+        type: 'file',
+        name: file.display_name,
+        x: e.clientX,
+        y: e.clientY,
+        scope: scope as 'application' | 'project' | 'personal',
+        scopeId: effectiveScopeId ?? '',
+        folderId: file.folder_id,
+      })
+    },
+    [scope, effectiveScopeId]
+  )
+
   const handleCreateSubmit = useCallback(async (name: string, format?: 'document' | 'canvas') => {
     const resolvedScopeId = createScope === 'personal' ? (userId ?? '') : createScopeId
 
@@ -879,7 +994,7 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
     }
   }, [createType, createScope, createScopeId, createParentId, userId, createDocument, createFolder, selectDocument, expandFolder])
 
-  const handleRename = useCallback((id: string, type: 'folder' | 'document') => {
+  const handleRename = useCallback((id: string, type: 'folder' | 'document' | 'file') => {
     const targetScope = contextMenuTarget?.scope ?? null
     const targetScopeId = contextMenuTarget?.scopeId ?? null
     handleCloseContextMenu()
@@ -896,6 +1011,21 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
     try {
       if (renamingItemType === 'folder') {
         await renameFolder.mutateAsync({ folderId: renamingItemId, name: newName, scope: itemScope, scopeId: itemScopeId })
+      } else if (renamingItemType === 'file') {
+        const fileItem = findFileInCache(renamingItemId)
+        if (!fileItem) {
+          toast.error('Could not find file data. Please try again.')
+          setRenamingItemId(null)
+          setRenamingItemScope(null)
+          setRenamingItemScopeId(null)
+          return
+        }
+        await renameFileMutation.mutateAsync({
+          fileId: renamingItemId,
+          displayName: newName,
+          folderId: fileItem.folder_id,
+          rowVersion: fileItem.row_version,
+        })
       } else {
         const rowVersion = getDocRowVersion(renamingItemId)
         if (!rowVersion) {
@@ -913,7 +1043,7 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
     setRenamingItemId(null)
     setRenamingItemScope(null)
     setRenamingItemScopeId(null)
-  }, [renamingItemId, renamingItemType, renamingItemScope, renamingItemScopeId, renameFolder, renameDocument, getDocRowVersion, scope, effectiveScopeId])
+  }, [renamingItemId, renamingItemType, renamingItemScope, renamingItemScopeId, renameFolder, renameDocument, renameFileMutation, findFileInCache, getDocRowVersion, scope, effectiveScopeId])
 
   const handleRenameCancel = useCallback(() => {
     setRenamingItemId(null)
@@ -921,16 +1051,34 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
     setRenamingItemScopeId(null)
   }, [])
 
-  const handleDelete = useCallback((id: string, type: 'folder' | 'document') => {
+  const handleDelete = useCallback((id: string, type: 'folder' | 'document' | 'file') => {
     const targetScope = contextMenuTarget?.scope ?? null
     const targetScopeId = contextMenuTarget?.scopeId ?? null
+    const targetFolderId = contextMenuTarget?.folderId ?? null
     handleCloseContextMenu()
+
+    if (type === 'file') {
+      const fileItem = findFileInCache(id)
+      const fileFolderId = targetFolderId ?? fileItem?.folder_id
+      if (!fileFolderId) {
+        toast.error('Could not determine file folder. Please try again.')
+        return
+      }
+      deleteFileMutation.mutate(
+        { fileId: id, folderId: fileFolderId },
+        {
+          onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to delete file'),
+        }
+      )
+      return
+    }
+
     const name = type === 'folder'
       ? findFolderById(folders, id)?.name || 'this folder'
       : findDocInCache(id)?.title || unfiledDocs.find((d) => d.id === id)?.title || 'this document'
     setDeleteTarget({ id, type, name, scope: targetScope, scopeId: targetScopeId })
     setDeleteDialogOpen(true)
-  }, [folders, unfiledDocs, findDocInCache, contextMenuTarget, handleCloseContextMenu])
+  }, [folders, unfiledDocs, findDocInCache, findFileInCache, deleteFileMutation, contextMenuTarget, handleCloseContextMenu])
 
   const handleDeleteConfirm = useCallback(async () => {
     if (!deleteTarget) return
@@ -1057,13 +1205,15 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
                 onContextMenu={handleContextMenu}
                 onRenameSubmit={handleRenameSubmit}
                 onRenameCancel={handleRenameCancel}
+                onSelectFile={handleFileSelect}
+                onFileContextMenu={handleFileContextMenu}
               />
             </>
           )}
         </div>
       )
     },
-    [dndPrefix, canEdit, scope, effectiveScopeId, expandedFolderIds, contextMenuFolderId, selectedDocumentId, renamingItemId, activeItem, dropTargetFolderId, activeLocks, toggleFolder, handleSelectDocument, handleContextMenu, handleRenameSubmit, handleRenameCancel]
+    [dndPrefix, canEdit, scope, effectiveScopeId, expandedFolderIds, contextMenuFolderId, selectedDocumentId, renamingItemId, activeItem, dropTargetFolderId, activeLocks, toggleFolder, handleSelectDocument, handleContextMenu, handleRenameSubmit, handleRenameCancel, handleFileSelect, handleFileContextMenu]
   )
 
   // ========================================================================
@@ -1195,6 +1345,8 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
           onNewDocument={handleNewDocument}
           onRename={(id) => handleRename(id, contextMenuTarget.type)}
           onDelete={handleDelete}
+          onImport={handleImport}
+          onUploadFiles={handleUploadFiles}
         />
       )}
 
@@ -1208,6 +1360,40 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
         itemName={deleteTarget?.name || ''}
         itemType={deleteTarget?.type || 'document'}
         onConfirm={handleDeleteConfirm}
+      />
+
+      {/* Import dialog (triggered from folder context menu) */}
+      <ImportDialog
+        open={importDialogOpen}
+        onOpenChange={setImportDialogOpen}
+        defaultScope={importTarget?.scope}
+        defaultScopeId={importTarget?.scopeId}
+        defaultFolderId={importTarget?.folderId}
+        onImportComplete={() => setImportDialogOpen(false)}
+      />
+
+      {/* Hidden file input for folder upload */}
+      <input
+        ref={uploadFileInputRef}
+        type="file"
+        multiple
+        onChange={handleFileInputChange}
+        className="hidden"
+        aria-hidden="true"
+      />
+
+      {/* File conflict dialog */}
+      <FileConflictDialog
+        open={conflictDialogOpen}
+        onOpenChange={setConflictDialogOpen}
+        file={conflictFile}
+        folderId={conflictFolderId}
+        existingFileId={conflictExistingFileId}
+        onResolved={() => {
+          setConflictFile(null)
+          setConflictFolderId(null)
+          setConflictExistingFileId(null)
+        }}
       />
     </DndContext>
   )

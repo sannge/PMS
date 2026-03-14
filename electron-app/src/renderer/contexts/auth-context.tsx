@@ -18,8 +18,10 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   type ReactNode,
 } from 'react'
+import { configureApiClient, setTokens, authGet } from '@/lib/api-client'
 
 // ============================================================================
 // Types
@@ -49,6 +51,7 @@ export interface RegisterData {
 
 export interface TokenResponse {
   access_token: string
+  refresh_token: string
   token_type: string
 }
 
@@ -61,6 +64,7 @@ export interface AuthError {
 interface AuthState {
   user: User | null
   token: string | null
+  refreshToken: string | null
   isAuthenticated: boolean
   isLoading: boolean
   isInitialized: boolean
@@ -141,22 +145,28 @@ export function parseApiError(status: number, data: unknown): AuthError {
   }
 }
 
-function loadPersistedToken(): string | null {
+function loadPersistedTokens(): { token: string | null; refreshToken: string | null } {
   try {
     const stored = localStorage.getItem(AUTH_STORAGE_KEY)
     if (stored) {
       const data = JSON.parse(stored)
-      return data.state?.token || null
+      const token = typeof data.state?.token === 'string' && data.state.token.length > 0
+        ? data.state.token
+        : null
+      const refreshToken = typeof data.state?.refreshToken === 'string' && data.state.refreshToken.length > 0
+        ? data.state.refreshToken
+        : null
+      return { token, refreshToken }
     }
   } catch {
-    // Ignore parsing errors
+    // Ignore parsing errors — treat as no persisted tokens
   }
-  return null
+  return { token: null, refreshToken: null }
 }
 
-function persistToken(token: string | null): void {
+function persistTokens(token: string | null, refreshToken: string | null): void {
   try {
-    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify({ state: { token } }))
+    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify({ state: { token, refreshToken } }))
   } catch {
     // Ignore storage errors
   }
@@ -173,15 +183,24 @@ type AuthAction =
   | { type: 'SET_TOKEN'; payload: string | null }
   | { type: 'SET_AUTHENTICATED'; payload: boolean }
   | { type: 'SET_INITIALIZED'; payload: boolean }
-  | { type: 'LOGIN_SUCCESS'; payload: { token: string; user?: User } }
+  | { type: 'LOGIN_SUCCESS'; payload: { token: string; refreshToken: string; user?: User } }
+  | { type: 'TOKENS_REFRESHED'; payload: { token: string; refreshToken: string } }
   | { type: 'SET_PENDING_VERIFICATION'; payload: string | null }
   | { type: 'SET_PENDING_CONTEXT'; payload: 'registration' | 'login' | null }
   | { type: 'LOGOUT' }
   | { type: 'RESET' }
 
+const _persisted = loadPersistedTokens()
+
+// Seed api-client module with persisted tokens immediately at module evaluation time.
+// This ensures tokens are available before React effects run (child effects like
+// useAuthInit's checkAuth() fire before parent AuthProvider effects).
+setTokens(_persisted.token, _persisted.refreshToken)
+
 const initialState: AuthState = {
   user: null,
-  token: loadPersistedToken(),
+  token: _persisted.token,
+  refreshToken: _persisted.refreshToken,
   isAuthenticated: false,
   isLoading: false,
   isInitialized: false,
@@ -208,12 +227,25 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
       return {
         ...state,
         token: action.payload.token,
+        refreshToken: action.payload.refreshToken,
         user: action.payload.user || state.user,
         isAuthenticated: true,
         isLoading: false,
         error: null,
         pendingVerificationEmail: null,
         pendingVerificationContext: null,
+      }
+    case 'TOKENS_REFRESHED':
+      // Lightweight update: only token + refreshToken changed.
+      // Avoids resetting isLoading/error/pendingVerification like LOGIN_SUCCESS does,
+      // which would cause unnecessary re-renders in 16+ consuming hooks.
+      if (state.token === action.payload.token && state.refreshToken === action.payload.refreshToken) {
+        return state // No change — skip re-render entirely
+      }
+      return {
+        ...state,
+        token: action.payload.token,
+        refreshToken: action.payload.refreshToken,
       }
     case 'SET_PENDING_VERIFICATION':
       return {
@@ -230,13 +262,14 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
         ...state,
         user: null,
         token: null,
+        refreshToken: null,
         isAuthenticated: false,
         error: null,
         pendingVerificationEmail: null,
         pendingVerificationContext: null,
       }
     case 'RESET':
-      return { ...initialState, token: null }
+      return { ...initialState, token: null, refreshToken: null }
     default:
       return state
   }
@@ -277,36 +310,66 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 export function AuthProvider({ children }: { children: ReactNode }): JSX.Element {
   const [state, dispatch] = useReducer(authReducer, initialState)
 
-  // Persist token changes
+  // Refs for token values — lets callbacks close over refs instead of state,
+  // so useCallback deps can be [] and actions stay truly stable.
+  const tokenRef = useRef(state.token)
+  const refreshTokenRef = useRef(state.refreshToken)
   useEffect(() => {
-    persistToken(state.token)
-  }, [state.token])
+    tokenRef.current = state.token
+    refreshTokenRef.current = state.refreshToken
+  }, [state.token, state.refreshToken])
+
+  // Persist token changes and sync to api-client module.
+  // DA-008: localStorage is the authoritative source for auth tokens.
+  // TanStack Query / IndexedDB does NOT cache auth tokens (they live in React
+  // state seeded from localStorage at module evaluation time, line 190-196).
+  // persistTokens writes synchronously to localStorage, so even if the app
+  // crashes before IndexedDB flushes, relaunch reads fresh tokens from
+  // localStorage via loadPersistedTokens(). No IndexedDB sync needed here.
+  useEffect(() => {
+    persistTokens(state.token, state.refreshToken)
+    setTokens(state.token, state.refreshToken)
+  }, [state.token, state.refreshToken])
+
+  // Configure api-client callbacks on mount
+  useEffect(() => {
+    configureApiClient({
+      onTokensRefreshed: (access: string, refresh: string) => {
+        dispatch({
+          type: 'TOKENS_REFRESHED',
+          payload: { token: access, refreshToken: refresh },
+        })
+      },
+      onSessionExpired: () => {
+        dispatch({ type: 'LOGOUT' })
+      },
+    })
+    // Seed api-client with persisted tokens on initial mount
+    setTokens(state.token, state.refreshToken)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const fetchCurrentUser = useCallback(async (): Promise<void> => {
-    if (!state.token) {
+    if (!tokenRef.current) {
       dispatch({ type: 'SET_USER', payload: null })
       return
     }
 
     try {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<User>(
-        '/auth/me',
-        getAuthHeaders(state.token)
-      )
+      // Uses authGet which handles 401 → refresh → retry automatically
+      const response = await authGet<User>('/auth/me')
 
       if (response.status === 200) {
         dispatch({ type: 'SET_USER', payload: response.data })
-      } else if (response.status === 401) {
+      } else if (response.status === 401 || response.status === 403) {
+        // Auth failure after refresh attempt — session truly expired
         dispatch({ type: 'LOGOUT' })
       }
+      // 5xx/other: keep existing state (transient server error)
     } catch {
-      dispatch({ type: 'LOGOUT' })
+      // Network error: keep existing state, don't logout
     }
-  }, [state.token])
+  }, [])
 
   const login = useCallback(async (credentials: LoginCredentials): Promise<boolean> => {
     dispatch({ type: 'SET_LOADING', payload: true })
@@ -321,7 +384,7 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
       formData.append('username', credentials.email)
       formData.append('password', credentials.password)
 
-      const response = await window.electronAPI.fetch<TokenResponse>('/auth/login', {
+      const response = await window.electronAPI.fetch<Record<string, unknown>>('/auth/login', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
@@ -344,7 +407,7 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
         return false
       }
 
-      const tokenData = response.data as Record<string, unknown>
+      const tokenData = response.data
 
       // Check if 2FA is required (login returns requires_2fa instead of access_token)
       if ('requires_2fa' in tokenData && tokenData.requires_2fa) {
@@ -354,12 +417,18 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
         return false
       }
 
-      dispatch({ type: 'LOGIN_SUCCESS', payload: { token: tokenData.access_token as string } })
+      dispatch({
+        type: 'LOGIN_SUCCESS',
+        payload: {
+          token: tokenData.access_token as string,
+          refreshToken: (tokenData.refresh_token as string) || '',
+        },
+      })
 
       // Fetch user profile
       const userResponse = await window.electronAPI.get<User>(
         '/auth/me',
-        getAuthHeaders(tokenData.access_token)
+        getAuthHeaders(tokenData.access_token as string)
       )
 
       if (userResponse.status === 200) {
@@ -415,8 +484,15 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
 
   const logout = useCallback(async (): Promise<void> => {
     try {
-      if (window.electronAPI && state.token) {
-        await window.electronAPI.post('/auth/logout', undefined, getAuthHeaders(state.token))
+      const tok = tokenRef.current
+      const refTok = refreshTokenRef.current
+      if (window.electronAPI && tok) {
+        // Revoke refresh token + blacklist access token in parallel
+        const revokePromise = refTok
+          ? window.electronAPI.post('/auth/revoke', { refresh_token: refTok }, getAuthHeaders(tok))
+          : Promise.resolve()
+        const logoutPromise = window.electronAPI.post('/auth/logout', undefined, getAuthHeaders(tok))
+        await Promise.allSettled([revokePromise, logoutPromise])
       }
     } catch {
       // Ignore logout errors
@@ -428,11 +504,26 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
     } catch {
       // Non-critical
     }
+    // Clear WebSocket event dedup cache to prevent stale fingerprints across sessions
+    try {
+      const { clearEventDedup } = await import('@/hooks/use-websocket-cache')
+      clearEventDedup()
+    } catch {
+      // Non-critical
+    }
+    // Disconnect WebSocket and clear its token to prevent stale connections
+    try {
+      const { wsClient } = await import('@/lib/websocket')
+      wsClient.disconnect()
+      wsClient.setToken(null)
+    } catch {
+      // Non-critical
+    }
     dispatch({ type: 'LOGOUT' })
-  }, [state.token])
+  }, [])
 
   const checkAuth = useCallback(async (): Promise<boolean> => {
-    if (!state.token) {
+    if (!tokenRef.current) {
       dispatch({ type: 'SET_INITIALIZED', payload: true })
       dispatch({ type: 'SET_AUTHENTICATED', payload: false })
       return false
@@ -441,33 +532,34 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
     dispatch({ type: 'SET_LOADING', payload: true })
 
     try {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<User>(
-        '/auth/me',
-        getAuthHeaders(state.token)
-      )
+      // Uses authGet which handles 401 → refresh → retry automatically
+      const response = await authGet<User>('/auth/me')
 
       if (response.status === 200) {
         dispatch({ type: 'SET_USER', payload: response.data })
         dispatch({ type: 'SET_INITIALIZED', payload: true })
         dispatch({ type: 'SET_LOADING', payload: false })
         return true
-      } else {
+      } else if (response.status === 401 || response.status === 403) {
+        // Auth failure after refresh attempt — session truly expired
         dispatch({ type: 'LOGOUT' })
+        dispatch({ type: 'SET_INITIALIZED', payload: true })
+        dispatch({ type: 'SET_LOADING', payload: false })
+        return false
+      } else {
+        // 5xx/other: transient error — keep existing state
         dispatch({ type: 'SET_INITIALIZED', payload: true })
         dispatch({ type: 'SET_LOADING', payload: false })
         return false
       }
     } catch {
+      // Network error: keep existing state
       dispatch({ type: 'SET_INITIALIZED', payload: true })
       dispatch({ type: 'SET_LOADING', payload: false })
       dispatch({ type: 'SET_AUTHENTICATED', payload: false })
       return false
     }
-  }, [state.token])
+  }, [])
 
   const clearError = useCallback((): void => {
     dispatch({ type: 'SET_ERROR', payload: null })
@@ -507,7 +599,10 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
       }
 
       const tokenData = response.data
-      dispatch({ type: 'LOGIN_SUCCESS', payload: { token: tokenData.access_token } })
+      dispatch({
+        type: 'LOGIN_SUCCESS',
+        payload: { token: tokenData.access_token, refreshToken: tokenData.refresh_token },
+      })
 
       // Fetch user profile
       const userResponse = await window.electronAPI.get<User>(
@@ -552,7 +647,10 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
       }
 
       const tokenData = response.data
-      dispatch({ type: 'LOGIN_SUCCESS', payload: { token: tokenData.access_token } })
+      dispatch({
+        type: 'LOGIN_SUCCESS',
+        payload: { token: tokenData.access_token, refreshToken: tokenData.refresh_token },
+      })
 
       // Fetch user profile
       const userResponse = await window.electronAPI.get<User>(

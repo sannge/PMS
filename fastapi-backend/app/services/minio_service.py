@@ -184,6 +184,26 @@ class MinIOService:
         except S3Error as e:
             raise MinIOServiceError(f"Failed to download file: {str(e)}")
 
+    def download_to_file(self, bucket: str, object_name: str, file_path: str) -> None:
+        """
+        Download a file from MinIO directly to a local file path (streaming).
+
+        Uses minio-py fget_object which streams to disk without buffering the
+        entire object in memory. Preferred over download_file() for large files.
+
+        Args:
+            bucket: Name of the bucket
+            object_name: Object key (path) in the bucket
+            file_path: Local destination file path
+
+        Raises:
+            MinIOServiceError: If download fails
+        """
+        try:
+            self.client.fget_object(bucket, object_name, file_path)
+        except S3Error as e:
+            raise MinIOServiceError(f"Failed to download file to {file_path}: {str(e)}")
+
     def delete_file(self, bucket: str, object_name: str) -> bool:
         """
         Delete a file from MinIO.

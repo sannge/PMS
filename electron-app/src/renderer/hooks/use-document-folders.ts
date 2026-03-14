@@ -15,6 +15,7 @@ import {
   type UseMutationResult,
 } from '@tanstack/react-query'
 import { useAuthToken, useAuthUserId } from '@/contexts/auth-context'
+import { authGet, authPost, authPut, authDelete } from '@/lib/api-client'
 import { queryKeys } from '@/lib/query-client'
 import { TEMP_ID_PREFIX } from './use-documents'
 
@@ -72,11 +73,6 @@ interface MoveFolderParams {
 // ============================================================================
 // Helper Functions
 // ============================================================================
-
-function getAuthHeaders(token: string | null): Record<string, string> {
-  if (!token) return {}
-  return { Authorization: `Bearer ${token}` }
-}
 
 function parseApiError(status: number, data: unknown): string {
   if (typeof data === 'object' && data !== null) {
@@ -138,10 +134,6 @@ export function useFolderTree(
   return useQuery({
     queryKey: queryKeys.documentFolders(scope, effectiveScopeId),
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
       const resolved = resolveScope(scope, scopeId, userId)
       if (!resolved) {
         return []
@@ -151,9 +143,8 @@ export function useFolderTree(
       params.set('scope', resolved.apiScope)
       params.set('scope_id', resolved.apiScopeId)
 
-      const response = await window.electronAPI.get<FolderTreeNode[]>(
+      const response = await authGet<FolderTreeNode[]>(
         `/api/document-folders/tree?${params.toString()}`,
-        getAuthHeaders(token)
       )
 
       if (response.status !== 200) {
@@ -234,17 +225,12 @@ function removeFolderFromTree(tree: FolderTreeNode[], folderId: string): FolderT
  * Create a new folder with optimistic update.
  */
 export function useCreateFolder(): UseMutationResult<DocumentFolder, Error, CreateFolderParams> {
-  const token = useAuthToken()
   const userId = useAuthUserId()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (params: CreateFolderParams) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<DocumentFolder>(
+      const response = await authPost<DocumentFolder>(
         '/api/document-folders',
         {
           name: params.name,
@@ -252,7 +238,6 @@ export function useCreateFolder(): UseMutationResult<DocumentFolder, Error, Crea
           scope: params.scope,
           scope_id: params.scope_id,
         },
-        getAuthHeaders(token)
       )
 
       if (response.status !== 201) {
@@ -316,20 +301,14 @@ export function useCreateFolder(): UseMutationResult<DocumentFolder, Error, Crea
  * Rename a folder with optimistic update.
  */
 export function useRenameFolder(): UseMutationResult<DocumentFolder, Error, RenameFolderParams> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
   const userId = useAuthUserId()
 
   return useMutation({
     mutationFn: async ({ folderId, name }: RenameFolderParams) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.put<DocumentFolder>(
+      const response = await authPut<DocumentFolder>(
         `/api/document-folders/${folderId}`,
         { name },
-        getAuthHeaders(token)
       )
 
       if (response.status !== 200) {
@@ -365,20 +344,14 @@ export function useRenameFolder(): UseMutationResult<DocumentFolder, Error, Rena
  * Move a folder to a new parent with optimistic update.
  */
 export function useMoveFolder(): UseMutationResult<DocumentFolder, Error, MoveFolderParams> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
   const userId = useAuthUserId()
 
   return useMutation({
     mutationFn: async ({ folderId, parent_id }: MoveFolderParams) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.put<DocumentFolder>(
+      const response = await authPut<DocumentFolder>(
         `/api/document-folders/${folderId}`,
         { parent_id },
-        getAuthHeaders(token)
       )
 
       if (response.status !== 200) {
@@ -441,19 +414,13 @@ export function useMoveFolder(): UseMutationResult<DocumentFolder, Error, MoveFo
  * Delete a folder with optimistic update.
  */
 export function useDeleteFolder(): UseMutationResult<void, Error, { folderId: string; scope: string; scopeId: string }> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
   const userId = useAuthUserId()
 
   return useMutation({
     mutationFn: async ({ folderId }: { folderId: string; scope: string; scopeId: string }) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.delete<void>(
+      const response = await authDelete<void>(
         `/api/document-folders/${folderId}`,
-        getAuthHeaders(token)
       )
 
       if (response.status !== 204 && response.status !== 200) {
@@ -519,7 +486,6 @@ export function useReorderFolder(
   scope: string,
   scopeId: string
 ): UseMutationResult<DocumentFolder, Error, ReorderFolderParams> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
   const userId = useAuthUserId()
 
@@ -527,10 +493,6 @@ export function useReorderFolder(
 
   return useMutation({
     mutationFn: async ({ folderId, sortOrder, parentId }: ReorderFolderParams) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
       const body: { sort_order: number; parent_id?: string | null } = {
         sort_order: sortOrder,
       }
@@ -538,10 +500,9 @@ export function useReorderFolder(
         body.parent_id = parentId
       }
 
-      const response = await window.electronAPI.put<DocumentFolder>(
+      const response = await authPut<DocumentFolder>(
         `/api/document-folders/${folderId}`,
         body,
-        getAuthHeaders(token)
       )
 
       if (response.status !== 200) {

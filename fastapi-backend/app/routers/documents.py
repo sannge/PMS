@@ -7,7 +7,7 @@ and tag assignment with scope compatibility validation.
 """
 
 import asyncio
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -66,13 +66,34 @@ router = APIRouter(
 )
 
 
+_pending_search_tasks: set[asyncio.Task] = set()
+
+
 def _log_task_exception(task: asyncio.Task) -> None:
     """Callback for fire-and-forget tasks — log exceptions instead of silently dropping."""
+    _pending_search_tasks.discard(task)
     if task.cancelled():
         return
     exc = task.exception()
     if exc is not None:
         logger.error("Background search index task failed: %s: %s", type(exc).__name__, exc)
+
+
+def _create_search_task(coro: Any) -> asyncio.Task:
+    """Create a tracked background task for search indexing."""
+    task = asyncio.create_task(coro)
+    _pending_search_tasks.add(task)
+    task.add_done_callback(_log_task_exception)
+    return task
+
+
+async def drain_search_tasks(timeout: float = 5.0) -> None:
+    """Wait for pending search index tasks to complete (for graceful shutdown)."""
+    if _pending_search_tasks:
+        logger.info("Draining %d pending search index tasks...", len(_pending_search_tasks))
+        done, pending = await asyncio.wait(_pending_search_tasks, timeout=timeout)
+        if pending:
+            logger.warning("%d search index tasks still pending after %ss", len(pending), timeout)
 
 
 def _get_document_scope(doc: Document) -> tuple[str, str]:
@@ -135,6 +156,57 @@ async def _broadcast_document_event(
         await manager.broadcast_to_room(f"user:{doc.user_id}", message)
 
 
+async def _broadcast_document_event_from_data(
+    message_type: MessageType,
+    broadcast_data: dict,
+    actor_id: UUID | None = None,
+    extra_data: dict | None = None,
+    project_application_id: UUID | None = None,
+) -> None:
+    """Broadcast a document event using pre-captured data (safe after db.commit).
+
+    Same logic as _broadcast_document_event but operates on a plain dict
+    instead of a live ORM object, avoiding DetachedInstanceError.
+    """
+    application_id = broadcast_data.get("application_id")
+    project_id = broadcast_data.get("project_id")
+    user_id = broadcast_data.get("user_id")
+    folder_id = broadcast_data.get("folder_id")
+    updated_at = broadcast_data.get("updated_at")
+
+    if application_id:
+        scope, scope_id = "application", str(application_id)
+    elif project_id:
+        scope, scope_id = "project", str(project_id)
+    elif user_id:
+        scope, scope_id = "personal", str(user_id)
+    else:
+        scope, scope_id = "personal", ""
+
+    data = {
+        "document_id": broadcast_data["id"],
+        "scope": scope,
+        "scope_id": scope_id,
+        "folder_id": str(folder_id) if folder_id else None,
+        "actor_id": str(actor_id) if actor_id else None,
+        "timestamp": updated_at.isoformat() if updated_at else utc_now().isoformat(),
+        "application_id": str(project_application_id) if project_application_id else None,
+    }
+    if extra_data:
+        data.update(extra_data)
+
+    message = {"type": message_type.value, "data": data}
+
+    if application_id:
+        await manager.broadcast_to_room(f"application:{application_id}", message)
+    elif project_id:
+        await manager.broadcast_to_room(f"project:{project_id}", message)
+        if project_application_id:
+            await manager.broadcast_to_room(f"application:{project_application_id}", message)
+    else:
+        await manager.broadcast_to_room(f"user:{user_id}", message)
+
+
 # ============================================================================
 # Trash endpoint (MUST be before /{document_id} to avoid path matching)
 # ============================================================================
@@ -160,20 +232,20 @@ async def list_trash(
         .options(noload("*"))
     )
 
-    # Cursor pagination (keyset: created_at DESC, id DESC)
+    # Cursor pagination (keyset: deleted_at DESC, id DESC)
     if cursor:
-        cursor_created_at, cursor_id = decode_cursor(cursor)
+        cursor_deleted_at, cursor_id = decode_cursor(cursor)
         query = query.where(
             or_(
-                Document.created_at < cursor_created_at,
+                Document.deleted_at < cursor_deleted_at,
                 and_(
-                    Document.created_at == cursor_created_at,
+                    Document.deleted_at == cursor_deleted_at,
                     Document.id < cursor_id,
                 ),
             )
         )
 
-    query = query.order_by(Document.created_at.desc(), Document.id.desc())
+    query = query.order_by(Document.deleted_at.desc(), Document.id.desc())
     query = query.limit(limit + 1)
 
     result = await db.execute(query)
@@ -188,7 +260,7 @@ async def list_trash(
     next_cursor = None
     if has_next and documents:
         last = documents[-1]
-        next_cursor = encode_cursor(last.created_at, last.id)
+        next_cursor = encode_cursor(last.deleted_at, last.id)
 
     return DocumentListResponse(items=items, next_cursor=next_cursor)
 
@@ -297,8 +369,8 @@ async def get_projects_with_content(
         ),
     ).distinct()
 
-    # Combine with UNION
-    combined = projects_with_docs.union(projects_with_folders)
+    # Combine with UNION and cap at 500 to prevent unbounded results
+    combined = projects_with_docs.union(projects_with_folders).limit(500)
     result = await db.execute(combined)
     project_ids = [str(row[0]) for row in result.all()]
 
@@ -410,7 +482,7 @@ async def list_documents(
         False, description="If true and folder_id is omitted, return unfiled documents"
     ),
     cursor: Optional[str] = Query(None, description="Pagination cursor"),
-    limit: int = Query(30, ge=1, le=100, description="Page size"),
+    limit: int = Query(30, ge=1, le=200, description="Page size"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> DocumentListResponse:
@@ -473,14 +545,6 @@ async def list_documents(
 
     items = [DocumentListItem.model_validate(doc) for doc in documents]
 
-    # Batch-check ARQ for pending embed jobs (single Redis pipeline)
-    from ..services.arq_helper import batch_embed_jobs_pending
-
-    pending_ids = await batch_embed_jobs_pending([doc.id for doc in documents])
-    for item in items:
-        if item.id in pending_ids:
-            item.embedding_sync_pending = True
-
     next_cursor = None
     if has_next and documents:
         last = documents[-1]
@@ -535,21 +599,34 @@ async def create_document(
     from ..services.search_service import build_search_doc_data, index_document_from_data
     search_doc_data = build_search_doc_data(document, project_application_id=project_application_id)
 
+    # Capture broadcast data BEFORE commit to avoid DetachedInstanceError
+    broadcast_data = {
+        "id": str(document.id),
+        "application_id": document.application_id,
+        "project_id": document.project_id,
+        "user_id": document.user_id,
+        "folder_id": document.folder_id,
+        "updated_at": document.updated_at,
+    }
+
+    # Capture response BEFORE commit while attributes are loaded
+    response = DocumentResponse.model_validate(document)
+
     # Commit before broadcast so clients re-fetch committed data
     await db.commit()
 
     # Fire-and-forget: index new document for search (non-blocking)
-    asyncio.create_task(index_document_from_data(search_doc_data)).add_done_callback(_log_task_exception)
+    _create_search_task(index_document_from_data(search_doc_data))
 
-    # Broadcast document created event
-    await _broadcast_document_event(
+    # Broadcast document created event using pre-captured data
+    await _broadcast_document_event_from_data(
         MessageType.DOCUMENT_CREATED,
-        document,
+        broadcast_data,
         actor_id=current_user.id,
         project_application_id=project_application_id,
     )
 
-    return DocumentResponse.model_validate(document)
+    return response
 
 
 @router.get("/{document_id}", response_model=DocumentResponse)
@@ -584,10 +661,7 @@ async def get_document(
             detail="You do not have permission to view this document",
         )
 
-    from ..services.arq_helper import is_embed_job_pending
-
     response = DocumentResponse.model_validate(document)
-    response.embedding_sync_pending = await is_embed_job_pending(document_id)
     return response
 
 
@@ -656,6 +730,10 @@ async def update_document(
         if field in UPDATABLE_FIELDS:
             setattr(document, field, value)
 
+    # Mark embedding status as stale when content changes
+    if "content_json" in update_data:
+        document.embedding_status = "stale"
+
     # Increment version
     document.row_version += 1
     document.updated_at = utc_now()
@@ -685,21 +763,34 @@ async def update_document(
     from ..services.search_service import build_search_doc_data, index_document_from_data
     search_doc_data = build_search_doc_data(document, project_application_id=project_application_id)
 
+    # Capture broadcast data BEFORE commit to avoid DetachedInstanceError
+    broadcast_data = {
+        "id": str(document.id),
+        "application_id": document.application_id,
+        "project_id": document.project_id,
+        "user_id": document.user_id,
+        "folder_id": document.folder_id,
+        "updated_at": document.updated_at,
+    }
+
+    # Capture response BEFORE commit while attributes are loaded
+    response = DocumentResponse.model_validate(document)
+
     # Commit before broadcast so clients re-fetch committed data
     await db.commit()
 
     # Fire-and-forget: update search index (non-blocking)
-    asyncio.create_task(index_document_from_data(search_doc_data)).add_done_callback(_log_task_exception)
+    _create_search_task(index_document_from_data(search_doc_data))
 
-    # Broadcast document updated event
-    await _broadcast_document_event(
+    # Broadcast document updated event using pre-captured data
+    await _broadcast_document_event_from_data(
         MessageType.DOCUMENT_UPDATED,
-        document,
+        broadcast_data,
         actor_id=current_user.id,
         project_application_id=project_application_id,
     )
 
-    return DocumentResponse.model_validate(document)
+    return response
 
 
 @router.put("/{document_id}/content", response_model=DocumentResponse)
@@ -718,27 +809,7 @@ async def save_content(
     was modified by another user/session. On success, content is updated
     and row_version is incremented.
     """
-    # Permission check before saving
-    doc_result = await db.execute(
-        select(Document)
-        .where(Document.id == document_id)
-        .where(Document.deleted_at.is_(None))
-    )
-    doc_for_perm = doc_result.scalar_one_or_none()
-    if doc_for_perm is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Document {document_id} not found",
-        )
-
-    perm_service = PermissionService(db)
-    scope_type, scope_id = PermissionService.resolve_entity_scope(doc_for_perm)
-    if not await perm_service.check_can_edit_knowledge(current_user.id, scope_type, scope_id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have permission to edit this document",
-        )
-
+    # Permission check + save in one pass (avoids loading document twice)
     document, search_doc_data = await save_document_content(
         document_id=document_id,
         content_json=body.content_json,
@@ -746,6 +817,7 @@ async def save_content(
         user_id=current_user.id,
         db=db,
         minio=minio,
+        check_edit_permission=True,
     )
 
     # Broadcast document updated event so other users see fresh content
@@ -755,25 +827,38 @@ async def save_content(
         if project:
             project_application_id = project.application_id
 
+    # Capture broadcast data BEFORE commit to avoid DetachedInstanceError
+    broadcast_data = {
+        "id": str(document.id),
+        "application_id": document.application_id,
+        "project_id": document.project_id,
+        "user_id": document.user_id,
+        "folder_id": document.folder_id,
+        "updated_at": document.updated_at,
+    }
+
+    # Capture response BEFORE commit while attributes are loaded
+    response = DocumentResponse.model_validate(document)
+
     # Commit before broadcast so clients re-fetch committed data
     await db.commit()
 
     # Fire-and-forget: update search index AFTER commit (non-blocking)
     if search_doc_data:
         from ..services.search_service import index_document_from_data
-        asyncio.create_task(index_document_from_data(search_doc_data)).add_done_callback(_log_task_exception)
+        _create_search_task(index_document_from_data(search_doc_data))
 
     # Auto-embed removed (Phase 9.6): embeddings now triggered only by
     # manual sync (POST /documents/{id}/sync-embeddings) or nightly batch job.
 
-    await _broadcast_document_event(
+    await _broadcast_document_event_from_data(
         MessageType.DOCUMENT_UPDATED,
-        document,
+        broadcast_data,
         actor_id=current_user.id,
         project_application_id=project_application_id,
     )
 
-    return DocumentResponse.model_validate(document)
+    return response
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -823,17 +908,27 @@ async def delete_document(
     # Extract document ID before commit for safe background task usage
     doc_id_for_search = document.id
 
+    # Capture broadcast data BEFORE commit to avoid DetachedInstanceError
+    broadcast_data = {
+        "id": str(document.id),
+        "application_id": document.application_id,
+        "project_id": document.project_id,
+        "user_id": document.user_id,
+        "folder_id": document.folder_id,
+        "updated_at": document.updated_at,
+    }
+
     # Commit before broadcast so clients re-fetch committed data
     await db.commit()
 
     # Fire-and-forget: mark document as deleted in search index (non-blocking)
     from ..services.search_service import index_document_soft_delete
-    asyncio.create_task(index_document_soft_delete(doc_id_for_search)).add_done_callback(_log_task_exception)
+    _create_search_task(index_document_soft_delete(doc_id_for_search))
 
-    # Broadcast document deleted event
-    await _broadcast_document_event(
+    # Broadcast document deleted event using pre-captured data
+    await _broadcast_document_event_from_data(
         MessageType.DOCUMENT_DELETED,
-        document,
+        broadcast_data,
         actor_id=current_user.id,
         project_application_id=project_application_id,
     )
@@ -898,22 +993,35 @@ async def restore_document(
     # Extract document ID before commit for safe background task usage
     doc_id_for_search = document.id
 
+    # Capture broadcast data BEFORE commit to avoid DetachedInstanceError
+    broadcast_data = {
+        "id": str(document.id),
+        "application_id": document.application_id,
+        "project_id": document.project_id,
+        "user_id": document.user_id,
+        "folder_id": document.folder_id,
+        "updated_at": document.updated_at,
+    }
+
+    # Capture response BEFORE commit while attributes are loaded
+    response = DocumentResponse.model_validate(document)
+
     # Commit before broadcast so clients re-fetch committed data
     await db.commit()
 
     # Fire-and-forget: restore document in search index (non-blocking)
     from ..services.search_service import index_document_restore
-    asyncio.create_task(index_document_restore(doc_id_for_search)).add_done_callback(_log_task_exception)
+    _create_search_task(index_document_restore(doc_id_for_search))
 
-    # Broadcast document restored event (appears as created to other clients)
-    await _broadcast_document_event(
+    # Broadcast document restored event using pre-captured data
+    await _broadcast_document_event_from_data(
         MessageType.DOCUMENT_CREATED,
-        document,
+        broadcast_data,
         actor_id=current_user.id,
         project_application_id=project_application_id,
     )
 
-    return DocumentResponse.model_validate(document)
+    return response
 
 
 @router.delete("/{document_id}/permanent", status_code=status.HTTP_204_NO_CONTENT)
@@ -984,6 +1092,19 @@ async def permanent_delete_document(
         await remove_document_from_index(document_id)
     except Exception:
         logger.warning("Failed to remove document %s from search index", document_id)
+
+    # Clean up embedding chunks (if pgvector tables exist)
+    try:
+        from ..models.document_chunk import DocumentChunk
+        async with db.begin():
+            from sqlalchemy import delete as sa_delete
+            await db.execute(
+                sa_delete(DocumentChunk).where(DocumentChunk.document_id == document_id)
+            )
+    except ImportError:
+        pass  # DocumentChunk model may not exist yet
+    except Exception:
+        logger.warning("Failed to delete embedding chunks for document %s", document_id)
 
 
 # ============================================================================
@@ -1173,6 +1294,10 @@ async def sync_embeddings(
             detail="You do not have permission to sync embeddings for this document",
         )
 
+    # Set status to syncing before enqueuing
+    document.embedding_status = "syncing"
+    await db.flush()
+
     try:
         from ..services.arq_helper import get_arq_redis
 
@@ -1187,12 +1312,17 @@ async def sync_embeddings(
             str(document_id),
             _job_id=f"embed:{document_id}",
         )
+        await db.commit()
     except RuntimeError:
+        document.embedding_status = "stale"
+        await db.flush()
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Background worker not available",
         )
     except Exception:
+        document.embedding_status = "stale"
+        await db.flush()
         logger.exception("Failed to enqueue embed_document_job for %s", document_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

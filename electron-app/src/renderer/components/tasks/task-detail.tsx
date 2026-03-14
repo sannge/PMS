@@ -21,6 +21,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import DOMPurify from 'dompurify'
 import { cn } from '@/lib/utils'
 import { formatDateForInput, parseBackendDate } from '@/lib/time-utils'
 import {
@@ -1097,7 +1098,7 @@ export function TaskDetail({
                         '[&_a]:text-primary [&_a]:underline',
                         '[&_img]:max-w-full [&_img]:h-auto [&_img]:rounded-md',
                       )}
-                      dangerouslySetInnerHTML={{ __html: localDescription }}
+                      dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(localDescription, { FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'form'] }) }}
                     />
                   ) : (
                     <div

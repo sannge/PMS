@@ -19,6 +19,7 @@ import {
 } from '@tanstack/react-query'
 import { useAuthToken } from '@/contexts/auth-context'
 import { queryKeys } from '@/lib/query-client'
+import { authGet, authPost, authPut, authDelete } from '@/lib/api-client'
 
 // ============================================================================
 // Types
@@ -66,11 +67,6 @@ export interface ApiError {
 // Helper Functions
 // ============================================================================
 
-function getAuthHeaders(token: string | null): Record<string, string> {
-  if (!token) return {}
-  return { Authorization: `Bearer ${token}` }
-}
-
 function parseApiError(status: number, data: unknown): ApiError {
   if (typeof data === 'object' && data !== null) {
     const errorData = data as Record<string, unknown>
@@ -112,13 +108,8 @@ export function useChecklists(taskId: string | undefined): UseQueryResult<Checkl
   return useQuery({
     queryKey: queryKeys.checklists(taskId || ''),
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<Checklist[]>(
-        `/api/tasks/${taskId}/checklists`,
-        getAuthHeaders(token)
+      const response = await authGet<Checklist[]>(
+        `/api/tasks/${taskId}/checklists`
       )
 
       if (response.status !== 200) {
@@ -136,6 +127,7 @@ export function useChecklists(taskId: string | undefined): UseQueryResult<Checkl
     enabled: !!token && !!taskId,
     staleTime: 30 * 1000, // 30 seconds
     gcTime: 24 * 60 * 60 * 1000, // 24 hours for offline
+    refetchOnWindowFocus: false, // WS real-time invalidation handles freshness
   })
 }
 
@@ -166,19 +158,13 @@ export function useChecklistProgress(taskId: string | undefined): {
 export function useCreateChecklist(
   taskId: string
 ): UseMutationResult<Checklist, Error, ChecklistCreate, { previous?: Checklist[] }> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (data: ChecklistCreate) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<Checklist>(
+      const response = await authPost<Checklist>(
         `/api/tasks/${taskId}/checklists`,
-        data,
-        getAuthHeaders(token)
+        data
       )
 
       if (response.status !== 201) {
@@ -234,19 +220,13 @@ export function useUpdateChecklist(
   { checklistId: string; title: string },
   { previous?: Checklist[] }
 > {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async ({ checklistId, title }) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.put<Checklist>(
+      const response = await authPut<Checklist>(
         `/api/checklists/${checklistId}`,
-        { title },
-        getAuthHeaders(token)
+        { title }
       )
 
       if (response.status !== 200) {
@@ -283,18 +263,12 @@ export function useUpdateChecklist(
 export function useDeleteChecklist(
   taskId: string
 ): UseMutationResult<void, Error, string, { previous?: Checklist[] }> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (checklistId: string) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.delete<void>(
-        `/api/checklists/${checklistId}`,
-        getAuthHeaders(token)
+      const response = await authDelete<void>(
+        `/api/checklists/${checklistId}`
       )
 
       if (response.status !== 204) {
@@ -329,19 +303,13 @@ export function useDeleteChecklist(
 export function useReorderChecklists(
   taskId: string
 ): UseMutationResult<void, Error, string[], { previous?: Checklist[] }> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (checklistIds: string[]) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.put<void>(
+      const response = await authPut<void>(
         `/api/tasks/${taskId}/checklists/reorder`,
-        { item_ids: checklistIds },
-        getAuthHeaders(token)
+        { item_ids: checklistIds }
       )
 
       if (response.status !== 204) {
@@ -389,19 +357,13 @@ export function useCreateChecklistItem(
   { checklistId: string; data: ChecklistItemCreate },
   { previous?: Checklist[] }
 > {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async ({ checklistId, data }) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<ChecklistItem>(
+      const response = await authPost<ChecklistItem>(
         `/api/checklists/${checklistId}/items`,
-        data,
-        getAuthHeaders(token)
+        data
       )
 
       if (response.status !== 201) {
@@ -460,19 +422,13 @@ export function useUpdateChecklistItem(
   { itemId: string; content: string },
   { previous?: Checklist[] }
 > {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async ({ itemId, content }) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.put<ChecklistItem>(
+      const response = await authPut<ChecklistItem>(
         `/api/checklist-items/${itemId}`,
-        { content },
-        getAuthHeaders(token)
+        { content }
       )
 
       if (response.status !== 200) {
@@ -512,19 +468,13 @@ export function useUpdateChecklistItem(
 export function useToggleChecklistItem(
   taskId: string
 ): UseMutationResult<ChecklistItem, Error, string, { previous?: Checklist[] }> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (itemId: string) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<ChecklistItem>(
+      const response = await authPost<ChecklistItem>(
         `/api/checklist-items/${itemId}/toggle`,
-        {},
-        getAuthHeaders(token)
+        {}
       )
 
       if (response.status !== 200) {
@@ -572,18 +522,12 @@ export function useToggleChecklistItem(
 export function useDeleteChecklistItem(
   taskId: string
 ): UseMutationResult<void, Error, string, { previous?: Checklist[] }> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (itemId: string) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.delete<void>(
-        `/api/checklist-items/${itemId}`,
-        getAuthHeaders(token)
+      const response = await authDelete<void>(
+        `/api/checklist-items/${itemId}`
       )
 
       if (response.status !== 204) {
@@ -634,19 +578,13 @@ export function useReorderChecklistItems(
   { checklistId: string; itemIds: string[] },
   { previous?: Checklist[] }
 > {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async ({ checklistId, itemIds }) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.put<void>(
+      const response = await authPut<void>(
         `/api/checklists/${checklistId}/items/reorder`,
-        { item_ids: itemIds },
-        getAuthHeaders(token)
+        { item_ids: itemIds }
       )
 
       if (response.status !== 204) {

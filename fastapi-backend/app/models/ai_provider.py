@@ -116,7 +116,7 @@ class AiProvider(Base):
         index=True,
     )
 
-    # Authentication method: 'api_key' (default) or 'oauth'
+    # Authentication method: 'api_key' (default), 'oauth', or 'session_token'
     auth_method = Column(
         String(20),
         nullable=False,
@@ -159,7 +159,7 @@ class AiProvider(Base):
             name="ck_ai_providers_scope",
         ),
         CheckConstraint(
-            "auth_method IN ('api_key', 'oauth')",
+            "auth_method IN ('api_key', 'oauth', 'session_token')",
             name="ck_ai_providers_auth_method",
         ),
         Index("ix_AiProviders_auth_method", "auth_method"),

@@ -4,6 +4,9 @@
  * Inline clarification card rendered in the chat message stream when Blair
  * needs follow-up input. Shows a question, optional pill-style option buttons,
  * and a free-text input that is always available.
+ *
+ * Supports step-through mode: when `step` and `total` are provided (total > 1),
+ * shows step counter and progress dots for multi-question clarification wizards.
  */
 
 import { useState, useCallback, useRef } from 'react'
@@ -23,6 +26,57 @@ export interface ClarificationCardProps {
   selectedAnswer: string | null
   onSelectOption: (option: string) => void
   onSubmitText: (text: string) => void
+  /** Current step (1-indexed) for multi-step clarification */
+  step?: number
+  /** Total number of questions for multi-step clarification */
+  total?: number
+  /** Number of questions already answered (for progress dots) */
+  answeredCount?: number
+}
+
+// ============================================================================
+// Progress Dots
+// ============================================================================
+
+function ProgressDots({
+  total,
+  answeredCount,
+  currentStep,
+}: {
+  total: number
+  answeredCount: number
+  currentStep: number
+}) {
+  return (
+    <div
+      className="flex items-center justify-center gap-1.5 mt-2 pt-1"
+      role="progressbar"
+      aria-label={`Step ${currentStep} of ${total}`}
+      aria-valuenow={currentStep}
+      aria-valuemin={1}
+      aria-valuemax={total}
+    >
+      {Array.from({ length: total }, (_, i) => {
+        const stepNum = i + 1
+        const isAnswered = stepNum <= answeredCount
+        const isCurrent = stepNum === currentStep
+        return (
+          <span
+            key={i}
+            role="presentation"
+            className={cn(
+              'h-1.5 w-1.5 rounded-full transition-colors',
+              isAnswered
+                ? 'bg-primary'
+                : isCurrent
+                  ? 'bg-primary/60 ring-1 ring-primary/30'
+                  : 'bg-muted-foreground/20',
+            )}
+          />
+        )
+      })}
+    </div>
+  )
 }
 
 // ============================================================================
@@ -37,10 +91,14 @@ export function ClarificationCard({
   selectedAnswer,
   onSelectOption,
   onSubmitText,
+  step,
+  total,
+  answeredCount = 0,
 }: ClarificationCardProps): JSX.Element {
   const [textValue, setTextValue] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
   const isPending = status === 'pending'
+  const isMultiStep = total != null && total > 1
 
   const handleSubmitText = useCallback(() => {
     const trimmed = textValue.trim()
@@ -68,11 +126,18 @@ export function ClarificationCard({
         isPending && 'ring-1 ring-primary/20'
       )}
     >
-      {/* Question */}
+      {/* Header with optional step counter */}
       <div className="flex items-start gap-2 mb-2">
         <MessageCircle className="h-4 w-4 mt-0.5 text-primary shrink-0" />
-        <div>
-          <p className="text-xs font-medium">{question}</p>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs font-medium">{question}</p>
+            {isMultiStep && step != null && (
+              <span className="text-[10px] text-muted-foreground shrink-0">
+                {step} of {total}
+              </span>
+            )}
+          </div>
           {context && (
             <p className="mt-0.5 text-[11px] text-muted-foreground">{context}</p>
           )}
@@ -80,9 +145,9 @@ export function ClarificationCard({
       </div>
 
       {/* Options */}
-      {options && options.length > 0 && (
+      {options && options.filter(o => o.trim()).length > 0 && (
         <div className="flex flex-wrap gap-1.5 mb-2 pl-6">
-          {options.slice(0, 4).map((option) => {
+          {options.filter(o => o.trim()).slice(0, 4).map((option) => {
             const isSelected = selectedAnswer === option
             return (
               <button
@@ -128,12 +193,22 @@ export function ClarificationCard({
             size="icon"
             onClick={handleSubmitText}
             disabled={!textValue.trim()}
+            aria-label="Submit answer"
             className="h-7 w-7 shrink-0 rounded-lg"
           >
             <Send className="h-3 w-3" />
           </Button>
         )}
       </div>
+
+      {/* Progress dots for multi-step */}
+      {isMultiStep && (
+        <ProgressDots
+          total={total!}
+          answeredCount={answeredCount}
+          currentStep={step ?? 1}
+        />
+      )}
     </div>
   )
 }

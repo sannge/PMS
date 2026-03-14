@@ -15,6 +15,7 @@ import {
   UseMutationResult,
 } from '@tanstack/react-query'
 import { useAuthToken } from '@/contexts/auth-context'
+import { authGet, authPost, authPut, authPatch, authDelete } from '@/lib/api-client'
 import { queryKeys } from '@/lib/query-client'
 
 // ============================================================================
@@ -72,11 +73,6 @@ export interface ApiError {
 // ============================================================================
 // Helper Functions
 // ============================================================================
-
-function getAuthHeaders(token: string | null): Record<string, string> {
-  if (!token) return {}
-  return { Authorization: `Bearer ${token}` }
-}
 
 function parseApiError(status: number, data: unknown): ApiError {
   if (typeof data === 'object' && data !== null) {
@@ -138,13 +134,8 @@ export function useAppMembers(
   return useQuery({
     queryKey: queryKeys.appMembers(applicationId || ''),
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<ApplicationMember[]>(
-        `/api/applications/${applicationId}/members`,
-        getAuthHeaders(token)
+      const response = await authGet<ApplicationMember[]>(
+        `/api/applications/${applicationId}/members`
       )
 
       if (response.status !== 200) {
@@ -157,6 +148,7 @@ export function useAppMembers(
     staleTime: 30 * 1000, // 30 seconds - refetch when stale for add member dialogs
     gcTime: 24 * 60 * 60 * 1000,
     refetchOnMount: 'always', // Always refetch when query mounts (dialog opens)
+    refetchOnWindowFocus: false, // WS real-time invalidation handles freshness
   })
 }
 
@@ -166,19 +158,13 @@ export function useAppMembers(
 export function useInviteAppMember(
   applicationId: string
 ): UseMutationResult<void, Error, AddMemberPayload> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (data: AddMemberPayload) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<void>(
+      const response = await authPost<void>(
         `/api/applications/${applicationId}/invite`,
-        { email: data.email, role: data.role },
-        getAuthHeaders(token)
+        { email: data.email, role: data.role }
       )
 
       if (response.status !== 201 && response.status !== 200) {
@@ -203,19 +189,13 @@ export function useUpdateAppMemberRole(
   UpdateRolePayload,
   { previous?: ApplicationMember[] }
 > {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async ({ userId, newRole }: UpdateRolePayload) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.put<ApplicationMember>(
+      const response = await authPut<ApplicationMember>(
         `/api/applications/${applicationId}/members/${userId}`,
-        { role: newRole },
-        getAuthHeaders(token)
+        { role: newRole }
       )
 
       if (response.status !== 200) {
@@ -259,18 +239,12 @@ export function useUpdateAppMemberRole(
 export function useRemoveAppMember(
   applicationId: string
 ): UseMutationResult<void, Error, string> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (userId: string) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.delete<void>(
-        `/api/applications/${applicationId}/members/${userId}`,
-        getAuthHeaders(token)
+      const response = await authDelete<void>(
+        `/api/applications/${applicationId}/members/${userId}`
       )
 
       if (response.status !== 204 && response.status !== 200) {
@@ -298,13 +272,8 @@ export function useProjectMembers(
   return useQuery({
     queryKey: queryKeys.projectMembers(projectId || ''),
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<ProjectMember[]>(
-        `/api/projects/${projectId}/members`,
-        getAuthHeaders(token)
+      const response = await authGet<ProjectMember[]>(
+        `/api/projects/${projectId}/members`
       )
 
       if (response.status !== 200) {
@@ -316,6 +285,7 @@ export function useProjectMembers(
     enabled: !!token && !!projectId,
     staleTime: 30 * 1000, // 30 seconds - members may change frequently
     gcTime: 24 * 60 * 60 * 1000,
+    refetchOnWindowFocus: false, // WS real-time invalidation handles freshness
   })
 }
 
@@ -325,19 +295,13 @@ export function useProjectMembers(
 export function useAddProjectMember(
   projectId: string
 ): UseMutationResult<ProjectMember, Error, AddProjectMemberPayload> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (data: AddProjectMemberPayload) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<ProjectMember>(
+      const response = await authPost<ProjectMember>(
         `/api/projects/${projectId}/members`,
-        { user_id: data.user_id, role: data.role },
-        getAuthHeaders(token)
+        { user_id: data.user_id, role: data.role }
       )
 
       if (response.status !== 201) {
@@ -362,19 +326,13 @@ export function useAddProjectMember(
 export function useUpdateProjectMemberRole(
   projectId: string
 ): UseMutationResult<ProjectMember, Error, UpdateRolePayload, { previous?: ProjectMember[] }> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async ({ userId, newRole }: UpdateRolePayload) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.patch<ProjectMember>(
+      const response = await authPatch<ProjectMember>(
         `/api/projects/${projectId}/members/${userId}/role`,
-        { role: newRole },
-        getAuthHeaders(token)
+        { role: newRole }
       )
 
       if (response.status !== 200) {
@@ -418,18 +376,12 @@ export function useUpdateProjectMemberRole(
 export function useRemoveProjectMember(
   projectId: string
 ): UseMutationResult<void, Error, string> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (userId: string) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.delete<void>(
-        `/api/projects/${projectId}/members/${userId}`,
-        getAuthHeaders(token)
+      const response = await authDelete<void>(
+        `/api/projects/${projectId}/members/${userId}`
       )
 
       if (response.status !== 204 && response.status !== 200) {

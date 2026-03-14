@@ -15,7 +15,8 @@ import {
   type UseQueryResult,
   type UseMutationResult,
 } from '@tanstack/react-query'
-import { useAuthToken, getAuthHeaders, parseApiError as parseApiErrorAuth } from '@/contexts/auth-context'
+import { useAuthToken, parseApiError as parseApiErrorAuth } from '@/contexts/auth-context'
+import { authGet, authPost, authPut, authDelete } from '@/lib/api-client'
 import { queryKeys } from '@/lib/query-client'
 
 // ============================================================================
@@ -146,8 +147,6 @@ export type EffectiveChatConfig = AiConfigSummaryResponse
 // Helper Functions
 // ============================================================================
 
-// getAuthHeaders imported from @/contexts/auth-context
-
 function parseApiError(status: number, data: unknown): string {
   const result = parseApiErrorAuth(status, data)
   return result.message
@@ -166,13 +165,8 @@ export function useAiProviders(): UseQueryResult<AiProviderResponse[], Error> {
   return useQuery({
     queryKey: queryKeys.aiProviders,
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<AiProviderResponse[]>(
-        '/api/ai/config/providers',
-        getAuthHeaders(token)
+      const response = await authGet<AiProviderResponse[]>(
+        '/api/ai/config/providers'
       )
 
       if (response.status !== 200) {
@@ -182,6 +176,7 @@ export function useAiProviders(): UseQueryResult<AiProviderResponse[], Error> {
       return response.data
     },
     enabled: !!token,
+    staleTime: 5 * 60 * 1000, // 5 min — admin config changes rarely
   })
 }
 
@@ -190,19 +185,13 @@ export function useAiProviders(): UseQueryResult<AiProviderResponse[], Error> {
  * Optimistically appends to the provider list.
  */
 export function useCreateAiProvider(): UseMutationResult<AiProviderResponse, Error, AiProviderCreate> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (body: AiProviderCreate) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<AiProviderResponse>(
+      const response = await authPost<AiProviderResponse>(
         '/api/ai/config/providers',
-        body,
-        getAuthHeaders(token)
+        body
       )
 
       if (response.status !== 201) {
@@ -260,19 +249,13 @@ export function useUpdateAiProvider(): UseMutationResult<
   Error,
   { providerId: string; body: AiProviderUpdate }
 > {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async ({ providerId, body }) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.put<AiProviderResponse>(
+      const response = await authPut<AiProviderResponse>(
         `/api/ai/config/providers/${providerId}`,
-        body,
-        getAuthHeaders(token)
+        body
       )
 
       if (response.status !== 200) {
@@ -293,18 +276,12 @@ export function useUpdateAiProvider(): UseMutationResult<
  * Delete a global AI provider. Cascades to its models.
  */
 export function useDeleteAiProvider(): UseMutationResult<void, Error, string> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (providerId: string) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.delete<void>(
-        `/api/ai/config/providers/${providerId}`,
-        getAuthHeaders(token)
+      const response = await authDelete<void>(
+        `/api/ai/config/providers/${providerId}`
       )
 
       if (response.status !== 204 && response.status !== 200) {
@@ -323,18 +300,11 @@ export function useDeleteAiProvider(): UseMutationResult<void, Error, string> {
  * Test connectivity for a global AI provider.
  */
 export function useTestAiProvider(): UseMutationResult<TestProviderResult, Error, string> {
-  const token = useAuthToken()
-
   return useMutation({
     mutationFn: async (providerId: string) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<TestProviderResult>(
+      const response = await authPost<TestProviderResult>(
         `/api/ai/config/providers/${providerId}/test`,
-        undefined,
-        getAuthHeaders(token)
+        undefined
       )
 
       if (response.status !== 200) {
@@ -367,10 +337,6 @@ export function useAiModels(params?: {
       params?.capability ?? null,
     ],
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
       const searchParams = new URLSearchParams()
       if (params?.provider_type) {
         searchParams.set('provider_type', params.provider_type)
@@ -380,9 +346,8 @@ export function useAiModels(params?: {
       }
       const queryString = searchParams.toString() ? `?${searchParams.toString()}` : ''
 
-      const response = await window.electronAPI.get<AiModelResponse[]>(
-        `/api/ai/config/models${queryString}`,
-        getAuthHeaders(token)
+      const response = await authGet<AiModelResponse[]>(
+        `/api/ai/config/models${queryString}`
       )
 
       if (response.status !== 200) {
@@ -399,19 +364,13 @@ export function useAiModels(params?: {
  * Create a new AI model under a global provider.
  */
 export function useCreateAiModel(): UseMutationResult<AiModelResponse, Error, AiModelCreate> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (body: AiModelCreate) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<AiModelResponse>(
+      const response = await authPost<AiModelResponse>(
         '/api/ai/config/models',
-        body,
-        getAuthHeaders(token)
+        body
       )
 
       if (response.status !== 201) {
@@ -435,19 +394,13 @@ export function useUpdateAiModel(): UseMutationResult<
   Error,
   { modelId: string; body: AiModelUpdate }
 > {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async ({ modelId, body }) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.put<AiModelResponse>(
+      const response = await authPut<AiModelResponse>(
         `/api/ai/config/models/${modelId}`,
-        body,
-        getAuthHeaders(token)
+        body
       )
 
       if (response.status !== 200) {
@@ -467,18 +420,12 @@ export function useUpdateAiModel(): UseMutationResult<
  * Delete an AI model entry.
  */
 export function useDeleteAiModel(): UseMutationResult<void, Error, string> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (modelId: string) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.delete<void>(
-        `/api/ai/config/models/${modelId}`,
-        getAuthHeaders(token)
+      const response = await authDelete<void>(
+        `/api/ai/config/models/${modelId}`
       )
 
       if (response.status !== 204 && response.status !== 200) {
@@ -509,10 +456,6 @@ export function useAvailableModels(params?: {
       params?.capability ?? null,
     ],
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
       const searchParams = new URLSearchParams()
       if (params?.provider_type) {
         searchParams.set('provider_type', params.provider_type)
@@ -522,9 +465,8 @@ export function useAvailableModels(params?: {
       }
       const queryString = searchParams.toString() ? `?${searchParams.toString()}` : ''
 
-      const response = await window.electronAPI.get<AiModelResponse[]>(
-        `/api/ai/config/models/available${queryString}`,
-        getAuthHeaders(token)
+      const response = await authGet<AiModelResponse[]>(
+        `/api/ai/config/models/available${queryString}`
       )
 
       if (response.status !== 200) {
@@ -553,13 +495,8 @@ export function useDocumentIndexStatus(
   return useQuery({
     queryKey: queryKeys.documentIndexStatus(documentId ?? ''),
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<IndexStatusResponse>(
-        `/api/ai/index-status/${documentId}`,
-        getAuthHeaders(token)
+      const response = await authGet<IndexStatusResponse>(
+        `/api/ai/index-status/${documentId}`
       )
 
       if (response.status !== 200) {
@@ -585,13 +522,8 @@ export function useApplicationIndexStatus(
   return useQuery({
     queryKey: queryKeys.applicationIndexStatus(applicationId ?? ''),
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<IndexProgressResponse>(
-        `/api/ai/index-status/application/${applicationId}`,
-        getAuthHeaders(token)
+      const response = await authGet<IndexProgressResponse>(
+        `/api/ai/index-status/application/${applicationId}`
       )
 
       if (response.status !== 200) {
@@ -607,63 +539,21 @@ export function useApplicationIndexStatus(
 }
 
 /**
- * Re-embed a single document.
- */
-export function useReindexDocument(): UseMutationResult<
-  { status: string; document_id: string },
-  Error,
-  string
-> {
-  const token = useAuthToken()
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: async (documentId: string) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<{ status: string; document_id: string }>(
-        `/api/ai/reindex/${documentId}`,
-        undefined,
-        getAuthHeaders(token)
-      )
-
-      if (response.status !== 202 && response.status !== 200) {
-        throw new Error(parseApiError(response.status, response.data))
-      }
-
-      return response.data
-    },
-    onSuccess: (_data, documentId) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.documentIndexStatus(documentId) })
-    },
-  })
-}
-
-/**
  * Sync embeddings for a single document via POST /api/documents/{id}/sync-embeddings.
- * Unlike useReindexDocument (which forces a full re-embed), this only syncs
- * when the document content has changed since the last embedding update.
+ * Clears old ARQ job/result keys to ensure the job re-queues reliably.
  */
 export function useSyncDocumentEmbeddings(): UseMutationResult<
   { status: string; document_id: string },
   Error,
   string
 > {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (documentId: string) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<{ status: string; document_id: string }>(
+      const response = await authPost<{ status: string; document_id: string }>(
         `/api/documents/${documentId}/sync-embeddings`,
-        undefined,
-        getAuthHeaders(token)
+        undefined
       )
 
       if (response.status !== 202 && response.status !== 200) {
@@ -674,10 +564,23 @@ export function useSyncDocumentEmbeddings(): UseMutationResult<
       return response.data
     },
     onSuccess: (_data, documentId) => {
+      // Mark pending on individual document cache
       queryClient.setQueryData(
         queryKeys.document(documentId),
         (old: Record<string, unknown> | undefined) =>
-          old ? { ...old, embedding_sync_pending: true } : old
+          old ? { ...old, embedding_status: 'syncing' } : old
+      )
+      // Also mark pending in document list caches so tree-view dots update
+      queryClient.setQueriesData<{ items: Array<Record<string, unknown>> }>(
+        { queryKey: ['documents'] },
+        (old) => {
+          if (!old?.items) return old
+          const idx = old.items.findIndex((d) => d.id === documentId)
+          if (idx === -1) return old
+          const updated = [...old.items]
+          updated[idx] = { ...updated[idx], embedding_status: 'syncing' }
+          return { ...old, items: updated }
+        }
       )
     },
   })
@@ -691,19 +594,13 @@ export function useReindexApplication(): UseMutationResult<
   Error,
   string
 > {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (applicationId: string) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<{ status: string; application_id: string }>(
+      const response = await authPost<{ status: string; application_id: string }>(
         `/api/ai/reindex/application/${applicationId}`,
-        undefined,
-        getAuthHeaders(token)
+        undefined
       )
 
       if (response.status !== 202 && response.status !== 200) {
@@ -719,7 +616,12 @@ export function useReindexApplication(): UseMutationResult<
 }
 
 /**
- * Poll index progress. Refetches every 5s while status is "running".
+ * Poll index progress. Refetches every 15s while status is "running".
+ *
+ * NOTE: The backend already pushes EMBEDDING_UPDATED events via WebSocket,
+ * so this polling could be replaced with WS-driven cache invalidation
+ * (e.g., invalidateQueries on EMBEDDING_UPDATED in use-websocket-cache.ts).
+ * Keeping polling as a fallback for reliability.
  */
 export function useIndexProgress(): UseQueryResult<IndexProgressResponse, Error> {
   const token = useAuthToken()
@@ -727,13 +629,8 @@ export function useIndexProgress(): UseQueryResult<IndexProgressResponse, Error>
   return useQuery({
     queryKey: queryKeys.indexProgress,
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<IndexProgressResponse>(
-        '/api/ai/index-progress',
-        getAuthHeaders(token)
+      const response = await authGet<IndexProgressResponse>(
+        '/api/ai/index-progress'
       )
 
       if (response.status !== 200) {
@@ -745,7 +642,7 @@ export function useIndexProgress(): UseQueryResult<IndexProgressResponse, Error>
     enabled: !!token,
     refetchInterval: (query) => {
       const data = query.state.data as IndexProgressResponse | undefined
-      return data?.status === 'running' ? 5000 : false
+      return data?.status === 'running' ? 15_000 : false
     },
     refetchOnWindowFocus: false,
   })
@@ -767,13 +664,8 @@ export function useAiConfigSummary(): UseQueryResult<AiConfigSummaryResponse, Er
   return useQuery({
     queryKey: queryKeys.aiConfigSummary,
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<AiConfigSummaryResponse>(
-        '/api/ai/config/summary',
-        getAuthHeaders(token)
+      const response = await authGet<AiConfigSummaryResponse>(
+        '/api/ai/config/summary'
       )
 
       if (response.status !== 200) {
@@ -783,6 +675,7 @@ export function useAiConfigSummary(): UseQueryResult<AiConfigSummaryResponse, Er
       return response.data
     },
     enabled: !!token,
+    staleTime: 5 * 60 * 1000, // 5 min — admin config changes rarely
   })
 }
 
@@ -797,13 +690,8 @@ export function useCapabilityConfig(
   return useQuery({
     queryKey: queryKeys.capabilityConfig(capability ?? ''),
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<CapabilityConfig>(
-        `/api/ai/config/capability/${capability}`,
-        getAuthHeaders(token)
+      const response = await authGet<CapabilityConfig>(
+        `/api/ai/config/capability/${capability}`
       )
 
       if (response.status !== 200) {
@@ -824,19 +712,13 @@ export function useSaveCapabilityConfig(): UseMutationResult<
   Error,
   { capability: string; body: Record<string, unknown> }
 > {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async ({ capability, body }) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.put<AiProviderResponse>(
+      const response = await authPut<AiProviderResponse>(
         `/api/ai/config/capability/${capability}`,
-        body,
-        getAuthHeaders(token)
+        body
       )
 
       if (response.status !== 200) {
@@ -891,13 +773,8 @@ export function useUserOverrides(): UseQueryResult<AiProviderResponse[], Error> 
   return useQuery({
     queryKey: queryKeys.userOverrides,
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<AiProviderResponse[]>(
-        '/api/ai/config/me/providers',
-        getAuthHeaders(token)
+      const response = await authGet<AiProviderResponse[]>(
+        '/api/ai/config/me/providers'
       )
 
       if (response.status !== 200) {
@@ -918,19 +795,13 @@ export function useCreateUserOverride(): UseMutationResult<
   Error,
   UserOverrideConfig
 > {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (body: UserOverrideConfig) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<AiProviderResponse>(
+      const response = await authPost<AiProviderResponse>(
         '/api/ai/config/me/providers',
-        body,
-        getAuthHeaders(token)
+        body
       )
 
       if (response.status !== 201) {
@@ -953,19 +824,13 @@ export function useUpdateUserOverride(): UseMutationResult<
   Error,
   { providerType: string; body: UserOverrideConfig }
 > {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async ({ providerType, body }) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.put<AiProviderResponse>(
+      const response = await authPut<AiProviderResponse>(
         `/api/ai/config/me/providers/${providerType}`,
-        body,
-        getAuthHeaders(token)
+        body
       )
 
       if (response.status !== 200) {
@@ -984,18 +849,12 @@ export function useUpdateUserOverride(): UseMutationResult<
  * Delete a user's provider override (fall back to global config).
  */
 export function useDeleteUserOverride(): UseMutationResult<void, Error, string> {
-  const token = useAuthToken()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (providerType: string) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.delete<void>(
-        `/api/ai/config/me/providers/${providerType}`,
-        getAuthHeaders(token)
+      const response = await authDelete<void>(
+        `/api/ai/config/me/providers/${providerType}`
       )
 
       if (response.status !== 204 && response.status !== 200) {
@@ -1012,18 +871,11 @@ export function useDeleteUserOverride(): UseMutationResult<void, Error, string> 
  * Test connectivity for a user's provider override.
  */
 export function useTestUserOverride(): UseMutationResult<TestProviderResult, Error, string> {
-  const token = useAuthToken()
-
   return useMutation({
     mutationFn: async (providerType: string) => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.post<TestProviderResult>(
+      const response = await authPost<TestProviderResult>(
         `/api/ai/config/me/providers/${providerType}/test`,
-        undefined,
-        getAuthHeaders(token)
+        undefined
       )
 
       if (response.status !== 200) {
@@ -1044,13 +896,8 @@ export function useUserEffectiveConfig(): UseQueryResult<EffectiveChatConfig, Er
   return useQuery({
     queryKey: queryKeys.userEffectiveConfig,
     queryFn: async () => {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available')
-      }
-
-      const response = await window.electronAPI.get<EffectiveChatConfig>(
-        '/api/ai/config/me/summary',
-        getAuthHeaders(token)
+      const response = await authGet<EffectiveChatConfig>(
+        '/api/ai/config/me/summary'
       )
 
       if (response.status !== 200) {

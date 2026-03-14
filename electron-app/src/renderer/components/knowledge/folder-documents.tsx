@@ -1,14 +1,16 @@
 /**
  * Folder Documents
  *
- * Renders documents inside a specific folder. Lazy-loads via a per-folder
- * query so we only fetch data when the folder is expanded. Isolated as its
- * own component to avoid hook-count issues when folders expand/collapse.
+ * Renders documents and files inside a specific folder. Lazy-loads via
+ * per-folder queries so we only fetch data when the folder is expanded.
+ * Isolated as its own component to avoid hook-count issues when folders
+ * expand/collapse.
  *
  * Shared by KnowledgeTree and its ProjectSection sub-component.
  */
 
 import { useDocuments } from '@/hooks/use-documents'
+import { useFolderFiles, type FolderFileListItem } from '@/hooks/use-folder-files'
 import { type ActiveLockInfo } from '@/hooks/use-document-lock'
 import { FolderTreeItem } from './folder-tree-item'
 import { TreeItemSkeleton } from './tree-skeletons'
@@ -19,6 +21,8 @@ export interface FolderDocumentsProps {
   folderId: string
   depth: number
   selectedDocumentId: string | null
+  /** Currently selected file ID for highlight */
+  selectedFileId?: string | null
   renamingItemId: string | null
   /** Prefix for sortable IDs (e.g. "app", "personal", "project-{id}") */
   sortableIdPrefix: string
@@ -30,6 +34,10 @@ export interface FolderDocumentsProps {
   onContextMenu: (e: React.MouseEvent, id: string, type: 'folder' | 'document', name: string) => void
   onRenameSubmit: (newName: string) => void
   onRenameCancel: () => void
+  /** Called when a file node is clicked */
+  onSelectFile?: (file: FolderFileListItem) => void
+  /** Called when a file node is right-clicked */
+  onFileContextMenu?: (e: React.MouseEvent, file: FolderFileListItem) => void
 }
 
 export function FolderDocuments({
@@ -38,6 +46,7 @@ export function FolderDocuments({
   folderId,
   depth,
   selectedDocumentId,
+  selectedFileId,
   renamingItemId,
   sortableIdPrefix,
   activeItemId,
@@ -46,11 +55,21 @@ export function FolderDocuments({
   onContextMenu,
   onRenameSubmit,
   onRenameCancel,
+  onSelectFile,
+  onFileContextMenu,
 }: FolderDocumentsProps): JSX.Element | null {
   const { data, isLoading } = useDocuments(scope, scopeId, { folderId })
+  const { data: filesData, isLoading: isFilesLoading } = useFolderFiles(folderId)
   const docs = data?.items ?? []
+  const files = filesData?.items ?? []
 
-  if (isLoading) {
+  // MED-9: Only show skeletons when there is NO cached data at all.
+  // Show documents immediately when available while files still load (and vice versa).
+  const hasCachedDocs = docs.length > 0
+  const hasCachedFiles = files.length > 0
+  const showSkeleton = (isLoading && !hasCachedDocs) && (isFilesLoading && !hasCachedFiles)
+
+  if (showSkeleton) {
     return (
       <div className="space-y-0.5">
         <TreeItemSkeleton depth={depth} widthPercent={65} />
@@ -59,7 +78,7 @@ export function FolderDocuments({
     )
   }
 
-  if (docs.length === 0) return null
+  if (docs.length === 0 && files.length === 0) return null
 
   return (
     <>
@@ -76,6 +95,20 @@ export function FolderDocuments({
           lockInfo={activeLocks.get(doc.id)}
           onSelect={() => onSelectDocument(doc.id)}
           onContextMenu={(e) => onContextMenu(e, doc.id, 'document', doc.title)}
+          onRenameSubmit={onRenameSubmit}
+          onRenameCancel={onRenameCancel}
+        />
+      ))}
+      {files.map((file) => (
+        <FolderTreeItem
+          key={`file-${file.id}`}
+          node={file}
+          type="file"
+          depth={depth}
+          isSelected={selectedFileId === file.id}
+          isRenaming={renamingItemId === file.id}
+          onSelect={() => onSelectFile?.(file)}
+          onContextMenu={(e) => onFileContextMenu?.(e, file)}
           onRenameSubmit={onRenameSubmit}
           onRenameCancel={onRenameCancel}
         />

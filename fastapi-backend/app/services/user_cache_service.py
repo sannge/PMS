@@ -21,8 +21,10 @@ from uuid import UUID
 
 
 # Cache configuration
-_CACHE_TTL = 300  # 5 minutes
-_MAX_SIZE = 10000  # Maximum entries per cache
+from ..ai.config_service import get_agent_config
+_cfg = get_agent_config()
+_CACHE_TTL = _cfg.get_int("cache.user_cache_ttl", 300)
+_MAX_SIZE = _cfg.get_int("cache.user_cache_max_size", 10000)
 
 
 # === User Profile Cache ===

@@ -11,7 +11,8 @@ import { cn } from '@/lib/utils'
 import { useAiSidebar } from './use-ai-sidebar'
 
 export function AiToggleButton(): JSX.Element {
-  const { isOpen, toggle } = useAiSidebar()
+  const isOpen = useAiSidebar(s => s.isOpen)
+  const toggle = useAiSidebar(s => s.toggle)
 
   return (
     <button

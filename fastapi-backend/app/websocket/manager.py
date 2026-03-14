@@ -18,11 +18,15 @@ from uuid import UUID
 
 from fastapi import WebSocket, WebSocketDisconnect
 
+from ..ai.config_service import get_agent_config
 from ..config import settings
 from ..services.redis_service import redis_service
 from ..utils.timezone import utc_now
 
 logger = logging.getLogger(__name__)
+
+_cfg = get_agent_config()
+_WS_BATCH_SIZE = _cfg.get_int("websocket.batch_size", 50)
 
 
 class MessageType(str, Enum):
@@ -118,6 +122,13 @@ class MessageType(str, Enum):
     FOLDER_UPDATED = "folder_updated"
     FOLDER_DELETED = "folder_deleted"
 
+    # Folder file events
+    FILE_UPLOADED = "file_uploaded"
+    FILE_UPDATED = "file_updated"
+    FILE_DELETED = "file_deleted"
+    FILE_EXTRACTION_COMPLETED = "file_extraction_completed"
+    FILE_EXTRACTION_FAILED = "file_extraction_failed"
+
     # AI events
     EMBEDDING_UPDATED = "embedding_updated"
     ENTITIES_EXTRACTED = "entities_extracted"
@@ -138,6 +149,7 @@ class WebSocketConnection:
     user_id: UUID
     connected_at: datetime = field(default_factory=lambda: utc_now())
     rooms: set[str] = field(default_factory=set)
+    consecutive_failures: int = 0
 
     def __hash__(self) -> int:
         """Hash by websocket id for set operations."""
@@ -202,6 +214,8 @@ class ConnectionManager:
         """
         Handle broadcast messages from Redis (from other workers).
 
+        Uses batched sends with timeout to prevent amplification.
+
         Args:
             data: Message containing room_id, message, and exclude_conn_id
         """
@@ -213,11 +227,12 @@ class ConnectionManager:
             return
 
         # Send to LOCAL connections only (Redis already distributed to all workers)
-        connections = self._rooms.get(room_id, set()).copy()
-        for conn in connections:
-            if exclude_conn_id and str(id(conn.websocket)) == exclude_conn_id:
-                continue
-            await self.send_personal(conn, message)
+        connections = [
+            conn for conn in self._rooms.get(room_id, set()).copy()
+            if not (exclude_conn_id and str(id(conn.websocket)) == exclude_conn_id)
+        ]
+
+        await self._batched_send(connections, message)
 
     async def _handle_redis_user_message(self, data: dict) -> None:
         """
@@ -238,9 +253,49 @@ class ConnectionManager:
             return
 
         # Send to LOCAL connections for this user
-        connections = self._user_connections.get(user_id, set()).copy()
-        for conn in connections:
-            await self.send_personal(conn, message)
+        connections = list(self._user_connections.get(user_id, set()).copy())
+        await self._batched_send(connections, message)
+
+    async def _batched_send(
+        self,
+        connections: list[WebSocketConnection],
+        message: dict[str, Any],
+    ) -> int:
+        """Send a message to connections in batches with per-send timeout.
+
+        Sends in groups of 50 with a 2-second timeout per send to prevent
+        amplification and stalled connections from blocking the event loop.
+
+        Args:
+            connections: List of target connections.
+            message: The message dict to send.
+
+        Returns:
+            Number of successful sends.
+        """
+        if not connections:
+            return 0
+
+        _BATCH_SIZE = _WS_BATCH_SIZE
+        _SEND_TIMEOUT_S = 2.0
+        success_count = 0
+
+        for i in range(0, len(connections), _BATCH_SIZE):
+            batch = connections[i:i + _BATCH_SIZE]
+            tasks = [
+                asyncio.wait_for(
+                    self.send_personal(conn, message),
+                    timeout=_SEND_TIMEOUT_S,
+                )
+                for conn in batch
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            success_count += sum(1 for r in results if r is True)
+            # Yield to event loop between batches
+            if i + _BATCH_SIZE < len(connections):
+                await asyncio.sleep(0)
+
+        return success_count
 
     @property
     def total_connections(self) -> int:
@@ -466,6 +521,9 @@ class ConnectionManager:
         """
         Send a message to a specific connection.
 
+        Tracks consecutive failures. After 3 consecutive failures,
+        the connection is considered stale and is disconnected.
+
         Args:
             connection: The target connection
             message: The message to send
@@ -475,9 +533,28 @@ class ConnectionManager:
         """
         try:
             await connection.websocket.send_json(message)
+            connection.consecutive_failures = 0
             return True
         except Exception:
+            connection.consecutive_failures += 1
+            if connection.consecutive_failures >= 3:
+                logger.info(
+                    "Disconnecting stale connection: user=%s, failures=%d",
+                    connection.user_id,
+                    connection.consecutive_failures,
+                )
+                task = asyncio.create_task(self.disconnect(connection.websocket))
+                task.add_done_callback(self._log_disconnect_error)
             return False
+
+    @staticmethod
+    def _log_disconnect_error(task: asyncio.Task) -> None:
+        """Log exceptions from background disconnect tasks."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc:
+            logger.warning("Background disconnect failed: %s", exc)
 
     async def broadcast_to_room(
         self,
@@ -520,22 +597,35 @@ class ConnectionManager:
                 "Redis not connected - falling back to local-only broadcast. "
                 "Cross-worker real-time sync is degraded.",
             )
-        connections = self._rooms.get(room_id, set()).copy()
+        connections = list(self._rooms.get(room_id, set()).copy())
 
         if exclude:
-            connections.discard(exclude)
+            connections = [c for c in connections if c != exclude]
 
         if not connections:
             return 0
 
-        # Send to all connections concurrently
-        tasks = [
-            self.send_personal(conn, message)
-            for conn in connections
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Send in batches with a 2s timeout per send to prevent
+        # amplification and stalled connections from blocking the loop
+        _BATCH_SIZE = _WS_BATCH_SIZE
+        _SEND_TIMEOUT_S = 2.0
+        success_count = 0
 
-        success_count = sum(1 for r in results if r is True)
+        for i in range(0, len(connections), _BATCH_SIZE):
+            batch = connections[i:i + _BATCH_SIZE]
+            tasks = [
+                asyncio.wait_for(
+                    self.send_personal(conn, message),
+                    timeout=_SEND_TIMEOUT_S,
+                )
+                for conn in batch
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            success_count += sum(1 for r in results if r is True)
+            # Yield to event loop between batches
+            if i + _BATCH_SIZE < len(connections):
+                await asyncio.sleep(0)
+
         logger.debug(
             f"Broadcast to room {room_id}: "
             f"{success_count}/{len(connections)} successful"
@@ -572,19 +662,12 @@ class ConnectionManager:
             return len(self._user_connections.get(user_id, []))
 
         # Fallback to local-only broadcast if Redis is not connected
-        connections = self._user_connections.get(user_id, set()).copy()
+        connections = list(self._user_connections.get(user_id, set()).copy())
 
         if not connections:
             return 0
 
-        tasks = [
-            self.send_personal(conn, message)
-            for conn in connections
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        success_count = sum(1 for r in results if r is True)
-        return success_count
+        return await self._batched_send(connections, message)
 
     async def broadcast_to_all(
         self,
@@ -601,21 +684,15 @@ class ConnectionManager:
         Returns:
             int: Number of successful sends
         """
-        connections = set(self._connections.values())
+        connections = list(self._connections.values())
 
         if exclude:
-            connections.discard(exclude)
+            connections = [c for c in connections if c != exclude]
 
         if not connections:
             return 0
 
-        tasks = [
-            self.send_personal(conn, message)
-            for conn in connections
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        return sum(1 for r in results if r is True)
+        return await self._batched_send(connections, message)
 
     async def handle_message(
         self,
@@ -640,7 +717,27 @@ class ConnectionManager:
         elif message_type == MessageType.JOIN_ROOM or message_type == "join_room":
             room_id = data.get("data", {}).get("room_id")
             if room_id:
-                await self.join_room(connection, room_id)
+                # Authorize before joining — check_room_access validates scope
+                from .room_auth import check_room_access
+
+                if await check_room_access(connection.user_id, room_id):
+                    await self.join_room(connection, room_id)
+                else:
+                    logger.warning(
+                        "Room join DENIED: user=%s room=%s",
+                        connection.user_id,
+                        room_id,
+                    )
+                    await self.send_personal(
+                        connection,
+                        {
+                            "type": MessageType.ERROR,
+                            "data": {
+                                "message": "Access denied to room",
+                                "room_id": room_id,
+                            },
+                        },
+                    )
 
         elif message_type == MessageType.LEAVE_ROOM:
             room_id = data.get("data", {}).get("room_id")

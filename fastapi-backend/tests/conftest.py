@@ -95,9 +95,13 @@ _DROP_STATEMENTS = [
     'DROP VIEW IF EXISTS v_projects CASCADE',
     'DROP VIEW IF EXISTS v_applications CASCADE',
     # Drop tables in FK-safe order
+    'DROP TABLE IF EXISTS "AgentConfigurations" CASCADE',
     'DROP TABLE IF EXISTS ai_system_prompts CASCADE',
+    'DROP TABLE IF EXISTS "ChatMessages" CASCADE',
+    'DROP TABLE IF EXISTS "ChatSessions" CASCADE',
     'DROP TABLE IF EXISTS "ImportJobs" CASCADE',
     'DROP TABLE IF EXISTS "DocumentChunks" CASCADE',
+    'DROP TABLE IF EXISTS "FolderFiles" CASCADE',
     'DROP TABLE IF EXISTS "DocumentSnapshots" CASCADE',
     'DROP TABLE IF EXISTS "DocumentTagAssignments" CASCADE',
     'DROP TABLE IF EXISTS "DocumentTags" CASCADE',
@@ -150,6 +154,13 @@ async def engine():
     _ddl_engine = create_async_engine(
         TEST_DATABASE_URL, pool_size=1, max_overflow=0,
     )
+
+    # Terminate stale connections to avoid deadlocks during DROP TABLE
+    async with _ddl_engine.begin() as conn:
+        await conn.execute(text(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            "WHERE datname = current_database() AND pid != pg_backend_pid()"
+        ))
 
     # Drop all tables and stale composite types (clean slate)
     async with _ddl_engine.begin() as conn:
@@ -279,6 +290,20 @@ def _clear_user_caches():
 
 
 @pytest.fixture(autouse=True)
+def _clear_rate_limit_counters():
+    """Clear in-memory rate limit counters between tests.
+
+    When Redis is unavailable (the norm in tests), the rate limiter falls back
+    to in-memory counters keyed by IP. Without clearing, limits accumulate
+    across tests sharing the same test client IP.
+    """
+    from app.ai.rate_limiter import _inmemory_counters
+    _inmemory_counters.clear()
+    yield
+    _inmemory_counters.clear()
+
+
+@pytest.fixture(autouse=True)
 def _mock_smtp():
     """Prevent real SMTP connections during tests.
 
@@ -290,6 +315,23 @@ def _mock_smtp():
     with patch(
         "app.services.email_service.aiosmtplib.send",
         new_callable=AsyncMock,
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _mock_token_blacklist():
+    """Prevent token blacklist checks from failing when Redis is unavailable.
+
+    Tests run without Redis. With redis_required=True in .env the
+    fail-closed blacklist check would reject every JWT token. This mock
+    makes is_token_blacklisted always return False (not blacklisted) so
+    that auth works normally in tests.
+    """
+    with patch(
+        "app.services.auth_service.is_token_blacklisted",
+        new_callable=AsyncMock,
+        return_value=False,
     ):
         yield
 
