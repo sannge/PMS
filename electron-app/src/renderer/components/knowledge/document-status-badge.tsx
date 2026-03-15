@@ -2,15 +2,17 @@
  * DocumentStatusBadge
  *
  * Unified badge merging the former DocumentIndexBadge and DocumentSyncBadge.
+ * Supports both native documents and uploaded files via the `entityType` prop.
  *
- * 4 states:
+ * 5 states:
  * - "indexed" (green): embeddings up-to-date
  * - "indexing" (yellow pulse): reindex or sync in progress
  * - "not-indexed" (gray): never embedded
  * - "stale" (orange): document changed since last embedding
+ * - "failed" (red): embedding job failed
  *
  * Two variants:
- * - "badge": Full badge with text + Radix Popover (for document header)
+ * - "badge": Full badge with text + Radix Popover (for document/file header)
  * - "dot": Small colored dot indicator (for tree views)
  */
 
@@ -23,6 +25,7 @@ import {
   useDocumentIndexStatus,
   useSyncDocumentEmbeddings,
 } from '@/hooks/use-ai-config'
+import { useSyncFileEmbeddings } from '@/hooks/use-folder-files'
 import { formatRelativeTime, formatAbsoluteTime } from '@/lib/time-utils'
 import { cn } from '@/lib/utils'
 
@@ -30,12 +33,14 @@ import { cn } from '@/lib/utils'
 // Types
 // ============================================================================
 
-type StatusState = 'indexed' | 'indexing' | 'not-indexed' | 'stale'
+type StatusState = 'indexed' | 'indexing' | 'not-indexed' | 'stale' | 'failed'
 
 interface DocumentStatusBadgeProps {
   documentId: string
   /** Backend-managed embedding status */
-  embeddingStatus?: 'none' | 'stale' | 'syncing' | 'synced'
+  embeddingStatus?: 'none' | 'stale' | 'syncing' | 'synced' | 'failed'
+  /** Whether this badge is for a native document or an uploaded file */
+  entityType?: 'document' | 'file'
   variant: 'badge' | 'dot'
   className?: string
 }
@@ -44,11 +49,12 @@ interface DocumentStatusBadgeProps {
 // State Derivation
 // ============================================================================
 
-function mapStatus(embeddingStatus: 'none' | 'stale' | 'syncing' | 'synced' | undefined): StatusState {
+function mapStatus(embeddingStatus: 'none' | 'stale' | 'syncing' | 'synced' | 'failed' | undefined): StatusState {
   switch (embeddingStatus) {
     case 'synced': return 'indexed'
     case 'syncing': return 'indexing'
     case 'stale': return 'stale'
+    case 'failed': return 'failed'
     default: return 'not-indexed'
   }
 }
@@ -85,19 +91,30 @@ const STATE_CONFIG: Record<
     borderClass: 'border-orange-300/50 dark:border-orange-700/50',
     bgClass: 'bg-orange-50/80 dark:bg-orange-950/30',
   },
+  failed: {
+    dotClass: 'bg-red-500',
+    label: 'Failed',
+    textClass: 'text-red-700 dark:text-red-400',
+    borderClass: 'border-red-300/50 dark:border-red-700/50',
+    bgClass: 'bg-red-50/80 dark:bg-red-950/30',
+  },
 }
 
 // ============================================================================
-// StatusDot — lightweight dot variant (no mutation hook)
+// StatusDot — lightweight dot variant
 // ============================================================================
 
 function StatusDot({
   documentId,
   embeddingStatus,
+  entityType = 'document',
   className,
 }: Omit<DocumentStatusBadgeProps, 'variant'>) {
   const syncDoc = useSyncDocumentEmbeddings()
-  const state = syncDoc.isPending || embeddingStatus === 'syncing'
+  const syncFile = useSyncFileEmbeddings()
+  const syncMutation = entityType === 'file' ? syncFile : syncDoc
+
+  const state = syncMutation.isPending || embeddingStatus === 'syncing'
     ? 'indexing'
     : mapStatus(embeddingStatus)
   const config = STATE_CONFIG[state]
@@ -105,17 +122,18 @@ function StatusDot({
   const handleSync = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
-      syncDoc.mutate(documentId, {
+      syncMutation.mutate(documentId, {
         onSuccess: () => toast.success('Embedding sync started'),
         onError: (err) => toast.error('Sync failed', { description: err.message }),
       })
     },
-    [documentId, syncDoc]
+    [documentId, syncMutation]
   )
 
   if (state === 'indexed' || state === 'not-indexed') return null
 
-  if (state === 'stale') {
+  // Stale and failed dots are clickable to trigger sync
+  if (state === 'stale' || state === 'failed') {
     return (
       <button
         type="button"
@@ -125,8 +143,8 @@ function StatusDot({
           'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1',
           className,
         )}
-        title="Stale - click to sync embeddings"
-        aria-label="Embedding stale - click to sync"
+        title={state === 'failed' ? 'Failed - click to retry sync' : 'Stale - click to sync embeddings'}
+        aria-label={state === 'failed' ? 'Embedding failed - click to retry' : 'Embedding stale - click to sync'}
         onClick={handleSync}
       />
     )
@@ -152,25 +170,31 @@ function StatusDot({
 function StatusBadge({
   documentId,
   embeddingStatus,
+  entityType = 'document',
   className,
 }: Omit<DocumentStatusBadgeProps, 'variant'>) {
-  const { data: indexStatus } = useDocumentIndexStatus(documentId)
+  // Only fetch index status for documents (endpoint doesn't exist for files)
+  const { data: indexStatus } = useDocumentIndexStatus(
+    entityType === 'document' ? documentId : null
+  )
   const syncDoc = useSyncDocumentEmbeddings()
+  const syncFile = useSyncFileEmbeddings()
+  const syncMutation = entityType === 'file' ? syncFile : syncDoc
 
   const embeddingUpdatedAt = indexStatus?.embedding_updated_at ?? null
-  const isOperationPending = syncDoc.isPending || embeddingStatus === 'syncing'
+  const isOperationPending = syncMutation.isPending || embeddingStatus === 'syncing'
   const state = isOperationPending ? 'indexing' : mapStatus(embeddingStatus)
   const config = STATE_CONFIG[state]
 
   const handleSync = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
-      syncDoc.mutate(documentId, {
+      syncMutation.mutate(documentId, {
         onSuccess: () => toast.success('Embedding sync started'),
         onError: (err) => toast.error('Sync failed', { description: err.message }),
       })
     },
-    [documentId, syncDoc]
+    [documentId, syncMutation]
   )
 
   const relativeLabel =
@@ -219,11 +243,11 @@ function StatusBadge({
                   : 'Never'}
               </span>
             </div>
-            {indexStatus && 'chunk_count' in indexStatus && (
+            {indexStatus?.chunk_count != null && (
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">Chunks</span>
                 <span className="font-medium">
-                  {(indexStatus as unknown as { chunk_count: number }).chunk_count}
+                  {indexStatus.chunk_count}
                 </span>
               </div>
             )}
@@ -238,21 +262,22 @@ function StatusBadge({
 
           {state !== 'indexing' && (
             <Button
-              variant={state === 'stale' ? 'default' : 'outline'}
+              variant={state === 'stale' || state === 'failed' ? 'default' : 'outline'}
               size="sm"
               className={cn(
                 'w-full h-7 text-xs',
-                state === 'stale' && 'bg-gradient-to-br from-amber-400 to-orange-500 text-white hover:from-amber-500 hover:to-orange-600'
+                state === 'stale' && 'bg-gradient-to-br from-amber-400 to-orange-500 text-white hover:from-amber-500 hover:to-orange-600',
+                state === 'failed' && 'bg-gradient-to-br from-red-400 to-red-600 text-white hover:from-red-500 hover:to-red-700'
               )}
               onClick={handleSync}
-              disabled={syncDoc.isPending}
+              disabled={syncMutation.isPending}
             >
-              {syncDoc.isPending ? (
+              {syncMutation.isPending ? (
                 <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
               ) : (
                 <RefreshCw className="h-3 w-3 mr-1.5" />
               )}
-              Sync Now
+              {state === 'failed' ? 'Retry Sync' : 'Sync Now'}
             </Button>
           )}
         </div>
@@ -268,13 +293,14 @@ function StatusBadge({
 export function DocumentStatusBadge({
   documentId,
   embeddingStatus,
+  entityType = 'document',
   variant,
   className,
 }: DocumentStatusBadgeProps) {
   if (variant === 'dot') {
-    return <StatusDot documentId={documentId} embeddingStatus={embeddingStatus} className={className} />
+    return <StatusDot documentId={documentId} embeddingStatus={embeddingStatus} entityType={entityType} className={className} />
   }
-  return <StatusBadge documentId={documentId} embeddingStatus={embeddingStatus} className={className} />
+  return <StatusBadge documentId={documentId} embeddingStatus={embeddingStatus} entityType={entityType} className={className} />
 }
 
 export default DocumentStatusBadge

@@ -9,17 +9,16 @@ import logging
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select, update
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from sqlalchemy import delete as sa_delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import lazyload
 
-logger = logging.getLogger(__name__)
-
-from ..utils.timezone import utc_now
 from ..database import get_db
 from ..models.document import Document
+from ..models.document_chunk import DocumentChunk
 from ..models.document_folder import DocumentFolder
+from ..models.folder_file import FolderFile
 from ..models.project import Project
 from ..models.user import User
 from ..schemas.document_folder import (
@@ -29,7 +28,6 @@ from ..schemas.document_folder import (
     FolderUpdate,
 )
 from ..services.auth_service import get_current_user
-from ..services.permission_service import PermissionService
 from ..services.document_service import (
     check_name_uniqueness,
     compute_materialized_path,
@@ -39,7 +37,13 @@ from ..services.document_service import (
     validate_folder_depth,
     validate_scope,
 )
+from ..services.minio_service import get_minio_service
+from ..services.permission_service import PermissionService
+from ..services.search_service import get_meili_index
+from ..utils.timezone import utc_now
 from ..websocket.manager import manager, MessageType
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/document-folders",
@@ -369,6 +373,7 @@ async def update_folder(
 @router.delete("/{folder_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_folder(
     folder_id: UUID,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
@@ -413,21 +418,69 @@ async def delete_folder(
         .where(DocumentFolder.materialized_path.like(f"{folder.materialized_path}%"))
     )
     all_folder_ids = [row[0] for row in descendant_result.all()]
+    child_files: list = []
+    _files_to_cleanup: list[tuple] = []
+
+    soft_deleted_doc_ids: list[UUID] = []
 
     if all_folder_ids:
         now = utc_now()
+
+        # Soft-delete documents and collect their IDs in a single round-trip
         soft_delete_result = await db.execute(
             update(Document)
             .where(Document.folder_id.in_(all_folder_ids))
             .where(Document.deleted_at.is_(None))
-            .values(deleted_at=now)
+            .values(deleted_at=now, updated_at=now)
+            .returning(Document.id)
         )
+        soft_deleted_doc_ids = [row[0] for row in soft_delete_result.all()]
         logger.info(
             "Soft-deleted %d documents in folder %s (descendant folders: %d)",
-            soft_delete_result.rowcount,
+            len(soft_deleted_doc_ids),
             folder_id,
             len(all_folder_ids),
         )
+
+        # F-223: Soft-delete child FolderFiles and clean up storage/search
+        child_files_result = await db.execute(
+            select(FolderFile)
+            .where(
+                FolderFile.folder_id.in_(all_folder_ids),
+                FolderFile.deleted_at.is_(None),
+            )
+        )
+        child_files = child_files_result.scalars().all()
+
+        if child_files:
+            # Delete associated document chunks BEFORE soft-deleting files
+            # to prevent orphaned chunks in vector search and RBAC leakage
+            file_ids_to_clean = [ff.id for ff in child_files]
+            await db.execute(
+                sa_delete(DocumentChunk).where(DocumentChunk.file_id.in_(file_ids_to_clean))
+            )
+
+            # Soft-delete all child files
+            await db.execute(
+                update(FolderFile)
+                .where(
+                    FolderFile.folder_id.in_(all_folder_ids),
+                    FolderFile.deleted_at.is_(None),
+                )
+                .values(deleted_at=now, updated_at=now)
+            )
+            logger.info(
+                "Soft-deleted %d files in folder %s (descendant folders: %d)",
+                len(child_files),
+                folder_id,
+                len(all_folder_ids),
+            )
+
+            # Capture file storage info for post-commit cleanup
+            _files_to_cleanup = [
+                (str(ff.id), ff.storage_bucket, ff.storage_key, ff.thumbnail_key)
+                for ff in child_files
+            ]
 
     # Capture broadcast data before deletion (folder attrs unavailable after delete+commit)
     broadcast_data, broadcast_rooms = _build_folder_broadcast(
@@ -443,6 +496,69 @@ async def delete_folder(
     # commit the client's onSuccess re-fetch would race against the commit
     # and could see stale (pre-soft-delete) data.
     await db.commit()
+
+    # Batch-sync soft-deleted documents to Meilisearch via background task
+    if soft_deleted_doc_ids:
+        deleted_ts = int(now.timestamp())
+        async def _sync_deleted_docs_to_meili() -> None:
+            try:
+                from ..services.search_service import _meili_circuit_is_open
+                if _meili_circuit_is_open():
+                    logger.info("Skipping doc soft-delete sync: circuit breaker open")
+                    return
+                index = get_meili_index()
+                await index.update_documents([
+                    {"id": str(doc_id), "deleted_at": deleted_ts}
+                    for doc_id in soft_deleted_doc_ids
+                ])
+            except Exception as exc:
+                logger.warning(
+                    "Failed to batch-sync %d soft-deleted docs to search index: %s",
+                    len(soft_deleted_doc_ids), exc,
+                )
+        background_tasks.add_task(_sync_deleted_docs_to_meili)
+
+    # FIX-21: MinIO cleanup AFTER commit succeeds, via background tasks
+    # to avoid blocking the async event loop with sync I/O
+    if all_folder_ids and child_files:
+        def _cleanup_folder_files_minio() -> None:
+            try:
+                minio = get_minio_service()
+                for file_id_str, bucket, key, thumb_key in _files_to_cleanup:
+                    try:
+                        minio.delete_file(bucket=bucket, object_name=key)
+                        if thumb_key:
+                            minio.delete_file(bucket=bucket, object_name=thumb_key)
+                    except Exception as minio_err:
+                        logger.warning(
+                            "Failed to delete MinIO object for file %s: %s", file_id_str, minio_err,
+                        )
+            except Exception as minio_init_err:
+                logger.warning("Failed to initialize MinIO service during folder delete: %s", minio_init_err)
+
+        background_tasks.add_task(_cleanup_folder_files_minio)
+
+        # Batch soft-delete child files from search index via background task
+        if child_files:
+            file_search_ids = [f"file_{ff.id}" for ff in child_files]
+            deleted_ts = int(now.timestamp())
+            async def _batch_remove_files_from_meili() -> None:
+                try:
+                    from ..services.search_service import _meili_circuit_is_open
+                    if _meili_circuit_is_open():
+                        logger.info("Skipping file soft-delete sync: circuit breaker open")
+                        return
+                    index = get_meili_index()
+                    await index.update_documents([
+                        {"id": fid, "deleted_at": deleted_ts}
+                        for fid in file_search_ids
+                    ])
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to batch soft-delete %d files from search index: %s",
+                        len(file_search_ids), exc,
+                    )
+            background_tasks.add_task(_batch_remove_files_from_meili)
 
     # Broadcast AFTER commit so other clients re-fetch committed data
     await _broadcast_to_rooms(MessageType.FOLDER_DELETED, broadcast_data, broadcast_rooms)

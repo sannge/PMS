@@ -76,6 +76,7 @@ export function useSubscriptionTokenStatus(): UseQueryResult<SubscriptionTokenSt
     },
     enabled: !!token,
     staleTime: 60 * 1000,
+    refetchOnWindowFocus: true, // Status changes externally (browser OAuth flow)
   })
 }
 

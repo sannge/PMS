@@ -53,7 +53,7 @@ function extractSearchTerms(query: string): string[] {
 }
 
 export function SearchBar({ className, scopeToContext }: SearchBarProps = {}): JSX.Element {
-  const { searchQuery, setSearch, navigateToDocument, revealDocument, scope, scopeId } = useKnowledgeBase()
+  const { searchQuery, setSearch, navigateToDocument, revealDocument, selectFile, setActiveTab, scope, scopeId } = useKnowledgeBase()
   const [localValue, setLocalValue] = useState(searchQuery)
   const [showResults, setShowResults] = useState(false)
   const [selectedResultIndex, setSelectedResultIndex] = useState(-1)
@@ -111,18 +111,32 @@ export function SearchBar({ className, scopeToContext }: SearchBarProps = {}): J
   }, [setSearch])
 
   const handleResultClick = useCallback((hit: SearchResultHit) => {
-    // Prefer actual matched terms from backend (handles fuzzy/typo matches correctly)
-    const terms = hit.matchedTerms?.length ? hit.matchedTerms : extractSearchTerms(debouncedQuery)
-    if (scopeToContext) {
-      // Scoped panel: select document without changing scope/tab
-      revealDocument(hit.id, terms, hit.folder_id ?? undefined, hit.occurrenceIndex ?? 0, hit.project_id ?? undefined)
+    const isFile = hit.content_type === 'file' || hit.id.startsWith('file_')
+
+    if (isFile) {
+      // File result: strip "file_" prefix to get the actual file UUID, switch tab, then select
+      const fileId = hit.id.startsWith('file_') ? hit.id.slice(5) : hit.id
+      // Always use the user's query terms for file highlighting — matchedTerms
+      // from Meilisearch can include title tokens, fuzzy variants, and short
+      // substrings that cause false-positive highlights across the document.
+      const terms = extractSearchTerms(debouncedQuery)
+      if (!scopeToContext) {
+        const targetTab = getTargetTab(hit)
+        setActiveTab(targetTab)
+      }
+      selectFile(fileId, terms)
     } else {
-      // Notes page: full navigation with tab/scope switch
-      const targetTab = getTargetTab(hit)
-      navigateToDocument(targetTab, hit.id, terms, hit.folder_id ?? undefined, hit.occurrenceIndex ?? 0, hit.project_id ?? undefined)
+      // Document result: navigate with search highlighting
+      const terms = hit.matchedTerms?.length ? hit.matchedTerms : extractSearchTerms(debouncedQuery)
+      if (scopeToContext) {
+        revealDocument(hit.id, terms, hit.folder_id ?? undefined, hit.occurrenceIndex ?? 0, hit.project_id ?? undefined)
+      } else {
+        const targetTab = getTargetTab(hit)
+        navigateToDocument(targetTab, hit.id, terms, hit.folder_id ?? undefined, hit.occurrenceIndex ?? 0, hit.project_id ?? undefined)
+      }
     }
     setShowResults(false)
-  }, [scopeToContext, debouncedQuery, navigateToDocument, revealDocument])
+  }, [scopeToContext, debouncedQuery, navigateToDocument, revealDocument, selectFile, setActiveTab])
 
   const handleCloseResults = useCallback(() => {
     setShowResults(false)

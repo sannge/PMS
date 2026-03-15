@@ -127,6 +127,14 @@ export interface TaskDetailProps {
    */
   applicationId?: string
   /**
+   * Application name for breadcrumb display
+   */
+  applicationName?: string
+  /**
+   * Project name for breadcrumb display
+   */
+  projectName?: string
+  /**
    * Callback to revert task selection when user chooses to keep editing
    * unsaved description changes instead of switching tasks.
    * Called with the current task so parent can restore selection.
@@ -437,6 +445,8 @@ export function TaskDetail({
   enableRealtime = true,
   canEdit = true,
   applicationId,
+  applicationName,
+  projectName,
   onRevertTaskSelection,
 }: TaskDetailProps): JSX.Element | null {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -730,6 +740,14 @@ export function TaskDetail({
                   {getTaskTypeLabel(task.task_type)}
                 </span>
               </div>
+              {/* Application > Project breadcrumb */}
+              {(applicationName || projectName) && (
+                <div className="flex items-center gap-1 text-xs text-muted-foreground mt-0.5">
+                  {applicationName && <span>{applicationName}</span>}
+                  {applicationName && projectName && <ChevronRight className="h-3 w-3" />}
+                  {projectName && <span>{projectName}</span>}
+                </div>
+              )}
               {/* Real-time connection indicator */}
               {enableRealtime && (
                 <div
@@ -1098,7 +1116,12 @@ export function TaskDetail({
                         '[&_a]:text-primary [&_a]:underline',
                         '[&_img]:max-w-full [&_img]:h-auto [&_img]:rounded-md',
                       )}
-                      dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(localDescription, { FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'form'] }) }}
+                      dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(localDescription, {
+                        ALLOWED_TAGS: ['p', 'br', 'b', 'i', 'em', 'strong', 'u', 's', 'a', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'code', 'span', 'div', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'hr', 'img', 'sub', 'sup', 'mark'],
+                        ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'class', 'target', 'rel', 'colspan', 'rowspan', 'width', 'height'],
+                        ALLOW_DATA_ATTR: false,
+                        ALLOWED_URI_REGEXP: /^(?:https?|mailto:|data:image\/)/i,
+                      }) }}
                     />
                   ) : (
                     <div

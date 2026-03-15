@@ -577,7 +577,25 @@ def _make_ip_rate_limit_dep(
         request: Request,
         rate_limiter: AIRateLimiter = Depends(get_rate_limiter),
     ) -> None:
-        client_ip = request.client.host if request.client else "unknown"
+        # M11: Extract real client IP from X-Forwarded-For only when behind
+        # a trusted proxy (checked via settings).  Falls back to direct connection IP.
+        # R2-7: Use rightmost non-trusted-proxy IP to prevent XFF spoofing.
+        from ..config import settings as _rl_settings
+        _xff = request.headers.get("x-forwarded-for", "")
+        if _xff and getattr(_rl_settings, "trusted_proxy_ips", ""):
+            _conn_ip = request.client.host if request.client else ""
+            _trusted = {ip.strip() for ip in _rl_settings.trusted_proxy_ips.split(",") if ip.strip()}
+            if _conn_ip in _trusted:
+                # Use the rightmost non-trusted-proxy IP (first untrusted hop)
+                _parts = [p.strip() for p in _xff.split(",")]
+                client_ip = next(
+                    (p for p in reversed(_parts) if p not in _trusted),
+                    _parts[0],
+                )
+            else:
+                client_ip = _conn_ip or "unknown"
+        else:
+            client_ip = request.client.host if request.client else "unknown"
         limit, window = _get_limits()[key_suffix]
         result = await rate_limiter.check_and_increment(
             endpoint=key_suffix,

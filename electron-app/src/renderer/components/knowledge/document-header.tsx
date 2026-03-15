@@ -17,7 +17,7 @@ export interface DocumentTimestampProps {
   /** When provided, renders the unified embedding status badge */
   documentId?: string
   /** Backend-managed embedding status */
-  embeddingStatus?: 'none' | 'stale' | 'syncing' | 'synced'
+  embeddingStatus?: 'none' | 'stale' | 'syncing' | 'synced' | 'failed'
 }
 
 /** Format an ISO timestamp as "Feb 8, 2026 3:45 PM" */

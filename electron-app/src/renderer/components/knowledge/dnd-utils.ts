@@ -5,14 +5,18 @@
  * for sortable ID creation and parsing.
  */
 
-/** Build a sortable ID string: `${prefix}-folder-${id}` or `${prefix}-doc-${id}`. */
-export function makeSortableId(prefix: string, type: 'folder' | 'document', id: string): string {
-  return `${prefix}-${type === 'folder' ? 'folder' : 'doc'}-${id}`
+/** Regex for parsing project-scoped sortable IDs (hoisted to module scope to avoid recompilation). */
+const PROJECT_SORTABLE_ID_RE = /^project-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})-(folder|doc|file)-(.+)$/i
+
+/** Build a sortable ID string: `${prefix}-folder-${id}`, `${prefix}-doc-${id}`, or `${prefix}-file-${id}`. */
+export function makeSortableId(prefix: string, type: 'folder' | 'document' | 'file', id: string): string {
+  const slug = type === 'folder' ? 'folder' : type === 'file' ? 'file' : 'doc'
+  return `${prefix}-${slug}-${id}`
 }
 
 interface ParsedSortableId {
   prefix: string
-  type: 'folder' | 'document'
+  type: 'folder' | 'document' | 'file'
   itemId: string
 }
 
@@ -37,7 +41,8 @@ export function parsePrefixToScope(prefix: string): ScopeInfo | null {
 /**
  * Parse a sortable ID string back into its parts.
  *
- * Tries each valid prefix to match `${prefix}-folder-{id}` or `${prefix}-doc-{id}`.
+ * Tries each valid prefix to match `${prefix}-folder-{id}`, `${prefix}-doc-{id}`,
+ * or `${prefix}-file-{id}`.
  * Also handles project IDs: `project-{projId}-folder-{id}` is parsed as
  * `{ prefix: 'project:{projId}', type: 'folder', itemId }`.
  */
@@ -51,18 +56,21 @@ export function parseSortableId(sortableId: string, validPrefixes: string[]): Pa
     if (sortableId.startsWith(docPrefix)) {
       return { prefix, type: 'document', itemId: sortableId.slice(docPrefix.length) }
     }
+    const filePrefix = `${prefix}-file-`
+    if (sortableId.startsWith(filePrefix)) {
+      return { prefix, type: 'file', itemId: sortableId.slice(filePrefix.length) }
+    }
   }
 
-  // Project items: project-{projId}-folder-{id} or project-{projId}-doc-{id}
+  // Project items: project-{projId}-folder-{id}, project-{projId}-doc-{id}, or project-{projId}-file-{id}
   // UUID-aware regex: project IDs contain hyphens (e.g. a1b2c3d4-e5f6-7890-abcd-ef1234567890)
-  const projectMatch = sortableId.match(
-    /^project-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})-(folder|doc)-(.+)$/i
-  )
+  const projectMatch = sortableId.match(PROJECT_SORTABLE_ID_RE)
   if (projectMatch) {
     const [, projectId, typeStr, itemId] = projectMatch
+    const type = typeStr === 'folder' ? 'folder' : typeStr === 'file' ? 'file' : 'document'
     return {
       prefix: `project:${projectId}`,
-      type: typeStr === 'folder' ? 'folder' : 'document',
+      type,
       itemId,
     }
   }

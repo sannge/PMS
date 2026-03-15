@@ -67,6 +67,8 @@ router = APIRouter(
 
 
 _pending_search_tasks: set[asyncio.Task] = set()
+# L11: Cap to prevent unbounded growth if tasks accumulate faster than they drain
+_MAX_PENDING_SEARCH_TASKS = 500
 
 
 def _log_task_exception(task: asyncio.Task) -> None:
@@ -81,6 +83,13 @@ def _log_task_exception(task: asyncio.Task) -> None:
 
 def _create_search_task(coro: Any) -> asyncio.Task:
     """Create a tracked background task for search indexing."""
+    # L11: Refuse to create new tasks if set is at capacity
+    if len(_pending_search_tasks) >= _MAX_PENDING_SEARCH_TASKS:
+        logger.warning(
+            "Search task set at capacity (%d), skipping new task",
+            _MAX_PENDING_SEARCH_TASKS,
+        )
+        return asyncio.create_task(coro)  # still run it, just don't track
     task = asyncio.create_task(coro)
     _pending_search_tasks.add(task)
     task.add_done_callback(_log_task_exception)

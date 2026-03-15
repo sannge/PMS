@@ -42,7 +42,7 @@ export interface Document {
   updated_at: string
   tags: DocumentTagRef[]
   /** Backend-managed embedding status */
-  embedding_status?: 'none' | 'stale' | 'syncing' | 'synced'
+  embedding_status?: 'none' | 'stale' | 'syncing' | 'synced' | 'failed'
 }
 
 export interface DocumentTagRef {
@@ -65,7 +65,7 @@ export interface DocumentListItem {
   updated_at: string
   deleted_at: string | null
   /** Backend-managed embedding status */
-  embedding_status?: 'none' | 'stale' | 'syncing' | 'synced'
+  embedding_status?: 'none' | 'stale' | 'syncing' | 'synced' | 'failed'
 }
 
 export interface DocumentListResponse {
@@ -269,7 +269,8 @@ export function useCreateDocument(): UseMutationResult<Document, Error, CreateDo
       // Resolve effective scope ID for cache key
       const effectiveScopeId = params.scope === 'personal' ? (userId ?? '') : params.scope_id
 
-      // Cancel outgoing refetches
+      // Cancel outgoing refetches BEFORE any cache mutation to prevent
+      // a ghost __temp_ item if cancelQueries throws.
       await queryClient.cancelQueries({ queryKey: queryKeys.documents(params.scope, effectiveScopeId) })
 
       // Snapshot previous value
@@ -294,11 +295,21 @@ export function useCreateDocument(): UseMutationResult<Document, Error, CreateDo
         deleted_at: null,
       }
 
-      // Append to cache — select transform handles sorting
-      queryClient.setQueryData<DocumentListResponse>(queryKey, (old) => ({
-        items: [...(old?.items ?? []), tempDoc],
-        next_cursor: old?.next_cursor ?? null,
-      }))
+      // Wrap the optimistic cache update in try/catch so that if any error
+      // occurs after the mutation, we roll back immediately rather than
+      // leaving a ghost __temp_ item in the cache.
+      try {
+        queryClient.setQueryData<DocumentListResponse>(queryKey, (old) => ({
+          items: [...(old?.items ?? []), tempDoc],
+          next_cursor: old?.next_cursor ?? null,
+        }))
+      } catch (err) {
+        // Roll back to previous state before re-throwing
+        if (previous) {
+          queryClient.setQueryData(queryKey, previous)
+        }
+        throw err
+      }
 
       return { previous, queryKey, tempId, effectiveScopeId, scope: params.scope }
     },
@@ -320,6 +331,14 @@ export function useCreateDocument(): UseMutationResult<Document, Error, CreateDo
       // Rollback to previous state
       if (context?.previous) {
         queryClient.setQueryData(context.queryKey, context.previous)
+      }
+    },
+    onSettled: (_data, _error, _params, context) => {
+      if (context?.scope && context.effectiveScopeId) {
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.documents(context.scope, context.effectiveScopeId),
+          exact: false,
+        })
       }
     },
   })
@@ -561,10 +580,13 @@ export function useDeleteDocument(): UseMutationResult<void, Error, { documentId
         } : old
       )
 
+      // Snapshot individual document cache before removing
+      const previousDoc = queryClient.getQueryData(queryKeys.document(documentId))
+
       // Remove from individual document cache
       queryClient.removeQueries({ queryKey: queryKeys.document(documentId) })
 
-      return { previousLists, documentId }
+      return { previousLists, previousDoc, documentId }
     },
     onSuccess: (_data, { scope, scopeId }) => {
       const effectiveScopeId = scope === 'personal' ? (userId ?? '') : scopeId
@@ -586,6 +608,10 @@ export function useDeleteDocument(): UseMutationResult<void, Error, { documentId
             queryClient.setQueryData(key, data)
           }
         })
+      }
+      // Restore individual document cache
+      if (context?.previousDoc) {
+        queryClient.setQueryData(queryKeys.document(context.documentId), context.previousDoc)
       }
     },
   })

@@ -122,6 +122,16 @@ function emit(): void {
 }
 
 function setState(partial: Partial<AiSidebarData>): void {
+  // Skip emit when no values actually changed (prevents unnecessary re-renders
+  // that can cascade into "Maximum update depth exceeded").
+  let changed = false
+  for (const key of Object.keys(partial) as (keyof AiSidebarData)[]) {
+    if (!Object.is(state[key], partial[key])) {
+      changed = true
+      break
+    }
+  }
+  if (!changed) return
   state = { ...state, ...partial }
   emit()
 }

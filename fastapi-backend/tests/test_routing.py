@@ -41,12 +41,13 @@ class TestRouteAfterUnderstand:
         }
         assert route_after_understand(state) == "respond"
 
-    def test_follow_up_high_confidence_fast_paths(self):
+    def test_follow_up_high_confidence_explores(self):
+        """follow_up no longer fast-paths; only greeting does."""
         state = {
             "messages": [],
             "classification": {"intent": "follow_up", "confidence": 0.8},
         }
-        assert route_after_understand(state) == "respond"
+        assert route_after_understand(state) == "explore"
 
     def test_greeting_low_confidence_explores(self):
         """Greeting with confidence between clarify and fast_path thresholds goes to explore."""

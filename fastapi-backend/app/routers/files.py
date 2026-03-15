@@ -368,6 +368,15 @@ async def upload_file(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Comment with ID {comment_id} not found",
             )
+        # R2-8: When both comment_id and task_id are provided, verify the
+        # comment actually belongs to the task to prevent injection.
+        if task_id and comment.task_id != task_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Comment does not belong to specified task",
+            )
+        # H6: Check upload permission via the comment's parent task
+        await verify_task_attachment_access(comment.task_id, current_user, db, action="upload")
 
     # Handle explicit entity_type=document with entity_id
     if entity_type == EntityType.DOCUMENT and entity_id:
@@ -988,6 +997,21 @@ async def get_entity_attachments(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied. You do not have permission to view attachments for this document.",
             )
+
+    # H7: Entity-level authorization for task/comment attachments
+    if entity_type == EntityType.TASK:
+        await verify_task_attachment_access(entity_id, current_user, db, action="view")
+    elif entity_type == EntityType.COMMENT:
+        result = await db.execute(
+            select(Comment).where(Comment.id == entity_id)
+        )
+        comment = result.scalar_one_or_none()
+        if not comment:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Comment with ID {entity_id} not found",
+            )
+        await verify_task_attachment_access(comment.task_id, current_user, db, action="view")
 
     # Build query
     query = (

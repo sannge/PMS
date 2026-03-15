@@ -15,13 +15,12 @@
  */
 
 import { useEffect, useRef, useCallback } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { Skeleton } from '@/components/ui/skeleton'
 import { KnowledgeBaseProvider, useKnowledgeBase } from '@/contexts/knowledge-base-context'
 import { useAuthUserId } from '@/contexts/auth-context'
 import { useApplicationsWithDocs, useDocument } from '@/hooks/use-documents'
 import { useKnowledgePermissions } from '@/hooks/use-knowledge-permissions'
 import { useWebSocket, WebSocketClient, MessageType } from '@/hooks/use-websocket'
-import { queryKeys } from '@/lib/query-client'
 import {
   consumePendingAiNavigation,
   subscribePendingAiNavigation,
@@ -31,19 +30,23 @@ import { KnowledgeSidebar } from '@/components/knowledge/knowledge-sidebar'
 import { KnowledgeTabBar } from '@/components/knowledge/knowledge-tab-bar'
 import { SearchBar } from '@/components/knowledge/search-bar'
 import { EditorPanel } from '@/components/knowledge/editor-panel'
+import { FileViewerPanel } from '@/components/knowledge/file-viewer-panel'
+import { useFileDetail } from '@/hooks/use-folder-files'
 
 /**
  * NotesPageContent - Inner component that needs context access.
  */
 function NotesPageContent(): JSX.Element {
-  const { activeTab, setActiveTab, selectedDocumentId, selectDocument, navigateToDocument } = useKnowledgeBase()
+  const { activeTab, setActiveTab, selectedDocumentId, selectedFileId, selectDocument, selectFile, navigateToDocument } = useKnowledgeBase()
   const { data: scopesSummary, isLoading: isAppsLoading } = useApplicationsWithDocs()
   const userId = useAuthUserId()
   const { joinRoom, leaveRoom, status: wsStatus, subscribe } = useWebSocket()
-  const queryClient = useQueryClient()
 
   // Read selected document metadata to determine its scope (shared cache with EditorPanel)
   const { data: selectedDoc } = useDocument(selectedDocumentId)
+
+  // Read selected file metadata for file viewer panel
+  const { data: selectedFile, isLoading: isFileLoading } = useFileDetail(selectedFileId)
 
   // Permissions — scope to the document's actual scope (project-scoped docs need project permissions)
   const permScope = selectedDoc?.project_id
@@ -87,7 +90,7 @@ function NotesPageContent(): JSX.Element {
     }
   }, [activeTab, userId, wsStatus.isConnected, joinRoom, leaveRoom])
 
-  // Clear selection when the currently viewed document is deleted by another user
+  // Clear selection when the currently viewed document/file is deleted by another user
   useEffect(() => {
     if (!wsStatus.isConnected) return
 
@@ -102,11 +105,25 @@ function NotesPageContent(): JSX.Element {
 
     const unsubFolderDeleted = subscribe<{ folder_id: string }>(
       MessageType.FOLDER_DELETED,
-      () => {
+      (data) => {
         // When a folder is deleted, documents inside it are cascade-deleted.
-        // Reset selection so the editor doesn't keep showing a deleted document.
-        if (selectedDocumentId) {
+        // Only clear document selection if the selected document is in the deleted folder.
+        if (selectedDocumentId && selectedDoc?.folder_id === data.folder_id) {
           selectDocument(null)
+        }
+        // Files in the folder are also cascade soft-deleted.
+        // Only clear file selection if the file belongs to the deleted folder.
+        if (selectedFileId && selectedFile?.folder_id === data.folder_id) {
+          selectFile(null)
+        }
+      }
+    )
+
+    const unsubFileDeleted = subscribe<{ file_id: string }>(
+      MessageType.FILE_DELETED,
+      (data) => {
+        if (data.file_id === selectedFileId) {
+          selectFile(null)
         }
       }
     )
@@ -114,26 +131,9 @@ function NotesPageContent(): JSX.Element {
     return () => {
       unsubDocDeleted()
       unsubFolderDeleted()
+      unsubFileDeleted()
     }
-  }, [wsStatus.isConnected, subscribe, selectedDocumentId, selectDocument])
-
-  // Invalidate document cache when another user saves content
-  useEffect(() => {
-    if (!wsStatus.isConnected) return
-
-    const unsubDocUpdated = subscribe<{ document_id: string; actor_id?: string }>(
-      MessageType.DOCUMENT_UPDATED,
-      (data) => {
-        // Skip own actions
-        if (data.actor_id && data.actor_id === userId) return
-        queryClient.invalidateQueries({ queryKey: queryKeys.document(data.document_id) })
-      }
-    )
-
-    return () => {
-      unsubDocUpdated()
-    }
-  }, [wsStatus.isConnected, subscribe, userId, queryClient])
+  }, [wsStatus.isConnected, subscribe, selectedDocumentId, selectDocument, selectedDoc, selectedFileId, selectFile, selectedFile])
 
   // Handle AI navigation: navigate to a document with highlight when Blair source is clicked
   const handleAiNavigation = useCallback(
@@ -198,7 +198,43 @@ function NotesPageContent(): JSX.Element {
       <div className="flex flex-1 min-h-0">
         <KnowledgeSidebar />
         <main className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
-          <EditorPanel keyByDocumentId canEdit={canEdit} isOwner={isOwner} />
+          {selectedFileId && isFileLoading ? (
+            <div className="flex-1 flex flex-col min-h-0">
+              {/* Header skeleton */}
+              <div className="flex items-center justify-between px-4 py-2 border-b border-border">
+                <div className="flex items-center gap-2">
+                  <Skeleton className="h-4 w-40" />
+                  <Skeleton className="h-4 w-16" />
+                </div>
+                <div className="flex items-center gap-1">
+                  <Skeleton className="h-7 w-7 rounded" />
+                  <Skeleton className="h-7 w-7 rounded" />
+                </div>
+              </div>
+              {/* Content skeleton */}
+              <div className="flex-1 p-6 space-y-4">
+                <Skeleton className="h-5 w-48" />
+                <div className="space-y-2.5">
+                  <Skeleton className="h-3.5 w-full" />
+                  <Skeleton className="h-3.5 w-[90%]" />
+                  <Skeleton className="h-3.5 w-[75%]" />
+                </div>
+                <Skeleton className="h-40 w-full rounded-lg" />
+                <div className="space-y-2.5">
+                  <Skeleton className="h-3.5 w-[85%]" />
+                  <Skeleton className="h-3.5 w-[60%]" />
+                </div>
+              </div>
+            </div>
+          ) : selectedFileId && selectedFile ? (
+            <FileViewerPanel file={selectedFile} />
+          ) : selectedFileId && !isFileLoading && !selectedFile ? (
+            <div className="flex-1 flex items-center justify-center text-muted-foreground">
+              <p>File not found or has been deleted.</p>
+            </div>
+          ) : (
+            <EditorPanel keyByDocumentId canEdit={canEdit} isOwner={isOwner} />
+          )}
         </main>
       </div>
     </div>

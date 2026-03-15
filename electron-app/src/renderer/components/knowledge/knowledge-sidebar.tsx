@@ -18,17 +18,24 @@ import { useKnowledgeBase } from '@/contexts/knowledge-base-context'
 import { useAuthUserId } from '@/contexts/auth-context'
 import { useCreateDocument } from '@/hooks/use-documents'
 import { useCreateFolder } from '@/hooks/use-document-folders'
+import { useUploadFile, type UploadConflictError } from '@/hooks/use-folder-files'
 import { useKnowledgePermissions } from '@/hooks/use-knowledge-permissions'
 import { KnowledgeTree } from './knowledge-tree'
 import { TagFilterList } from './tag-filter-list'
 import { CreateDialog } from './create-dialog'
-import { ImportDialog } from '@/components/ai/import-dialog'
+import { FileConflictDialog } from './file-conflict-dialog'
 import { createEmptyCanvas } from './canvas-types'
+import { toast } from 'sonner'
 
 const SIDEBAR_WIDTH_KEY = 'knowledge-sidebar-width'
 const DEFAULT_WIDTH = 256
 const MIN_WIDTH = 200
 const MAX_WIDTH = 500
+
+interface ConflictEntry {
+  file: File
+  existingFileId: string | null
+}
 
 export function KnowledgeSidebar(): JSX.Element {
   const {
@@ -49,20 +56,47 @@ export function KnowledgeSidebar(): JSX.Element {
   // Dialog state
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [createType, setCreateType] = useState<'document' | 'folder'>('document')
-  const [importDialogOpen, setImportDialogOpen] = useState(false)
+
+  // File upload
+  const uploadFileInputRef = useRef<HTMLInputElement>(null)
+  const uploadFileMutation = useUploadFile()
+
+  // Conflict dialog state — supports sequential resolution of multiple conflicts
+  const [conflictDialogOpen, setConflictDialogOpen] = useState(false)
+  const [conflictQueue, setConflictQueue] = useState<ConflictEntry[]>([])
+  const [conflictFolderId, setConflictFolderId] = useState<string | null>(null)
+  const [conflictScope, setConflictScope] = useState<string | undefined>()
+  const [conflictScopeId, setConflictScopeId] = useState<string | undefined>()
+
+  // Derive current conflict from the front of the queue
+  const conflictFile = conflictQueue.length > 0 ? conflictQueue[0].file : null
+  const conflictExistingFileId = conflictQueue.length > 0 ? conflictQueue[0].existingFileId : null
+
+  // When the conflict queue empties while the dialog is open, close the dialog.
+  // This is done via useEffect instead of inside the setConflictQueue updater to
+  // avoid clearing file/scope state while the dialog close animation is still
+  // rendering (which would cause null props during the animation).
+  useEffect(() => {
+    if (conflictDialogOpen && conflictQueue.length === 0) {
+      setConflictDialogOpen(false)
+      setConflictFolderId(null)
+      setConflictScope(undefined)
+      setConflictScopeId(undefined)
+    }
+  }, [conflictDialogOpen, conflictQueue.length])
 
   // Resizable width state
   const [sidebarWidth, setSidebarWidth] = useState(() => {
-    const stored = localStorage.getItem(SIDEBAR_WIDTH_KEY)
-    return stored ? parseInt(stored, 10) : DEFAULT_WIDTH
+    try {
+      const stored = localStorage.getItem(SIDEBAR_WIDTH_KEY)
+      const parsed = stored ? parseInt(stored, 10) : NaN
+      return isNaN(parsed) ? DEFAULT_WIDTH : Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, parsed))
+    } catch {
+      return DEFAULT_WIDTH
+    }
   })
   const [isResizing, setIsResizing] = useState(false)
   const sidebarRef = useRef<HTMLDivElement>(null)
-
-  // Persist width to localStorage
-  useEffect(() => {
-    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth))
-  }, [sidebarWidth])
 
   // Handle resize drag
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -85,6 +119,14 @@ export function KnowledgeSidebar(): JSX.Element {
 
     const handleMouseUp = () => {
       setIsResizing(false)
+      // Persist width to localStorage only on mouseup (not during drag)
+      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(
+        Math.min(MAX_WIDTH, Math.max(MIN_WIDTH,
+          sidebarRef.current
+            ? sidebarRef.current.getBoundingClientRect().width
+            : sidebarWidth
+        ))
+      ))
     }
 
     document.addEventListener('mousemove', handleMouseMove)
@@ -96,15 +138,15 @@ export function KnowledgeSidebar(): JSX.Element {
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
     }
-  }, [isResizing])
+  }, [isResizing, sidebarWidth])
 
-  const resolveScope = () => {
+  const resolveScope = useCallback(() => {
     if (activeTab === 'personal') {
       return { scope: 'personal' as const, scopeId: userId ?? '' }
     }
     const appId = activeTab.slice(4)
     return { scope: 'application' as const, scopeId: appId }
-  }
+  }, [activeTab, userId])
 
   const handleCreateDocClick = () => {
     setCreateType('document')
@@ -120,21 +162,34 @@ export function KnowledgeSidebar(): JSX.Element {
     const { scope, scopeId } = resolveScope()
     if (!scopeId) return
 
-    if (createType === 'document') {
-      await createDocument.mutateAsync({
-        title: name,
-        scope,
-        scope_id: scopeId,
-        folder_id: selectedFolderId || null, // Use selected folder
-        content_json: format === 'canvas' ? JSON.stringify(createEmptyCanvas()) : undefined,
-      })
-    } else {
-      await createFolder.mutateAsync({
-        name,
-        scope,
-        scope_id: scopeId,
-        parent_id: selectedFolderId || null, // Create inside selected folder
-      })
+    // Close dialog immediately before mutation to prevent re-open on cache invalidation
+    setCreateDialogOpen(false)
+
+    try {
+      if (createType === 'document') {
+        await createDocument.mutateAsync({
+          title: name,
+          scope,
+          scope_id: scopeId,
+          folder_id: selectedFolderId || null, // Use selected folder
+          content_json: format === 'canvas' ? JSON.stringify(createEmptyCanvas()) : undefined,
+        })
+        toast.success(format === 'canvas' ? 'Canvas created' : 'Document created')
+      } else {
+        await createFolder.mutateAsync({
+          name,
+          scope,
+          scope_id: scopeId,
+          parent_id: selectedFolderId || null, // Create inside selected folder
+        })
+        toast.success('Folder created')
+      }
+    } catch (err) {
+      toast.error(
+        createType === 'document'
+          ? 'Failed to create document'
+          : 'Failed to create folder'
+      )
     }
   }
 
@@ -194,10 +249,10 @@ export function KnowledgeSidebar(): JSX.Element {
                 <FolderPlus className="h-3.5 w-3.5" />
               </button>
               <button
-                onClick={() => setImportDialogOpen(true)}
+                onClick={() => uploadFileInputRef.current?.click()}
                 className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-                title="Import document"
-                aria-label="Import document"
+                title="Upload files"
+                aria-label="Upload files"
               >
                 <Upload className="h-3.5 w-3.5" />
               </button>
@@ -212,14 +267,91 @@ export function KnowledgeSidebar(): JSX.Element {
             onSubmit={handleCreateSubmit}
           />
 
-          {/* Import dialog */}
-          <ImportDialog
-            open={importDialogOpen}
-            onOpenChange={setImportDialogOpen}
-            defaultScope={activeTab === 'personal' ? 'personal' : 'application'}
-            defaultScopeId={activeTab === 'personal' ? (userId ?? '') : activeTab.slice(4)}
-            defaultFolderId={selectedFolderId ?? undefined}
-            onImportComplete={() => setImportDialogOpen(false)}
+          {/* Hidden file input for sidebar upload button */}
+          <input
+            ref={uploadFileInputRef}
+            type="file"
+            multiple
+            onChange={async (e) => {
+              const files = e.target.files
+              if (!files || files.length === 0) return
+              const { scope: resolvedScope, scopeId: resolvedScopeId } = resolveScope()
+              const folderId = selectedFolderId ?? undefined
+              const conflicts: { file: File; existingFileId: string | null }[] = []
+              const total = files.length
+              let uploaded = 0
+
+              // Show progress toast for multi-file uploads
+              const toastId = total > 1
+                ? toast.loading(`Uploading 0/${total} files...`)
+                : toast.loading(`Uploading ${files[0].name}...`)
+
+              for (let i = 0; i < files.length; i++) {
+                try {
+                  await uploadFileMutation.mutateAsync({
+                    file: files[i],
+                    folderId,
+                    scope: resolvedScope,
+                    scopeId: resolvedScopeId,
+                  })
+                  uploaded++
+                  if (total > 1) {
+                    toast.loading(`Uploading ${uploaded}/${total} files...`, { id: toastId })
+                  }
+                } catch (err) {
+                  const error = err as UploadConflictError
+                  if (error.status === 409) {
+                    conflicts.push({ file: files[i], existingFileId: error.existingFileId ?? null })
+                  } else {
+                    toast.error(`Failed to upload ${files[i].name}: ${error.message}`)
+                  }
+                }
+              }
+
+              // Dismiss progress toast and show result
+              if (uploaded > 0) {
+                toast.success(
+                  total === 1 ? `${files[0].name} uploaded` : `${uploaded} file${uploaded > 1 ? 's' : ''} uploaded`,
+                  { id: toastId }
+                )
+              } else {
+                toast.dismiss(toastId)
+              }
+
+              // Queue all conflicts for sequential resolution
+              if (conflicts.length > 0) {
+                setConflictQueue(conflicts)
+                setConflictFolderId(folderId ?? null)
+                setConflictScope(resolvedScope)
+                setConflictScopeId(resolvedScopeId)
+                setConflictDialogOpen(true)
+                if (conflicts.length > 1) {
+                  toast.info(`${conflicts.length} files had conflicts. Resolve them one at a time.`)
+                }
+              }
+
+              e.target.value = ''
+            }}
+            className="hidden"
+            aria-hidden="true"
+          />
+
+          {/* File conflict dialog */}
+          <FileConflictDialog
+            open={conflictDialogOpen}
+            onOpenChange={setConflictDialogOpen}
+            file={conflictFile}
+            folderId={conflictFolderId}
+            scope={conflictScope}
+            scopeId={conflictScopeId}
+            existingFileId={conflictExistingFileId}
+            onResolved={() => {
+              // Remove the resolved conflict from the queue.
+              // When the queue becomes empty, the useEffect above will
+              // close the dialog and clear state on the next render,
+              // avoiding null props during the close animation.
+              setConflictQueue((prev) => prev.slice(1))
+            }}
           />
 
           {/* Folder tree section */}

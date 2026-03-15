@@ -142,7 +142,7 @@ export function useReceivedInvitations(
     enabled: !!token,
     staleTime: 5 * 60 * 1000, // 5 minutes
     gcTime: 24 * 60 * 60 * 1000,
-    refetchOnWindowFocus: false, // WS real-time invalidation handles freshness
+    refetchOnWindowFocus: true, // Invitations change externally (email links)
   })
 }
 
@@ -198,7 +198,7 @@ export function usePendingInvitationCount(): UseQueryResult<number, Error> {
     enabled: !!token,
     staleTime: 60 * 1000, // 1 minute
     refetchInterval: 60 * 1000, // Poll every minute
-    refetchOnWindowFocus: false, // WS real-time invalidation handles freshness
+    refetchOnWindowFocus: true, // Invitations change externally (email links)
   })
 }
 

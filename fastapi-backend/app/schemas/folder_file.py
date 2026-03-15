@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class FolderFileResponse(BaseModel):
@@ -14,7 +14,7 @@ class FolderFileResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    folder_id: UUID
+    folder_id: Optional[UUID] = None
     application_id: Optional[UUID] = None
     project_id: Optional[UUID] = None
     user_id: Optional[UUID] = None
@@ -23,23 +23,36 @@ class FolderFileResponse(BaseModel):
     mime_type: str = "application/octet-stream"
     file_size: int
     file_extension: str
-    thumbnail_key: Optional[str] = None
+    has_thumbnail: bool = False
     extraction_status: Literal[
         "pending", "processing", "completed", "failed", "unsupported"
     ] = "pending"
-    extraction_error: Optional[str] = None
     extracted_metadata: dict[str, Any] = Field(default_factory=dict)
     embedding_status: Literal[
         "none", "stale", "syncing", "synced", "failed"
     ] = "none"
     embedding_updated_at: Optional[datetime] = None
-    sha256_hash: Optional[str] = None
     sort_order: int = 0
     created_by: Optional[UUID] = None
     row_version: int = 1
     deleted_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="before")
+    @classmethod
+    def _set_has_thumbnail(cls, values: Any) -> Any:
+        """Derive has_thumbnail from the ORM thumbnail_key attribute."""
+        if isinstance(values, dict):
+            values["has_thumbnail"] = bool(values.get("thumbnail_key"))
+            return values
+        # ORM model with from_attributes — read thumbnail_key directly
+        tk = getattr(values, "thumbnail_key", None)
+        try:
+            values.__dict__["has_thumbnail"] = bool(tk)
+        except (TypeError, AttributeError):
+            pass
+        return values
 
 
 class FolderFileInternalResponse(FolderFileResponse):
@@ -68,7 +81,7 @@ class FolderFileListItem(BaseModel):
         "none", "stale", "syncing", "synced", "failed"
     ] = "none"
     sort_order: int = 0
-    folder_id: UUID
+    folder_id: Optional[UUID] = None
     created_by: Optional[UUID] = None
     row_version: int = 1
     created_at: datetime
@@ -105,12 +118,14 @@ class FolderFileUpdate(BaseModel):
     @field_validator("display_name", mode="before")
     @classmethod
     def sanitize_display_name(cls, v: str | None) -> str | None:
-        """Strip null bytes, control characters, and angle brackets."""
+        """Strip null bytes, control characters, angle brackets, and path separators."""
         if v is None:
             return v
         # Remove null bytes, C0/C1 control chars (except tab/newline), DEL,
         # and angle brackets that could allow HTML injection.
         sanitized = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f<>]", "", v)
+        # F-123: Remove path separators to prevent directory traversal
+        sanitized = sanitized.replace("/", "").replace("\\", "")
         return sanitized.strip()
 
 
@@ -118,6 +133,15 @@ class FolderFileListResponse(BaseModel):
     """Wrapper response for list endpoint (CRIT-3: frontend expects {items: []})."""
 
     items: list[FolderFileListItem]
+
+
+class FolderFileDownloadUrlResponse(BaseModel):
+    """Schema for download URL endpoint response."""
+
+    file_id: str
+    display_name: str
+    original_name: str
+    download_url: str
 
 
 class FolderFileReplaceResponse(BaseModel):

@@ -33,8 +33,12 @@ export interface FileConflictDialogProps {
   onOpenChange: (open: boolean) => void
   /** The file that caused the conflict */
   file: File | null
-  /** The folder the file was being uploaded to */
+  /** The folder the file was being uploaded to (null for unfiled uploads) */
   folderId: string | null
+  /** Scope type for unfiled uploads (used when folderId is null) */
+  scope?: string
+  /** Scope entity ID for unfiled uploads (used when folderId is null) */
+  scopeId?: string
   /** The ID of the existing file to replace (if known) */
   existingFileId?: string | null
   /** Called after the conflict is resolved */
@@ -76,19 +80,27 @@ export function FileConflictDialog({
   onOpenChange,
   file,
   folderId,
+  scope,
+  scopeId,
   existingFileId,
   onResolved,
 }: FileConflictDialogProps): JSX.Element {
-  // LOW-2: Track which action is in progress to show spinner on correct button
+  // Track which action is in progress to show spinner on correct button
   const [activeAction, setActiveAction] = useState<'idle' | 'replacing' | 'keepingBoth'>('idle')
   const replaceFile = useReplaceFile()
   const uploadFile = useUploadFile()
 
   const handleReplace = useCallback(async () => {
-    if (!file || !folderId || !existingFileId) return
+    if (!file || !existingFileId || (!folderId && !scopeId)) return
     setActiveAction('replacing')
     try {
-      await replaceFile.mutateAsync({ fileId: existingFileId, file, folderId })
+      await replaceFile.mutateAsync({
+        fileId: existingFileId,
+        file,
+        folderId: folderId ?? '',
+        scope,
+        scopeId,
+      })
       onOpenChange(false)
       onResolved?.()
     } catch (err) {
@@ -96,19 +108,21 @@ export function FileConflictDialog({
     } finally {
       setActiveAction('idle')
     }
-  }, [file, folderId, existingFileId, replaceFile, onOpenChange, onResolved])
+  }, [file, folderId, scope, scopeId, existingFileId, replaceFile, onOpenChange, onResolved])
 
   const handleKeepBoth = useCallback(async () => {
-    if (!file || !folderId) return
+    if (!file || (!folderId && !scopeId)) return
     setActiveAction('keepingBoth')
     try {
-      // MED-10: Retry with incremented names if we keep getting 409
+      // Retry with incremented names if we keep getting 409
       let candidateName = incrementFilename(file.name)
       for (let attempt = 0; attempt < MAX_KEEP_BOTH_ATTEMPTS; attempt++) {
         try {
           await uploadFile.mutateAsync({
             file,
-            folderId,
+            folderId: folderId ?? undefined,
+            scope: !folderId ? scope : undefined,
+            scopeId: !folderId ? scopeId : undefined,
             displayName: candidateName,
           })
           // Success -- break out
@@ -131,7 +145,7 @@ export function FileConflictDialog({
     } finally {
       setActiveAction('idle')
     }
-  }, [file, folderId, uploadFile, onOpenChange, onResolved])
+  }, [file, folderId, scope, scopeId, uploadFile, onOpenChange, onResolved])
 
   const handleCancel = useCallback(() => {
     onOpenChange(false)

@@ -8,7 +8,7 @@
  * Escapes HTML entities for XSS prevention.
  */
 
-import { useState, useCallback, useMemo } from 'react'
+import React, { useState, useCallback, useMemo } from 'react'
 import { Copy, Check, Download, FileSpreadsheet, Square, CheckSquare } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getAccessToken } from '@/lib/api-client'
@@ -610,12 +610,15 @@ function ExportDownloadCard({ href, filename }: { href: string; filename: string
 // Component
 // ============================================================================
 
-export function MarkdownRenderer({ content, className }: MarkdownRendererProps): JSX.Element {
-  const blocks = useMemo(() => parseBlocks(content), [content])
+export const MarkdownRenderer = React.memo(
+  function MarkdownRenderer({ content, className }: MarkdownRendererProps): JSX.Element {
+    const blocks = useMemo(() => parseBlocks(content), [content])
 
-  return (
-    <div className={cn('space-y-2.5 text-sm leading-relaxed [overflow-wrap:anywhere]', className)}>
-      {blocks.map((block, i) => renderBlock(block, `md-${i}`))}
-    </div>
-  )
-}
+    return (
+      <div className={cn('space-y-2.5 text-sm leading-relaxed [overflow-wrap:anywhere]', className)}>
+        {blocks.map((block, i) => renderBlock(block, `md-${i}`))}
+      </div>
+    )
+  },
+  (prev, next) => prev.content === next.content && prev.className === next.className,
+)

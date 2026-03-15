@@ -95,6 +95,7 @@ export interface AiModelResponse {
 export interface IndexStatusResponse {
   document_id: string
   embedding_updated_at: string | null
+  chunk_count?: number
 }
 
 export interface IndexProgressResponse {

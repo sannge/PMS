@@ -74,6 +74,7 @@ from .knowledge_tools import (
     get_document_details,
     get_my_notes,
     list_recent_documents,
+    read_document,
     search_knowledge,
 )
 
@@ -162,10 +163,11 @@ ALL_READ_TOOLS = [
     get_task_detail,
     get_task_comments,
     get_blocked_tasks,
-    # Knowledge (5)
+    # Knowledge (6)
     search_knowledge,
     browse_folders,
     get_document_details,
+    read_document,
     list_recent_documents,
     get_my_notes,
     # Utility (4)
@@ -218,6 +220,7 @@ __all__ = [
     "search_knowledge",
     "browse_folders",
     "get_document_details",
+    "read_document",
     "list_recent_documents",
     "get_my_notes",
     "sql_query",

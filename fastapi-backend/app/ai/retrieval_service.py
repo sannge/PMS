@@ -126,10 +126,41 @@ class HybridRetrievalService:
         if not query:
             return []
 
-        # Step 1: Resolve user's RBAC scope
+        # Step 1: Resolve user's RBAC scope (M8: cached in Redis for 30s)
         # Don't early-return on empty app_ids — user may have personal-scope docs
-        app_ids = await _get_user_application_ids(self.db, user_id)
-        project_ids = await _get_projects_in_applications(self.db, app_ids) if app_ids else []
+        app_ids: list[UUID] = []
+        project_ids: list[UUID] = []
+        _rbac_cached = False
+        _rbac_rs = None
+        _cache_key = f"rbac_scope:{user_id}"
+        import json as _json
+        try:
+            from ..services.redis_service import redis_service as _rbac_rs
+            if _rbac_rs.is_connected:
+                _raw = await _rbac_rs.get(_cache_key)
+                if _raw:
+                    _cached = _json.loads(_raw)
+                    app_ids = [UUID(a) for a in _cached.get("app_ids", [])]
+                    project_ids = [UUID(p) for p in _cached.get("project_ids", [])]
+                    _rbac_cached = True
+        except Exception:
+            pass
+
+        if not _rbac_cached:
+            app_ids = await _get_user_application_ids(self.db, user_id)
+            project_ids = await _get_projects_in_applications(self.db, app_ids) if app_ids else []
+            try:
+                if _rbac_rs is not None and _rbac_rs.is_connected:
+                    await _rbac_rs.set(
+                        _cache_key,
+                        _json.dumps({
+                            "app_ids": [str(a) for a in app_ids],
+                            "project_ids": [str(p) for p in project_ids],
+                        }),
+                        ttl=30,
+                    )
+            except Exception:
+                pass
 
         # Apply optional scope narrowing
         if application_id is not None:
@@ -385,10 +416,10 @@ class HybridRetrievalService:
             if not doc_id:
                 continue
 
-            # Handle file: prefixed IDs from Meilisearch
-            is_file = isinstance(doc_id, str) and doc_id.startswith("file:")
+            # Handle file_ prefixed IDs from Meilisearch
+            is_file = isinstance(doc_id, str) and doc_id.startswith("file_")
             if is_file:
-                real_id = UUID(doc_id[5:])  # Strip "file:" prefix
+                real_id = UUID(doc_id[5:])  # Strip "file_" prefix
                 source_type = "file"
                 file_id = real_id
             else:
@@ -548,10 +579,11 @@ class HybridRetrievalService:
 
         RRF score: rrf_score(d) = sum over lists: 1 / (k + rank(d))
 
-        Deduplicates by document_id so that the same document from
-        different sources (semantic chunk vs keyword hit) merges correctly.
-        When multiple chunks from the same document appear, the chunk from
-        the highest-ranked entry (lowest rank number) is preserved.
+        Deduplicates by (source_type, document_id, chunk_index) so that
+        multiple chunks from the same document survive.  Cross-source hits
+        (semantic chunk vs keyword hit) for the *same* chunk still merge.
+        A per-document cap of 3 chunks (by RRF score) prevents any single
+        document from dominating the result set.
 
         Args:
             ranked_lists: Variable number of ranked result lists.
@@ -560,15 +592,16 @@ class HybridRetrievalService:
         Returns:
             Merged and deduplicated list of RetrievalResult.
         """
-        # Key: (source_type, document_id) — ensures cross-source dedup while
-        # keeping document-sourced and file-sourced results separate.
-        # Within a single source, duplicate chunks from the same item
-        # accumulate RRF score but the highest-ranked chunk's text is preserved.
-        merged: dict[tuple[str, UUID], dict] = {}
+        # Key: (source_type, document_id, chunk_index) — preserves multiple
+        # chunks from the same document while merging cross-source hits for
+        # the *same* chunk.  A per-document cap of 3 (applied after scoring)
+        # prevents any single document from dominating the result set.
+        _MAX_CHUNKS_PER_DOC = 3
+        merged: dict[tuple[str, UUID, int | None], dict] = {}
 
         for ranked_list in ranked_lists:
             for result in ranked_list:
-                key = (result.source_type, result.document_id)
+                key = (result.source_type, result.document_id, result.chunk_index)
 
                 if key not in merged:
                     merged[key] = {
@@ -598,9 +631,23 @@ class HybridRetrievalService:
                     merged[key]["chunk_index"] = result.chunk_index
                     merged[key]["best_rank"] = result.rank
 
+        # Per-document cap: keep only the top _MAX_CHUNKS_PER_DOC chunks
+        # per (source_type, document_id) by RRF score.
+        from collections import defaultdict
+        _doc_counts: dict[tuple[str, UUID], int] = defaultdict(int)
+        _sorted_entries = sorted(
+            merged.values(), key=lambda e: e["rrf_score"], reverse=True
+        )
+        _capped_entries: list[dict] = []
+        for entry in _sorted_entries:
+            doc_key = (entry["source_type"], entry["document_id"])
+            if _doc_counts[doc_key] < _MAX_CHUNKS_PER_DOC:
+                _doc_counts[doc_key] += 1
+                _capped_entries.append(entry)
+
         # Convert to RetrievalResult
         results: list[RetrievalResult] = []
-        for entry in merged.values():
+        for entry in _capped_entries:
             source_str = "+".join(sorted(entry["sources"]))
             snippet = self._generate_snippet(
                 entry["heading_context"], entry["chunk_text"]

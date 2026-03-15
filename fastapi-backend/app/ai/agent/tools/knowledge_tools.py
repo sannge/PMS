@@ -207,7 +207,8 @@ async def search_knowledge(
                 text=filtered_text, sources=sources
             )
             push_sources(sources)
-            return _truncate(tool_result.format_for_llm())
+            # H4: Use 16K cap to match RAG output budget (avoid double truncation)
+            return _truncate(tool_result.format_for_llm(), max_len=16000)
 
         elif docs_meta:
             sources = _build_sources(docs_meta)
@@ -215,9 +216,10 @@ async def search_knowledge(
                 text=formatted_text, sources=sources
             )
             push_sources(sources)
-            return _truncate(tool_result.format_for_llm())
+            # H4: Use 16K cap to match RAG output budget (avoid double truncation)
+            return _truncate(tool_result.format_for_llm(), max_len=16000)
 
-        return _truncate(formatted_text)
+        return _truncate(formatted_text, max_len=16000)
 
     except Exception as exc:
         from langgraph.errors import GraphBubbleUp
@@ -226,6 +228,93 @@ async def search_knowledge(
             raise
         logger.warning("search_knowledge failed: %s: %s", type(exc).__name__, exc)
         return "Error searching knowledge base. Please try again."
+
+
+@tool
+async def read_document(document_id: str) -> str:
+    """Read the full content of a specific document.
+
+    Returns the plain-text content of the document, capped at 12,000
+    characters.  Use this when you need the actual content of a document
+    (not just search snippets).
+
+    Args:
+        document_id: The document UUID.
+    """
+    _MAX_READ_CHARS = 12_000
+
+    try:
+        user_id = _get_user_id()
+        doc_uuid: UUID
+        try:
+            doc_uuid = UUID(document_id)
+        except (ValueError, AttributeError):
+            return f"Error: Invalid document_id '{document_id}'."
+
+        async with _get_tool_session() as db:
+            # Fetch document with RBAC check
+            from ....services.permission_service import PermissionService
+
+            result = await db.execute(
+                select(
+                    Document.id,
+                    Document.title,
+                    Document.content_plain,
+                    Document.application_id,
+                    Document.project_id,
+                    Document.user_id,
+                ).where(
+                    Document.id == doc_uuid,
+                    Document.deleted_at.is_(None),
+                )
+            )
+            row = result.one_or_none()
+            if not row:
+                return f"Document '{document_id}' not found."
+
+            # RBAC: check the user can view this document's scope
+            perm_service = PermissionService(db)
+            scope_type: str
+            scope_id: UUID | None
+            if row.application_id:
+                scope_type = "application"
+                scope_id = row.application_id
+            elif row.project_id:
+                scope_type = "project"
+                scope_id = row.project_id
+            else:
+                scope_type = "personal"
+                scope_id = row.user_id
+
+            # R2-14: Guard against personal-scope docs with NULL user_id
+            if scope_type == "personal" and scope_id is None:
+                return "Access denied: you do not have permission to read this document."
+
+            if not await perm_service.check_can_view_knowledge(
+                user_id, scope_type, scope_id
+            ):
+                return "Access denied: you do not have permission to read this document."
+
+            content = row.content_plain or ""
+            title = _escape_md(row.title or "Untitled")
+
+            if not content.strip():
+                return f"## {title}\n\n(This document has no text content.)"
+
+            if len(content) > _MAX_READ_CHARS:
+                content = content[:_MAX_READ_CHARS] + "\n\n... (content truncated)"
+
+            return f"## {title}\n\n{content}"
+
+    except Exception as exc:
+        from langgraph.errors import GraphBubbleUp
+
+        if isinstance(exc, GraphBubbleUp):
+            raise
+        logger.warning(
+            "read_document failed: %s: %s", type(exc).__name__, exc
+        )
+        return "Error reading document. Please try again."
 
 
 @tool

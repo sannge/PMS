@@ -40,7 +40,7 @@ export interface DocumentEditorProps {
   /** Which occurrence (0-based) to scroll to after highlights are applied. -1 = no scroll. */
   scrollToOccurrence?: number
   /** Backend-managed embedding status */
-  embeddingStatus?: 'none' | 'stale' | 'syncing' | 'synced'
+  embeddingStatus?: 'none' | 'stale' | 'syncing' | 'synced' | 'failed'
 }
 
 /** Props for the EditorToolbar component */

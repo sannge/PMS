@@ -309,6 +309,7 @@ class TestScrapeUrl:
             # Mock httpx streaming response
             mock_stream_response = AsyncMock()
             mock_stream_response.raise_for_status = MagicMock()
+            mock_stream_response.is_redirect = False
             mock_stream_response.headers = {"content-type": "text/html; charset=utf-8"}
 
             async def _aiter_bytes(chunk_size=65536):
@@ -328,6 +329,9 @@ class TestScrapeUrl:
                 "socket.getaddrinfo", _mock_getaddrinfo("93.184.216.34")
             ), patch(
                 "app.ai.rate_limiter.get_rate_limiter", return_value=mock_rl
+            ), patch(
+                "app.ai.rate_limiter._get_limits",
+                return_value={"web_scrape": (10, 60), "web_search": (20, 60)},
             ), patch(
                 "app.ai.config_service.get_agent_config"
             ) as mock_cfg, patch(

@@ -88,9 +88,14 @@ function createWindow(): void {
     mainWindow?.webContents.send('window-maximized-change', false)
   })
 
-  // Handle external links - open in default browser
+  // Handle external links - open in default browser (with protocol validation)
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    try {
+      const parsed = new URL(details.url)
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        shell.openExternal(details.url)
+      }
+    } catch { /* ignore invalid URLs */ }
     return { action: 'deny' }
   })
 
@@ -209,7 +214,7 @@ function setupContentSecurityPolicy(): void {
               `connect-src 'self' http://localhost:* ws://localhost:* ${minioUrl}; ` +
               `media-src 'self' blob: ${minioUrl}; ` +
               "worker-src 'self' blob:; " +
-              "frame-src https://embed.diagrams.net;"
+              `frame-src https://embed.diagrams.net ${minioUrl};`
             : // Production CSP - more restrictive
               "default-src 'self'; " +
               "script-src 'self'; " +
@@ -218,7 +223,7 @@ function setupContentSecurityPolicy(): void {
               "font-src 'self' data:; " +
               `connect-src 'self' ${apiUrl} ${wsUrl} ${minioUrl}; ` +
               `media-src 'self' blob: ${minioUrl}; ` +
-              "frame-src https://embed.diagrams.net;"
+              `frame-src https://embed.diagrams.net ${minioUrl};`
         ]
       }
     })
@@ -310,9 +315,11 @@ function createApplicationMenu(): void {
     {
       label: 'View',
       submenu: [
-        { role: 'reload' },
-        { role: 'forceReload' },
-        { role: 'toggleDevTools' },
+        ...(is.dev ? [
+          { role: 'reload' as const },
+          { role: 'forceReload' as const },
+          { role: 'toggleDevTools' as const },
+        ] : []),
         { type: 'separator' },
         { role: 'resetZoom' },
         { role: 'zoomIn' },
@@ -433,22 +440,20 @@ app.on('certificate-error', (event, _webContents, url, _error, _certificate, cal
   }
 })
 
-// Prevent multiple instances (disabled for testing)
-// const gotTheLock = app.requestSingleInstanceLock()
-//
-// if (!gotTheLock) {
-//   app.quit()
-// } else {
-//   app.on('second-instance', () => {
-//     // Focus the main window if a second instance is attempted
-//     if (mainWindow) {
-//       if (mainWindow.isMinimized()) {
-//         mainWindow.restore()
-//       }
-//       mainWindow.focus()
-//     }
-//   })
-// }
+// Prevent multiple instances
+const gotTheLock = app.requestSingleInstanceLock()
+
+if (!gotTheLock) {
+  app.quit()
+} else {
+  app.on('second-instance', (_event, commandLine) => {
+    // Focus existing window
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
+    }
+  })
+}
 
 // Export for potential testing
 export { createWindow, mainWindow }

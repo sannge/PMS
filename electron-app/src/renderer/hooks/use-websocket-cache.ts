@@ -235,6 +235,9 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
           queryClient.invalidateQueries({ queryKey: queryKeys.projects(data.application_id) })
           queryClient.invalidateQueries({ queryKey: queryKeys.myProjects(data.application_id) })
           queryClient.invalidateQueries({ queryKey: queryKeys.myProjectsCrossApp })
+          // Invalidate application cache to update projects_count
+          queryClient.invalidateQueries({ queryKey: queryKeys.application(data.application_id) })
+          queryClient.invalidateQueries({ queryKey: queryKeys.applications })
         }
       })
     )
@@ -384,7 +387,6 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
         queryClient.invalidateQueries({ queryKey: queryKeys.comments(data.task_id) })
         // Invalidate attachments cache - comment deletion may have removed attachments
         queryClient.invalidateQueries({ queryKey: queryKeys.attachments(data.task_id) })
-        queryClient.invalidateQueries({ queryKey: ['attachments', 'task', data.task_id] })
       })
     )
 
@@ -429,6 +431,7 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
     unsubscribers.push(
       wsClient.on<ChecklistEventData>(MessageType.CHECKLIST_ITEM_ADDED, (data) => {
         queryClient.invalidateQueries({ queryKey: queryKeys.checklists(data.task_id) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.task(data.task_id) })
       })
     )
 
@@ -441,6 +444,7 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
     unsubscribers.push(
       wsClient.on<ChecklistEventData>(MessageType.CHECKLIST_ITEM_DELETED, (data) => {
         queryClient.invalidateQueries({ queryKey: queryKeys.checklists(data.task_id) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.task(data.task_id) })
       })
     )
 
@@ -688,7 +692,7 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
         }
 
         if (isOwnAction) {
-          // QE-013: Own-action auto-saves should NOT invalidate the full document list.
+          // Own-action auto-saves should NOT invalidate the full document list.
           // Invalidation triggers a refetch every few seconds during editing, causing
           // unnecessary network traffic. Instead, surgically update just the updated_at
           // timestamp in list caches so tree/list views stay in sync without refetching.
@@ -725,7 +729,9 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
           }
         }
 
-        queryClient.invalidateQueries({ queryKey: ['search'] })
+        if (!isOwnAction) {
+          queryClient.invalidateQueries({ queryKey: ['search'] })
+        }
         if (data.folder_id !== undefined) {
           queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders(data.scope, data.scope_id) })
           if (data.scope === 'project' && data.application_id) {
@@ -797,8 +803,10 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
     unsubscribers.push(
       wsClient.on<FolderEventData>(MessageType.FOLDER_UPDATED, (data) => {
         if (isDuplicateEvent(`folder_updated:${data.folder_id}`)) return
-        // NOTE: Do NOT skip own actions. Same IndexedDB consistency rationale:
-        // invalidation ensures the persisted cache is updated with server-confirmed data.
+        // Skip invalidation for own actions to preserve optimistic updates.
+        // The mutation's onSettled already handles cache reconciliation.
+        const isOwnAction = data.actor_id && data.actor_id === currentUserRef.current
+        if (isOwnAction) return
         queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders(data.scope, data.scope_id) })
         if (data.scope === 'project' && data.application_id) {
           queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders('application', data.application_id) })
@@ -826,6 +834,11 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
           { queryKey: queryKeys.documentFolders(data.scope, data.scope_id) },
           (old) => old ? removeFolder(old) : old
         )
+
+        // Clean up orphaned file list caches for the deleted folder
+        queryClient.removeQueries({ queryKey: queryKeys.folderFiles(data.folder_id) })
+        // Files become unfiled after folder deletion — refresh unfiled lists
+        queryClient.invalidateQueries({ queryKey: ['folderFiles', 'unfiled'] })
 
         // Skip invalidations that onSuccess already handles for own actions
         if (!isOwnAction) {
@@ -895,14 +908,26 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
           )
           // Also update document list caches so tree-view dots clear immediately.
           queryClient.setQueriesData<{ items: Array<Record<string, unknown>> }>(
-            { queryKey: ['documents'] },
+            { queryKey: ['documents'], exact: false },
             (old) => {
               if (!old?.items) return old
-              const idx = old.items.findIndex((d) => d.id === data.document_id)
+              const idx = old.items.findIndex((d: Record<string, unknown>) => d.id === data.document_id)
               if (idx === -1) return old
               const updated = [...old.items]
               updated[idx] = { ...updated[idx], embedding_status: data.embedding_status ?? 'synced' }
               return { ...old, items: updated }
+            }
+          )
+          // Also update folder_files caches so file dots update immediately.
+          queryClient.setQueriesData<Array<Record<string, unknown>>>(
+            { queryKey: ['folderFiles'], exact: false },
+            (old) => {
+              if (!Array.isArray(old)) return old
+              const idx = old.findIndex((f: Record<string, unknown>) => f.id === data.document_id)
+              if (idx === -1) return old
+              const updated = [...old]
+              updated[idx] = { ...updated[idx], embedding_status: data.embedding_status ?? 'synced' }
+              return updated
             }
           )
         }
@@ -966,37 +991,95 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
     // ========================================================================
 
     unsubscribers.push(
-      wsClient.on<{ file_id: string; folder_id: string }>(MessageType.FILE_UPLOADED, (data) => {
+      wsClient.on<{ file_id: string; folder_id: string | null; actor_id?: string }>(MessageType.FILE_UPLOADED, (data) => {
         if (isDuplicateEvent(`file_uploaded:${data.file_id}`)) return
-        queryClient.invalidateQueries({ queryKey: queryKeys.folderFiles(data.folder_id) })
+        const isOwnAction = data.actor_id && data.actor_id === currentUserRef.current
+        if (isOwnAction) return
+        if (data.folder_id) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.folderFiles(data.folder_id) })
+        } else {
+          // Unfiled file — invalidate all unfiled caches (prefix match)
+          queryClient.invalidateQueries({ queryKey: ['folderFiles', 'unfiled'] })
+        }
       })
     )
 
     unsubscribers.push(
-      wsClient.on<{ file_id: string; folder_id: string }>(MessageType.FILE_UPDATED, (data) => {
+      wsClient.on<{ file_id: string; folder_id: string | null; source_folder_id?: string | null; actor_id?: string | null }>(MessageType.FILE_UPDATED, (data) => {
         if (isDuplicateEvent(`file_updated:${data.file_id}`)) return
-        queryClient.invalidateQueries({ queryKey: queryKeys.folderFiles(data.folder_id) })
+        // Skip invalidation for own actions to preserve optimistic updates
+        const isOwnAction = data.actor_id && data.actor_id === currentUserRef.current
+        if (isOwnAction) return
+        if (data.folder_id) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.folderFiles(data.folder_id) })
+        } else {
+          queryClient.invalidateQueries({ queryKey: ['folderFiles', 'unfiled'] })
+        }
+        // On move, also invalidate the source folder so the file disappears from the old location
+        if (data.source_folder_id && data.source_folder_id !== data.folder_id) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.folderFiles(data.source_folder_id) })
+        }
+        // Invalidate detail + download URL so viewer picks up renames/replacements
+        queryClient.invalidateQueries({ queryKey: queryKeys.folderFile(data.file_id) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.folderFileDownloadUrl(data.file_id) })
       })
     )
 
     unsubscribers.push(
-      wsClient.on<{ file_id: string; folder_id: string }>(MessageType.FILE_DELETED, (data) => {
+      wsClient.on<{ file_id: string; folder_id: string | null }>(MessageType.FILE_DELETED, (data) => {
         if (isDuplicateEvent(`file_deleted:${data.file_id}`)) return
-        queryClient.invalidateQueries({ queryKey: queryKeys.folderFiles(data.folder_id) })
+        if (data.folder_id) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.folderFiles(data.folder_id) })
+        } else {
+          queryClient.invalidateQueries({ queryKey: ['folderFiles', 'unfiled'] })
+        }
+        // Remove stale detail + download URL caches for deleted file
+        queryClient.removeQueries({ queryKey: queryKeys.folderFile(data.file_id) })
+        queryClient.removeQueries({ queryKey: queryKeys.folderFileDownloadUrl(data.file_id) })
       })
     )
 
     unsubscribers.push(
-      wsClient.on<{ file_id: string; folder_id: string }>(MessageType.FILE_EXTRACTION_COMPLETED, (data) => {
+      wsClient.on<{ file_id: string; folder_id: string | null }>(MessageType.FILE_EXTRACTION_COMPLETED, (data) => {
         if (isDuplicateEvent(`file_extraction_completed:${data.file_id}`)) return
-        queryClient.invalidateQueries({ queryKey: queryKeys.folderFiles(data.folder_id) })
+        if (data.folder_id) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.folderFiles(data.folder_id) })
+        } else {
+          queryClient.invalidateQueries({ queryKey: ['folderFiles', 'unfiled'] })
+        }
+        // Invalidate individual file detail so FileViewerPanel badge updates
+        queryClient.invalidateQueries({ queryKey: queryKeys.folderFile(data.file_id) })
       })
     )
 
     unsubscribers.push(
-      wsClient.on<{ file_id: string; folder_id: string }>(MessageType.FILE_EXTRACTION_FAILED, (data) => {
+      wsClient.on<{ file_id: string; folder_id: string | null }>(MessageType.FILE_EXTRACTION_FAILED, (data) => {
         if (isDuplicateEvent(`file_extraction_failed:${data.file_id}`)) return
-        queryClient.invalidateQueries({ queryKey: queryKeys.folderFiles(data.folder_id) })
+        if (data.folder_id) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.folderFiles(data.folder_id) })
+        } else {
+          queryClient.invalidateQueries({ queryKey: ['folderFiles', 'unfiled'] })
+        }
+        // Invalidate individual file detail so FileViewerPanel badge updates
+        queryClient.invalidateQueries({ queryKey: queryKeys.folderFile(data.file_id) })
+      })
+    )
+
+    // ========================================================================
+    // Infrastructure Status Events
+    // ========================================================================
+
+    unsubscribers.push(
+      wsClient.on<{ connected: boolean }>(MessageType.REDIS_STATUS_CHANGED, (data) => {
+        if (data.connected) {
+          toast.dismiss('redis-degraded')
+          toast.success('Collaborative features restored', { duration: 3000 })
+        } else {
+          toast.warning(
+            'Some collaborative features are temporarily degraded',
+            { id: 'redis-degraded', duration: Infinity },
+          )
+        }
       })
     )
 

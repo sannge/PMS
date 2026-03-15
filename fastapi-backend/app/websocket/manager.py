@@ -136,6 +136,9 @@ class MessageType(str, Enum):
     IMPORT_FAILED = "import_failed"
     REINDEX_PROGRESS = "reindex_progress"
 
+    # Infrastructure status events
+    REDIS_STATUS_CHANGED = "redis_status_changed"
+
     # Ping/pong for keepalive
     PING = "ping"
     PONG = "pong"
@@ -191,24 +194,34 @@ class ConnectionManager:
         self._last_redis_warning: float = 0.0
         # Lock for thread-safe operations
         self._lock = asyncio.Lock()
+        # M20: Lock to prevent double-subscribe race in initialize_redis
+        self._init_lock = asyncio.Lock()
         # Redis initialization flag
         self._redis_initialized = False
 
     async def initialize_redis(self) -> None:
-        """Set up Redis pub/sub handlers for cross-worker messaging."""
-        if self._redis_initialized:
-            return
+        """Set up Redis pub/sub handlers for cross-worker messaging.
 
-        await redis_service.subscribe(
-            self._BROADCAST_CHANNEL,
-            self._handle_redis_broadcast
-        )
-        await redis_service.subscribe(
-            self._USER_CHANNEL,
-            self._handle_redis_user_message
-        )
-        self._redis_initialized = True
-        logger.info("ConnectionManager Redis pub/sub initialized")
+        M20: Protected with a lock to prevent duplicate subscriptions when
+        multiple WebSocket connections initialize concurrently.
+
+        Safe to call again after a Redis outage — handler registrations are
+        idempotent (RedisService.subscribe appends only if not already present).
+        """
+        async with self._init_lock:
+            if self._redis_initialized:
+                return
+
+            await redis_service.subscribe(
+                self._BROADCAST_CHANNEL,
+                self._handle_redis_broadcast
+            )
+            await redis_service.subscribe(
+                self._USER_CHANNEL,
+                self._handle_redis_user_message
+            )
+            self._redis_initialized = True
+            logger.info("ConnectionManager Redis pub/sub initialized")
 
     async def _handle_redis_broadcast(self, data: dict) -> None:
         """
@@ -332,6 +345,16 @@ class ConnectionManager:
         Returns:
             WebSocketConnection: The connection wrapper object, or None if rejected
         """
+        # L3: Global WebSocket connection cap (per worker process)
+        _global_cap = _cfg.get_int("websocket.max_global_connections", 10000)
+        if len(self._connections) >= _global_cap:
+            logger.warning(
+                "Global WebSocket cap reached: %d/%d — rejecting connection for user %s",
+                len(self._connections), _global_cap, user_id,
+            )
+            await websocket.close(code=4029, reason="Server at connection capacity")
+            return None
+
         # DDoS protection: reject excessive connections from single user
         current_connections = len(self._user_connections.get(user_id, set()))
         if current_connections >= settings.ws_max_connections_per_user:

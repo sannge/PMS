@@ -1,11 +1,12 @@
 """Unit tests for the status derivation service.
 
-Tests cover all derivation rules:
+Tests cover all derivation rules (earliest-status-wins):
 1. Empty project returns "Todo"
 2. All done tasks returns "Done"
 3. Any issue task returns "Issue"
-4. Active tasks returns "In Progress"
-5. Default (only todo) returns "Todo"
+4. Any todo task returns "Todo" (earliest status wins)
+5. Active/review tasks (no todo) returns "In Progress"
+6. Default returns "Todo"
 
 Also tests aggregation update functions and helper utilities.
 """
@@ -196,10 +197,10 @@ class TestDeriveProjectStatus:
         assert result == "Issue"
 
     def test_active_work_returns_in_progress(self):
-        """Rule 4: Active work (in_progress tasks) returns In Progress."""
+        """Rule 5: Active work (in_progress tasks) returns In Progress when no todo tasks."""
         agg = ProjectAggregation(
-            total_tasks=5,
-            todo_tasks=2,
+            total_tasks=3,
+            todo_tasks=0,
             active_tasks=2,
             review_tasks=0,
             issue_tasks=0,
@@ -211,10 +212,10 @@ class TestDeriveProjectStatus:
         assert result == "In Progress"
 
     def test_review_tasks_returns_in_progress(self):
-        """Rule 4: Review tasks also count as active work."""
+        """Rule 5: Review tasks also count as active work when no todo tasks."""
         agg = ProjectAggregation(
-            total_tasks=5,
-            todo_tasks=2,
+            total_tasks=3,
+            todo_tasks=0,
             active_tasks=0,
             review_tasks=2,
             issue_tasks=0,
@@ -226,10 +227,10 @@ class TestDeriveProjectStatus:
         assert result == "In Progress"
 
     def test_mixed_active_and_review_returns_in_progress(self):
-        """Rule 4: Mix of active and review tasks returns In Progress."""
+        """Rule 5: Mix of active and review tasks returns In Progress when no todo tasks."""
         agg = ProjectAggregation(
-            total_tasks=6,
-            todo_tasks=2,
+            total_tasks=4,
+            todo_tasks=0,
             active_tasks=1,
             review_tasks=1,
             issue_tasks=0,
@@ -491,13 +492,13 @@ class TestUpdateAggregationOnTaskStatusChange:
 
     def test_move_from_todo_to_in_progress(self):
         """Moving task from Todo to In Progress updates both counters."""
-        agg = self._create_mock_agg(total=5, todo=3, active=1, done=1)
+        agg = self._create_mock_agg(total=3, todo=1, active=1, done=1)
 
         new_status = update_aggregation_on_task_status_change(agg, "Todo", "In Progress")
 
-        assert agg.todo_tasks == 2
+        assert agg.todo_tasks == 0
         assert agg.active_tasks == 2
-        assert agg.total_tasks == 5  # Total unchanged
+        assert agg.total_tasks == 3  # Total unchanged
         assert new_status == "In Progress"
 
     def test_move_from_in_progress_to_done(self):
@@ -671,17 +672,18 @@ class TestRecalculateAggregationFromTasks:
         """Recalculates correctly using task_status relationship."""
         agg = self._create_mock_agg()
         tasks = [
-            self._create_mock_task_with_status_obj("Todo"),
-            self._create_mock_task_with_status_obj("Todo"),
             self._create_mock_task_with_status_obj("In Progress"),
+            self._create_mock_task_with_status_obj("In Progress"),
+            self._create_mock_task_with_status_obj("In Review"),
             self._create_mock_task_with_status_obj("Done"),
         ]
 
         result = recalculate_aggregation_from_tasks(agg, tasks)
 
         assert agg.total_tasks == 4
-        assert agg.todo_tasks == 2
-        assert agg.active_tasks == 1
+        assert agg.todo_tasks == 0
+        assert agg.active_tasks == 2
+        assert agg.review_tasks == 1
         assert agg.done_tasks == 1
         assert result == "In Progress"
 
@@ -775,18 +777,18 @@ class TestDerivationRulesIntegration:
     """Integration tests verifying complete derivation rule priority."""
 
     def test_derivation_priority_order(self):
-        """Verify derivation follows priority: Done > Issue > In Progress > Todo."""
+        """Verify derivation follows priority: Done > Issue > Todo > In Progress."""
         # Test 1: All done beats everything
         assert derive_project_status(ProjectAggregation(3, 0, 0, 0, 0, 3)) == "Done"
 
-        # Test 2: Issue beats In Progress
+        # Test 2: Issue beats everything except Done
         assert derive_project_status(ProjectAggregation(3, 0, 1, 0, 1, 1)) == "Issue"
 
-        # Test 3: In Progress beats Todo
-        assert derive_project_status(ProjectAggregation(3, 1, 1, 0, 0, 1)) == "In Progress"
+        # Test 3: Any todo = Todo (earliest status wins, even with active work)
+        assert derive_project_status(ProjectAggregation(3, 1, 1, 0, 0, 1)) == "Todo"
 
-        # Test 4: Review also triggers In Progress
-        assert derive_project_status(ProjectAggregation(3, 1, 0, 1, 0, 1)) == "In Progress"
+        # Test 4: In Progress only when no todo tasks remain
+        assert derive_project_status(ProjectAggregation(3, 0, 1, 1, 0, 1)) == "In Progress"
 
         # Test 5: Default is Todo
         assert derive_project_status(ProjectAggregation(3, 3, 0, 0, 0, 0)) == "Todo"

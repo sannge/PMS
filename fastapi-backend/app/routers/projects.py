@@ -272,7 +272,7 @@ async def list_projects(
     application_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
-    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    cursor: Optional[str] = Query(None, description="Cursor for keyset pagination (updated_at|id)"),
     limit: int = Query(100, ge=1, le=500, description="Maximum number of records to return"),
     search: Optional[str] = Query(None, description="Search term for project name"),
     project_type: Optional[str] = Query(None, description="Filter by project type"),
@@ -282,7 +282,7 @@ async def list_projects(
     List all projects within an application.
 
     - **application_id**: ID of the parent application
-    - **skip**: Number of records to skip for pagination
+    - **cursor**: Keyset pagination cursor (updated_at|id format)
     - **limit**: Maximum number of records to return (1-500)
     - **search**: Optional search term to filter by name
     - **project_type**: Optional filter by project type (scrum, kanban, etc.)
@@ -313,11 +313,26 @@ async def list_projects(
     if project_type:
         query = query.where(Project.project_type == project_type)
 
-    # Order by most recently updated
-    query = query.order_by(Project.updated_at.desc())
+    # Keyset pagination using (updated_at DESC, id DESC)
+    if cursor:
+        try:
+            cursor_ts_str, cursor_id_str = cursor.rsplit("|", 1)
+            cursor_updated_at = datetime.fromisoformat(cursor_ts_str)
+            cursor_id = UUID(cursor_id_str)
+            query = query.where(
+                or_(
+                    Project.updated_at < cursor_updated_at,
+                    (Project.updated_at == cursor_updated_at) & (Project.id < cursor_id),
+                )
+            )
+        except (ValueError, TypeError):
+            pass  # Invalid cursor, start from the beginning
 
-    # Apply pagination
-    query = query.offset(skip).limit(limit)
+    # Order by most recently updated
+    query = query.order_by(Project.updated_at.desc(), Project.id.desc())
+
+    # Fetch results
+    query = query.limit(limit)
     result = await db.execute(query)
     projects_list = result.scalars().all()
 

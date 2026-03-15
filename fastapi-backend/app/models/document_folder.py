@@ -158,14 +158,15 @@ class DocumentFolder(Base):
         "DocumentFolder",
         remote_side=[id],
         back_populates="children",
-        lazy="joined",
+        lazy="select",
     )
 
     children: List["DocumentFolder"] = relationship(
         "DocumentFolder",
         back_populates="parent",
-        lazy="dynamic",
+        lazy="select",
         cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
     documents: List["Document"] = relationship(
@@ -185,7 +186,7 @@ class DocumentFolder(Base):
     creator = relationship(
         "User",
         foreign_keys=[created_by],
-        lazy="joined",
+        lazy="select",
     )
 
     def __repr__(self) -> str:

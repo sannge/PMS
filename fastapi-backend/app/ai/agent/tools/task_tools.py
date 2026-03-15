@@ -81,7 +81,8 @@ async def list_tasks(
                 .options(
                     selectinload(Task.task_status),
                     selectinload(Task.assignee),
-                    selectinload(Task.checklists),
+                    # Task.checklists uses lazy="dynamic" which is incompatible
+                    # with selectinload. Use denormalized checklist_total/checklist_done instead.
                 )
                 .order_by(TaskStatus.rank, Task.task_rank)
             )
@@ -152,9 +153,9 @@ async def list_tasks(
             if overdue:
                 due += f" (**{overdue}d overdue**)"
 
-            # Checklist progress
-            cl_done = sum(cl.completed_items for cl in t.checklists)
-            cl_total = sum(cl.total_items for cl in t.checklists)
+            # Checklist progress (denormalized columns — avoids lazy="dynamic" query)
+            cl_done = t.checklist_done or 0
+            cl_total = t.checklist_total or 0
             cl_text = f"{cl_done}/{cl_total}" if cl_total > 0 else "\u2014"
 
             lines.append(
@@ -190,7 +191,10 @@ async def get_task_detail(task: str) -> str:
                 return error
             task_uuid = UUID(resolved_id)  # type: ignore[arg-type]
 
-            # Single query: full load with RBAC check on result
+            # Load task with eagerly-loaded relationships.
+            # Task.subtasks, .attachments, .checklists, .comments all use
+            # lazy="dynamic" which is incompatible with selectinload —
+            # query them separately below.
             result = await db.execute(
                 select(Task)
                 .where(Task.id == task_uuid)
@@ -200,10 +204,6 @@ async def get_task_detail(task: str) -> str:
                     selectinload(Task.reporter),
                     selectinload(Task.project),
                     selectinload(Task.parent),
-                    selectinload(Task.subtasks).selectinload(Task.task_status),
-                    selectinload(Task.attachments),
-                    selectinload(Task.checklists).selectinload(Checklist.items),
-                    selectinload(Task.comments).selectinload(Comment.author),
                 )
             )
             t = result.scalar_one_or_none()
@@ -213,6 +213,34 @@ async def get_task_detail(task: str) -> str:
             # RBAC check on loaded task
             if not _check_project_access(str(t.project_id)):
                 return f"Task not found: {task}"
+
+            # Separate queries for dynamic relationships
+            _subtasks_result = await db.execute(
+                select(Task)
+                .where(Task.parent_id == task_uuid)
+                .options(selectinload(Task.task_status))
+            )
+            _subtasks = _subtasks_result.scalars().all()
+
+            _attachments_result = await db.execute(
+                select(Attachment)
+                .where(Attachment.task_id == task_uuid)
+            )
+            _attachments = _attachments_result.scalars().all()
+
+            checklists_result = await db.execute(
+                select(Checklist)
+                .where(Checklist.task_id == task_uuid)
+                .options(selectinload(Checklist.items))
+            )
+            _checklists = checklists_result.scalars().all()
+
+            comments_result = await db.execute(
+                select(Comment)
+                .where(Comment.task_id == task_uuid)
+                .options(selectinload(Comment.author))
+            )
+            _comments = comments_result.scalars().all()
 
         # Build output
         parts: list[str] = []
@@ -248,7 +276,7 @@ async def get_task_detail(task: str) -> str:
             parts.append("")
 
         # Subtasks
-        subtasks = list(t.subtasks)
+        subtasks = _subtasks
         if subtasks:
             parts.append(f"### Subtasks ({len(subtasks)})")
             for st in subtasks:
@@ -257,7 +285,7 @@ async def get_task_detail(task: str) -> str:
             parts.append("")
 
         # Checklists
-        checklists = list(t.checklists)
+        checklists = _checklists
         if checklists:
             parts.append("### Checklists")
             for cl in checklists:
@@ -271,7 +299,7 @@ async def get_task_detail(task: str) -> str:
             parts.append("")
 
         # Attachments
-        attachments = list(t.attachments)
+        attachments = _attachments
         if attachments:
             parts.append(f"### Attachments ({len(attachments)})")
             for att in attachments:
@@ -282,7 +310,7 @@ async def get_task_detail(task: str) -> str:
             parts.append("")
 
         # Comments (last 5 non-deleted)
-        non_deleted = [c for c in t.comments if not c.is_deleted]
+        non_deleted = [c for c in _comments if not c.is_deleted]
         comments = sorted(
             non_deleted,
             key=lambda c: c.created_at or datetime.min.replace(tzinfo=timezone.utc),

@@ -32,6 +32,7 @@ from .routers import admin_config_router, ai_chat_router, ai_config_router, ai_i
 from .websocket import manager, route_incoming_message, check_room_access
 from .models.user import User
 from .services.auth_service import decode_access_token, get_current_user, is_token_blacklisted, validate_ws_connection_token
+from .dependencies.redis_gate import require_redis
 from .services.redis_service import redis_service
 from .services.archive_service import archive_service
 
@@ -56,6 +57,34 @@ async def lifespan(app: FastAPI):
         logger.info("Starting Redis pub/sub listener...")
         await redis_service.start_listening()
         logger.info("Redis pub/sub listener started")
+
+        # Start background health monitor with state-change callback
+        async def _on_redis_state_change(connected: bool) -> None:
+            """Handle Redis connected ↔ disconnected transitions."""
+            if connected:
+                logger.info("Redis recovered — re-initializing pub/sub and WebSocket relay")
+                try:
+                    await redis_service.start_listening()
+                    await manager.initialize_redis()
+                except Exception as exc:
+                    logger.error("Failed to re-initialize after Redis recovery: %s", exc)
+            else:
+                logger.warning("Redis health monitor detected outage — gate is active")
+
+            # Broadcast status change to all local WebSocket connections
+            from .websocket.manager import MessageType
+            try:
+                await manager.broadcast_to_all({
+                    "type": MessageType.REDIS_STATUS_CHANGED,
+                    "data": {"connected": connected},
+                })
+            except Exception as exc:
+                logger.error("Failed to broadcast Redis status change: %s", exc)
+
+        await redis_service.start_health_monitor(
+            interval=5, on_state_change=_on_redis_state_change
+        )
+        logger.info("Redis health monitor started")
     except Exception as e:
         if settings.redis_required:
             logger.error(f"Redis connection failed and REDIS_REQUIRED=true: {e}")
@@ -73,9 +102,9 @@ async def lifespan(app: FastAPI):
     #
     # Connection budget per worker:
     # - SQLAlchemy pool: pool_size(50) + max_overflow(100) = 150 max
-    # - Checkpointer pool: 5 connections (psycopg_pool)
-    # - Total per worker: 155
-    # - With 4 workers: 620 total (ensure Postgres max_connections >= 700)
+    # - Checkpointer pool: 10 connections (psycopg_pool)
+    # - Total per worker: 160
+    # - With 4 workers: 640 total (ensure Postgres max_connections >= 700)
     from .ai.agent.graph import set_checkpointer
     try:
         from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -86,12 +115,13 @@ async def lifespan(app: FastAPI):
             f"postgresql://{settings.db_user}:{quote_plus(settings.db_password)}"
             f"@{settings.db_server}:{settings.db_port}/{settings.db_name}"
         )
-        # Use a bounded connection pool (max 5) instead of the default single
+        # Use a bounded connection pool instead of the default single
         # connection to limit Postgres connection consumption (DB-002).
+        # F16: Raised from 5 to 10 to avoid bottleneck with _MAX_CONCURRENT_AGENTS=50.
         _checkpointer_pool = AsyncConnectionPool(
             pg_uri,
             min_size=1,
-            max_size=5,
+            max_size=10,
             kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
             open=False,
         )
@@ -100,7 +130,7 @@ async def lifespan(app: FastAPI):
         await pg_checkpointer.setup()
         set_checkpointer(pg_checkpointer)
         app.state._checkpointer_pool = _checkpointer_pool  # prevent GC, clean up on shutdown
-        logger.info("LangGraph checkpointer initialized (AsyncPostgresSaver → Postgres, pool_size=5)")
+        logger.info("LangGraph checkpointer initialized (AsyncPostgresSaver → Postgres, pool_size=10)")
     except Exception as e:
         if getattr(settings, 'redis_required', False):
             logger.critical(
@@ -153,6 +183,9 @@ async def lifespan(app: FastAPI):
             logger.info("Postgres checkpointer connection pool closed")
         except Exception:
             pass
+
+    logger.info("Stopping Redis health monitor...")
+    await redis_service.stop_health_monitor()
 
     logger.info("Disconnecting from Redis...")
     await redis_service.disconnect()
@@ -244,7 +277,11 @@ app.include_router(users_router)
 app.include_router(dashboard_router)
 app.include_router(comments_router)
 app.include_router(checklists_router)
-app.include_router(document_locks_router, tags=["document-locks"])
+app.include_router(
+    document_locks_router,
+    tags=["document-locks"],
+    dependencies=[Depends(require_redis)],
+)
 app.include_router(document_search_router, tags=["document-search"])
 app.include_router(documents_router, prefix="/api", tags=["documents"])
 app.include_router(document_tags_router, prefix="/api", tags=["document-tags"])

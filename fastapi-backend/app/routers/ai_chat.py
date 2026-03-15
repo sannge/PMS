@@ -74,6 +74,85 @@ _SAFE_INTERRUPT_KEYS = {
 _MAX_CONCURRENT_AGENTS = _cfg.get_int("agent.max_concurrent_agents", 50)
 _agent_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_AGENTS)
 
+# C3: Redis-backed distributed semaphore key and helpers.
+# Uses INCR/DECR with an atomic ceiling check so the total across all
+# workers never exceeds _MAX_CONCURRENT_AGENTS.  Falls back to the local
+# asyncio.Semaphore when Redis is unavailable.
+_DISTRIBUTED_SEM_KEY = "agent:concurrent_count"
+_DISTRIBUTED_SEM_TTL = 600  # safety TTL to prevent leaked counters
+
+
+async def _distributed_acquire() -> bool:
+    """Atomically increment the distributed counter; return True if under limit.
+
+    If the counter exceeds the limit, it is decremented back and False is
+    returned.  When Redis is down, falls back to the local semaphore.
+    """
+    from ..services.redis_service import redis_service
+
+    if not redis_service.is_connected:
+        # Fallback to local semaphore
+        try:
+            async with asyncio.timeout(1):
+                await _agent_semaphore.acquire()
+            return True
+        except asyncio.TimeoutError:
+            return False
+
+    try:
+        # Atomic: INCR + ceiling check via Lua
+        # R2-9: Only set EXPIRE when counter transitions 0→1 so the safety
+        # TTL is not perpetually reset by subsequent acquires.
+        _LUA = (
+            "local c = redis.call('INCR', KEYS[1]) "
+            "if tonumber(c) == 1 then redis.call('EXPIRE', KEYS[1], ARGV[2]) end "
+            "if c > tonumber(ARGV[1]) then "
+            "  redis.call('DECR', KEYS[1]) "
+            "  return 0 "
+            "end "
+            "return 1"
+        )
+        result = await redis_service.client.eval(
+            _LUA, 1, _DISTRIBUTED_SEM_KEY,
+            str(_MAX_CONCURRENT_AGENTS), str(_DISTRIBUTED_SEM_TTL),
+        )
+        return result == 1
+    except Exception:
+        logger.debug("Distributed semaphore Redis error, falling back to local", exc_info=True)
+        try:
+            async with asyncio.timeout(1):
+                await _agent_semaphore.acquire()
+            return True
+        except asyncio.TimeoutError:
+            return False
+
+
+async def _distributed_release() -> None:
+    """Decrement the distributed counter (floor at 0)."""
+    from ..services.redis_service import redis_service
+
+    if not redis_service.is_connected:
+        try:
+            _agent_semaphore.release()
+        except ValueError:
+            pass
+        return
+
+    try:
+        # DECR with floor at 0
+        _LUA = (
+            "local c = redis.call('DECR', KEYS[1]) "
+            "if c < 0 then redis.call('SET', KEYS[1], 0) end "
+            "return c"
+        )
+        await redis_service.client.eval(_LUA, 1, _DISTRIBUTED_SEM_KEY)
+    except Exception:
+        logger.debug("Distributed semaphore release Redis error", exc_info=True)
+        try:
+            _agent_semaphore.release()
+        except ValueError:
+            pass
+
 # Module-level cancel tracking
 _MAX_CANCEL_EVENTS = 1000  # Safety cap — should never hit this in practice
 
@@ -108,19 +187,25 @@ _THREAD_OWNER_TTL = _cfg.get_int("stream.thread_owner_ttl", 86400)  # 24 hours
 _thread_owners_fallback: OrderedDict[str, str] = OrderedDict()
 _FALLBACK_MAX_SIZE = 10_000
 
+# F5: Simple time-based circuit breaker for Redis — skip Redis for a cooldown
+# period after a failure to prevent thundering herd on reconnect.
+_redis_circuit_open_until: float = 0.0
+_REDIS_CIRCUIT_COOLDOWN_S = 5.0  # skip Redis for 5s after failure
+
 
 async def _register_thread(thread_id: str, user_id: str) -> None:
     """Record the owner of a thread in Redis (with in-memory fallback)."""
+    global _redis_circuit_open_until
     from ..services.redis_service import redis_service
 
     try:
-        if redis_service.is_connected:
+        if _time.monotonic() >= _redis_circuit_open_until and redis_service.is_connected:
             await redis_service.set(
                 f"thread_owner:{thread_id}", user_id, ttl=_THREAD_OWNER_TTL
             )
             return
     except Exception:
-        pass  # Fall through to in-memory
+        _redis_circuit_open_until = _time.monotonic() + _REDIS_CIRCUIT_COOLDOWN_S
 
     # TE-R4-011: Evict BEFORE adding (consistent with _register_cancel_event)
     if len(_thread_owners_fallback) >= _FALLBACK_MAX_SIZE:
@@ -152,16 +237,22 @@ async def _validate_thread_owner(
             endpoints (resume, replay, history) to prevent IDOR after FIFO
             eviction of the fallback dict.
     """
+    global _redis_circuit_open_until
     from ..services.redis_service import redis_service
 
     owner: str | None = None
     redis_available = False
     try:
-        if redis_service.is_connected:
+        if _time.monotonic() >= _redis_circuit_open_until and redis_service.is_connected:
             redis_available = True
             owner = await redis_service.get(f"thread_owner:{thread_id}")
     except Exception:
+        _redis_circuit_open_until = _time.monotonic() + _REDIS_CIRCUIT_COOLDOWN_S
         redis_available = False
+
+    # F10: Prune from in-memory fallback when Redis has the authoritative answer
+    if redis_available and owner is not None:
+        _thread_owners_fallback.pop(thread_id, None)
 
     # CRIT-4: For strict endpoints, refuse immediately when Redis is down
     if strict and not redis_available:
@@ -177,6 +268,15 @@ async def _validate_thread_owner(
 
     if owner is None and not strict:
         owner = _thread_owners_fallback.get(thread_id)
+        # F10: Backfill into Redis if it's now available (owner was only in fallback)
+        if owner is not None and redis_available:
+            try:
+                await redis_service.set(
+                    f"thread_owner:{thread_id}", owner, ttl=_THREAD_OWNER_TTL
+                )
+                _thread_owners_fallback.pop(thread_id, None)
+            except Exception:
+                pass  # Best-effort backfill; fallback still has the entry
 
     if owner is None and not redis_available:
         # Fail-closed: Redis down + not in local fallback = refuse
@@ -558,10 +658,14 @@ async def _stream_agent(
 
             if event_kind == "on_chain_start":
                 node_name = event.get("name", "")
-                if node_name in _THINKING_NODES:
+                # Filter to node-level events only — LangGraph emits
+                # on_chain_start at both graph and node levels, causing
+                # duplicate thinking_step events without this guard.
+                lg_node = event.get("metadata", {}).get("langgraph_node", "")
+                if node_name in _THINKING_NODES and lg_node:
                     _active_node = node_name
                 label = _NODE_LABELS_START.get(node_name)
-                if node_name in _THINKING_NODES and label:
+                if node_name in _THINKING_NODES and lg_node and label:
                     yield {
                         "event": "thinking_step",
                         "data": json.dumps({
@@ -582,7 +686,8 @@ async def _stream_agent(
 
             elif event_kind == "on_chain_end":
                 node_name = event.get("name", "")
-                if node_name in _THINKING_NODES:
+                lg_node = event.get("metadata", {}).get("langgraph_node", "")
+                if node_name in _THINKING_NODES and lg_node:
                     payload: dict[str, Any] = {
                         "type": "node",
                         "node": node_name,
@@ -755,22 +860,6 @@ async def _stream_agent(
                     _output_tokens = usage.get("output_tokens", 0)
                 break
 
-    # Persist token counts to session DB row
-    if session_id and (_input_tokens or _output_tokens):
-        try:
-            from sqlalchemy import update as sa_update
-            from ..models.chat_session import ChatSession as _CS
-            async with async_session_maker() as _db:
-                await _db.execute(
-                    sa_update(_CS).where(_CS.id == session_id).values(
-                        total_input_tokens=_CS.total_input_tokens + _input_tokens,
-                        total_output_tokens=_CS.total_output_tokens + _output_tokens,
-                    )
-                )
-                await _db.commit()
-        except Exception:
-            logger.debug("Failed to persist token usage to session", exc_info=True)
-
     yield {
         "event": "token_usage",
         "data": json.dumps({
@@ -783,6 +872,7 @@ async def _stream_agent(
 
     # Emit context_summary if the agent auto-summarized old messages
     _context_summary_text: str | None = None
+    _summary_seq = 0
     if graph_state:
         _context_summary_text = graph_state.values.get("context_summary")
     if _context_summary_text:
@@ -795,21 +885,6 @@ async def _stream_agent(
                 "up_to_sequence": _summary_seq,
             }),
         }
-        # Persist summary to ChatSession (only if session exists)
-        if session_id:
-            try:
-                from sqlalchemy import update as _sa_update
-                from ..models.chat_session import ChatSession as _CSSum
-                async with async_session_maker() as _sum_db:
-                    await _sum_db.execute(
-                        _sa_update(_CSSum).where(_CSSum.id == session_id).values(
-                            context_summary=_context_summary_text,
-                            summary_up_to_msg_seq=_summary_seq,
-                        )
-                    )
-                    await _sum_db.commit()
-            except Exception:
-                logger.debug("Failed to persist context summary to session", exc_info=True)
 
     yield {
         "event": "run_finished",
@@ -821,6 +896,22 @@ async def _stream_agent(
         }),
     }
     yield {"event": "end", "data": "{}"}
+
+    # R2-4: Store token/summary data in shared_state so that
+    # _guarded_sse_stream's finally block can persist it even if
+    # the generator is closed early (e.g. client disconnect).
+    if session_id and (_input_tokens or _output_tokens):
+        shared_state["_token_usage"] = {
+            "session_id": session_id,
+            "input_tokens": _input_tokens,
+            "output_tokens": _output_tokens,
+        }
+    if session_id and _context_summary_text:
+        shared_state["_context_summary"] = {
+            "session_id": session_id,
+            "summary_text": _context_summary_text,
+            "summary_seq": _summary_seq,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -871,6 +962,21 @@ async def _guarded_sse_stream(
         graph, state, config, thread_id=thread_id, shared_state=shared_state,
         session_id=session_id, context_limit=context_limit, user_id=user_id,
     ).__aiter__()
+
+    # H11: Subscribe to Redis cancel channel for cross-worker cancellation
+    _redis_cancel_sub: Any = None
+    from ..services.redis_service import redis_service as _rs
+
+    async def _on_redis_cancel(data: dict) -> None:
+        if cancel_event:
+            cancel_event.set()
+
+    if cancel_event and _rs.is_connected:
+        try:
+            await _rs.subscribe(f"cancel:{thread_id}", _on_redis_cancel)
+            _redis_cancel_sub = f"cancel:{thread_id}"
+        except Exception:
+            pass
 
     try:
         async with asyncio.timeout(STREAM_OVERALL_TIMEOUT_S):
@@ -1003,11 +1109,78 @@ async def _guarded_sse_stream(
         }
         yield {"event": "end", "data": "{}"}
     finally:
+        # H12: Pop thread from active cancel dict to prevent stale events
+        _active_stream_cancels.pop(thread_id, None)
+        # H11: Unsubscribe from Redis cancel channel
+        if _redis_cancel_sub:
+            try:
+                await _rs.unsubscribe(_redis_cancel_sub)
+            except Exception:
+                pass
+        # H15: If the stream ended with an unresolved interrupt, store a flag
+        # in Redis so subsequent non-resume requests get a 409.
+        if emitted_interrupt and not emitted_run_finished:
+            try:
+                if _rs.is_connected:
+                    await _rs.client.set(
+                        f"hitl_pending:{thread_id}", "1", ex=3600
+                    )
+            except Exception:
+                pass
+        # R2-10: Clear HITL pending flag when run completed without new interrupt
+        # (covers both normal runs and successful HITL resumes).
+        elif emitted_run_finished and not emitted_interrupt:
+            try:
+                if _rs.is_connected:
+                    await _rs.client.delete(f"hitl_pending:{thread_id}")
+            except Exception:
+                pass
         # Ensure async generator is closed to release resources
         try:
             await aiter_stream.aclose()
         except Exception:
             pass
+        # R2-4: Persist token usage and context summary from shared_state.
+        # This runs even if the generator was closed early (client disconnect).
+        _tu = shared_state.get("_token_usage")
+        if _tu:
+            try:
+                async with asyncio.timeout(5):
+                    from sqlalchemy import update as sa_update
+                    from ..models.chat_session import ChatSession as _CS
+                    async with async_session_maker() as _db:
+                        await _db.execute(
+                            sa_update(_CS).where(_CS.id == _tu["session_id"]).values(
+                                total_input_tokens=_CS.total_input_tokens + _tu["input_tokens"],
+                                total_output_tokens=_CS.total_output_tokens + _tu["output_tokens"],
+                            )
+                        )
+                        await _db.commit()
+            except Exception:
+                logger.warning("Failed to persist token usage to session", exc_info=True)
+        _cs = shared_state.get("_context_summary")
+        if _cs:
+            try:
+                async with asyncio.timeout(5):
+                    from sqlalchemy import update as _sa_update, or_
+                    from ..models.chat_session import ChatSession as _CSSum
+                    async with async_session_maker() as _sum_db:
+                        # R2-5: Use or_(IS NULL, < seq) to handle first-time summary
+                        await _sum_db.execute(
+                            _sa_update(_CSSum).where(
+                                _CSSum.id == _cs["session_id"],
+                                or_(
+                                    _CSSum.summary_up_to_msg_seq.is_(None),
+                                    _CSSum.summary_up_to_msg_seq < _cs["summary_seq"],
+                                ),
+                            ).values(
+                                context_summary=_cs["summary_text"],
+                                summary_up_to_msg_seq=_cs["summary_seq"],
+                            )
+                        )
+                        await _sum_db.commit()
+            except Exception:
+                logger.warning("Failed to persist context summary to session", exc_info=True)
         if cleanup:
             await cleanup() if asyncio.iscoroutinefunction(cleanup) else cleanup()
 
@@ -1040,11 +1213,8 @@ async def chat(
     # 1. Validate images
     _validate_images(request.images)
 
-    # DA-003: Acquire agent concurrency semaphore
-    try:
-        async with asyncio.timeout(1):
-            await _agent_semaphore.acquire()
-    except asyncio.TimeoutError:
+    # DA-003: Acquire agent concurrency semaphore (C3: distributed)
+    if not await _distributed_acquire():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="AI service is at capacity. Please try again shortly.",
@@ -1187,7 +1357,7 @@ async def chat(
             interrupt_payload=interrupt_payload,
         )
     finally:
-        _agent_semaphore.release()
+        await _distributed_release()
 
 
 # ---------------------------------------------------------------------------
@@ -1216,11 +1386,8 @@ async def chat_stream(
 
     # DA-001: Acquire semaphore eagerly to reject 503 fast, but track
     # that we acquired it so cleanup can release it reliably even if
-    # the generator is never iterated.
-    try:
-        async with asyncio.timeout(1):
-            await _agent_semaphore.acquire()
-    except asyncio.TimeoutError:
+    # the generator is never iterated.  (C3: distributed)
+    if not await _distributed_acquire():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="AI service is at capacity. Please try again shortly.",
@@ -1230,7 +1397,7 @@ async def chat_stream(
     try:
         graph, context = await _setup_agent_context(current_user)
     except Exception:
-        _agent_semaphore.release()
+        await _distributed_release()
         clear_tool_context()
         raise
 
@@ -1251,6 +1418,24 @@ async def chat_stream(
         thread_id = request.thread_id or str(uuid4())
         if request.thread_id:
             await _validate_thread_owner(thread_id, str(current_user.id))
+
+            # H15: Reject non-resume requests to threads awaiting HITL
+            from ..services.redis_service import redis_service as _h15_rs
+            if _h15_rs.is_connected:
+                try:
+                    _hitl_flag = await _h15_rs.client.get(f"hitl_pending:{thread_id}")
+                    if _hitl_flag:
+                        await _distributed_release()
+                        clear_tool_context()
+                        raise HTTPException(
+                            status_code=status.HTTP_409_CONFLICT,
+                            detail="This thread is awaiting a HITL response. Use the resume endpoint.",
+                        )
+                except HTTPException:
+                    raise
+                except Exception:
+                    pass  # fail-open if Redis is down
+
         await _register_thread(thread_id, str(current_user.id))
         config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
 
@@ -1261,7 +1446,7 @@ async def chat_stream(
             "accessible_project_ids": context["accessible_project_ids"],
         }
     except Exception:
-        _agent_semaphore.release()
+        await _distributed_release()
         clear_tool_context()
         raise
 
@@ -1315,11 +1500,21 @@ async def chat_stream(
                     await db.commit()
             else:
                 # Auto-create session (enforce 100-session cap)
+                # R2-12: Use pg_advisory_xact_lock to serialize session creation
+                # per user. FOR UPDATE on count() doesn't prevent concurrent INSERTs.
                 from ..utils.timezone import utc_now
+                from sqlalchemy import text as _sa_text
 
-                count_q = select(func.count()).select_from(ChatSession).where(
-                    ChatSession.user_id == current_user.id,
-                    ChatSession.is_archived.is_(False),
+                await db.execute(
+                    _sa_text("SELECT pg_advisory_xact_lock(hashtext(:uid))"),
+                    {"uid": str(current_user.id)},
+                )
+
+                count_q = (
+                    select(func.count()).select_from(ChatSession).where(
+                        ChatSession.user_id == current_user.id,
+                        ChatSession.is_archived.is_(False),
+                    )
                 )
                 active_count = (await db.execute(count_q)).scalar() or 0
                 if active_count >= 100:
@@ -1353,7 +1548,10 @@ async def chat_stream(
                 await db.refresh(new_sess)
                 session_id = str(new_sess.id)
                 await db.commit()
+    except HTTPException:
+        raise
     except Exception:
+        session_id = ""
         logger.debug("Session handling failed, continuing without session", exc_info=True)
 
     # 6. Return SSE stream using shared helper (CR2-001)
@@ -1365,7 +1563,7 @@ async def chat_stream(
     # clear the ContextVar before the generator starts.
     _cleaned_up = False
 
-    def _cleanup():
+    async def _cleanup():
         nonlocal _cleaned_up
         if _cleaned_up:
             return
@@ -1375,14 +1573,15 @@ async def chat_stream(
         except Exception:
             pass
         try:
-            _agent_semaphore.release()
+            await _distributed_release()
         except Exception:
             pass
-        _active_stream_cancels.pop(thread_id, None)
+        # R2-17: Don't pop _active_stream_cancels here — _guarded_sse_stream's
+        # finally block already handles it, and double-pop is harmless but confusing.
 
     async def _background_cleanup():
         """Safety net: release resources if the generator was never iterated."""
-        _cleanup()
+        await _cleanup()
 
     return EventSourceResponse(
         _guarded_sse_stream(
@@ -1410,11 +1609,26 @@ async def cancel_chat(
     thread_id: str,
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """Cancel an active streaming chat."""
+    """Cancel an active streaming chat.
+
+    H11: Also publishes to Redis so other workers can cancel the stream.
+    """
     await _validate_thread_owner(thread_id, str(current_user.id))
     cancel_event = _active_stream_cancels.get(thread_id)
     if cancel_event:
         cancel_event.set()
+
+    # H11: Publish cancel across workers via Redis pub/sub
+    from ..services.redis_service import redis_service
+    if redis_service.is_connected:
+        try:
+            await redis_service.publish(
+                f"cancel:{thread_id}", {"action": "cancel"}
+            )
+        except Exception:
+            logger.debug("Failed to publish cancel to Redis", exc_info=True)
+
+    if cancel_event:
         return {"status": "cancelled"}
     return {"status": "not_found"}
 
@@ -1459,11 +1673,8 @@ async def resume_chat(
             detail="Checkpointer not configured — HITL resume unavailable",
         )
 
-    # DA-003: Acquire agent concurrency semaphore
-    try:
-        async with asyncio.timeout(1):
-            await _agent_semaphore.acquire()
-    except asyncio.TimeoutError:
+    # DA-003: Acquire agent concurrency semaphore (C3: distributed)
+    if not await _distributed_acquire():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="AI service is at capacity. Please try again shortly.",
@@ -1489,6 +1700,13 @@ async def resume_chat(
                     result = await graph.ainvoke(
                         Command(resume=request.response), config=config
                     )
+                # R2-10: Clear HITL pending flag AFTER resume succeeds
+                from ..services.redis_service import redis_service as _h15_resume_rs
+                if _h15_resume_rs.is_connected:
+                    try:
+                        await _h15_resume_rs.client.delete(f"hitl_pending:{request.thread_id}")
+                    except Exception:
+                        pass
             except TimeoutError:
                 logger_ctx.warning(
                     "Agent resume timed out (%ds) for user %s, thread %s",
@@ -1572,7 +1790,7 @@ async def resume_chat(
 
         return _build_chat_response(result_messages, request.thread_id)
     finally:
-        _agent_semaphore.release()
+        await _distributed_release()
 
 
 # ---------------------------------------------------------------------------
@@ -1601,6 +1819,10 @@ async def resume_chat_stream(
         request.thread_id, str(current_user.id), require_existing=True, strict=True,
     )
 
+    # R2-10: HITL pending flag is cleared by _guarded_sse_stream's finally block
+    # after the resume succeeds (emitted_run_finished=True). Do NOT clear it
+    # eagerly here — if the resume errors, the flag should remain.
+
     checkpointer = get_checkpointer()
     if checkpointer is None:
         raise HTTPException(
@@ -1608,11 +1830,8 @@ async def resume_chat_stream(
             detail="Checkpointer not configured — HITL resume unavailable",
         )
 
-    # DA-003: Acquire agent concurrency semaphore
-    try:
-        async with asyncio.timeout(1):
-            await _agent_semaphore.acquire()
-    except asyncio.TimeoutError:
+    # DA-003: Acquire agent concurrency semaphore (C3: distributed)
+    if not await _distributed_acquire():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="AI service is at capacity. Please try again shortly.",
@@ -1623,7 +1842,7 @@ async def resume_chat_stream(
     try:
         graph, _context = await _setup_agent_context(current_user, warm_model=True)
     except Exception:
-        _agent_semaphore.release()
+        await _distributed_release()
         clear_tool_context()
         raise
 
@@ -1661,7 +1880,7 @@ async def resume_chat_stream(
     # CR2-C1: Idempotent cleanup with flag — safety net if generator never iterated.
     _cleaned_up = False
 
-    def _cleanup():
+    async def _cleanup():
         nonlocal _cleaned_up
         if _cleaned_up:
             return
@@ -1671,13 +1890,14 @@ async def resume_chat_stream(
         except Exception:
             pass
         try:
-            _agent_semaphore.release()
+            await _distributed_release()
         except Exception:
             pass
-        _active_stream_cancels.pop(request.thread_id, None)
+        # R2-17: Don't pop _active_stream_cancels here — _guarded_sse_stream's
+        # finally block already handles it.
 
     async def _background_cleanup():
-        _cleanup()
+        await _cleanup()
 
     return EventSourceResponse(
         _guarded_sse_stream(
@@ -1801,9 +2021,10 @@ async def replay_conversation(
     if request.message:
         # DA-003: Acquire agent concurrency semaphore (only for branching/streaming)
         try:
-            async with asyncio.timeout(1):
-                await _agent_semaphore.acquire()
-        except asyncio.TimeoutError:
+            acquired = await _distributed_acquire()
+        except Exception:
+            acquired = False
+        if not acquired:
             clear_tool_context()
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1830,7 +2051,7 @@ async def replay_conversation(
                 "accessible_project_ids": context["accessible_project_ids"],
             }
         except Exception:
-            _agent_semaphore.release()
+            await _distributed_release()
             clear_tool_context()
             raise
 
@@ -1845,7 +2066,7 @@ async def replay_conversation(
         # CR2-C1: Idempotent cleanup with flag — safety net if generator never iterated.
         _cleaned_up = False
 
-        def _cleanup():
+        async def _cleanup():
             nonlocal _cleaned_up
             if _cleaned_up:
                 return
@@ -1855,13 +2076,13 @@ async def replay_conversation(
             except Exception:
                 pass
             try:
-                _agent_semaphore.release()
+                await _distributed_release()
             except Exception:
                 pass
             _active_stream_cancels.pop(branch_thread_id, None)
 
         async def _background_cleanup():
-            _cleanup()
+            await _cleanup()
 
         return EventSourceResponse(
             _guarded_sse_stream(
@@ -1884,7 +2105,8 @@ async def replay_conversation(
             }
         }
         try:
-            state = await graph.aget_state(config)
+            async with asyncio.timeout(30):
+                state = await graph.aget_state(config)
             if state is None or not state.values:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,

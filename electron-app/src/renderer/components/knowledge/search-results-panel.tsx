@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { parseBackendDate } from '@/lib/time-utils'
-import { X } from 'lucide-react'
+import { X, FileText } from 'lucide-react'
 import DOMPurify from 'dompurify'
 import type { SearchResultHit, SearchResponse } from '@/hooks/use-document-search'
 
@@ -200,7 +200,10 @@ export function SearchResultsPanel({
                        ${isFollowUp ? 'pl-6' : ''}`}
           >
             {!isFollowUp && (
-              <div className="font-medium text-sm truncate">
+              <div className="font-medium text-sm truncate flex items-center gap-1.5">
+                {(hit.content_type === 'file' || hit.id.startsWith('file_')) && (
+                  <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                )}
                 <SearchResultSnippet html={hit._formatted?.title ?? hit.title} />
               </div>
             )}

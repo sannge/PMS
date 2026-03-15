@@ -198,7 +198,7 @@ class Document(Base):
             name="ck_documents_exactly_one_scope",
         ),
         CheckConstraint(
-            "embedding_status IN ('none', 'stale', 'syncing', 'synced')",
+            "embedding_status IN ('none', 'stale', 'syncing', 'synced', 'failed')",
             name="ck_documents_embedding_status",
         ),
         Index("ix_documents_app_folder", "application_id", "folder_id"),

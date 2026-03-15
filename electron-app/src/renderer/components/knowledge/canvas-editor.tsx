@@ -31,7 +31,7 @@ interface CanvasEditorProps {
   updatedAt?: string
   onBaselineSync?: (json: object) => void
   /** Backend-managed embedding status */
-  embeddingStatus?: 'none' | 'stale' | 'syncing' | 'synced'
+  embeddingStatus?: 'none' | 'stale' | 'syncing' | 'synced' | 'failed'
 }
 
 export function CanvasEditor({

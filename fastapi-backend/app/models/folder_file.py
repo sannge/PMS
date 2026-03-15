@@ -53,7 +53,7 @@ class FolderFile(Base):
 
     Attributes:
         id: Unique identifier (UUID)
-        folder_id: FK to DocumentFolder (required - files must live in a folder)
+        folder_id: FK to DocumentFolder (optional - nullable for unfiled scope-root files)
         application_id: FK to Applications (scope - exactly one scope FK must be set)
         project_id: FK to Projects (scope)
         user_id: FK to Users (personal scope)
@@ -91,11 +91,11 @@ class FolderFile(Base):
         nullable=False,
     )
 
-    # Folder association (required - files must live in a folder)
+    # Folder association (nullable — files can be unfiled at scope root)
     folder_id = Column(
         UUID(as_uuid=True),
-        ForeignKey("DocumentFolders.id", ondelete="CASCADE"),
-        nullable=False,
+        ForeignKey("DocumentFolders.id", ondelete="SET NULL"),
+        nullable=True,
         index=True,
     )
 
@@ -274,6 +274,72 @@ class FolderFile(Base):
             func.lower(Column("display_name")),
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
+            info={"skip_autogenerate": True},
+        ),
+        # Partial unique indexes for unfiled files (folder_id IS NULL).
+        # PostgreSQL treats NULL != NULL so (folder_id, lower(display_name))
+        # does not prevent duplicates among unfiled files in the same scope.
+        Index(
+            "uq_folder_files_unfiled_app_name",
+            "application_id",
+            func.lower(Column("display_name")),
+            unique=True,
+            postgresql_where=text("folder_id IS NULL AND deleted_at IS NULL"),
+            info={"skip_autogenerate": True},
+        ),
+        Index(
+            "uq_folder_files_unfiled_proj_name",
+            "project_id",
+            func.lower(Column("display_name")),
+            unique=True,
+            postgresql_where=text("folder_id IS NULL AND deleted_at IS NULL"),
+            info={"skip_autogenerate": True},
+        ),
+        Index(
+            "uq_folder_files_unfiled_user_name",
+            "user_id",
+            func.lower(Column("display_name")),
+            unique=True,
+            postgresql_where=text("folder_id IS NULL AND deleted_at IS NULL"),
+            info={"skip_autogenerate": True},
+        ),
+        # Composite indexes for unfiled file listing queries.
+        Index(
+            "ix_folder_files_unfiled_app_sort",
+            "application_id",
+            "sort_order",
+            postgresql_where=text("folder_id IS NULL AND deleted_at IS NULL"),
+            info={"skip_autogenerate": True},
+        ),
+        Index(
+            "ix_folder_files_unfiled_proj_sort",
+            "project_id",
+            "sort_order",
+            postgresql_where=text("folder_id IS NULL AND deleted_at IS NULL"),
+            info={"skip_autogenerate": True},
+        ),
+        Index(
+            "ix_folder_files_unfiled_user_sort",
+            "user_id",
+            "sort_order",
+            postgresql_where=text("folder_id IS NULL AND deleted_at IS NULL"),
+            info={"skip_autogenerate": True},
+        ),
+        # Composite index for list_files query: WHERE deleted_at IS NULL AND folder_id = ? ORDER BY sort_order
+        Index(
+            "ix_folder_files_folder_sort",
+            "folder_id",
+            "sort_order",
+            postgresql_where=text("deleted_at IS NULL"),
+            info={"skip_autogenerate": True},
+        ),
+        # Partial index for batch embedding jobs on stale/none/failed files.
+        # NOTE: This index is created for a planned batch_embed_stale_files cron job.
+        # Currently unused — remove if the batch job is not implemented by the next migration cleanup.
+        Index(
+            "ix_folder_files_embedding_stale",
+            "embedding_status",
+            postgresql_where=text("deleted_at IS NULL AND embedding_status IN ('stale', 'none', 'failed')"),
             info={"skip_autogenerate": True},
         ),
     )

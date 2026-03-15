@@ -90,18 +90,21 @@ async def list_sessions(
         query = query.where(ChatSession.is_archived.is_(False))
     query = query.order_by(ChatSession.updated_at.desc())
 
-    # Total count
-    count_q = select(func.count()).select_from(query.subquery())
-    total = (await db.execute(count_q)).scalar() or 0
-
-    # Paginated results
-    query = query.offset(offset).limit(limit)
+    # Fetch limit + 1 to determine has_more without a COUNT(*)
+    query = query.offset(offset).limit(limit + 1)
     result = await db.execute(query)
-    sessions = result.scalars().all()
+    sessions = list(result.scalars().all())
+
+    has_more = len(sessions) > limit
+    if has_more:
+        sessions = sessions[:limit]
 
     return {
         "sessions": [_session_to_summary(s) for s in sessions],
-        "total": total,
+        # R2-15: total is approximate (lower-bound estimate from cursor pagination).
+        # Use has_more as the primary pagination signal.
+        "total_estimate": offset + len(sessions) + (1 if has_more else 0),
+        "has_more": has_more,
     }
 
 

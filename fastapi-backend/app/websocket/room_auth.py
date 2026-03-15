@@ -62,16 +62,17 @@ async def _set_cached_auth(user_id: UUID, room_id: str, result: bool) -> None:
     cache_key = (str(user_id), room_id)
     expires_at = time.time() + _AUTH_CACHE_TTL
 
-    # Enforce max cache size (simple eviction: clear half when full)
-    if len(_auth_cache) >= _AUTH_CACHE_MAX_SIZE:
-        async with _cache_lock:
+    # R2-16: All cache mutations under lock to prevent concurrent races
+    async with _cache_lock:
+        # Enforce max cache size (simple eviction: clear half when full)
+        if len(_auth_cache) >= _AUTH_CACHE_MAX_SIZE:
             # Clear oldest half of entries
             sorted_entries = sorted(_auth_cache.items(), key=lambda x: x[1][1])
             entries_to_remove = len(sorted_entries) // 2
             for key, _ in sorted_entries[:entries_to_remove]:
                 _auth_cache.pop(key, None)
 
-    _auth_cache[cache_key] = (result, expires_at)
+        _auth_cache[cache_key] = (result, expires_at)
 
 
 def invalidate_user_cache(user_id: UUID) -> None:
@@ -87,6 +88,48 @@ def invalidate_room_cache(room_id: str) -> None:
     keys_to_remove = [k for k in _auth_cache.keys() if k[1] == room_id]
     for key in keys_to_remove:
         _auth_cache.pop(key, None)
+
+
+# L10: Cross-worker cache invalidation via Redis pub/sub
+_ROOM_AUTH_INVALIDATE_CHANNEL = "ws:room_auth_invalidate"
+
+
+async def publish_room_auth_invalidation(
+    *, user_id: str | None = None, room_id: str | None = None
+) -> None:
+    """Publish a room auth cache invalidation event to all workers."""
+    from ..services.redis_service import redis_service
+    if redis_service.is_connected:
+        try:
+            await redis_service.publish(
+                _ROOM_AUTH_INVALIDATE_CHANNEL,
+                {"user_id": user_id, "room_id": room_id},
+            )
+        except Exception:
+            pass  # Best-effort
+
+
+async def _handle_room_auth_invalidation(data: dict) -> None:
+    """Handle cross-worker room auth cache invalidation."""
+    uid = data.get("user_id")
+    rid = data.get("room_id")
+    if uid:
+        from uuid import UUID as _UUID
+        try:
+            invalidate_user_cache(_UUID(uid))
+        except (ValueError, AttributeError):
+            pass
+    if rid:
+        invalidate_room_cache(rid)
+
+
+async def setup_room_auth_pubsub() -> None:
+    """Subscribe to room auth invalidation channel (call at startup)."""
+    from ..services.redis_service import redis_service
+    if redis_service.is_connected:
+        await redis_service.subscribe(
+            _ROOM_AUTH_INVALIDATE_CHANNEL, _handle_room_auth_invalidation
+        )
 
 
 async def check_room_access(user_id: UUID, room_id: str) -> bool:
@@ -156,49 +199,75 @@ async def _check_room_access_async(user_id: UUID, room_type: str, resource_id: U
 
 
 async def _check_application_access(db: AsyncSession, user_id: UUID, application_id: UUID) -> bool:
-    """Check if user is a member of the application or the owner."""
-    # First check if user is the application owner (for backwards compatibility
-    # with applications created before ApplicationMember records were created for owners)
-    result = await db.execute(
-        select(Application).where(Application.id == application_id)
-    )
-    application = result.scalar_one_or_none()
-    if application and application.owner_id == user_id:
-        return True
+    """Check if user is a member of the application or the owner.
 
-    # Then check ApplicationMember table
-    result = await db.execute(
-        select(ApplicationMember).where(
-            ApplicationMember.application_id == application_id,
-            ApplicationMember.user_id == user_id,
+    Uses a single EXISTS query combining the owner check and member check.
+    """
+    from sqlalchemy import exists, literal
+
+    stmt = select(literal(1)).where(
+        exists(
+            select(literal(1)).where(
+                (Application.id == application_id)
+                & (Application.owner_id == user_id)
+            )
+        )
+        | exists(
+            select(literal(1)).where(
+                (ApplicationMember.application_id == application_id)
+                & (ApplicationMember.user_id == user_id)
+            )
         )
     )
-    member = result.scalar_one_or_none()
-    return member is not None
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none() is not None
 
 
 async def _check_project_access(db: AsyncSession, user_id: UUID, project_id: UUID) -> bool:
-    """Check if user has access to the project via application or project membership."""
-    result = await db.execute(
-        select(Project).where(Project.id == project_id)
-    )
-    project = result.scalar_one_or_none()
-    if not project:
-        return False
+    """Check if user has access to the project via application or project membership.
 
-    # Check if user is an application member (has access to all projects)
-    if await _check_application_access(db, user_id, project.application_id):
-        return True
+    Uses a single query that checks all access paths: application owner,
+    application member, or direct project member.
+    """
+    from sqlalchemy import exists, literal
 
-    # Check if user is a project member (has access to this specific project)
-    result = await db.execute(
-        select(ProjectMember).where(
-            ProjectMember.project_id == project_id,
-            ProjectMember.user_id == user_id,
+    stmt = select(literal(1)).where(
+        exists(
+            select(literal(1))
+            .select_from(Project)
+            .where(Project.id == project_id)
+        )
+    ).where(
+        # Application owner (via project's application_id)
+        exists(
+            select(literal(1))
+            .select_from(Project)
+            .join(Application, Application.id == Project.application_id)
+            .where(
+                (Project.id == project_id)
+                & (Application.owner_id == user_id)
+            )
+        )
+        # Application member
+        | exists(
+            select(literal(1))
+            .select_from(Project)
+            .join(ApplicationMember, ApplicationMember.application_id == Project.application_id)
+            .where(
+                (Project.id == project_id)
+                & (ApplicationMember.user_id == user_id)
+            )
+        )
+        # Direct project member
+        | exists(
+            select(literal(1)).where(
+                (ProjectMember.project_id == project_id)
+                & (ProjectMember.user_id == user_id)
+            )
         )
     )
-    project_member = result.scalar_one_or_none()
-    return project_member is not None
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none() is not None
 
 
 async def _check_task_access(db: AsyncSession, user_id: UUID, task_id: UUID) -> bool:
@@ -215,7 +284,11 @@ async def _check_task_access(db: AsyncSession, user_id: UUID, task_id: UUID) -> 
 async def _check_document_access(db: AsyncSession, user_id: UUID, document_id: UUID) -> bool:
     """Check if user has access to a document based on its scope."""
     result = await db.execute(
-        select(Document).where(Document.id == document_id)
+        select(Document).where(
+            Document.id == document_id,
+            # R2-20: Exclude soft-deleted documents from WebSocket room access
+            Document.deleted_at.is_(None),
+        )
     )
     document = result.scalar_one_or_none()
     if not document:

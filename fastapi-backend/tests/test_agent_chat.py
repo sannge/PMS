@@ -589,12 +589,13 @@ class TestStreamAgent:
         from app.routers.ai_chat import _stream_agent
 
         mock_graph = MagicMock()
+        mock_graph.aget_state = AsyncMock(return_value=None)
 
         async def fake_events(*args, **kwargs):
-            yield {"event": "on_chain_start", "name": "intake", "data": {}}
-            yield {"event": "on_chain_end", "name": "intake", "data": {"output": {}}}
-            yield {"event": "on_chain_start", "name": "explore", "data": {}}
-            yield {"event": "on_chain_end", "name": "explore", "data": {"output": {}}}
+            yield {"event": "on_chain_start", "name": "intake", "data": {}, "metadata": {"langgraph_node": "intake"}}
+            yield {"event": "on_chain_end", "name": "intake", "data": {"output": {}}, "metadata": {"langgraph_node": "intake"}}
+            yield {"event": "on_chain_start", "name": "explore", "data": {}, "metadata": {"langgraph_node": "explore"}}
+            yield {"event": "on_chain_end", "name": "explore", "data": {"output": {}}, "metadata": {"langgraph_node": "explore"}}
 
         mock_graph.astream_events = fake_events
 
@@ -617,10 +618,11 @@ class TestStreamAgent:
         from app.routers.ai_chat import _stream_agent
 
         mock_graph = MagicMock()
+        mock_graph.aget_state = AsyncMock(return_value=None)
 
         async def fake_events(*args, **kwargs):
-            yield {"event": "on_chain_start", "name": "some_unknown_node", "data": {}}
-            yield {"event": "on_chain_end", "name": "some_unknown_node", "data": {"output": {}}}
+            yield {"event": "on_chain_start", "name": "some_unknown_node", "data": {}, "metadata": {"langgraph_node": "some_unknown_node"}}
+            yield {"event": "on_chain_end", "name": "some_unknown_node", "data": {"output": {}}, "metadata": {"langgraph_node": "some_unknown_node"}}
 
         mock_graph.astream_events = fake_events
 
@@ -636,6 +638,7 @@ class TestStreamAgent:
         from app.routers.ai_chat import _stream_agent
 
         mock_graph = MagicMock()
+        mock_graph.aget_state = AsyncMock(return_value=None)
 
         # Simulate explore node returning tool_calls
         mock_ai_msg = MagicMock()
@@ -645,7 +648,7 @@ class TestStreamAgent:
         ]
 
         async def fake_events(*args, **kwargs):
-            yield {"event": "on_chain_start", "name": "explore", "data": {}}
+            yield {"event": "on_chain_start", "name": "explore", "data": {}, "metadata": {"langgraph_node": "explore"}}
             yield {
                 "event": "on_chain_end",
                 "name": "explore",
@@ -654,6 +657,7 @@ class TestStreamAgent:
                         "messages": [mock_ai_msg],
                     }
                 },
+                "metadata": {"langgraph_node": "explore"},
             }
 
         mock_graph.astream_events = fake_events
@@ -675,6 +679,7 @@ class TestStreamAgent:
         from app.routers.ai_chat import _stream_agent
 
         mock_graph = MagicMock()
+        mock_graph.aget_state = AsyncMock(return_value=None)
 
         async def empty_events(*args, **kwargs):
             return
@@ -943,16 +948,18 @@ class TestOnChainEndDetails:
         from app.routers.ai_chat import _stream_agent
 
         mock_graph = MagicMock()
+        mock_graph.aget_state = AsyncMock(return_value=None)
 
         mock_ai_msg = MagicMock()
         mock_ai_msg.tool_calls = [{"name": "sql_query", "args": {}, "id": "tc1"}]
 
         async def fake_events(*args, **kwargs):
-            yield {"event": "on_chain_start", "name": "explore", "data": {}}
+            yield {"event": "on_chain_start", "name": "explore", "data": {}, "metadata": {"langgraph_node": "explore"}}
             yield {
                 "event": "on_chain_end",
                 "name": "explore",
                 "data": {"output": {"messages": [mock_ai_msg]}},
+                "metadata": {"langgraph_node": "explore"},
             }
 
         mock_graph.astream_events = fake_events
@@ -973,13 +980,15 @@ class TestOnChainEndDetails:
         from app.routers.ai_chat import _stream_agent
 
         mock_graph = MagicMock()
+        mock_graph.aget_state = AsyncMock(return_value=None)
 
         async def fake_events(*args, **kwargs):
-            yield {"event": "on_chain_start", "name": "explore_tools", "data": {}}
+            yield {"event": "on_chain_start", "name": "explore_tools", "data": {}, "metadata": {"langgraph_node": "explore_tools"}}
             yield {
                 "event": "on_chain_end",
                 "name": "explore_tools",
                 "data": {"output": {"messages": [MagicMock(), MagicMock()]}},
+                "metadata": {"langgraph_node": "explore_tools"},
             }
 
         mock_graph.astream_events = fake_events
@@ -998,13 +1007,15 @@ class TestOnChainEndDetails:
         from app.routers.ai_chat import _stream_agent
 
         mock_graph = MagicMock()
+        mock_graph.aget_state = AsyncMock(return_value=None)
 
         async def fake_events(*args, **kwargs):
-            yield {"event": "on_chain_start", "name": "intake", "data": {}}
+            yield {"event": "on_chain_start", "name": "intake", "data": {}, "metadata": {"langgraph_node": "intake"}}
             yield {
                 "event": "on_chain_end",
                 "name": "intake",
                 "data": {"output": {"total_tool_calls": 0}},
+                "metadata": {"langgraph_node": "intake"},
             }
 
         mock_graph.astream_events = fake_events
@@ -1036,7 +1047,7 @@ class TestHITLSpinnerFix:
 
         async def fake_events(*args, **kwargs):
             # Simulate explore_tools node starting (on_chain_start fires)
-            yield {"event": "on_chain_start", "name": "explore_tools", "data": {}}
+            yield {"event": "on_chain_start", "name": "explore_tools", "data": {}, "metadata": {"langgraph_node": "explore_tools"}}
             # on_chain_end never fires because interrupt() is called inside execute_tools
 
         mock_graph.astream_events = fake_events
@@ -1142,6 +1153,8 @@ class TestValidateThreadOwner:
 
     async def test_redis_available_correct_owner_passes(self):
         """Redis available + correct owner -> no exception."""
+        import app.routers.ai_chat as _chat_mod
+        _chat_mod._redis_circuit_open_until = 0.0  # Reset circuit breaker
         mock_redis = _mock_redis_service(connected=True, get_return="user-A")
         with patch(_REDIS_PATCH, mock_redis):
             # Should not raise

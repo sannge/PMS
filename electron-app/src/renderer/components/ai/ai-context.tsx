@@ -25,6 +25,7 @@
 import {
   createContext,
   useContext,
+  useMemo,
   useState,
   useCallback,
   type ReactNode,
@@ -65,8 +66,10 @@ export function AiContextProvider({ children }: AiContextProviderProps): JSX.Ele
     setContextState(ctx)
   }, [])
 
+  const value = useMemo(() => ({ context, setContext }), [context, setContext])
+
   return (
-    <AiContextContext.Provider value={{ context, setContext }}>
+    <AiContextContext.Provider value={value}>
       {children}
     </AiContextContext.Provider>
   )

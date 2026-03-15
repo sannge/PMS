@@ -31,6 +31,7 @@ class RedisService:
     - JSON caching with TTL support
     - Sorted sets for presence tracking
     - Sliding window rate limiting
+    - Background health monitor with state-change callbacks
     """
 
     def __init__(self) -> None:
@@ -41,6 +42,8 @@ class RedisService:
         self._handlers: dict[str, list[Callable]] = {}
         self._running = False
         self._connected = False
+        self._health_monitor_task: Optional[asyncio.Task] = None
+        self._on_state_change: Optional[Callable[[bool], Any]] = None
 
     async def connect(self) -> None:
         """Initialize Redis connection with connection pooling."""
@@ -106,17 +109,37 @@ class RedisService:
         self._handlers[channel].append(handler)
         logger.debug(f"Subscribed to channel: {channel}")
 
-    async def unsubscribe(self, channel: str) -> None:
+    async def unsubscribe(self, channel: str, handler: Callable | None = None) -> None:
         """
-        Unsubscribe from a channel.
+        Unsubscribe a specific handler from a channel.
+
+        If *handler* is None, removes ALL handlers for the channel (backward compat).
+        If *handler* is given, removes only that handler. The Redis pubsub
+        subscription is only dropped when no handlers remain for the channel.
 
         Args:
             channel: The channel name to unsubscribe from
+            handler: Optional specific handler to remove
         """
-        if channel in self._handlers:
+        if channel not in self._handlers:
+            return
+
+        if handler is None:
+            # Remove all handlers (backward compat)
             del self._handlers[channel]
-            if self._pubsub:
-                await self._pubsub.unsubscribe(channel)
+        else:
+            try:
+                self._handlers[channel].remove(handler)
+            except ValueError:
+                pass  # Handler not in list
+            # Only fully unsubscribe when list is empty
+            if self._handlers[channel]:
+                logger.debug(f"Removed handler from channel: {channel} ({len(self._handlers[channel])} remaining)")
+                return
+            del self._handlers[channel]
+
+        if self._pubsub:
+            await self._pubsub.unsubscribe(channel)
         logger.debug(f"Unsubscribed from channel: {channel}")
 
     async def publish(self, channel: str, message: dict) -> int:
@@ -139,10 +162,24 @@ class RedisService:
             raise
 
     async def start_listening(self) -> None:
-        """Start the pub/sub listener background task."""
-        if self._running and self._listener_task is not None:
+        """Start the pub/sub listener background task.
+
+        Safe to call again after a Redis outage to re-establish subscriptions.
+        If the listener is already running and healthy, this is a no-op.
+        """
+        # If listener is already running and not done, nothing to do
+        if self._running and self._listener_task is not None and not self._listener_task.done():
             logger.debug("Pub/sub listener already running")
             return
+
+        # Clean up stale pubsub/task from a previous failed session
+        if self._pubsub:
+            try:
+                await self._pubsub.close()
+            except Exception:
+                pass
+        if self._listener_task and self._listener_task.done():
+            self._listener_task = None
 
         self._pubsub = self.client.pubsub()
         self._running = True
@@ -180,9 +217,16 @@ class RedisService:
                 # Only log if we're still supposed to be running
                 if self._running:
                     logger.error(f"Pub/sub listener error: {e}")
-                    await asyncio.sleep(1)
+                    # L4: Exponential backoff to prevent tight-loop on Redis outage
+                    if not hasattr(self, "_reconnect_delay"):
+                        self._reconnect_delay = 1.0
+                    await asyncio.sleep(self._reconnect_delay)
+                    self._reconnect_delay = min(self._reconnect_delay * 2, 30.0)
                 else:
                     break
+            else:
+                # Reset backoff on successful iteration
+                self._reconnect_delay = 1.0
 
     # =========================================================================
     # Caching Methods
@@ -441,10 +485,77 @@ class RedisService:
         Returns:
             Tuple of (allowed: bool, current_count: int)
         """
-        current = await self.client.incr(key)
-        if current == 1:
-            await self.client.expire(key, window)
+        # H14: Atomic INCR + EXPIRE via Lua to prevent key leak if Redis
+        # crashes between the two commands.
+        _RATE_LIMIT_LUA = (
+            "local c = redis.call('INCR', KEYS[1]) "
+            "if c == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end "
+            "return c"
+        )
+        current = await self.client.eval(_RATE_LIMIT_LUA, 1, key, window)
         return current <= limit, current
+
+    # =========================================================================
+    # Background Health Monitor
+    # =========================================================================
+
+    async def start_health_monitor(
+        self,
+        interval: int = 5,
+        on_state_change: Optional[Callable[[bool], Any]] = None,
+    ) -> None:
+        """Start a background task that PINGs Redis every *interval* seconds.
+
+        On state transitions (connected ↔ disconnected) the optional
+        *on_state_change* callback is invoked with the new boolean state.
+        The callback may be a regular function or a coroutine.
+        """
+        if self._health_monitor_task is not None:
+            return
+        self._on_state_change = on_state_change
+        self._health_monitor_task = asyncio.create_task(
+            self._health_monitor_loop(interval)
+        )
+        logger.info("Redis health monitor started (interval=%ds)", interval)
+
+    async def stop_health_monitor(self) -> None:
+        """Cancel the background health monitor task."""
+        if self._health_monitor_task is not None:
+            self._health_monitor_task.cancel()
+            try:
+                await self._health_monitor_task
+            except asyncio.CancelledError:
+                pass
+            self._health_monitor_task = None
+            logger.info("Redis health monitor stopped")
+
+    async def _health_monitor_loop(self, interval: int) -> None:
+        """Background loop: PING Redis and detect state transitions."""
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                previous = self._connected
+                try:
+                    if self._redis is not None:
+                        await self._redis.ping()
+                        self._connected = True
+                    else:
+                        self._connected = False
+                except Exception:
+                    self._connected = False
+
+                # Fire callback only on transitions
+                if previous != self._connected and self._on_state_change is not None:
+                    try:
+                        result = self._on_state_change(self._connected)
+                        if asyncio.iscoroutine(result):
+                            await result
+                    except Exception as e:
+                        logger.error("Redis state-change callback error: %s", e)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("Health monitor unexpected error: %s", e)
 
     # =========================================================================
     # Health Check
@@ -459,16 +570,24 @@ class RedisService:
         """
         try:
             if not self.is_connected:
-                return {"status": "disconnected"}
+                return {
+                    "status": "disconnected",
+                    "gate_active": settings.redis_required and not self._connected,
+                }
 
             info = await self.client.info("memory")
             return {
                 "status": "healthy",
                 "used_memory_human": info.get("used_memory_human", "unknown"),
                 "connected_clients": info.get("connected_clients", 0),
+                "gate_active": False,
             }
         except Exception as e:
-            return {"status": "error", "error": str(e)}
+            return {
+                "status": "error",
+                "error": str(e),
+                "gate_active": settings.redis_required and not self._connected,
+            }
 
 
 # Global singleton instance

@@ -14,7 +14,7 @@
  */
 
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
-import { FilePlus, Folder, FileText, FolderKanban, ChevronRight, Archive } from 'lucide-react'
+import { FilePlus, Folder, FileText, File as FileIcon, FolderKanban, ChevronRight, Archive } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   DndContext,
@@ -66,8 +66,7 @@ import { DeleteDialog } from './delete-dialog'
 import { createEmptyCanvas } from './canvas-types'
 import { matchesSearch, filterFolderTree, findFolderById, isDescendantOf, collectAncestorIds } from './tree-utils'
 import { useProjectPermissionsMap } from '@/hooks/use-knowledge-permissions'
-import { ImportDialog } from '@/components/ai/import-dialog'
-import { useUploadFile, useRenameFile, useDeleteFile, fetchFileDownloadUrl, type FolderFileListItem, type UploadConflictError } from '@/hooks/use-folder-files'
+import { useUploadFile, useRenameFile, useDeleteFile, useMoveFile, useUnfiledFiles, fetchFileDownloadUrl, type FolderFileListItem, type UploadConflictError } from '@/hooks/use-folder-files'
 import { FileConflictDialog } from './file-conflict-dialog'
 import { parseSortableId, parsePrefixToScope, type ScopeInfo } from './dnd-utils'
 
@@ -96,10 +95,10 @@ interface ContextMenuTarget {
 
 interface ActiveDragItem {
   id: string
-  type: 'folder' | 'document'
+  type: 'folder' | 'document' | 'file'
   name: string
   scope: string
-  /** For documents: the folder_id at drag start (cached to avoid repeated query scans) */
+  /** For documents/files: the folder_id at drag start (cached to avoid repeated query scans) */
   folderId: string | null
 }
 
@@ -111,6 +110,7 @@ interface ProjectSectionProps {
   project: Project
   expandedFolderIds: Set<string>
   selectedDocumentId: string | null
+  selectedFileId?: string | null
   renamingItemId: string | null
   activeItem: ActiveDragItem | null
   dropTargetFolderId: string | null
@@ -128,6 +128,8 @@ interface ProjectSectionProps {
   clearReveal?: () => void
   onToggleFolder: (folderId: string) => void
   onSelectDocument: (documentId: string) => void
+  onSelectFile?: (file: FolderFileListItem) => void
+  onFileContextMenu?: (e: React.MouseEvent, file: FolderFileListItem, menuScope?: 'application' | 'project' | 'personal', menuScopeId?: string) => void
   onContextMenu: (
     e: React.MouseEvent,
     id: string,
@@ -144,6 +146,7 @@ function ProjectSection({
   project,
   expandedFolderIds,
   selectedDocumentId,
+  selectedFileId,
   renamingItemId,
   activeItem,
   dropTargetFolderId,
@@ -156,6 +159,8 @@ function ProjectSection({
   clearReveal: clearRevealFn,
   onToggleFolder,
   onSelectDocument,
+  onSelectFile,
+  onFileContextMenu,
   onContextMenu,
   onRenameSubmit,
   onRenameCancel,
@@ -187,6 +192,12 @@ function ProjectSection({
     { includeUnfiled: true }
   )
 
+  // Unfiled files at project scope root
+  const { data: projectUnfiledFiles } = useUnfiledFiles(
+    'project',
+    isExpanded ? project.id : null
+  )
+
   // Active locks for this project scope (lazy: only fetches when expanded)
   const projectActiveLocks = useActiveLocks('project', isExpanded ? project.id : null)
 
@@ -194,6 +205,7 @@ function ProjectSection({
 
   const folders = projectFolders ?? []
   const unfiledDocs = projectUnfiled?.items ?? []
+  const unfiledFiles = projectUnfiledFiles?.items ?? []
   const isLoading = isExpanded && (isFoldersLoading || isUnfiledLoading) && folders.length === 0 && unfiledDocs.length === 0
 
   // Expand ancestors when this project is the reveal target and data has loaded
@@ -214,8 +226,8 @@ function ProjectSection({
 
   const isEmpty = useMemo(() => {
     if (!isExpanded || isLoading) return false
-    return folders.length === 0 && unfiledDocs.length === 0
-  }, [isExpanded, isLoading, folders.length, unfiledDocs.length])
+    return folders.length === 0 && unfiledDocs.length === 0 && unfiledFiles.length === 0
+  }, [isExpanded, isLoading, folders.length, unfiledDocs.length, unfiledFiles.length])
 
   // Sortable IDs for project items
   const projectSortableItems = useMemo(() => {
@@ -230,8 +242,11 @@ function ProjectSection({
     unfiledDocs.forEach(doc => {
       items.push(`project-${project.id}-doc-${doc.id}`)
     })
+    unfiledFiles.forEach(file => {
+      items.push(`project-${project.id}-file-${file.id}`)
+    })
     return items
-  }, [project.id, folders, unfiledDocs])
+  }, [project.id, folders, unfiledDocs, unfiledFiles])
 
   // No-op sorting strategy: items are alphabetically ordered, DnD is only for nesting
   const noReorderStrategy = useCallback(() => null, [])
@@ -272,6 +287,7 @@ function ProjectSection({
                 folderId={node.id}
                 depth={depth + 1}
                 selectedDocumentId={selectedDocumentId}
+                selectedFileId={selectedFileId}
                 renamingItemId={renamingItemId}
                 sortableIdPrefix={canEdit ? `project-${project.id}` : ''}
                 activeItemId={activeItem?.type === 'document' ? activeItem.id : null}
@@ -282,13 +298,15 @@ function ProjectSection({
                 }
                 onRenameSubmit={onRenameSubmit}
                 onRenameCancel={onRenameCancel}
+                onSelectFile={onSelectFile}
+                onFileContextMenu={(e, file) => onFileContextMenu?.(e, file, 'project', project.id)}
               />
             </>
           )}
         </div>
       )
     },
-    [expandedFolderIds, contextMenuFolderId, selectedDocumentId, renamingItemId, activeItem, dropTargetFolderId, project.id, canEdit, projectActiveLocks, onToggleFolder, onSelectDocument, onContextMenu, onRenameSubmit, onRenameCancel]
+    [expandedFolderIds, contextMenuFolderId, selectedDocumentId, selectedFileId, renamingItemId, activeItem, dropTargetFolderId, project.id, canEdit, projectActiveLocks, onToggleFolder, onSelectDocument, onContextMenu, onRenameSubmit, onRenameCancel, onFileContextMenu]
   )
 
   const renderDocumentItem = useCallback(
@@ -361,7 +379,22 @@ function ProjectSection({
             <SortableContext items={projectSortableItems} strategy={noReorderStrategy}>
               {folders.map((node) => renderFolderNode(node, 1))}
               {unfiledDocs.map((doc) => renderDocumentItem(doc, 1))}
-              {folders.length === 0 && unfiledDocs.length === 0 && (
+              {unfiledFiles.map((file) => (
+                <FolderTreeItem
+                  key={`file-${file.id}`}
+                  node={file}
+                  type="file"
+                  depth={1}
+                  isSelected={selectedFileId === file.id}
+                  isRenaming={renamingItemId === file.id}
+                  sortableId={canEdit ? `project-${project.id}-file-${file.id}` : undefined}
+                  onSelect={() => onSelectFile?.(file)}
+                  onContextMenu={(e) => onFileContextMenu?.(e, file, 'project', project.id)}
+                  onRenameSubmit={onRenameSubmit}
+                  onRenameCancel={onRenameCancel}
+                />
+              ))}
+              {folders.length === 0 && unfiledDocs.length === 0 && unfiledFiles.length === 0 && (
                 <div className="px-2 py-1.5 text-xs text-muted-foreground">
                   No documents yet
                 </div>
@@ -384,12 +417,14 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
     scopeId: contextScopeId,
     expandedFolderIds,
     selectedDocumentId,
+    selectedFileId,
     searchQuery,
     revealFolderId,
     revealProjectId,
     toggleFolder,
     expandFolder,
     selectDocument,
+    selectFile,
     expandFolders,
     clearReveal,
   } = useKnowledgeBase()
@@ -407,6 +442,7 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
   // Data queries
   const { data: folderTree, isLoading: isFoldersLoading, isFetching: isFoldersFetching } = useFolderTree(scope, effectiveScopeId)
   const { data: unfiledResponse, isLoading: isUnfiledLoading } = useDocuments(scope, effectiveScopeId, { includeUnfiled: true })
+  const { data: unfiledFilesResponse } = useUnfiledFiles(scope, effectiveScopeId)
 
   // Active locks for the current scope (single batch request replaces N per-document queries)
   const activeLocks = useActiveLocks(scope, effectiveScopeId)
@@ -464,6 +500,60 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
     return null
   }, [queryClient])
 
+  // --- Drag lookup Maps (FIX-3) ---
+  // Pre-built Maps for O(1) lookups during drag operations (handleDragOver fires at 60fps).
+  // Built once at drag start, cleared on drag end. Falls back to linear scan for non-drag usage.
+  const dragDocMapRef = useRef<Map<string, DocumentListItem> | null>(null)
+  const dragFileMapRef = useRef<Map<string, FolderFileListItem> | null>(null)
+
+  /** Build lookup Maps from the current query cache. Called once at drag start. */
+  const buildDragLookupMaps = useCallback(() => {
+    const docMap = new Map<string, DocumentListItem>()
+    const allDocs = queryClient.getQueriesData<DocumentListResponse>({
+      queryKey: ['documents'],
+      exact: false,
+    })
+    for (const [, data] of allDocs) {
+      if (data?.items) {
+        for (const doc of data.items) {
+          docMap.set(doc.id, doc)
+        }
+      }
+    }
+    dragDocMapRef.current = docMap
+
+    const fileMap = new Map<string, FolderFileListItem>()
+    const allFiles = queryClient.getQueriesData<{ items: FolderFileListItem[] }>({
+      queryKey: ['folderFiles'],
+      exact: false,
+    })
+    for (const [, data] of allFiles) {
+      if (data?.items) {
+        for (const file of data.items) {
+          fileMap.set(file.id, file)
+        }
+      }
+    }
+    dragFileMapRef.current = fileMap
+  }, [queryClient])
+
+  const clearDragLookupMaps = useCallback(() => {
+    dragDocMapRef.current = null
+    dragFileMapRef.current = null
+  }, [])
+
+  /** O(1) doc lookup during drag, falls back to linear scan if maps not built. */
+  const findDocDuringDrag = useCallback((documentId: string): DocumentListItem | null => {
+    if (dragDocMapRef.current) return dragDocMapRef.current.get(documentId) ?? null
+    return findDocInCache(documentId)
+  }, [findDocInCache])
+
+  /** O(1) file lookup during drag, falls back to linear scan if maps not built. */
+  const findFileDuringDrag = useCallback((fileId: string): FolderFileListItem | null => {
+    if (dragFileMapRef.current) return dragFileMapRef.current.get(fileId) ?? null
+    return findFileInCache(fileId)
+  }, [findFileInCache])
+
   /** Resolve DnD prefix to scope/scopeId for mutation params. */
   const getScopeFromPrefix = useCallback((prefix: string): ScopeInfo => {
     const parsed = parsePrefixToScope(prefix)
@@ -494,28 +584,39 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; type: 'document' | 'folder'; name: string; scope: string | null; scopeId: string | null } | null>(null)
 
-  // Import dialog state
-  const [importDialogOpen, setImportDialogOpen] = useState(false)
-  const [importTarget, setImportTarget] = useState<{ folderId: string; scope: 'application' | 'project' | 'personal'; scopeId: string } | null>(null)
-
   // File upload state
   const uploadFileInputRef = useRef<HTMLInputElement>(null)
   const uploadFolderIdRef = useRef<string | null>(null)
   const uploadFileMutation = useUploadFile()
   const renameFileMutation = useRenameFile()
   const deleteFileMutation = useDeleteFile()
+  const moveFileMutation = useMoveFile()
   const [conflictDialogOpen, setConflictDialogOpen] = useState(false)
-  const [conflictFile, setConflictFile] = useState<File | null>(null)
+  const [conflictQueue, setConflictQueue] = useState<{ file: File; existingFileId: string | null }[]>([])
   const [conflictFolderId, setConflictFolderId] = useState<string | null>(null)
-  const [conflictExistingFileId, setConflictExistingFileId] = useState<string | null>(null)
+
+  // Derive current conflict from the front of the queue
+  const conflictFile = conflictQueue.length > 0 ? conflictQueue[0].file : null
+  const conflictExistingFileId = conflictQueue.length > 0 ? conflictQueue[0].existingFileId : null
+
+  // When the conflict queue empties while the dialog is open, close the dialog.
+  // Done via useEffect (not inside setConflictQueue updater) to avoid clearing
+  // file props while the dialog close animation is still rendering.
+  useEffect(() => {
+    if (conflictDialogOpen && conflictQueue.length === 0) {
+      setConflictDialogOpen(false)
+      setConflictFolderId(null)
+    }
+  }, [conflictDialogOpen, conflictQueue.length])
 
   const folders = folderTree ?? []
   const unfiledDocs = unfiledResponse?.items ?? []
+  const unfiledFiles = unfiledFilesResponse?.items ?? []
   const projectList = projects ?? []
 
   // Only show loading skeleton on true first load (no data at all)
   // Don't show skeleton when switching tabs if we have any cached/placeholder data
-  const hasAnyData = folders.length > 0 || unfiledDocs.length > 0
+  const hasAnyData = folders.length > 0 || unfiledDocs.length > 0 || unfiledFiles.length > 0
   const isInitialLoad = (isFoldersLoading || isUnfiledLoading || (isApplicationScope && isProjectsContentLoading)) && !hasAnyData
 
   // Project filtering (application scope only)
@@ -533,6 +634,10 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
     if (!searchQuery) return unfiledDocs
     return unfiledDocs.filter(doc => matchesSearch(doc.title, searchQuery))
   }, [unfiledDocs, searchQuery])
+  const filteredUnfiledFiles = useMemo(() => {
+    if (!searchQuery) return unfiledFiles
+    return unfiledFiles.filter(file => matchesSearch(file.display_name, searchQuery))
+  }, [unfiledFiles, searchQuery])
 
   const filteredProjects = useMemo(() => {
     if (!isApplicationScope) return []
@@ -648,8 +753,11 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
     filteredDocs.forEach(doc => {
       items.push(`${dndPrefix}-doc-${doc.id}`)
     })
+    filteredUnfiledFiles.forEach(file => {
+      items.push(`${dndPrefix}-file-${file.id}`)
+    })
     return items
-  }, [dndPrefix, filteredFolders, filteredDocs])
+  }, [dndPrefix, filteredFolders, filteredDocs, filteredUnfiledFiles])
 
   // No-op sorting strategy: items are alphabetically ordered by the backend,
   // so we disable visual shifting during drag. DnD is only for nesting.
@@ -665,20 +773,44 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
     const parsed = parse(String(event.active.id))
     if (!parsed) return
 
+    // Build O(1) lookup maps once at drag start (used by handleDragOver at 60fps)
+    buildDragLookupMaps()
+
     let name = 'Item'
+    let folderId: string | null = null
     if (parsed.prefix === dndPrefix) {
       if (parsed.type === 'folder') {
         const folder = findFolderById(filteredFolders, parsed.itemId)
         if (folder) name = folder.name
+      } else if (parsed.type === 'file') {
+        const fileItem = findFileDuringDrag(parsed.itemId)
+        if (fileItem) {
+          name = fileItem.display_name
+          folderId = fileItem.folder_id
+        }
       } else {
         const doc = filteredDocs.find(d => d.id === parsed.itemId)
         if (doc) name = doc.title
+        folderId = findDocDuringDrag(parsed.itemId)?.folder_id ?? null
+      }
+    } else {
+      // Project scope
+      if (parsed.type === 'file') {
+        const fileItem = findFileDuringDrag(parsed.itemId)
+        if (fileItem) {
+          name = fileItem.display_name
+          folderId = fileItem.folder_id
+        }
+      } else if (parsed.type === 'document') {
+        folderId = findDocDuringDrag(parsed.itemId)?.folder_id ?? null
       }
     }
 
-    const folderId = parsed.type === 'document' ? (findDocInCache(parsed.itemId)?.folder_id ?? null) : null
+    if (parsed.type === 'document' && folderId === null) {
+      folderId = findDocDuringDrag(parsed.itemId)?.folder_id ?? null
+    }
     setActiveItem({ id: parsed.itemId, type: parsed.type, name, scope: parsed.prefix, folderId })
-  }, [dndPrefix, filteredFolders, filteredDocs, parse, findDocInCache])
+  }, [dndPrefix, filteredFolders, filteredDocs, parse, findDocDuringDrag, findFileDuringDrag, buildDragLookupMaps])
 
   const handleDragOver = useCallback((event: DragOverEvent) => {
     const { over, active } = event
@@ -698,14 +830,17 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
     // Show drop target highlight when hovering over a folder with a different item
     if (overParsed.type === 'folder' && activeParsed.itemId !== overParsed.itemId) {
       setDropTargetFolderId(overParsed.itemId)
-    } else if (overParsed.type === 'document') {
-      // Resolve the document's parent folder so hovering over a child doc highlights the folder
-      const parentFolderId = findDocInCache(overParsed.itemId)?.folder_id ?? null
+    } else if (overParsed.type === 'document' || overParsed.type === 'file') {
+      // Resolve the item's parent folder so hovering over a child doc/file highlights the folder
+      // Uses O(1) Map lookup instead of linear cache scan (this handler fires at 60fps)
+      const parentFolderId = overParsed.type === 'document'
+        ? (findDocDuringDrag(overParsed.itemId)?.folder_id ?? null)
+        : (findFileDuringDrag(overParsed.itemId)?.folder_id ?? null)
       if (
         parentFolderId &&
         activeParsed.itemId !== parentFolderId &&
-        // Don't highlight if dragging a doc already in that folder (use cached folderId from drag start)
-        !(activeParsed.type === 'document' && activeItem?.folderId === parentFolderId) &&
+        // Don't highlight if dragging an item already in that folder
+        !((activeParsed.type === 'document' || activeParsed.type === 'file') && activeItem?.folderId === parentFolderId) &&
         !(activeParsed.type === 'folder' && isDescendantOf(getFolderTree(activeParsed.prefix), activeParsed.itemId, parentFolderId))
       ) {
         setDropTargetFolderId(parentFolderId)
@@ -715,7 +850,7 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
     } else {
       setDropTargetFolderId(null)
     }
-  }, [parse, findDocInCache, getFolderTree, activeItem])
+  }, [parse, findDocDuringDrag, findFileDuringDrag, getFolderTree, activeItem])
 
   /** Check if a folder is at root level (no parent) in any cached tree */
   const isRootFolder = useCallback((folderId: string): boolean => {
@@ -738,8 +873,8 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
     return doc !== null && !doc.folder_id
   }, [unfiledDocs, findDocInCache])
 
-  /** Move an item to root (folder_id=null for docs, parent_id=null for folders) */
-  const moveItemToRoot = useCallback(async (parsed: { prefix: string; type: 'folder' | 'document'; itemId: string }) => {
+  /** Move an item to root (folder_id=null for docs/files, parent_id=null for folders) */
+  const moveItemToRoot = useCallback(async (parsed: { prefix: string; type: 'folder' | 'document' | 'file'; itemId: string }) => {
     const itemScope = getScopeFromPrefix(parsed.prefix)
     if (parsed.type === 'document') {
       const docFolderId = findDocInCache(parsed.itemId)?.folder_id
@@ -752,6 +887,19 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
         await moveDocument.mutateAsync({ documentId: parsed.itemId, folder_id: null, row_version: rowVersion, ...itemScope })
         toast.success('Moved to root')
       }
+    } else if (parsed.type === 'file') {
+      const fileItem = findFileInCache(parsed.itemId)
+      if (fileItem?.folder_id) {
+        await moveFileMutation.mutateAsync({
+          fileId: parsed.itemId,
+          targetFolderId: null,
+          rowVersion: fileItem.row_version,
+          sourceFolderId: fileItem.folder_id,
+          scope: itemScope.scope,
+          scopeId: itemScope.scopeId,
+        })
+        toast.success('Moved to root')
+      }
     } else {
       const activeIsRoot = isRootFolder(parsed.itemId)
       if (!activeIsRoot) {
@@ -759,40 +907,59 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
         toast.success('Moved to root')
       }
     }
-  }, [findDocInCache, getDocRowVersion, moveDocument, moveFolder, isRootFolder, getScopeFromPrefix])
+  }, [findDocInCache, findFileInCache, getDocRowVersion, moveDocument, moveFolder, moveFileMutation, isRootFolder, getScopeFromPrefix])
 
   const handleDragEnd = useCallback(async (event: DragEndEvent) => {
     const { active, over } = event
     setActiveItem(null)
     setDropTargetFolderId(null)
 
-    if (!over || active.id === over.id) return
+    if (!over || active.id === over.id) {
+      clearDragLookupMaps()
+      return
+    }
 
     const activeParsed = parse(String(active.id))
 
     // Case 0: Dropping onto root drop zone → move to root
     if (String(over.id) === ROOT_DROP_ZONE_ID) {
-      if (!activeParsed) return
+      if (!activeParsed) {
+        clearDragLookupMaps()
+        return
+      }
       try {
         await moveItemToRoot(activeParsed)
       } catch (error) {
         console.error('Failed to move:', error)
         toast.error(error instanceof Error ? error.message : 'Failed to move item')
       }
+      clearDragLookupMaps()
       return
     }
 
     const overParsed = parse(String(over.id))
 
-    if (!activeParsed || !overParsed) return
-    if (activeParsed.prefix !== overParsed.prefix) return // No cross-scope
+    if (!activeParsed || !overParsed) {
+      clearDragLookupMaps()
+      return
+    }
+    if (activeParsed.prefix !== overParsed.prefix) {
+      clearDragLookupMaps()
+      return // No cross-scope
+    }
 
-    // Resolve effective drop target: if dropping on a document inside a folder,
+    // Resolve effective drop target: if dropping on a document/file inside a folder,
     // treat it as dropping onto that parent folder
     let effectiveTargetType = overParsed.type
     let effectiveTargetId = overParsed.itemId
     if (overParsed.type === 'document') {
-      const parentFolderId = findDocInCache(overParsed.itemId)?.folder_id
+      const parentFolderId = findDocDuringDrag(overParsed.itemId)?.folder_id
+      if (parentFolderId) {
+        effectiveTargetType = 'folder'
+        effectiveTargetId = parentFolderId
+      }
+    } else if (overParsed.type === 'file') {
+      const parentFolderId = findFileDuringDrag(overParsed.itemId)?.folder_id
       if (parentFolderId) {
         effectiveTargetType = 'folder'
         effectiveTargetId = parentFolderId
@@ -813,9 +980,27 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
           await moveFolder.mutateAsync({ folderId: activeParsed.itemId, parent_id: effectiveTargetId, ...itemScope })
           const targetFolder = findFolderById(scopeFolders, effectiveTargetId)
           toast.success(`Moved to ${targetFolder?.name ?? 'folder'}`)
+        } else if (activeParsed.type === 'file') {
+          // Skip if file is already in this folder
+          const fileItem = findFileDuringDrag(activeParsed.itemId)
+          if (!fileItem) {
+            toast.error('Could not determine file version. Please try again.')
+            return
+          }
+          if (fileItem.folder_id === effectiveTargetId) return
+          await moveFileMutation.mutateAsync({
+            fileId: activeParsed.itemId,
+            targetFolderId: effectiveTargetId,
+            rowVersion: fileItem.row_version,
+            sourceFolderId: fileItem.folder_id ?? null,
+            scope: itemScope.scope,
+            scopeId: itemScope.scopeId,
+          })
+          const targetFolder = findFolderById(scopeFolders, effectiveTargetId)
+          toast.success(`Moved to ${targetFolder?.name ?? 'folder'}`)
         } else {
           // Skip if doc is already in this folder
-          if (findDocInCache(activeParsed.itemId)?.folder_id === effectiveTargetId) return
+          if (findDocDuringDrag(activeParsed.itemId)?.folder_id === effectiveTargetId) return
           const rowVersion = getDocRowVersion(activeParsed.itemId)
           if (!rowVersion) {
             toast.error('Could not determine document version. Please try again.')
@@ -830,10 +1015,12 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
       }
 
       // Case 2: Dropping onto a root-level item → move to root (unfiled) if currently nested
-      if (overParsed.type === 'document' || overParsed.type === 'folder') {
+      if (overParsed.type === 'document' || overParsed.type === 'folder' || overParsed.type === 'file') {
         const overIsRoot = overParsed.type === 'folder'
           ? isRootFolder(overParsed.itemId)
-          : isRootDocument(overParsed.itemId)
+          : overParsed.type === 'file'
+            ? !(findFileDuringDrag(overParsed.itemId)?.folder_id)
+            : isRootDocument(overParsed.itemId)
 
         if (!overIsRoot) return // Don't do anything if dropping on a nested sibling
 
@@ -842,8 +1029,10 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
     } catch (error) {
       console.error('Failed to move:', error)
       toast.error(error instanceof Error ? error.message : 'Failed to move item')
+    } finally {
+      clearDragLookupMaps()
     }
-  }, [parse, moveFolder, moveDocument, expandFolder, getDocRowVersion, findDocInCache, isRootFolder, isRootDocument, moveItemToRoot, getFolderTree, getScopeFromPrefix])
+  }, [parse, moveFolder, moveDocument, moveFileMutation, expandFolder, getDocRowVersion, findDocDuringDrag, findFileDuringDrag, isRootFolder, isRootDocument, moveItemToRoot, getFolderTree, getScopeFromPrefix, clearDragLookupMaps])
 
   // ========================================================================
   // Context menu handlers
@@ -888,15 +1077,6 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
     setCreateDialogOpen(true)
   }, [contextMenuTarget, scope, effectiveScopeId, handleCloseContextMenu])
 
-  const handleImport = useCallback((folderId: string) => {
-    handleCloseContextMenu()
-    const target = contextMenuTarget
-    const importScope = target?.scope ?? (scope as 'application' | 'project' | 'personal')
-    const importScopeId = target?.scopeId ?? effectiveScopeId ?? ''
-    setImportTarget({ folderId, scope: importScope, scopeId: importScopeId })
-    setImportDialogOpen(true)
-  }, [contextMenuTarget, scope, effectiveScopeId, handleCloseContextMenu])
-
   const handleUploadFiles = useCallback((folderId: string) => {
     handleCloseContextMenu()
     uploadFolderIdRef.current = folderId
@@ -926,12 +1106,10 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
       }
     }
 
-    // Show conflict dialog for the first conflict (user resolves one at a time)
+    // Queue all conflicts for sequential resolution
     if (conflicts.length > 0) {
-      const first = conflicts[0]
-      setConflictFile(first.file)
+      setConflictQueue(conflicts)
       setConflictFolderId(folderId)
-      setConflictExistingFileId(first.existingFileId)
       setConflictDialogOpen(true)
       if (conflicts.length > 1) {
         toast.info(`${conflicts.length} files had conflicts. Resolve them one at a time.`)
@@ -942,18 +1120,20 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
     e.target.value = ''
   }, [uploadFileMutation])
 
-  const handleFileSelect = useCallback(async (file: FolderFileListItem) => {
-    // CRIT-4: Fetch presigned download URL via authenticated endpoint, then open
-    try {
-      const downloadUrl = await fetchFileDownloadUrl(file.id)
-      window.open(downloadUrl, '_blank')
-    } catch {
-      toast.error(`Failed to get download URL for ${file.display_name}`)
-    }
-  }, [])
+  const handleFileSelect = useCallback((file: FolderFileListItem) => {
+    // Seed the detail cache so useFileDetail returns instantly (no redundant fetch)
+    queryClient.setQueryData(queryKeys.folderFile(file.id), file)
+    // Prefetch download URL so FileViewerPanel has it ready on mount
+    queryClient.prefetchQuery({
+      queryKey: queryKeys.folderFileDownloadUrl(file.id),
+      queryFn: () => fetchFileDownloadUrl(file.id),
+      staleTime: 4 * 60 * 1000,
+    })
+    selectFile(file.id)
+  }, [selectFile, queryClient])
 
   const handleFileContextMenu = useCallback(
-    (e: React.MouseEvent, file: FolderFileListItem) => {
+    (e: React.MouseEvent, file: FolderFileListItem, menuScope?: 'application' | 'project' | 'personal', menuScopeId?: string) => {
       e.preventDefault()
       e.stopPropagation()
       setContextMenuTarget({
@@ -962,9 +1142,9 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
         name: file.display_name,
         x: e.clientX,
         y: e.clientY,
-        scope: scope as 'application' | 'project' | 'personal',
-        scopeId: effectiveScopeId ?? '',
-        folderId: file.folder_id,
+        scope: menuScope ?? scope as 'application' | 'project' | 'personal',
+        scopeId: menuScopeId ?? effectiveScopeId ?? '',
+        folderId: file.folder_id ?? undefined,
       })
     },
     [scope, effectiveScopeId]
@@ -972,6 +1152,9 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
 
   const handleCreateSubmit = useCallback(async (name: string, format?: 'document' | 'canvas') => {
     const resolvedScopeId = createScope === 'personal' ? (userId ?? '') : createScopeId
+
+    // Close dialog immediately before mutation to prevent re-open on cache invalidation
+    setCreateDialogOpen(false)
 
     if (createType === 'document') {
       const doc = await createDocument.mutateAsync({
@@ -983,6 +1166,7 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
       })
       selectDocument(doc.id)
       if (createParentId) expandFolder(createParentId)
+      toast.success(format === 'canvas' ? 'Canvas created' : 'Document created')
     } else {
       await createFolder.mutateAsync({
         name,
@@ -991,6 +1175,7 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
         parent_id: createParentId,
       })
       if (createParentId) expandFolder(createParentId)
+      toast.success('Folder created')
     }
   }, [createType, createScope, createScopeId, createParentId, userId, createDocument, createFolder, selectDocument, expandFolder])
 
@@ -1023,8 +1208,10 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
         await renameFileMutation.mutateAsync({
           fileId: renamingItemId,
           displayName: newName,
-          folderId: fileItem.folder_id,
+          folderId: fileItem.folder_id ?? '',
           rowVersion: fileItem.row_version,
+          scope: itemScope,
+          scopeId: itemScopeId,
         })
       } else {
         const rowVersion = getDocRowVersion(renamingItemId)
@@ -1059,13 +1246,18 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
 
     if (type === 'file') {
       const fileItem = findFileInCache(id)
-      const fileFolderId = targetFolderId ?? fileItem?.folder_id
-      if (!fileFolderId) {
-        toast.error('Could not determine file folder. Please try again.')
-        return
+      const fileFolderId = targetFolderId ?? fileItem?.folder_id ?? ''
+      // Clear content viewer if the deleted file is currently selected
+      if (selectedFileId === id) {
+        selectFile(null)
       }
       deleteFileMutation.mutate(
-        { fileId: id, folderId: fileFolderId },
+        {
+          fileId: id,
+          folderId: fileFolderId,
+          scope: targetScope ?? scope,
+          scopeId: targetScopeId ?? effectiveScopeId ?? '',
+        },
         {
           onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to delete file'),
         }
@@ -1078,7 +1270,7 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
       : findDocInCache(id)?.title || unfiledDocs.find((d) => d.id === id)?.title || 'this document'
     setDeleteTarget({ id, type, name, scope: targetScope, scopeId: targetScopeId })
     setDeleteDialogOpen(true)
-  }, [folders, unfiledDocs, findDocInCache, findFileInCache, deleteFileMutation, contextMenuTarget, handleCloseContextMenu])
+  }, [folders, unfiledDocs, findDocInCache, findFileInCache, deleteFileMutation, contextMenuTarget, handleCloseContextMenu, selectedFileId, selectFile])
 
   const handleDeleteConfirm = useCallback(async () => {
     if (!deleteTarget) return
@@ -1088,6 +1280,7 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
       // Capture selected doc's folder_id BEFORE mutation invalidates cache
       const selectedDocFolderId = selectedDocumentId ? findDocInCache(selectedDocumentId)?.folder_id : null
       await deleteFolder.mutateAsync({ folderId: deleteTarget.id, scope: itemScope, scopeId: itemScopeId })
+      toast.success('Folder deleted')
       // Cascade: folder deletion removes all documents inside it.
       // Clear selection if the selected document was directly in the deleted folder,
       // or in any subfolder (descendant), or if the cache was already invalidated.
@@ -1104,6 +1297,7 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
       }
     } else {
       await deleteDocument.mutateAsync({ documentId: deleteTarget.id, scope: itemScope, scopeId: itemScopeId })
+      toast.success('Document deleted')
       if (selectedDocumentId === deleteTarget.id) selectDocument(null)
     }
   }, [deleteTarget, deleteFolder, deleteDocument, selectedDocumentId, selectDocument, findDocInCache, queryClient, folders, scope, effectiveScopeId])
@@ -1197,6 +1391,7 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
                 folderId={node.id}
                 depth={depth + 1}
                 selectedDocumentId={selectedDocumentId}
+                selectedFileId={selectedFileId}
                 renamingItemId={renamingItemId}
                 sortableIdPrefix={canEdit ? prefix : ''}
                 activeItemId={activeItem?.type === 'document' ? activeItem.id : null}
@@ -1213,7 +1408,7 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
         </div>
       )
     },
-    [dndPrefix, canEdit, scope, effectiveScopeId, expandedFolderIds, contextMenuFolderId, selectedDocumentId, renamingItemId, activeItem, dropTargetFolderId, activeLocks, toggleFolder, handleSelectDocument, handleContextMenu, handleRenameSubmit, handleRenameCancel, handleFileSelect, handleFileContextMenu]
+    [dndPrefix, canEdit, scope, effectiveScopeId, expandedFolderIds, contextMenuFolderId, selectedDocumentId, selectedFileId, renamingItemId, activeItem, dropTargetFolderId, activeLocks, toggleFolder, handleSelectDocument, handleContextMenu, handleRenameSubmit, handleRenameCancel, handleFileSelect, handleFileContextMenu]
   )
 
   // ========================================================================
@@ -1224,8 +1419,8 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
     return <TreeSkeleton />
   }
 
-  const hasNoData = folders.length === 0 && unfiledDocs.length === 0 && (isApplicationScope ? projectIdsWithContent.size === 0 : true)
-  const hasNoResults = filteredFolders.length === 0 && filteredDocs.length === 0 && filteredProjects.length === 0
+  const hasNoData = folders.length === 0 && unfiledDocs.length === 0 && unfiledFiles.length === 0 && (isApplicationScope ? projectIdsWithContent.size === 0 : true)
+  const hasNoResults = filteredFolders.length === 0 && filteredDocs.length === 0 && filteredUnfiledFiles.length === 0 && filteredProjects.length === 0
 
   // Empty state
   if (hasNoData) {
@@ -1277,6 +1472,21 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
         <SortableContext items={sortableItems} strategy={noReorderStrategy}>
           {filteredFolders.map((node) => renderFolderNode(node, 0))}
           {filteredDocs.map((doc) => renderDocumentItem(doc, 0))}
+          {filteredUnfiledFiles.map((file) => (
+            <FolderTreeItem
+              key={`file-${file.id}`}
+              node={file}
+              type="file"
+              depth={0}
+              isSelected={selectedFileId === file.id}
+              isRenaming={renamingItemId === file.id}
+              sortableId={canEdit ? `${dndPrefix}-file-${file.id}` : undefined}
+              onSelect={() => handleFileSelect(file)}
+              onContextMenu={(e) => handleFileContextMenu(e, file)}
+              onRenameSubmit={handleRenameSubmit}
+              onRenameCancel={handleRenameCancel}
+            />
+          ))}
         </SortableContext>
 
         {/* Project sections (application scope only) */}
@@ -1293,6 +1503,7 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
                 project={project}
                 expandedFolderIds={expandedFolderIds}
                 selectedDocumentId={selectedDocumentId}
+                selectedFileId={selectedFileId}
                 renamingItemId={renamingItemId}
                 activeItem={activeItem}
                 dropTargetFolderId={dropTargetFolderId}
@@ -1304,6 +1515,8 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
                 clearReveal={clearReveal}
                 onToggleFolder={toggleFolder}
                 onSelectDocument={handleSelectDocument}
+                onSelectFile={handleFileSelect}
+                onFileContextMenu={handleFileContextMenu}
                 onContextMenu={handleContextMenu}
                 onRenameSubmit={handleRenameSubmit}
                 onRenameCancel={handleRenameCancel}
@@ -1322,6 +1535,8 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
           <div className="flex items-center gap-1.5 px-3 py-1.5 bg-background border rounded-md shadow-lg opacity-90">
             {activeItem.type === 'folder' ? (
               <Folder className="h-4 w-4 text-muted-foreground" />
+            ) : activeItem.type === 'file' ? (
+              <FileIcon className="h-4 w-4 text-muted-foreground" />
             ) : (
               <FileText className="h-4 w-4 text-muted-foreground" />
             )}
@@ -1345,7 +1560,6 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
           onNewDocument={handleNewDocument}
           onRename={(id) => handleRename(id, contextMenuTarget.type)}
           onDelete={handleDelete}
-          onImport={handleImport}
           onUploadFiles={handleUploadFiles}
         />
       )}
@@ -1362,16 +1576,6 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
         onConfirm={handleDeleteConfirm}
       />
 
-      {/* Import dialog (triggered from folder context menu) */}
-      <ImportDialog
-        open={importDialogOpen}
-        onOpenChange={setImportDialogOpen}
-        defaultScope={importTarget?.scope}
-        defaultScopeId={importTarget?.scopeId}
-        defaultFolderId={importTarget?.folderId}
-        onImportComplete={() => setImportDialogOpen(false)}
-      />
-
       {/* Hidden file input for folder upload */}
       <input
         ref={uploadFileInputRef}
@@ -1385,14 +1589,21 @@ export function KnowledgeTree({ applicationId, canEdit = true }: KnowledgeTreePr
       {/* File conflict dialog */}
       <FileConflictDialog
         open={conflictDialogOpen}
-        onOpenChange={setConflictDialogOpen}
+        onOpenChange={(open) => {
+          setConflictDialogOpen(open)
+          if (!open) {
+            setConflictQueue([])
+            setConflictFolderId(null)
+          }
+        }}
         file={conflictFile}
         folderId={conflictFolderId}
         existingFileId={conflictExistingFileId}
         onResolved={() => {
-          setConflictFile(null)
-          setConflictFolderId(null)
-          setConflictExistingFileId(null)
+          // Remove the resolved conflict from the queue.
+          // When the queue becomes empty, the useEffect above will
+          // close the dialog and clear state on the next render.
+          setConflictQueue((prev) => prev.slice(1))
         }}
       />
     </DndContext>

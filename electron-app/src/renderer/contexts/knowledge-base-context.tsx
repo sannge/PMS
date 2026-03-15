@@ -37,6 +37,7 @@ interface KnowledgeBaseUIState {
   isSidebarCollapsed: boolean
   expandedFolderIds: Set<string>
   selectedDocumentId: string | null
+  selectedFileId: string | null
   selectedFolderId: string | null
   searchQuery: string
   activeTagIds: string[]
@@ -61,6 +62,7 @@ interface KnowledgeBaseContextValue extends KnowledgeBaseUIState {
   expandFolder: (folderId: string) => void
   collapseFolder: (folderId: string) => void
   selectDocument: (documentId: string | null) => void
+  selectFile: (fileId: string | null, searchTerms?: string[]) => void
   selectFolder: (folderId: string | null) => void
   setSearch: (query: string) => void
   toggleTag: (tagId: string) => void
@@ -196,6 +198,7 @@ type KnowledgeBaseAction =
   | { type: 'EXPAND_FOLDER'; folderId: string }
   | { type: 'COLLAPSE_FOLDER'; folderId: string }
   | { type: 'SELECT_DOCUMENT'; documentId: string | null }
+  | { type: 'SELECT_FILE'; fileId: string | null; searchTerms?: string[] }
   | { type: 'SELECT_FOLDER'; folderId: string | null }
   | { type: 'SET_SEARCH'; query: string }
   | { type: 'TOGGLE_TAG'; tagId: string }
@@ -217,6 +220,7 @@ function knowledgeBaseReducer(
         scope: action.scope,
         scopeId: action.scopeId,
         selectedDocumentId: null,
+        selectedFileId: null,
         selectedFolderId: null,
         activeTagIds: [],
         searchHighlightTerms: [],
@@ -231,6 +235,7 @@ function knowledgeBaseReducer(
         scope,
         scopeId,
         selectedDocumentId: null,
+        selectedFileId: null,
         selectedFolderId: null,
         activeTagIds: [],
         searchHighlightTerms: [],
@@ -273,7 +278,10 @@ function knowledgeBaseReducer(
     }
 
     case 'SELECT_DOCUMENT':
-      return { ...state, selectedDocumentId: action.documentId, searchHighlightTerms: [], searchScrollToOccurrence: -1 }
+      return { ...state, selectedDocumentId: action.documentId, selectedFileId: null, searchHighlightTerms: [], searchScrollToOccurrence: -1 }
+
+    case 'SELECT_FILE':
+      return { ...state, selectedFileId: action.fileId, selectedDocumentId: null, searchHighlightTerms: action.searchTerms ?? [], searchScrollToOccurrence: action.searchTerms?.length ? 0 : -1 }
 
     case 'SELECT_FOLDER':
       return { ...state, selectedFolderId: action.folderId }
@@ -301,6 +309,7 @@ function knowledgeBaseReducer(
       return {
         ...state,
         selectedDocumentId: null,
+        selectedFileId: null,
         selectedFolderId: null,
         searchHighlightTerms: [],
         searchScrollToOccurrence: -1,
@@ -317,6 +326,7 @@ function knowledgeBaseReducer(
         scope: targetTab === 'personal' ? 'personal' : 'application',
         scopeId: targetTab.startsWith('app:') ? targetTab.slice(4) : null,
         selectedDocumentId: documentId,
+        selectedFileId: null,
         selectedFolderId: null,
         searchHighlightTerms: searchTerms,
         searchScrollToOccurrence: scrollToOccurrence ?? 0,
@@ -334,6 +344,7 @@ function knowledgeBaseReducer(
       return {
         ...state,
         selectedDocumentId: documentId,
+        selectedFileId: null,
         selectedFolderId: null,
         searchHighlightTerms: searchTerms,
         searchScrollToOccurrence: scrollToOccurrence ?? 0,
@@ -399,6 +410,7 @@ export function KnowledgeBaseProvider({
       isSidebarCollapsed: loadBoolean(k.sidebar, false),
       expandedFolderIds: loadExpandedFolders(k.expanded),
       selectedDocumentId: null,
+      selectedFileId: null,
       selectedFolderId: null,
       searchQuery: '',
       activeTagIds: [],
@@ -414,9 +426,20 @@ export function KnowledgeBaseProvider({
     persistValue(keys.sidebar, String(state.isSidebarCollapsed))
   }, [keys.sidebar, state.isSidebarCollapsed])
 
-  // Persist expanded folders
+  // Persist expanded folders (debounced to avoid localStorage write thrash)
+  const expandedPersistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
-    persistExpandedFolders(keys.expanded, state.expandedFolderIds)
+    if (expandedPersistTimerRef.current) {
+      clearTimeout(expandedPersistTimerRef.current)
+    }
+    expandedPersistTimerRef.current = setTimeout(() => {
+      persistExpandedFolders(keys.expanded, state.expandedFolderIds)
+    }, 500)
+    return () => {
+      if (expandedPersistTimerRef.current) {
+        clearTimeout(expandedPersistTimerRef.current)
+      }
+    }
   }, [keys.expanded, state.expandedFolderIds])
 
   // Persist scope
@@ -467,6 +490,16 @@ export function KnowledgeBaseProvider({
     const guard = navigationGuardRef.current
     if (guard && !guard(documentId, () => dispatch({ type: 'SELECT_DOCUMENT', documentId }))) return
     dispatch({ type: 'SELECT_DOCUMENT', documentId })
+  }, [])
+
+  const selectFile = useCallback((fileId: string | null, searchTerms?: string[]) => {
+    // The navigation guard protects unsaved document changes.
+    // File selections clear the active document, so pass fileId as the
+    // targetDocId so the guard can distinguish file-select from deselect
+    // and decide whether to block navigation for dirty document state.
+    const guard = navigationGuardRef.current
+    if (guard && !guard(fileId, () => dispatch({ type: 'SELECT_FILE', fileId, searchTerms }))) return
+    dispatch({ type: 'SELECT_FILE', fileId, searchTerms })
   }, [])
 
   const selectFolder = useCallback((folderId: string | null) => {
@@ -528,6 +561,7 @@ export function KnowledgeBaseProvider({
     expandFolder,
     collapseFolder,
     selectDocument,
+    selectFile,
     selectFolder,
     setSearch,
     toggleTag,
@@ -540,8 +574,16 @@ export function KnowledgeBaseProvider({
     expandFolders,
     clearReveal,
   }), [
-    state, setScope, setActiveTab, toggleSidebar, toggleFolder,
-    expandFolder, collapseFolder, selectDocument, selectFolder,
+    // Individual state fields instead of `state` object to avoid re-rendering
+    // all consumers on every dispatch (state is a new object each time).
+    state.scope, state.scopeId, state.activeTab, state.isSidebarCollapsed,
+    state.expandedFolderIds, state.selectedDocumentId, state.selectedFileId,
+    state.selectedFolderId, state.searchQuery, state.activeTagIds,
+    state.searchHighlightTerms, state.searchScrollToOccurrence,
+    state.revealFolderId, state.revealProjectId,
+    // Callbacks (all stable via useCallback with [] deps)
+    setScope, setActiveTab, toggleSidebar, toggleFolder,
+    expandFolder, collapseFolder, selectDocument, selectFile, selectFolder,
     setSearch, toggleTag, clearTags, resetSelection,
     registerNavigationGuard, unregisterNavigationGuard, navigateToDocument,
     revealDocument, expandFolders, clearReveal,

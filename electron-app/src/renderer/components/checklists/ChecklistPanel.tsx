@@ -11,7 +11,6 @@
  */
 
 import { useEffect, useCallback, useState, useRef } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { CheckSquare, Plus, AlertCircle, X } from 'lucide-react'
 import {
@@ -26,10 +25,9 @@ import {
   useDeleteChecklistItem,
   useReorderChecklistItems,
 } from '@/hooks/use-checklists'
-import { queryKeys } from '@/lib/query-client'
 import { ChecklistCard } from './ChecklistCard'
 import { SkeletonChecklists } from '@/components/ui/skeleton'
-import { wsClient, MessageType } from '@/lib/websocket'
+import { wsClient } from '@/lib/websocket'
 
 // ============================================================================
 // Types
@@ -53,7 +51,6 @@ export function ChecklistPanel({
   className,
   canEdit = true,
 }: ChecklistPanelProps): JSX.Element {
-  const queryClient = useQueryClient()
   const [isAdding, setIsAdding] = useState(false)
   const [newTitle, setNewTitle] = useState('')
   const [error, setError] = useState<Error | null>(null)
@@ -73,6 +70,17 @@ export function ChecklistPanel({
   const deleteItem = useDeleteChecklistItem(taskId)
   const reorderItems = useReorderChecklistItems(taskId)
 
+  // Track if any mutation is in-flight to disable concurrent interactions
+  const isAnyMutationPending =
+    createChecklist.isPending ||
+    updateChecklist.isPending ||
+    deleteChecklist.isPending ||
+    createItem.isPending ||
+    updateItem.isPending ||
+    toggleItem.isPending ||
+    deleteItem.isPending ||
+    reorderItems.isPending
+
   // Focus input when adding
   useEffect(() => {
     if (isAdding && inputRef.current) {
@@ -80,45 +88,13 @@ export function ChecklistPanel({
     }
   }, [isAdding])
 
-  // Subscribe to WebSocket events for real-time cache invalidation
+  // Join task room for real-time updates (cache invalidation handled by global hook)
   useEffect(() => {
     if (!taskId) return
-
     const roomId = `task:${taskId}`
-
-    // Join the room for this task
     wsClient.joinRoom(roomId)
-
-    // Invalidate checklists cache on any checklist event
-    const invalidateChecklists = () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.checklists(taskId) })
-    }
-
-    // Subscribe to all checklist events - invalidate cache to refetch
-    wsClient.on(MessageType.CHECKLIST_CREATED, invalidateChecklists)
-    wsClient.on(MessageType.CHECKLIST_UPDATED, invalidateChecklists)
-    wsClient.on(MessageType.CHECKLIST_DELETED, invalidateChecklists)
-    wsClient.on(MessageType.CHECKLISTS_REORDERED, invalidateChecklists)
-    wsClient.on(MessageType.CHECKLIST_ITEM_TOGGLED, invalidateChecklists)
-    wsClient.on(MessageType.CHECKLIST_ITEM_ADDED, invalidateChecklists)
-    wsClient.on(MessageType.CHECKLIST_ITEM_UPDATED, invalidateChecklists)
-    wsClient.on(MessageType.CHECKLIST_ITEM_DELETED, invalidateChecklists)
-    wsClient.on(MessageType.CHECKLIST_ITEMS_REORDERED, invalidateChecklists)
-
-    // Cleanup: leave room and unsubscribe
-    return () => {
-      wsClient.leaveRoom(roomId)
-      wsClient.off(MessageType.CHECKLIST_CREATED, invalidateChecklists)
-      wsClient.off(MessageType.CHECKLIST_UPDATED, invalidateChecklists)
-      wsClient.off(MessageType.CHECKLIST_DELETED, invalidateChecklists)
-      wsClient.off(MessageType.CHECKLISTS_REORDERED, invalidateChecklists)
-      wsClient.off(MessageType.CHECKLIST_ITEM_TOGGLED, invalidateChecklists)
-      wsClient.off(MessageType.CHECKLIST_ITEM_ADDED, invalidateChecklists)
-      wsClient.off(MessageType.CHECKLIST_ITEM_UPDATED, invalidateChecklists)
-      wsClient.off(MessageType.CHECKLIST_ITEM_DELETED, invalidateChecklists)
-      wsClient.off(MessageType.CHECKLIST_ITEMS_REORDERED, invalidateChecklists)
-    }
-  }, [taskId, queryClient])
+    return () => { wsClient.leaveRoom(roomId) }
+  }, [taskId])
 
   // Handlers
   const handleCreateChecklist = useCallback(async () => {
@@ -318,7 +294,7 @@ export function ChecklistPanel({
             onItemDelete={canEdit ? handleItemDelete : undefined}
             onItemCreate={canEdit ? handleItemCreate : undefined}
             onItemReorder={canEdit ? handleItemReorder : undefined}
-            disabled={checklist.id.startsWith('temp-')}
+            disabled={checklist.id.startsWith('temp-') || isAnyMutationPending}
           />
         ))}
 
@@ -339,17 +315,19 @@ export function ChecklistPanel({
                 }
               }}
               placeholder="Checklist title..."
+              disabled={createChecklist.isPending}
               className={cn(
                 'flex-1 px-2 py-1.5 rounded',
                 'bg-background border border-border',
                 'text-sm text-foreground',
                 'placeholder:text-muted-foreground',
-                'focus:outline-none focus:ring-1 focus:ring-ring'
+                'focus:outline-none focus:ring-1 focus:ring-ring',
+                'disabled:opacity-50 disabled:cursor-not-allowed'
               )}
             />
             <button
               onClick={handleCreateChecklist}
-              disabled={!newTitle.trim()}
+              disabled={!newTitle.trim() || createChecklist.isPending}
               className={cn(
                 'px-3 py-1.5 rounded-md',
                 'bg-primary text-primary-foreground text-xs font-medium',
@@ -358,7 +336,7 @@ export function ChecklistPanel({
                 'transition-colors'
               )}
             >
-              Add
+              {createChecklist.isPending ? 'Adding...' : 'Add'}
             </button>
             <button
               onClick={() => {
@@ -377,11 +355,13 @@ export function ChecklistPanel({
           canEdit && checklists.length > 0 && (
             <button
               onClick={() => setIsAdding(true)}
+              disabled={isAnyMutationPending}
               className={cn(
                 'flex items-center gap-2 w-full p-2 rounded-lg',
                 'border border-dashed border-border',
                 'text-sm text-muted-foreground',
                 'hover:border-primary/50 hover:text-foreground hover:bg-muted/30',
+                'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-border disabled:hover:text-muted-foreground disabled:hover:bg-transparent',
                 'transition-colors'
               )}
             >

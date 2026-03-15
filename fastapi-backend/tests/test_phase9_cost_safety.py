@@ -172,10 +172,13 @@ class TestImportConcurrency:
         from app.worker import (
             IMPORT_CONCURRENCY_KEY,
             IMPORT_CONCURRENCY_TTL,
-            MAX_CONCURRENT_IMPORTS,
         )
+        # MAX_CONCURRENT_IMPORTS is now read at call time inside
+        # process_document_import via get_agent_config().
+        from app.ai.config_service import get_agent_config
+        max_concurrent = get_agent_config().get_int("worker.max_concurrent_imports", 5)
 
-        assert MAX_CONCURRENT_IMPORTS == 5
+        assert max_concurrent == 5
         assert IMPORT_CONCURRENCY_KEY == "import:concurrency:count"
         assert IMPORT_CONCURRENCY_TTL == 3600
 
@@ -804,7 +807,9 @@ class TestImportConcurrencyLimiter:
     @pytest.mark.asyncio
     async def test_at_limit_defers_job(self):
         """Redis eval returns 6 (> 5), verify job is deferred with DECR."""
-        from app.worker import process_document_import, MAX_CONCURRENT_IMPORTS
+        from app.worker import process_document_import
+        from app.ai.config_service import get_agent_config
+        MAX_CONCURRENT_IMPORTS = get_agent_config().get_int("worker.max_concurrent_imports", 5)
 
         job_id = str(uuid4())
         user_id = uuid4()
@@ -842,7 +847,7 @@ class TestImportConcurrencyLimiter:
 
         with patch("app.worker.async_session_maker", return_value=mock_session_ctx), \
              patch("app.worker.redis_service", mock_redis_svc), \
-             patch("arq.connections.create_pool", AsyncMock(return_value=mock_arq_pool)):
+             patch("app.services.arq_helper.get_arq_redis", AsyncMock(return_value=mock_arq_pool)):
 
             result = await process_document_import({}, job_id)
 

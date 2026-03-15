@@ -24,6 +24,7 @@ import { queryClient, initializeQueryPersistence, clearQueryCache } from '@/lib/
 import { AuthProvider, useAuthState, useAuthActions, useAuthToken, NotificationUIProvider } from '@/contexts'
 import { clearEventDedup } from '@/hooks/use-websocket-cache'
 import { Toaster } from 'sonner'
+import { FindBar } from '@/components/layout/find-bar'
 
 // ============================================================================
 // Types
@@ -385,6 +386,7 @@ function App(): JSX.Element {
               <QueryClientInitializer>
                 <AuthRouter />
               </QueryClientInitializer>
+              <FindBar />
               <Toaster richColors />
             </ErrorBoundary>
           </ThemeProvider>

@@ -108,15 +108,16 @@ def derive_project_status(agg: ProjectAggregation) -> str:
     Derive project status from task aggregation counts.
 
     This is a pure function with no side effects. It deterministically
-    computes the project status based on the distribution of tasks
-    across different status categories.
+    computes the project status based on the earliest (lowest) status
+    among all tasks, ensuring the project reflects outstanding work.
 
-    Derivation Rules (in priority order):
+    Derivation Rules (earliest-status-wins):
     1. No tasks = Todo (empty project)
     2. All done = Done (project complete)
     3. Any issue = Issue (issue escalation - visibility priority)
-    4. Any active work = In Progress (work is happening)
-    5. Default = Todo (only todo tasks remaining)
+    4. Any todo = Todo (work hasn't started on all tasks yet)
+    5. Any active/review work = In Progress
+    6. Default = Todo
 
     Args:
         agg: ProjectAggregation containing task counts by status
@@ -132,7 +133,7 @@ def derive_project_status(agg: ProjectAggregation) -> str:
         >>> derive_project_status(ProjectAggregation(5, 3, 1, 0, 1, 0))
         'Issue'
         >>> derive_project_status(ProjectAggregation(5, 3, 2, 0, 0, 0))
-        'In Progress'
+        'Todo'
     """
     # Rule 1: No tasks = Todo (empty project defaults to Todo)
     if agg.total_tasks == 0:
@@ -143,16 +144,19 @@ def derive_project_status(agg: ProjectAggregation) -> str:
         return StatusCategory.DONE.value
 
     # Rule 3: Any issue = Issue (issue escalation has highest priority after Done)
-    # This ensures issues are visible at the project level
     if agg.issue_tasks > 0:
         return StatusCategory.ISSUE.value
 
-    # Rule 4: Any active work = In Progress (includes both in_progress and in_review)
-    # review_tasks are also considered active work
+    # Rule 4: Any todo tasks = Todo (earliest status wins — project reflects
+    # that not all work has progressed past the initial stage)
+    if agg.todo_tasks > 0:
+        return StatusCategory.TODO.value
+
+    # Rule 5: Any active work = In Progress (all tasks past Todo stage)
     if agg.active_tasks > 0 or agg.review_tasks > 0:
         return "In Progress"
 
-    # Rule 5: Default = Todo (only todo tasks, or mixed with done)
+    # Rule 6: Default = Todo
     return StatusCategory.TODO.value
 
 

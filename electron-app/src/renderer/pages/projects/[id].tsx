@@ -1057,6 +1057,8 @@ export function ProjectDetailPage({
           onDelete={canEditTasks ? handleTaskDelete : undefined}
           canEdit={canEditTasks}
           applicationId={project.application_id}
+          applicationName={application?.name}
+          projectName={project.name}
           onExternalUpdate={(updatedTask) => {
             setSelectedTask(updatedTask)
             // Project query will auto-refetch via cache invalidation

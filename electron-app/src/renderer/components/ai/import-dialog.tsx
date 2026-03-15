@@ -22,13 +22,6 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Upload, FileText, CheckCircle2, Loader2, XCircle, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -274,13 +267,7 @@ function DropZone({
   const [isDragOver, setIsDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const handleDragEnter = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setIsDragOver(true)
-  }, [])
-
-  const handleDragOver = useCallback((e: React.DragEvent) => {
+  const handleDragEnterOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     e.stopPropagation()
     setIsDragOver(true)
@@ -334,8 +321,8 @@ function DropZone({
             handleClick()
           }
         }}
-        onDragEnter={handleDragEnter}
-        onDragOver={handleDragOver}
+        onDragEnter={handleDragEnterOver}
+        onDragOver={handleDragEnterOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         className={cn(
@@ -425,9 +412,9 @@ export function ImportDialog({
   // Upload form state
   const [file, setFile] = useState<File | null>(null)
   const [title, setTitle] = useState('')
-  const [scope, setScope] = useState<string>(defaultScope)
-  const [scopeId] = useState(defaultScopeId)
-  const [folderId] = useState(defaultFolderId ?? '')
+  const scope = defaultScope
+  const scopeId = defaultScopeId
+  const folderId = defaultFolderId ?? ''
   const [validationError, setValidationError] = useState<string | null>(null)
 
   // Import job state
@@ -441,18 +428,22 @@ export function ImportDialog({
   const { data: jobStatus } = useImportJobStatus(activeJobId)
 
   // ---- Reset state when dialog closes ----
+  // Use a ref for importMutation.reset to keep resetState stable
+  // (useMutation returns a new object every render).
+  const resetMutationRef = useRef(importMutation.reset)
+  resetMutationRef.current = importMutation.reset
+
   const resetState = useCallback(() => {
     setFile(null)
     setTitle('')
-    setScope(defaultScope)
     setValidationError(null)
     setActiveJobId(null)
-    importMutation.reset()
+    resetMutationRef.current()
     if (autoCloseTimerRef.current) {
       clearTimeout(autoCloseTimerRef.current)
       autoCloseTimerRef.current = null
     }
-  }, [defaultScope, importMutation])
+  }, [])
 
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
@@ -590,21 +581,6 @@ export function ImportDialog({
                 placeholder="Document title"
                 disabled={isUploading}
               />
-            </div>
-
-            {/* Scope */}
-            <div className="space-y-2">
-              <Label htmlFor="import-scope">Scope</Label>
-              <Select value={scope} onValueChange={setScope} disabled={isUploading}>
-                <SelectTrigger id="import-scope">
-                  <SelectValue placeholder="Select scope" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="application">Application</SelectItem>
-                  <SelectItem value="project">Project</SelectItem>
-                  <SelectItem value="personal">Personal</SelectItem>
-                </SelectContent>
-              </Select>
             </div>
 
             {/* Footer with actions */}

@@ -143,6 +143,9 @@ export enum MessageType {
   // AI reindex events
   REINDEX_PROGRESS = 'reindex_progress',
 
+  // Infrastructure status events
+  REDIS_STATUS_CHANGED = 'redis_status_changed',
+
   // Keepalive
   PING = 'ping',
   PONG = 'pong',
@@ -1132,6 +1135,11 @@ export class WebSocketClient {
   private sendPing(): void {
     if (!this.ws || !this.isConnected()) {
       return
+    }
+
+    if (this.pongTimer) {
+      clearTimeout(this.pongTimer)
+      this.pongTimer = null
     }
 
     try {

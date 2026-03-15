@@ -41,7 +41,7 @@ from ..websocket.handlers import (
     handle_member_removed,
     handle_role_updated,
 )
-from ..websocket.room_auth import invalidate_user_cache
+from ..websocket.room_auth import invalidate_user_cache, publish_room_auth_invalidation
 
 router = APIRouter(prefix="/api/applications", tags=["Application Members"])
 
@@ -569,6 +569,15 @@ async def update_member_role(
 
         # Invalidate room auth cache so WS room access reflects new role
         invalidate_user_cache(user_id)
+        await publish_room_auth_invalidation(user_id=str(user_id))
+
+        # R2-6: Invalidate RBAC scope cache so AI retrieval reflects new role
+        try:
+            from ..services.redis_service import redis_service
+            if redis_service.is_connected:
+                await redis_service.delete(f"rbac_scope:{user_id}")
+        except Exception:
+            pass  # Best-effort; cache has 30s TTL anyway
 
     return member
 
@@ -738,12 +747,15 @@ async def remove_member(
 
     # Invalidate room auth cache so removed user can no longer join rooms
     invalidate_user_cache(user_id)
+    await publish_room_auth_invalidation(user_id=str(user_id))
 
     # Invalidate search scope cache so removed user can no longer see docs in search
     try:
         from ..services.redis_service import redis_service
         if redis_service.is_connected:
             await redis_service.delete(f"search:scope:{user_id}")
+            # R2-6: Invalidate RBAC scope cache so AI retrieval reflects removal
+            await redis_service.delete(f"rbac_scope:{user_id}")
     except Exception:
         pass  # Best-effort; scope cache has 30s TTL anyway
 

@@ -1,3 +1,6 @@
+/* TODO: Replace Google Fonts @import with local @fontsource packages to avoid
+   render-blocking network requests and offline failures in Electron.
+   Install @fontsource/plus-jakarta-sans and @fontsource/jetbrains-mono. */
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
 
@@ -327,6 +330,16 @@
     -webkit-app-region: no-drag;
   }
 
+  /* Find-in-page highlights (CSS Highlight API) */
+  ::highlight(find-matches) {
+    background-color: #fde047;
+    color: black;
+  }
+  ::highlight(find-active) {
+    background-color: #f97316;
+    color: white;
+  }
+
   /* Animation delays */
   .animation-delay-100 { animation-delay: 100ms; }
   .animation-delay-200 { animation-delay: 200ms; }
@@ -548,4 +561,122 @@
 /* Focus state */
 .task-editor .ProseMirror:focus {
   @apply outline-none;
+}
+
+/* ============================================================================
+   FILE VIEWER: PDF & DOCX text selection + react-pdf layers
+   ============================================================================ */
+
+/* ---- react-pdf: text & annotation layer styles ---- */
+
+:root {
+  --react-pdf-text-layer: 1;
+  --react-pdf-annotation-layer: 1;
+}
+
+.react-pdf__Page {
+  position: relative;
+}
+
+.react-pdf__Page canvas {
+  display: block;
+}
+
+.textLayer {
+  position: absolute;
+  text-align: initial;
+  inset: 0;
+  overflow: hidden;
+  line-height: 1;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  z-index: 2;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}
+
+.textLayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  margin: 0;
+  transform-origin: 0 0;
+}
+
+.textLayer span.markedContent {
+  top: 0;
+  height: 0;
+}
+
+.textLayer br::selection {
+  background: transparent;
+}
+
+.textLayer span::selection {
+  background: rgba(0, 100, 255, 0.3);
+  color: transparent;
+}
+
+.textLayer .endOfContent {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: -1;
+  cursor: default;
+  user-select: none;
+}
+
+.textLayer.selecting .endOfContent {
+  top: 0;
+}
+
+.annotationLayer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  transform-origin: 0 0;
+  z-index: 3;
+}
+
+.annotationLayer section {
+  position: absolute;
+  text-align: initial;
+  pointer-events: auto;
+  box-sizing: border-box;
+  margin: 0;
+  transform-origin: 0 0;
+}
+
+.annotationLayer :is(.linkAnnotation, .buttonWidgetAnnotation.pushButton) > a {
+  position: absolute;
+  font-size: 1em;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.hiddenCanvasElement {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+/* docx-preview container — enable text selection */
+.docx-preview-container {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  cursor: text;
+}
+
+/* docx-preview: selection highlight — translucent blue, keep text readable */
+.docx-preview-container ::selection {
+  background: rgba(0, 100, 255, 0.3) !important;
+  color: inherit !important;
 }

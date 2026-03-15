@@ -78,7 +78,7 @@ class TestBuildSearchFileData:
 
         data = build_search_file_data(ff)
 
-        assert data["id"] == f"file:{ff.id}"
+        assert data["id"] == f"file_{ff.id}"
         assert data["title"] == "report.pdf"
         assert data["file_name"] == "report.pdf"
         assert data["content_type"] == "file"
@@ -161,7 +161,7 @@ class TestIndexFileFromData:
         """index_file_from_data calls index_document_from_data."""
         from app.services.search_service import index_file_from_data
 
-        data = {"id": f"file:{uuid4()}", "title": "test.pdf"}
+        data = {"id": f"file_{uuid4()}", "title": "test.pdf"}
 
         with patch(
             "app.services.search_service.index_document_from_data",
@@ -181,7 +181,7 @@ class TestRemoveFileFromIndex:
 
     @pytest.mark.asyncio
     async def test_uses_file_prefix(self):
-        """remove_file_from_index uses file: prefix for deletion."""
+        """remove_file_from_index uses file_ prefix for deletion."""
         from app.services.search_service import remove_file_from_index
 
         file_id = uuid4()
@@ -200,7 +200,7 @@ class TestRemoveFileFromIndex:
         ):
             await remove_file_from_index(file_id)
 
-        mock_index.delete_document.assert_called_once_with(f"file:{file_id}")
+        mock_index.delete_document.assert_called_once_with(f"file_{file_id}")
 
     @pytest.mark.asyncio
     async def test_handles_exception_gracefully(self):
@@ -224,10 +224,10 @@ class TestExpandHitsFileDetection:
     """Tests for _expand_hits file entry handling."""
 
     def test_file_prefix_detected(self):
-        """Hits with file: prefix get content_type and file_name."""
+        """Hits with file_ prefix get content_type and file_name."""
         hits = [
             {
-                "id": f"file:{uuid4()}",
+                "id": f"file_{uuid4()}",
                 "title": "report.xlsx",
                 "file_name": "report.xlsx",
                 "content_plain": "Revenue data",
@@ -262,7 +262,7 @@ class TestExpandHitsFileDetection:
         """File hit with content matches generates per-occurrence entries."""
         hits = [
             {
-                "id": f"file:{uuid4()}",
+                "id": f"file_{uuid4()}",
                 "title": "data.csv",
                 "file_name": "data.csv",
                 "content_plain": "Alice is 30 years old. Bob is 25 years old.",
@@ -287,7 +287,7 @@ class TestExpandHitsFileDetection:
         """When file_name is missing, file_name falls back to title."""
         hits = [
             {
-                "id": f"file:{uuid4()}",
+                "id": f"file_{uuid4()}",
                 "title": "fallback-title.pdf",
                 "content_plain": "",
                 "_matchesPosition": {},
@@ -463,16 +463,16 @@ class TestRRFFileDedup:
 
 
 # ============================================================================
-# Keyword Search file: prefix Tests
+# Keyword Search file_ prefix Tests
 # ============================================================================
 
 
 class TestKeywordSearchFilePrefix:
-    """Tests for _keyword_search handling file: prefixed IDs."""
+    """Tests for _keyword_search handling file_ prefixed IDs."""
 
     @pytest.mark.asyncio
     async def test_file_prefix_parsed(self):
-        """Meilisearch hits with file: prefix are parsed correctly."""
+        """Meilisearch hits with file_ prefix are parsed correctly."""
         from app.ai.retrieval_service import HybridRetrievalService
 
         file_id = uuid4()
@@ -481,7 +481,7 @@ class TestKeywordSearchFilePrefix:
         mock_results = MagicMock()
         mock_results.hits = [
             {
-                "id": f"file:{file_id}",
+                "id": f"file_{file_id}",
                 "title": "report.xlsx",
                 "content_plain": "Revenue data",
                 "application_id": str(uuid4()),
@@ -554,3 +554,241 @@ class TestKeywordSearchFilePrefix:
         assert len(results) == 1
         assert results[0].source_type == "document"
         assert results[0].file_id is None
+
+
+# ============================================================================
+# _highlight_terms_in_window Tests
+# ============================================================================
+
+
+class TestHighlightTermsInWindow:
+    """Tests for regex-based highlighting in additional occurrence snippets."""
+
+    def test_single_term_highlighted(self):
+        from app.services.search_service import _highlight_terms_in_window
+        result = _highlight_terms_in_window(
+            "The quick brown fox jumps over the lazy dog", 10, 5, {"brown"}
+        )
+        assert "<mark>brown</mark>" in result
+
+    def test_multiple_terms_highlighted(self):
+        from app.services.search_service import _highlight_terms_in_window
+        result = _highlight_terms_in_window(
+            "The quick brown fox jumps over the lazy dog", 10, 5, {"brown", "fox"}
+        )
+        assert "<mark>brown</mark>" in result
+        assert "<mark>fox</mark>" in result
+
+    def test_html_escaped_before_highlight(self):
+        from app.services.search_service import _highlight_terms_in_window
+        result = _highlight_terms_in_window(
+            "Use <script> for brown testing", 20, 5, {"brown"}
+        )
+        assert "<script>" not in result
+        assert "&lt;script&gt;" in result
+        assert "<mark>brown</mark>" in result
+
+    def test_ellipsis_prefix_when_not_at_start(self):
+        from app.services.search_service import _highlight_terms_in_window
+        content = "x " * 100 + "target word here"
+        result = _highlight_terms_in_window(content, 200, 6, {"target"})
+        assert result.startswith("...")
+
+    def test_no_ellipsis_at_start(self):
+        from app.services.search_service import _highlight_terms_in_window
+        result = _highlight_terms_in_window(
+            "brown fox jumps", 0, 5, {"brown"}
+        )
+        assert not result.startswith("...")
+
+    def test_empty_terms_no_highlights(self):
+        from app.services.search_service import _highlight_terms_in_window
+        result = _highlight_terms_in_window(
+            "The quick brown fox", 10, 5, set()
+        )
+        assert "<mark>" not in result
+        assert "brown" in result
+
+    def test_case_insensitive_highlight(self):
+        from app.services.search_service import _highlight_terms_in_window
+        result = _highlight_terms_in_window(
+            "The Quick BROWN fox", 10, 5, {"brown"}
+        )
+        assert "<mark>BROWN</mark>" in result
+
+
+# ============================================================================
+# _sanitize_meili_snippet Tests
+# ============================================================================
+
+
+class TestSanitizeMeiliSnippet:
+    """Tests for HTML sanitization of Meilisearch formatted snippets."""
+
+    def test_preserves_mark_tags(self):
+        from app.services.search_service import _sanitize_meili_snippet
+        result = _sanitize_meili_snippet("hello <mark>world</mark> foo")
+        assert "<mark>world</mark>" in result
+
+    def test_escapes_script_tags(self):
+        from app.services.search_service import _sanitize_meili_snippet
+        result = _sanitize_meili_snippet('<script>alert("xss")</script> <mark>safe</mark>')
+        assert "<script>" not in result
+        assert "&lt;script&gt;" in result
+        assert "<mark>safe</mark>" in result
+
+    def test_escapes_html_entities(self):
+        from app.services.search_service import _sanitize_meili_snippet
+        result = _sanitize_meili_snippet("a & b <mark>c</mark>")
+        assert "a &amp; b" in result
+        assert "<mark>c</mark>" in result
+
+    def test_empty_string(self):
+        from app.services.search_service import _sanitize_meili_snippet
+        assert _sanitize_meili_snippet("") == ""
+
+    def test_none_passthrough(self):
+        from app.services.search_service import _sanitize_meili_snippet
+        # The function checks `if not html: return html`
+        assert _sanitize_meili_snippet("") == ""
+
+    def test_preserves_only_exact_mark_tags(self):
+        """<mark> preserved, <mark class='x'> and <markdown> escaped."""
+        from app.services.search_service import _sanitize_meili_snippet
+        result = _sanitize_meili_snippet('<mark>good</mark> <mark class="x">bad</mark> <markdown>also bad</markdown>')
+        assert "<mark>good</mark>" in result
+        # <mark class="x"> should be escaped (not exact <mark>)
+        # <markdown> should be escaped
+        assert "<markdown>" not in result
+
+    def test_unbalanced_marks_safe(self):
+        """Unbalanced <mark> tags don't cause issues."""
+        from app.services.search_service import _sanitize_meili_snippet
+        result = _sanitize_meili_snippet("hello <mark>world")
+        assert "<mark>world" in result  # <mark> preserved even without closing tag
+        assert "hello " in result
+
+
+# ============================================================================
+# _expand_hits Occurrence Behavior Tests
+# ============================================================================
+
+
+class TestExpandHitsOccurrenceBehavior:
+    """Tests for first occurrence using formatted vs additional using regex."""
+
+    def test_first_occurrence_uses_formatted(self):
+        from app.services.search_service import _expand_hits
+        hits = [{
+            "id": "doc-1",
+            "title": "Test",
+            "content_plain": "hello world hello again",
+            "_formatted": {
+                "title": "Test",
+                "content_plain": "...cropped <mark>hello</mark> world...",
+            },
+            "_matchesPosition": {
+                "content_plain": [
+                    {"start": 0, "length": 5},
+                    {"start": 12, "length": 5},
+                ],
+            },
+        }]
+        expanded = _expand_hits(hits)
+        assert len(expanded) == 2
+        # First occurrence uses formatted
+        assert expanded[0]["occurrenceIndex"] == 0
+        assert "<mark>" in expanded[0]["snippet"]
+        # Second occurrence uses regex highlight
+        assert expanded[1]["occurrenceIndex"] == 1
+        assert "<mark>" in expanded[1]["snippet"]
+
+    def test_title_only_match_uses_formatted(self):
+        from app.services.search_service import _expand_hits
+        hits = [{
+            "id": "doc-2",
+            "title": "Hello World",
+            "content_plain": "some content here",
+            "_formatted": {
+                "title": "<mark>Hello</mark> World",
+                "content_plain": "...some content...",
+            },
+            "_matchesPosition": {
+                "title": [{"start": 0, "length": 5}],
+            },
+        }]
+        expanded = _expand_hits(hits)
+        assert len(expanded) == 1
+        assert expanded[0]["occurrenceIndex"] == 0
+
+    def test_matched_terms_on_all_entries(self):
+        from app.services.search_service import _expand_hits
+        hits = [{
+            "id": "doc-3",
+            "title": "Test",
+            "content_plain": "hello world hello again",
+            "_formatted": {
+                "title": "Test",
+                "content_plain": "<mark>hello</mark> world...",
+            },
+            "_matchesPosition": {
+                "content_plain": [
+                    {"start": 0, "length": 5},
+                    {"start": 12, "length": 5},
+                ],
+            },
+        }]
+        expanded = _expand_hits(hits)
+        for entry in expanded:
+            assert "matchedTerms" in entry
+            assert len(entry["matchedTerms"]) > 0
+
+    def test_xss_in_formatted_content_escaped(self):
+        """Verify that malicious HTML in _formatted.content_plain is escaped while <mark> is preserved."""
+        from app.services.search_service import _expand_hits
+        hits = [{
+            "id": "doc-xss",
+            "title": "Test",
+            "content_plain": 'hello <script>alert("xss")</script> world',
+            "_formatted": {
+                "title": "Test",
+                "content_plain": '...<mark>hello</mark> <script>alert("xss")</script> world...',
+            },
+            "_matchesPosition": {
+                "content_plain": [
+                    {"start": 0, "length": 5},
+                ],
+            },
+        }]
+        expanded = _expand_hits(hits)
+        assert len(expanded) == 1
+        snippet = expanded[0]["snippet"]
+        # <mark> should survive
+        assert "<mark>hello</mark>" in snippet
+        # <script> should be escaped
+        assert "<script>" not in snippet
+        assert "&lt;script&gt;" in snippet
+
+    def test_ampersand_in_formatted_content_not_double_escaped(self):
+        """Verify & in content is escaped to &amp; but not double-escaped to &amp;amp;"""
+        from app.services.search_service import _expand_hits
+        hits = [{
+            "id": "doc-amp",
+            "title": "Test",
+            "content_plain": "Tom & Jerry meet",
+            "_formatted": {
+                "title": "Test",
+                "content_plain": "...<mark>Tom</mark> & Jerry...",
+            },
+            "_matchesPosition": {
+                "content_plain": [
+                    {"start": 0, "length": 3},
+                ],
+            },
+        }]
+        expanded = _expand_hits(hits)
+        snippet = expanded[0]["snippet"]
+        assert "<mark>Tom</mark>" in snippet
+        assert "&amp;" in snippet
+        # Should NOT be double-escaped
+        assert "&amp;amp;" not in snippet

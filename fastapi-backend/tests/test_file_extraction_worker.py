@@ -335,7 +335,7 @@ class TestExtractAndEmbedFileJob:
             ),
             patch(
                 "app.services.search_service.build_search_file_data",
-                return_value={"id": "file:" + str(ff.id)},
+                return_value={"id": "file_" + str(ff.id)},
             ),
             patch(
                 "app.services.search_service.index_file_from_data",
@@ -471,7 +471,7 @@ class TestExtractAndEmbedFileJob:
             ),
             patch(
                 "app.services.search_service.build_search_file_data",
-                return_value={"id": "file:" + str(ff.id)},
+                return_value={"id": "file_" + str(ff.id)},
             ),
             patch(
                 "app.services.search_service.index_file_from_data",
@@ -533,7 +533,7 @@ class TestExtractAndEmbedFileJob:
             ),
             patch(
                 "app.services.search_service.build_search_file_data",
-                return_value={"id": "file:" + str(ff.id)},
+                return_value={"id": "file_" + str(ff.id)},
             ),
             patch(
                 "app.services.search_service.index_file_from_data",

@@ -109,6 +109,23 @@ async def _get_langchain_chat_model(
         )
 
 
+# Knowledge tools whose results should be preserved in context after stripping,
+# because their output is valuable for follow-up questions in the same session.
+_KNOWLEDGE_TOOLS_TO_KEEP = frozenset({
+    "search_knowledge",
+    "read_document",
+    "get_document_details",
+})
+
+# Max chars to keep per knowledge tool result (prevents context bloat)
+_KB_RESULT_MAX_CHARS = 2000
+
+# Max number of completed groups whose KB results are preserved.
+# Only the most recent N groups keep their results; older ones are stripped clean.
+# This prevents O(n) session-level context bloat in long conversations.
+_KB_MAX_PRESERVED_GROUPS = 5
+
+
 def _strip_completed_tool_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
     """Stage A: Strip completed tool turns to reduce context size.
 
@@ -117,6 +134,10 @@ def _strip_completed_tool_messages(messages: list[BaseMessage]) -> list[BaseMess
     For completed turns, drop the AIMessage(tool_calls) + all ToolMessages.
     Keep HumanMessages + final AIMessage(content). SystemMessages always kept.
     The current (in-progress) turn is preserved entirely.
+
+    Knowledge tool results (search_knowledge, read_document, get_document_details)
+    are preserved by appending a condensed summary to the closing AIMessage,
+    since these results are useful context for follow-up questions.
     """
     if len(messages) <= 3:
         return list(messages)
@@ -150,13 +171,65 @@ def _strip_completed_tool_messages(messages: list[BaseMessage]) -> list[BaseMess
     if not groups:
         return list(messages)
 
+    # Collect knowledge tool results from groups being stripped, keyed by
+    # closing AIMessage index so we can append them to the right message.
+    kb_results_by_close: dict[int, list[str]] = {}
+    for start, end in groups:
+        kb_parts: list[str] = []
+        for idx in range(start, end):
+            msg = messages[idx]
+            if isinstance(msg, ToolMessage):
+                tool_name = getattr(msg, "name", "")
+                if tool_name in _KNOWLEDGE_TOOLS_TO_KEEP and msg.content:
+                    content_str = str(msg.content)[:_KB_RESULT_MAX_CHARS]
+                    kb_parts.append(f"[{tool_name}]: {content_str}")
+        if kb_parts:
+            # Cap total preserved KB context per message to prevent context bloat
+            total = 0
+            capped: list[str] = []
+            for part in kb_parts:
+                if total + len(part) > 3000:
+                    remaining = 3000 - total
+                    if remaining > 100:  # Only add if meaningful amount remains
+                        capped.append(part[:remaining] + "...")
+                    break
+                capped.append(part)
+                total += len(part)
+            if capped:
+                kb_results_by_close[end] = capped
+
+    # Session-level cap: only keep the most recent N groups' KB results
+    # to prevent unbounded context growth in long conversations.
+    if len(kb_results_by_close) > _KB_MAX_PRESERVED_GROUPS:
+        sorted_keys = sorted(kb_results_by_close.keys())
+        for key in sorted_keys[:-_KB_MAX_PRESERVED_GROUPS]:
+            del kb_results_by_close[key]
+
     # Build set of indices to drop
     drop_indices: set[int] = set()
     for start, end in groups:
         for idx in range(start, end):
             drop_indices.add(idx)
 
-    return [msg for idx, msg in enumerate(messages) if idx not in drop_indices]
+    # Build result, appending preserved KB results to closing AIMessages
+    result: list[BaseMessage] = []
+    for idx, msg in enumerate(messages):
+        if idx in drop_indices:
+            continue
+        if idx in kb_results_by_close:
+            # Append knowledge context to the closing AIMessage
+            kb_context = "\n\n---\n[Previous knowledge search results]\n" + "\n".join(
+                kb_results_by_close[idx]
+            )
+            msg = AIMessage(
+                content=str(msg.content) + kb_context,
+                id=getattr(msg, "id", None),
+                response_metadata=getattr(msg, "response_metadata", {}),
+                additional_kwargs=getattr(msg, "additional_kwargs", {}),
+            )
+        result.append(msg)
+
+    return result
 
 
 def _sanitize_orphaned_tool_calls(messages: list[BaseMessage]) -> list[BaseMessage]:
@@ -181,7 +254,12 @@ def _sanitize_orphaned_tool_calls(messages: list[BaseMessage]) -> list[BaseMessa
                     "Dropping orphaned tool_calls (ids=%s) from trimmed messages",
                     tc_ids - all_tool_msg_ids,
                 )
-                sanitized.append(AIMessage(content=msg.content or ""))
+                sanitized.append(AIMessage(
+                    content=msg.content or "",
+                    id=getattr(msg, "id", None),
+                    response_metadata=getattr(msg, "response_metadata", {}),
+                    additional_kwargs=getattr(msg, "additional_kwargs", {}),
+                ))
                 continue
         sanitized.append(msg)
     return sanitized

@@ -25,7 +25,11 @@ _cfg = get_agent_config()
 
 # Lock configuration
 LOCK_KEY_PREFIX = "doc_lock:"
-LOCK_TTL_SECONDS = _cfg.get_int("cache.document_lock_ttl", 300)
+
+
+def _get_lock_ttl() -> int:
+    """Return lock TTL at call time from runtime config."""
+    return get_agent_config().get_int("cache.document_lock_ttl", 300)
 
 
 def _lock_key(document_id: str) -> str:
@@ -135,7 +139,7 @@ class DocumentLockService:
         value = json.dumps(lock_data)
 
         result_str = await redis_service.client.eval(
-            _ACQUIRE_LOCK_SCRIPT, 1, key, value, str(LOCK_TTL_SECONDS), user_id
+            _ACQUIRE_LOCK_SCRIPT, 1, key, value, str(_get_lock_ttl()), user_id
         )
 
         result = json.loads(result_str)
@@ -207,7 +211,7 @@ class DocumentLockService:
         """
         key = _lock_key(document_id)
         result = await redis_service.client.eval(
-            _HEARTBEAT_SCRIPT, 1, key, user_id, str(LOCK_TTL_SECONDS)
+            _HEARTBEAT_SCRIPT, 1, key, user_id, str(_get_lock_ttl())
         )
 
         extended = result == 1
@@ -250,7 +254,7 @@ class DocumentLockService:
         new_value = json.dumps(new_lock_data)
 
         old_holder_str = await redis_service.client.eval(
-            _FORCE_TAKE_SCRIPT, 1, key, new_value, str(LOCK_TTL_SECONDS)
+            _FORCE_TAKE_SCRIPT, 1, key, new_value, str(_get_lock_ttl())
         )
 
         logger.info(

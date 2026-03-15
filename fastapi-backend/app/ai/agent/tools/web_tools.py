@@ -12,6 +12,7 @@ import logging
 import socket
 from urllib.parse import urlparse
 
+import httpx
 from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,26 @@ _BLOCKED_NETWORKS = [
     ipaddress.ip_network("0.0.0.0/8"),        # This host
     ipaddress.ip_network("240.0.0.0/4"),      # Reserved
 ]
+
+
+async def _ssrf_request_hook(request: httpx.Request) -> None:
+    """Re-validate DNS just before every HTTP request to prevent DNS rebinding."""
+    hostname = request.url.host
+    if not hostname:
+        return
+    try:
+        infos = await asyncio.to_thread(
+            socket.getaddrinfo, hostname, None, 0, socket.SOCK_STREAM
+        )
+    except socket.gaierror:
+        raise httpx.ConnectError(f"DNS resolution failed for {hostname}")
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        for network in _BLOCKED_NETWORKS:
+            if ip in network:
+                raise httpx.ConnectError(
+                    f"Blocked: {hostname} resolves to private IP {ip}"
+                )
 
 
 async def _validate_url_safe(url: str) -> None:
@@ -187,8 +208,6 @@ async def scrape_url(url: str) -> str:
     if err:
         return err
 
-    import httpx
-
     from app.ai.config_service import get_agent_config
 
     try:
@@ -199,6 +218,7 @@ async def scrape_url(url: str) -> str:
         async with httpx.AsyncClient(
             timeout=timeout,
             follow_redirects=False,
+            event_hooks={"request": [_ssrf_request_hook]},
         ) as client:
             # Manual redirect loop with per-hop SSRF validation
             # Use HEAD requests for redirect following, then stream the final URL
@@ -237,6 +257,9 @@ async def scrape_url(url: str) -> str:
                 headers={"User-Agent": "Mozilla/5.0 (compatible; Blair/1.0)"},
             ) as response:
                 response.raise_for_status()
+                # Guard against servers that redirect on GET but not HEAD
+                if response.is_redirect:
+                    return f"Error: unexpected redirect on final GET from {current_url}"
                 # Re-check Content-Type from the actual GET response
                 get_ct = response.headers.get("content-type", "")
                 if get_ct and not any(ct in get_ct.lower() for ct in ("text/html", "text/plain", "application/xhtml")):

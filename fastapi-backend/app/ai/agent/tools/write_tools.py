@@ -69,10 +69,22 @@ from .helpers import (
 logger = logging.getLogger(__name__)
 
 
+_pending_write_tasks: set[asyncio.Task] = set()  # type: ignore[type-arg]
+
+
 def _fire_and_forget(coro) -> None:  # type: ignore[type-arg]
-    """Schedule a coroutine as fire-and-forget (non-blocking, swallows errors)."""
+    """Schedule a coroutine as fire-and-forget (non-blocking, logs exceptions)."""
     task = asyncio.create_task(coro)
-    task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+    _pending_write_tasks.add(task)
+
+    def _done(t: asyncio.Task) -> None:  # type: ignore[type-arg]
+        _pending_write_tasks.discard(t)
+        if not t.cancelled():
+            exc = t.exception()
+            if exc is not None:
+                logger.warning("Fire-and-forget task failed: %s: %s", type(exc).__name__, exc)
+
+    task.add_done_callback(_done)
 
 
 async def _broadcast_doc_event(

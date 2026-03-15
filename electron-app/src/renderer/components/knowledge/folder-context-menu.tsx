@@ -10,7 +10,6 @@ import { useMemo, useCallback, useEffect } from 'react'
 import {
   FolderPlus,
   FilePlus,
-  FileInput,
   Upload,
   Pencil,
   Trash2,
@@ -36,8 +35,6 @@ export interface FolderContextMenuProps {
   onNewDocument: (folderId: string) => void
   onRename: (id: string) => void
   onDelete: (id: string, type: 'folder' | 'document' | 'file') => void
-  /** When provided, shows "Import Document" menu item for folders */
-  onImport?: (folderId: string) => void
   /** When provided, shows "Upload Files" menu item for folders */
   onUploadFiles?: (folderId: string) => void
 }
@@ -72,9 +69,8 @@ export function FolderContextMenu({
   onNewDocument,
   onRename,
   onDelete,
-  onImport,
   onUploadFiles,
-}: FolderContextMenuProps): JSX.Element {
+}: FolderContextMenuProps): JSX.Element | null {
   // Build menu items based on target type and permissions
   const menuItems: MenuEntry[] = useMemo(() => {
     // When user can't edit, don't show any context menu items for CRUD
@@ -85,9 +81,6 @@ export function FolderContextMenu({
         { label: 'New Folder', icon: FolderPlus, action: () => onNewFolder(target.id) },
         { label: 'New Document', icon: FilePlus, action: () => onNewDocument(target.id) },
       ]
-      if (onImport) {
-        items.push({ label: 'Import Document', icon: FileInput, action: () => onImport(target.id) })
-      }
       if (onUploadFiles) {
         items.push({ label: 'Upload Files...', icon: Upload, action: () => onUploadFiles(target.id) })
       }
@@ -113,7 +106,7 @@ export function FolderContextMenu({
       { type: 'separator' as const },
       { label: 'Delete', icon: Trash2, action: () => onDelete(target.id, 'document'), destructive: true },
     ]
-  }, [target, canEdit, onNewFolder, onNewDocument, onRename, onDelete, onImport, onUploadFiles])
+  }, [target, canEdit, onNewFolder, onNewDocument, onRename, onDelete, onUploadFiles])
 
   // Auto-close if menu has no items (read-only user)
   const isEmpty = menuItems.length === 0
@@ -121,7 +114,7 @@ export function FolderContextMenu({
     if (isEmpty) onClose()
   }, [isEmpty, onClose])
 
-  if (isEmpty) return null as unknown as JSX.Element
+  if (isEmpty) return null
 
   // Boundary checking -- adjust position so menu stays within viewport
   // MED-5: Calculate height from actual item count instead of static estimate

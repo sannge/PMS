@@ -453,8 +453,12 @@ async def verify_email_code(db: AsyncSession, email: str, code: str) -> User:
         )
 
     if user.email_verified:
-        # Idempotent - return user as-is (already verified)
-        return user
+        # L9: Reject already-verified accounts instead of returning tokens
+        # without code validation.  Prevents bypassing verification.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already verified.",
+        )
 
     if not user.verification_code or not user.verification_code_expires_at:
         raise HTTPException(

@@ -520,22 +520,19 @@ async def save_document_content(
     # Permission check (when called from save_content endpoint, avoids double-load)
     if check_edit_permission:
         from .permission_service import PermissionService
-        doc_check = await db.scalar(
-            select(Document.id).where(
+        # Single query: existence check + full load combined
+        result_perm = await db.execute(
+            select(Document).where(
                 Document.id == document_id,
                 Document.deleted_at.is_(None),
             )
         )
-        if doc_check is None:
+        doc_for_perm = result_perm.scalar_one_or_none()
+        if doc_for_perm is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Document {document_id} not found",
             )
-        # Load the document briefly for scope resolution
-        result_perm = await db.execute(
-            select(Document).where(Document.id == document_id)
-        )
-        doc_for_perm = result_perm.scalar_one()
         perm_service = PermissionService(db)
         scope_type, scope_id = PermissionService.resolve_entity_scope(doc_for_perm)
         if not await perm_service.check_can_edit_knowledge(user_id, scope_type, scope_id):

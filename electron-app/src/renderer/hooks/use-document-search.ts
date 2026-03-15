@@ -27,6 +27,9 @@ const MAX_LIMIT = 50 // Must match backend le=50 in document_search.py
 export interface SearchResultHit {
   id: string
   title: string
+  content_type?: string       // 'file' for folder files, undefined/absent for documents
+  file_name?: string          // Original file name (file results only)
+  mime_type?: string          // MIME type (file results only)
   application_id: string | null
   project_id: string | null
   user_id: string | null

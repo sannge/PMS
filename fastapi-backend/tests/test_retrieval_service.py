@@ -190,8 +190,13 @@ class TestReciprocalRankFusion:
         results = service._reciprocal_rank_fusion(list1, list2, k=60)
         assert len(results) == 1
 
-    def test_rrf_same_doc_different_chunks_merged(self):
-        """Different chunk_index values from same doc merge by document_id."""
+    def test_rrf_same_doc_different_chunks_stay_separate(self):
+        """Different chunk_index values from same doc are separate dedup keys.
+
+        After the dedup key change to (source_type, document_id, chunk_index),
+        chunks with different indices from the same document each get their own
+        RRF score. Both survive because the per-document cap is 3.
+        """
         service = HybridRetrievalService(
             provider_registry=_make_mock_registry(),
             normalizer=EmbeddingNormalizer(),
@@ -213,12 +218,12 @@ class TestReciprocalRankFusion:
         ]
 
         results = service._reciprocal_rank_fusion(list1, k=60)
-        # Same document merges into 1 result with combined RRF score
-        assert len(results) == 1
-        # Score = 1/(60+1) + 1/(60+2)
-        expected = 1 / 61 + 1 / 62
-        assert abs(results[0].score - expected) < 1e-6
-        # Highest-ranked chunk text preserved (rank=1, not the longer rank=2)
+        # Different chunk_index = different dedup keys, both survive (cap=3)
+        assert len(results) == 2
+        # Each chunk gets its own RRF score
+        assert abs(results[0].score - 1 / 61) < 1e-6
+        assert abs(results[1].score - 1 / 62) < 1e-6
+        # Highest-ranked chunk (rank=1) is first after sort
         assert "chunk 0 most relevant" in results[0].chunk_text
         assert results[0].heading_context == "Billing"
 
@@ -249,7 +254,12 @@ class TestReciprocalRankFusion:
         assert len(results) == 2
 
     def test_rrf_cross_source_dedup_by_document_id(self):
-        """Semantic (chunk_index=0) + keyword (chunk_index=None) merge for same doc."""
+        """Semantic (chunk_index=0) + keyword (chunk_index=None) are distinct dedup keys.
+
+        After the dedup key change to (source_type, document_id, chunk_index),
+        different chunk_index values stay separate rather than merging.  Both
+        survive because the per-document cap is 3.
+        """
         service = HybridRetrievalService(
             provider_registry=_make_mock_registry(),
             normalizer=EmbeddingNormalizer(),
@@ -269,12 +279,12 @@ class TestReciprocalRankFusion:
         )]
 
         results = service._reciprocal_rank_fusion(semantic, keyword, k=60)
-        assert len(results) == 1  # Merged, not 2 separate entries
-        assert "keyword" in results[0].source
-        assert "semantic" in results[0].source
-        # Highest-ranked (semantic rank=1) chunk text preserved
-        assert "semantic chunk" in results[0].chunk_text
-        assert results[0].heading_context == "H1"
+        # chunk_index=0 and chunk_index=None are different dedup keys,
+        # so both survive (per-doc cap of 3 is not exceeded).
+        assert len(results) == 2
+        sources = {r.source for r in results}
+        assert "semantic" in sources
+        assert "keyword" in sources
 
     def test_rrf_empty_lists(self):
         """Empty ranked lists produce empty results."""
@@ -520,7 +530,7 @@ class TestRetrievalGracefulDegradation:
         assert results[0].source == "semantic"
 
     def test_rrf_highest_ranked_chunk_text_preserved(self):
-        """When same doc appears in multiple sources, highest-ranked text is kept."""
+        """When same doc appears with same chunk_index across sources, text from the highest-ranked entry is kept."""
         service = HybridRetrievalService(
             provider_registry=_make_mock_registry(),
             normalizer=EmbeddingNormalizer(),
@@ -529,6 +539,7 @@ class TestRetrievalGracefulDegradation:
 
         doc_id = uuid.uuid4()
         # Semantic has rank=1 (best), keyword has rank=3 (worse)
+        # Both use chunk_index=0 so they share the same dedup key
         semantic_hit = [_RankedResult(
             document_id=doc_id, document_title="Test", chunk_text="relevant semantic chunk",
             heading_context="Security", chunk_index=0, rank=1, raw_score=0.9,
@@ -537,7 +548,7 @@ class TestRetrievalGracefulDegradation:
         keyword_hit = [_RankedResult(
             document_id=doc_id, document_title="Test",
             chunk_text="this is a much longer keyword text that is less relevant",
-            heading_context=None, chunk_index=None, rank=3, raw_score=0.8,
+            heading_context=None, chunk_index=0, rank=3, raw_score=0.8,
             source="keyword",
         )]
 

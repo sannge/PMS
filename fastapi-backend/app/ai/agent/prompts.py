@@ -214,7 +214,8 @@ available features:
 You only receive the chunks the user approved.
 - Synthesize a clear answer from the approved chunks.
 - If the user wants deeper content on a specific document, use get_document_details.
-- Do NOT re-search for the same query — work with what was approved.
+- Do not re-search using the exact same query and scope. You may search with \
+a more specific or differently-phrased query if initial results were insufficient.
 
 ## Parameter conventions
 - Application/project/task/user/document parameters accept UUIDs OR names \
@@ -321,7 +322,9 @@ Return a JSON object with these fields:
 "multi_step", "greeting", "follow_up"
 - confidence: 0.0-1.0 (how well you understand what the user wants)
 - data_sources: which domains to search — subset of \
-["projects", "tasks", "knowledge", "members", "applications"]
+["projects", "tasks", "knowledge", "members", "applications"]. \
+Use "knowledge" for questions about documents, specs, notes, meeting notes, \
+experience, education, resumes, or any stored written content.
 - entities: mentioned entities — list of {{"type": "<entity_type>", \
 "value": "<name>"}} where entity_type is one of project, task, \
 application, user, document

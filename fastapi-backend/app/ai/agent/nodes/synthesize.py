@@ -57,11 +57,11 @@ async def synthesize_node(
     tool_results_acc = (research.get("tool_results") or []) if isinstance(research, dict) else []
 
     if tool_results_acc:
-        # Accumulator entries are pre-truncated to 500 chars each (in execute_tools),
-        # so [-15:] ≈ 7,500 chars max — well within context window budget.
+        # H3: entries are pre-truncated to 3000 chars each (in execute_tools),
+        # so [-8:] ≈ 24,000 chars max — within context window budget.
         research_context = [
             f"Tool result ({r.get('tool', 'unknown')}): {r.get('result', '')}"
-            for r in tool_results_acc[-15:]
+            for r in tool_results_acc[-8:]
         ]
     else:
         # Fallback: scan messages for tool and AI content.

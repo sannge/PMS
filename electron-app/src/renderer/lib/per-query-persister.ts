@@ -55,6 +55,14 @@ let writeTimer: ReturnType<typeof setTimeout> | null = null
 /** Flag to track if initial hydration is complete */
 let hydrationComplete = false
 
+/**
+ * In-memory estimate of IndexedDB entry count.
+ * Used to skip expensive IndexedDB eviction checks when well below threshold.
+ * Initialized from first getCacheStats call, then maintained by writes/deletes.
+ */
+let entryCountEstimate = 0
+let entryCountEstimateInitialized = false
+
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -127,15 +135,30 @@ export function persistQuery(queryKey: QueryKey, state: QueryState<unknown, unkn
 async function flushPendingWrites(): Promise<void> {
   if (pendingWrites.size === 0) return
 
+  // Snapshot pending writes and identify which are genuinely new entries.
+  // Keys that were already pending are updates (the key existed in a prior
+  // flush or in the current batch), so only count truly new keys toward the
+  // entry estimate.
   const writes = Array.from(pendingWrites.entries())
   pendingWrites.clear()
   writeTimer = null
 
   const now = Date.now()
 
+  // Track new vs update: if entryCountEstimate is initialized, we can infer
+  // that a hash already seen in a previous flush is an update. However, we
+  // don't maintain a full key set, so after eviction we reset the estimate
+  // from actual stats (see below). For the normal path, count new inserts
+  // by checking if the entry already exists in IndexedDB.
+  let newInserts = 0
+
   // Process all pending writes
   await Promise.all(
     writes.map(async ([hash, { queryKey, state }]) => {
+      // Check if this is a new entry (not already in IndexedDB)
+      const existing = await getEntry(queryKey)
+      if (!existing) newInserts++
+
       const compressed = compressState(state)
       const entry: QueryCacheEntry = {
         queryKeyHash: hash,
@@ -149,10 +172,27 @@ async function flushPendingWrites(): Promise<void> {
     })
   )
 
-  // Perform LRU eviction if needed (non-blocking)
-  performLRUEviction().catch((err) =>
-    console.warn('[Persister] LRU eviction failed:', err)
-  )
+  // Only increment by genuinely new entries (not updates to existing keys)
+  entryCountEstimate += newInserts
+
+  // Only hit IndexedDB for eviction when in-memory estimate exceeds 90% threshold.
+  // This avoids expensive getCacheStats calls on every write flush.
+  const evictionThreshold = CACHE_CONFIG.maxEntries * CACHE_CONFIG.cleanupThreshold
+  if (entryCountEstimate >= evictionThreshold || !entryCountEstimateInitialized) {
+    performLRUEviction()
+      .then(async () => {
+        // After eviction, reset estimate to actual count from IndexedDB
+        // to correct any accumulated drift.
+        try {
+          const stats = await getCacheStats()
+          entryCountEstimate = stats.entryCount
+        } catch {
+          // If stats fail, leave estimate as-is
+        }
+        entryCountEstimateInitialized = true
+      })
+      .catch((err) => console.warn('[Persister] LRU eviction failed:', err))
+  }
 }
 
 /**
@@ -166,6 +206,9 @@ export async function removeQuery(queryKey: QueryKey): Promise<void> {
 
   // Remove from IndexedDB
   await deleteEntry(queryKey)
+
+  // Update in-memory estimate
+  if (entryCountEstimate > 0) entryCountEstimate--
 }
 
 // ============================================================================
@@ -288,13 +331,23 @@ export async function initializeHydration(queryClient: QueryClient): Promise<voi
   hydrationComplete = true
 
   // Phase 2: Deferred hydration (non-blocking)
-  setTimeout(async () => {
+  // Use requestIdleCallback when available so hydration runs during idle time
+  // instead of a hard-coded 2s delay. Falls back to setTimeout(2000) if the
+  // browser/Electron version doesn't support requestIdleCallback.
+  const scheduleDeferred = (cb: () => void) => {
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(cb, { timeout: 2000 })
+    } else {
+      setTimeout(cb, 2000)
+    }
+  }
+  scheduleDeferred(async () => {
     const deferredStart = performance.now()
     const deferredQueries = await loadQueriesByPrefixes(HYDRATION_PRIORITY.deferred)
     hydrateQueries(queryClient, deferredQueries)
     const phase2Time = performance.now() - deferredStart
     console.log(`[Persister] Phase 2 hydration: ${deferredQueries.length} queries in ${phase2Time.toFixed(0)}ms`)
-  }, 2000)
+  })
 }
 
 /**
@@ -366,6 +419,8 @@ export async function clearPersistedCache(): Promise<void> {
   await clearAll()
 
   hydrationComplete = false
+  entryCountEstimate = 0
+  entryCountEstimateInitialized = false
   console.log('[Persister] Cache cleared')
 }
 

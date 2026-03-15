@@ -27,9 +27,22 @@ logger = logging.getLogger(__name__)
 
 _cfg = get_agent_config()
 
+# M13: Frozen at import for backward compat; prefer getter functions below.
 MAX_ROWS = _cfg.get_int("sql.max_limit", 100)
 STATEMENT_TIMEOUT_MS = _cfg.get_int("sql.statement_timeout_ms", 5000)
 APP_QUERY_TIMEOUT_S = _cfg.get_float("sql.app_query_timeout_s", 6.0)
+
+
+def _get_max_rows() -> int:
+    return get_agent_config().get_int("sql.max_limit", 100)
+
+
+def _get_statement_timeout_ms() -> int:
+    return get_agent_config().get_int("sql.statement_timeout_ms", 5000)
+
+
+def _get_app_query_timeout_s() -> float:
+    return get_agent_config().get_float("sql.app_query_timeout_s", 6.0)
 
 
 def _serialize_value(value: object) -> object:
@@ -94,7 +107,7 @@ class QueryResult:
         parts = [header, separator, *data_rows]
 
         if self.truncated:
-            parts.append(f"\n*Results truncated to {MAX_ROWS} rows.*")
+            parts.append(f"\n*Results truncated to {_get_max_rows()} rows.*")
 
         return "\n".join(parts)
 
@@ -136,23 +149,27 @@ async def execute(
             text(f"SET LOCAL app.current_user_id = '{user_id}'")
         )
 
+        # M13: Use getter functions so admin config changes take effect at runtime.
+        _stmt_timeout = _get_statement_timeout_ms()
+        _app_timeout = _get_app_query_timeout_s()
+        _max_rows = _get_max_rows()
+
         # Set transaction-local statement timeout for safety.
-        # STATEMENT_TIMEOUT_MS is a module-level integer constant.
         await db.execute(
-            text(f"SET LOCAL statement_timeout = '{STATEMENT_TIMEOUT_MS}'")
+            text(f"SET LOCAL statement_timeout = '{_stmt_timeout}'")
         )
 
         # Execute the query (with application-level timeout as safety net)
         try:
             result = await asyncio.wait_for(
                 db.execute(text(sql)),
-                timeout=APP_QUERY_TIMEOUT_S,
+                timeout=_app_timeout,
             )
         except asyncio.TimeoutError as exc:
             execution_ms = int((time.monotonic() - start_time) * 1000)
             logger.warning(
                 "Query execution timeout (app-level, %ds) after %dms: %.100s",
-                APP_QUERY_TIMEOUT_S,
+                _app_timeout,
                 execution_ms,
                 sql,
             )
@@ -169,10 +186,10 @@ async def execute(
         columns = list(result.keys())
 
         # Fetch rows with cap
-        raw_rows = result.fetchmany(MAX_ROWS + 1)
-        truncated = len(raw_rows) > MAX_ROWS
+        raw_rows = result.fetchmany(_max_rows + 1)
+        truncated = len(raw_rows) > _max_rows
         if truncated:
-            raw_rows = raw_rows[:MAX_ROWS]
+            raw_rows = raw_rows[:_max_rows]
 
         # Serialize rows to dicts
         rows: list[dict] = []
@@ -202,7 +219,7 @@ async def execute(
                 "Query timed out after %dms: %.100s", execution_ms, sql
             )
             raise ValueError(
-                f"Query timed out after {STATEMENT_TIMEOUT_MS}ms. "
+                f"Query timed out after {_get_statement_timeout_ms()}ms. "
                 f"Try a simpler query or add more filters."
             ) from exc
 

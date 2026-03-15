@@ -136,7 +136,12 @@ export function useDocumentLock({
     // Skip temp IDs from optimistic updates - they don't exist on the server yet
     enabled: !!token && !!documentId && !isTempId(documentId),
     refetchInterval: LOCK_POLL_INTERVAL_MS,
-    staleTime: 10_000,
+    // WS events (DOCUMENT_LOCKED/UNLOCKED/FORCE_TAKEN) update the cache
+    // in-place via setQueryData, so we don't need staleTime: 0. Normal
+    // staleTime + refetchOnMount ensures fresh data on component mount
+    // (catches changes missed while unmounted), while WS handles real-time.
+    staleTime: 30_000,
+    refetchOnMount: true,
     gcTime: 60_000,
   });
 
@@ -484,8 +489,8 @@ export interface ActiveLockInfo {
  * Replaces per-document useDocumentLockStatus calls in tree views.
  * Returns a Map<documentId, ActiveLockInfo> for O(1) lookups.
  *
- * - staleTime: 0 (locks are transient; always refetch on mount)
- * - refetchOnWindowFocus: false (WS handles this while component is mounted)
+ * - staleTime: 30s (WS events keep cache fresh while mounted)
+ * - refetchOnMount: true (catches changes missed during unmount)
  * - Joins scope WS room so lock broadcast events are received
  *
  * Also subscribes to DOCUMENT_LOCKED/UNLOCKED/FORCE_TAKEN WS events to
@@ -533,8 +538,9 @@ export function useActiveLocks(
       return response.data;
     },
     enabled: !!token && !!scope && (scope === "personal" || !!scopeId),
-    staleTime: 0, // Always stale — locks are transient, refetch on every mount
-    refetchOnWindowFocus: false, // WS keeps it fresh while mounted
+    // WS events update individual documentLock caches; this batch query
+    // uses normal staleTime since WS handles real-time updates.
+    staleTime: 30_000,
     gcTime: 5 * 60 * 1000,
   });
 

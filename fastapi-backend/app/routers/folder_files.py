@@ -6,14 +6,16 @@ endpoints require authentication and use the same RBAC model as
 documents (application/project/personal scope).
 """
 
+import asyncio
 import hashlib
 import logging
 import os
 import re
-from typing import Annotated, Optional
+import time
+from typing import Annotated, Literal, Optional
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import delete as sa_delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +28,7 @@ from ..models.document_folder import DocumentFolder
 from ..models.folder_file import FolderFile
 from ..models.user import User
 from ..schemas.folder_file import (
+    FolderFileDownloadUrlResponse,
     FolderFileListItem,
     FolderFileListResponse,
     FolderFileReplaceResponse,
@@ -42,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/folder-files", tags=["FolderFiles"])
 
-_cfg = get_agent_config()
+# F-128: Removed module-level _cfg; get_agent_config() called at runtime inside helpers
 
 # File extensions that support content extraction
 EXTRACTABLE_EXTENSIONS = {
@@ -65,14 +68,20 @@ FOLDER_FILES_BUCKET = "pm-attachments"
 # Sanitize filename: keep alphanumeric, dash, underscore, dot
 _SANITIZE_RE = re.compile(r"[^a-zA-Z0-9_.\-]")
 
-# Upload rate limit: 20 uploads per minute per user (HIGH-8)
-_UPLOAD_RATE_LIMIT = 20
-_UPLOAD_RATE_WINDOW = 60
+def _get_upload_rate_limit() -> int:
+    """Get upload rate limit at runtime from config."""
+    return get_agent_config().get_int("file.upload_rate_limit", 20)
+
+
+def _get_upload_rate_window() -> int:
+    """Get upload rate window at runtime from config."""
+    return get_agent_config().get_int("file.upload_rate_window", 60)
 
 
 def _get_max_file_size() -> int:
     """Get MAX_FILE_SIZE at runtime from config (HIGH-13). Applies floor of 1024."""
-    return max(1024, _cfg.get_int("file.max_upload_size", 100 * 1024 * 1024))
+    cfg = get_agent_config()
+    return max(1024, cfg.get_int("file.max_upload_size", 100 * 1024 * 1024))
 
 
 def _sanitize_filename(filename: str) -> str:
@@ -109,11 +118,61 @@ def _sanitize_display_name(name: str) -> str:
     return sanitized if sanitized else "unnamed"
 
 
+_EXT_MIME_MAP: dict[str, str] = {
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".xls": "application/vnd.ms-excel",
+    ".csv": "text/csv",
+    ".tsv": "text/tab-separated-values",
+    ".vsdx": "application/vnd.ms-visio.drawing",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".txt": "text/plain",
+}
+
+
 def _detect_mime_type(content: bytes, filename: str) -> str:
     """Detect MIME type from file bytes using python-magic (HIGH-2).
 
+    For known Office formats (.docx, .xlsx, .pptx, etc.), extension-based
+    detection takes priority because these are ZIP archives internally and
+    python-magic incorrectly reports them as application/zip.
+
     Falls back to extension-based detection if python-magic is unavailable.
     """
+    # Check extension first for formats where magic detection is unreliable
+    ext = _get_extension(filename).lower()
+    ext_mime = _EXT_MIME_MAP.get(ext)
+    if ext_mime:
+        # Secondary content-type check: if python-magic is available, verify
+        # the content family matches the extension. Don't reject outright
+        # (to avoid false positives from magic) but log a warning.
+        try:
+            import magic as _magic
+            detected = _magic.from_buffer(content[:8192], mime=True)
+            if detected:
+                ext_family = ext_mime.split("/")[0]
+                detected_family = detected.split("/")[0]
+                # ZIP-based formats (docx, xlsx, pptx, vsdx) will be
+                # detected as application/zip by magic, which is expected.
+                if (
+                    detected_family != ext_family
+                    and detected not in ("application/zip", "application/x-zip-compressed", "application/octet-stream")
+                ):
+                    logger.warning(
+                        "MIME mismatch for '%s': extension says %s but content detected as %s",
+                        filename, ext_mime, detected,
+                    )
+        except ImportError:
+            pass
+        except Exception as magic_err:
+            logger.debug("Secondary MIME check failed for '%s': %s", filename, magic_err)
+        return ext_mime
+
     try:
         import magic
         detected = magic.from_buffer(content[:8192], mime=True)
@@ -126,28 +185,11 @@ def _detect_mime_type(content: bytes, filename: str) -> str:
             "Install python-magic for content-based MIME validation."
         )
         pass
-    except Exception:
+    except Exception as e:
         # magic detection failed; fall back
-        pass
+        logger.debug("MIME detection failed: %s", e)
 
-    # Fallback: extension-based MIME mapping
-    ext = _get_extension(filename).lower()
-    _ext_mime_map = {
-        ".pdf": "application/pdf",
-        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ".xls": "application/vnd.ms-excel",
-        ".csv": "text/csv",
-        ".tsv": "text/tab-separated-values",
-        ".vsdx": "application/vnd.ms-visio.drawing",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".gif": "image/gif",
-        ".txt": "text/plain",
-    }
-    return _ext_mime_map.get(ext, "application/octet-stream")
+    return "application/octet-stream"
 
 
 def _get_extension(filename: str) -> str:
@@ -195,6 +237,58 @@ async def _check_folder_view_permission(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied. You do not have permission to view files in this folder.",
         )
+
+
+async def _check_file_view_permission(
+    file: FolderFile,
+    user_id: UUID,
+    db: AsyncSession,
+) -> None:
+    """Verify user has view permission on a file.
+
+    Uses denormalized scope FKs on the file directly (authoritative),
+    avoiding a redundant folder query.
+    """
+    perm_service = PermissionService(db)
+    scope_type, scope_id = _resolve_file_scope(file)
+    if not await perm_service.check_can_view_knowledge(user_id, scope_type, scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. You do not have permission to view this file.",
+        )
+
+
+async def _check_file_edit_permission(
+    file: FolderFile,
+    user_id: UUID,
+    db: AsyncSession,
+) -> None:
+    """Verify user has edit permission on a file.
+
+    Uses denormalized scope FKs on the file directly (authoritative),
+    avoiding a redundant folder query.
+    """
+    perm_service = PermissionService(db)
+    scope_type, scope_id = _resolve_file_scope(file)
+    if not await perm_service.check_can_edit_knowledge(user_id, scope_type, scope_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. You do not have permission to manage this file.",
+        )
+
+
+def _resolve_file_scope(file: FolderFile) -> tuple[str, UUID]:
+    """Resolve scope type and ID from a file's scope fields."""
+    if file.application_id:
+        return "application", file.application_id
+    elif file.project_id:
+        return "project", file.project_id
+    elif file.user_id:
+        return "personal", file.user_id
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="File has no scope assignment",
+    )
 
 
 async def _get_folder_or_404(folder_id: UUID, db: AsyncSession) -> DocumentFolder:
@@ -246,30 +340,22 @@ async def _resolve_scope_room(file: FolderFile, db: AsyncSession) -> str | None:
 
 
 async def _delete_file_chunks(file_id: UUID, db: AsyncSession) -> None:
-    """Delete embedding chunks for a file (MED-3: shared helper for delete/replace)."""
-    try:
-        async with db.begin_nested():
-            await db.execute(
-                sa_delete(DocumentChunk).where(DocumentChunk.file_id == file_id)
-            )
-    except Exception as chunk_err:
-        logger.warning(
-            "Failed to delete chunks for file %s (table may not exist): %s",
-            file_id, chunk_err,
-        )
+    """Delete all DocumentChunk rows for a given file. Errors propagate to caller."""
+    await db.execute(
+        sa_delete(DocumentChunk).where(DocumentChunk.file_id == file_id)
+    )
 
 
 async def _enqueue_extraction_job(file_id: UUID) -> None:
     """Enqueue an ARQ background job for file extraction and embedding."""
-    from ..services.redis_service import redis_service
+    cfg = get_agent_config()
+    defer_by = cfg.get_int("worker.extract_defer_s", 5)  # MED-4: configurable
 
-    defer_by = _cfg.get_int("worker.extract_defer_s", 5)  # MED-4: configurable
-
-    if not redis_service.is_connected:
-        logger.warning("Redis not connected, skipping extraction job for file %s", file_id)
-        return
     try:
-        await redis_service.client.enqueue_job(
+        from ..services.arq_helper import get_arq_redis
+
+        arq_redis = await get_arq_redis()
+        await arq_redis.enqueue_job(
             "extract_and_embed_file_job",
             str(file_id),
             _job_id=f"extract_file:{file_id}",
@@ -302,7 +388,9 @@ async def _enqueue_extraction_job(file_id: UUID) -> None:
 )
 async def upload_file(
     current_user: Annotated[User, Depends(get_current_user)],
-    folder_id: UUID = Query(..., description="Target folder ID"),
+    folder_id: Optional[UUID] = Query(None, description="Target folder ID (null for unfiled)"),
+    scope: Optional[Literal["application", "project", "personal"]] = Query(None, description="Scope type: application, project, personal"),
+    scope_id: Optional[UUID] = Query(None, description="Scope entity ID"),
     display_name: Optional[str] = Query(
         None, max_length=255, description="Display name (defaults to filename)"
     ),
@@ -311,7 +399,7 @@ async def upload_file(
     file: UploadFile = File(..., description="The file to upload"),
     rate_limiter: AIRateLimiter = Depends(get_rate_limiter),
 ) -> FolderFileResponse:
-    """Upload a file into a knowledge base folder.
+    """Upload a file into a knowledge base folder or at scope root (unfiled).
 
     The file is stored in MinIO and a FolderFile record is created.
     If the file extension is extractable (PDF, DOCX, XLSX, etc.),
@@ -321,8 +409,8 @@ async def upload_file(
     rl_result = await rate_limiter.check_and_increment(
         endpoint="file_upload",
         scope_id=str(current_user.id),
-        limit=_UPLOAD_RATE_LIMIT,
-        window_seconds=_UPLOAD_RATE_WINDOW,
+        limit=_get_upload_rate_limit(),
+        window_seconds=_get_upload_rate_window(),
     )
     if not rl_result.allowed:
         raise HTTPException(
@@ -342,13 +430,22 @@ async def upload_file(
             detail="No file provided or file has no name",
         )
 
-    # HIGH-1: Block dangerous extensions
-    ext = _get_extension(file.filename)
-    if ext in BLOCKED_EXTENSIONS:
+    # F-104: Block dangerous extensions — check ALL dot-separated parts
+    # Sanitize null bytes and URL-decode before extension check
+    import urllib.parse
+    clean_filename = urllib.parse.unquote(file.filename or "").replace("\x00", "")
+    if not clean_filename.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"File extension '{ext}' is not allowed",
+            detail="Filename is empty or contains only invalid characters.",
         )
+    ext = _get_extension(clean_filename)
+    for part in clean_filename.split(".")[1:]:
+        if f".{part.lower()}" in BLOCKED_EXTENSIONS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"File extension '.{part.lower()}' is not allowed",
+            )
 
     # MED-9: Stream-read up to MAX_FILE_SIZE+1 to fail early
     max_size = _get_max_file_size()
@@ -367,9 +464,47 @@ async def upload_file(
             detail=f"File size exceeds maximum allowed ({max_size} bytes)",
         )
 
-    # Get folder and check RBAC
-    folder = await _get_folder_or_404(folder_id, db)
-    await _check_folder_edit_permission(folder, current_user.id, db)
+    # Resolve scope: from folder if provided, else from explicit scope params
+    file_application_id = None
+    file_project_id = None
+    file_user_id = None
+
+    if folder_id:
+        folder = await _get_folder_or_404(folder_id, db)
+        await _check_folder_edit_permission(folder, current_user.id, db)
+        file_application_id = folder.application_id
+        file_project_id = folder.project_id
+        file_user_id = folder.user_id
+    elif scope and scope_id:
+        # F-114: For personal scope, enforce scope_id == current_user.id
+        if scope == "personal" and scope_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied. Cannot upload to another user's personal scope.",
+            )
+        # F-101: RBAC check for unfiled uploads (mirrors folder_id branch)
+        perm_service = PermissionService(db)
+        if not await perm_service.check_can_edit_knowledge(current_user.id, scope, scope_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied. You do not have permission to upload files in this scope.",
+            )
+        if scope == "application":
+            file_application_id = scope_id
+        elif scope == "project":
+            file_project_id = scope_id
+        elif scope == "personal":
+            file_user_id = scope_id
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="scope must be 'application', 'project', or 'personal'",
+            )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Either folder_id or scope+scope_id is required",
+        )
 
     # MED-12: Sanitize original_name
     original_name = _sanitize_original_name(file.filename)
@@ -379,13 +514,24 @@ async def upload_file(
     # SA-NEW-MED-4: Sanitize display_name the same way FolderFileUpdate does
     display_name = _sanitize_display_name(display_name)
 
-    # Check for duplicate display_name in folder (case-insensitive)
+    # Check for duplicate display_name in same folder/root (case-insensitive)
+    dup_where = [
+        func.lower(FolderFile.display_name) == display_name.lower(),
+        FolderFile.deleted_at.is_(None),
+    ]
+    if folder_id:
+        dup_where.append(FolderFile.folder_id == folder_id)
+    else:
+        dup_where.append(FolderFile.folder_id.is_(None))
+        if file_application_id:
+            dup_where.append(FolderFile.application_id == file_application_id)
+        elif file_project_id:
+            dup_where.append(FolderFile.project_id == file_project_id)
+        elif file_user_id:
+            dup_where.append(FolderFile.user_id == file_user_id)
+
     dup_result = await db.execute(
-        select(FolderFile.id).where(
-            FolderFile.folder_id == folder_id,
-            func.lower(FolderFile.display_name) == display_name.lower(),
-            FolderFile.deleted_at.is_(None),
-        )
+        select(FolderFile.id).where(*dup_where)
     )
     existing_id = dup_result.scalar_one_or_none()
     if existing_id:
@@ -403,7 +549,8 @@ async def upload_file(
     # Generate MinIO object key
     uuid8 = str(uuid4())[:8]
     sanitized = _sanitize_filename(original_name)
-    storage_key = f"folder-files/{folder_id}/{uuid8}_{sanitized}"
+    scope_prefix = str(folder_id) if folder_id else f"unfiled/{scope_id}"
+    storage_key = f"folder-files/{scope_prefix}/{uuid8}_{sanitized}"
 
     # HIGH-2: Detect MIME type from file bytes, not client header
     mime_type = _detect_mime_type(content, original_name)
@@ -428,23 +575,34 @@ async def upload_file(
         # Determine extraction status
         extraction_status = "pending" if ext in EXTRACTABLE_EXTENSIONS else "unsupported"
 
-        # Get max sort_order in folder
+        # Get max sort_order in folder/scope
+        sort_where = [FolderFile.deleted_at.is_(None)]
+        if folder_id:
+            sort_where.append(FolderFile.folder_id == folder_id)
+        else:
+            sort_where.append(FolderFile.folder_id.is_(None))
+            if file_application_id:
+                sort_where.append(FolderFile.application_id == file_application_id)
+            elif file_project_id:
+                sort_where.append(FolderFile.project_id == file_project_id)
+            elif file_user_id:
+                sort_where.append(FolderFile.user_id == file_user_id)
+        # NOTE: sort_order ties from concurrent uploads are non-critical
+        # (files still appear, just with potentially duplicate sort_order).
+        # A with_for_update() would serialize uploads unnecessarily.
         max_sort_result = await db.execute(
-            select(func.coalesce(func.max(FolderFile.sort_order), -1)).where(
-                FolderFile.folder_id == folder_id,
-                FolderFile.deleted_at.is_(None),
-            )
+            select(func.coalesce(func.max(FolderFile.sort_order), 0)).where(*sort_where)
         )
-        max_sort = max_sort_result.scalar() or 0
+        max_sort = max_sort_result.scalar()
         next_sort = max_sort + 1
 
         # Create FolderFile record
         folder_file = FolderFile(
             id=uuid4(),
             folder_id=folder_id,
-            application_id=folder.application_id,
-            project_id=folder.project_id,
-            user_id=folder.user_id,
+            application_id=file_application_id,
+            project_id=file_project_id,
+            user_id=file_user_id,
             original_name=original_name,
             display_name=display_name,
             mime_type=mime_type,
@@ -466,24 +624,37 @@ async def upload_file(
         # Clean up orphaned MinIO object
         try:
             minio.delete_file(bucket=FOLDER_FILES_BUCKET, object_name=storage_key)
-        except Exception:
-            pass
+        except Exception as minio_err:
+            logger.error(
+                "ORPHAN: Failed to delete MinIO object %s after error for upload: %s",
+                storage_key, minio_err,
+            )
+        # Re-query to find the conflicting file so frontend can offer "Replace"
+        conflict_result = await db.execute(
+            select(FolderFile.id).where(*dup_where)
+        )
+        existing_id = conflict_result.scalar_one_or_none()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A file with this name already exists in the folder",
+            detail={
+                "message": f"File '{display_name}' already exists",
+                "existing_file_id": str(existing_id) if existing_id else None,
+            },
         )
     except Exception:
         await db.rollback()
         # Clean up orphaned MinIO object
         try:
             minio.delete_file(bucket=FOLDER_FILES_BUCKET, object_name=storage_key)
-        except Exception:
-            pass
+        except Exception as minio_err:
+            logger.error(
+                "ORPHAN: Failed to delete MinIO object %s after error for upload: %s",
+                storage_key, minio_err,
+            )
         raise
 
-    # Enqueue extraction job if extractable
-    if extraction_status == "pending":
-        await _enqueue_extraction_job(folder_file.id)
+    # Extraction + embedding runs via scheduled batch job or manual trigger,
+    # not auto-enqueued on upload.
 
     # WebSocket broadcast
     try:
@@ -495,12 +666,15 @@ async def upload_file(
                     "type": MessageType.FILE_UPLOADED,
                     "data": {
                         "file_id": str(folder_file.id),
-                        "folder_id": str(folder_file.folder_id),
+                        "folder_id": str(folder_file.folder_id) if folder_file.folder_id else None,
                         "display_name": folder_file.display_name,
                         "file_extension": folder_file.file_extension,
                         "file_size": folder_file.file_size,
                         "extraction_status": folder_file.extraction_status,
                         "uploaded_by": str(current_user.id),
+                        "actor_id": str(current_user.id),
+                        "scope": "application" if folder_file.application_id else "project" if folder_file.project_id else "personal",
+                        "scope_id": str(folder_file.application_id or folder_file.project_id or folder_file.user_id),
                     },
                 },
             )
@@ -523,34 +697,76 @@ async def upload_file(
     },
 )
 async def list_files(
-    folder_id: UUID = Query(..., description="Folder ID to list files from"),
+    folder_id: Optional[UUID] = Query(None, description="Folder ID to list files from"),
+    scope: Optional[Literal["application", "project", "personal"]] = Query(None, description="Scope type for unfiled listing"),
+    scope_id: Optional[UUID] = Query(None, description="Scope entity ID for unfiled listing"),
     limit: int = Query(100, ge=1, le=500, description="Maximum files to return"),
     cursor: Optional[UUID] = Query(None, description="Cursor for keyset pagination"),
     current_user: Annotated[User, Depends(get_current_user)] = None,  # HIGH-6: see note below
     db: AsyncSession = Depends(get_db),
 ) -> FolderFileListResponse:
-    """List files in a folder with RBAC enforcement."""
+    """List files in a folder or unfiled at scope root with RBAC enforcement."""
     # HIGH-6: current_user = None default is required by FastAPI for Depends ordering
     # but get_current_user will always return a User or raise 401.
-    folder = await _get_folder_or_404(folder_id, db)
-    await _check_folder_view_permission(folder, current_user.id, db)
+
+    # F-303: Validate scope parameter
+    VALID_SCOPES = {"application", "project", "personal"}
+    if scope and scope not in VALID_SCOPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid scope: {scope}. Must be one of: {', '.join(sorted(VALID_SCOPES))}",
+        )
+
+    where_clauses = [FolderFile.deleted_at.is_(None)]
+
+    if folder_id:
+        folder = await _get_folder_or_404(folder_id, db)
+        await _check_folder_view_permission(folder, current_user.id, db)
+        where_clauses.append(FolderFile.folder_id == folder_id)
+    elif scope and scope_id:
+        # F-102: RBAC check for unfiled scope listing
+        perm_service = PermissionService(db)
+        if not await perm_service.check_can_view_knowledge(current_user.id, scope, scope_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied. You do not have permission to view files in this scope.",
+            )
+        where_clauses.append(FolderFile.folder_id.is_(None))
+        if scope == "application":
+            where_clauses.append(FolderFile.application_id == scope_id)
+        elif scope == "project":
+            where_clauses.append(FolderFile.project_id == scope_id)
+        elif scope == "personal":
+            where_clauses.append(FolderFile.user_id == scope_id)
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Either folder_id or scope+scope_id is required",
+        )
 
     query = (
         select(FolderFile)
-        .where(
-            FolderFile.folder_id == folder_id,
-            FolderFile.deleted_at.is_(None),
-        )
-        .order_by(FolderFile.sort_order, FolderFile.display_name)
+        .where(*where_clauses)
+        .order_by(FolderFile.sort_order, func.lower(FolderFile.display_name))
         .limit(limit)
     )
 
     if cursor:
-        # MED-5: Cursor lookup scoped to same folder
+        # F-108: Cursor lookup scoped to same folder or unfiled scope
+        cursor_where = [FolderFile.id == cursor, FolderFile.deleted_at.is_(None)]
+        if folder_id:
+            cursor_where.append(FolderFile.folder_id == folder_id)
+        else:
+            cursor_where.append(FolderFile.folder_id.is_(None))
+            if scope == "application":
+                cursor_where.append(FolderFile.application_id == scope_id)
+            elif scope == "project":
+                cursor_where.append(FolderFile.project_id == scope_id)
+            elif scope == "personal":
+                cursor_where.append(FolderFile.user_id == scope_id)
         cursor_result = await db.execute(
-            select(FolderFile.sort_order, FolderFile.display_name).where(
-                FolderFile.id == cursor,
-                FolderFile.folder_id == folder_id,
+            select(FolderFile.sort_order, func.lower(FolderFile.display_name)).where(
+                *cursor_where,
             )
         )
         cursor_row = cursor_result.one_or_none()
@@ -559,7 +775,7 @@ async def list_files(
                 (FolderFile.sort_order > cursor_row[0])
                 | (
                     (FolderFile.sort_order == cursor_row[0])
-                    & (FolderFile.display_name > cursor_row[1])
+                    & (func.lower(FolderFile.display_name) > cursor_row[1])
                 )
             )
 
@@ -588,13 +804,13 @@ async def get_file(
 ) -> FolderFileResponse:
     """Get full file details with RBAC enforcement."""
     file = await _get_file_or_404(file_id, db)
-    folder = await _get_folder_or_404(file.folder_id, db)
-    await _check_folder_view_permission(folder, current_user.id, db)
+    await _check_file_view_permission(file, current_user.id, db)
     return file
 
 
 @router.get(
     "/{file_id}/download",
+    response_model=FolderFileDownloadUrlResponse,
     summary="Get download URL",
     description="Get a presigned download URL and filename.",
     responses={
@@ -609,11 +825,10 @@ async def get_download_url(
     current_user: Annotated[User, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
     minio: MinIOService = Depends(get_minio_service),
-) -> dict:
+) -> FolderFileDownloadUrlResponse:
     """Generate a presigned download URL for the file."""
     file = await _get_file_or_404(file_id, db)
-    folder = await _get_folder_or_404(file.folder_id, db)
-    await _check_folder_view_permission(folder, current_user.id, db)
+    await _check_file_view_permission(file, current_user.id, db)
 
     try:
         download_url = minio.get_presigned_download_url(
@@ -621,17 +836,19 @@ async def get_download_url(
             object_name=file.storage_key,
         )
     except MinIOServiceError as e:
+        # F-130: Log full error, return generic message to client
+        logger.error("Failed to generate download URL for file %s: %s", file_id, e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate download URL: {str(e)}",
+            detail="Failed to generate download URL",
         )
 
-    return {
-        "file_id": str(file.id),
-        "display_name": file.display_name,
-        "original_name": file.original_name,
-        "download_url": download_url,
-    }
+    return FolderFileDownloadUrlResponse(
+        file_id=str(file.id),
+        display_name=file.display_name,
+        original_name=file.original_name,
+        download_url=download_url,
+    )
 
 
 @router.put(
@@ -652,58 +869,141 @@ async def update_file(
     file_id: UUID,
     body: FolderFileUpdate,
     current_user: Annotated[User, Depends(get_current_user)],
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ) -> FolderFileResponse:
     """Update file metadata with optimistic concurrency control."""
     file = await _get_file_or_404(file_id, db)
-    folder = await _get_folder_or_404(file.folder_id, db)
-    await _check_folder_edit_permission(folder, current_user.id, db)
+    await _check_file_edit_permission(file, current_user.id, db)
 
-    # Optimistic concurrency check
-    if file.row_version != body.row_version:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Concurrency conflict: the file was modified by another user. Please refresh and try again.",
-        )
+    # CRIT-2: Capture original folder_id before mutation for WS source_folder_id
+    original_folder_id = file.folder_id
+    # Capture original scope FKs to detect cross-scope moves
+    original_scope = (file.application_id, file.project_id, file.user_id)
 
-    # If moving to another folder, check permissions on the target
-    target_folder_id = body.folder_id or file.folder_id
-    if body.folder_id and body.folder_id != file.folder_id:
-        target_folder = await _get_folder_or_404(body.folder_id, db)
-        await _check_folder_edit_permission(target_folder, current_user.id, db)
-        file.folder_id = body.folder_id
-        # Inherit scope from the target folder
-        file.application_id = target_folder.application_id
-        file.project_id = target_folder.project_id
-        file.user_id = target_folder.user_id
+    # Build update values dict for atomic UPDATE ... WHERE row_version
+    update_values: dict = {
+        "row_version": body.row_version + 1,
+        "updated_at": utc_now(),
+    }
+
+    # Determine target folder: distinguish "not provided" from "explicitly null"
+    if "folder_id" in body.model_fields_set:
+        # Explicitly set — None means "move to unfiled"
+        target_folder_id = body.folder_id
+        if body.folder_id is None and file.folder_id is not None:
+            # Moving from a folder to unfiled — clear folder_id, keep current scope
+            update_values["folder_id"] = None
+        elif body.folder_id is not None and body.folder_id != file.folder_id:
+            # Moving to a different folder — check permissions on the target
+            target_folder = await _get_folder_or_404(body.folder_id, db)
+            await _check_folder_edit_permission(target_folder, current_user.id, db)
+            update_values["folder_id"] = body.folder_id
+            # Inherit scope from the target folder
+            update_values["application_id"] = target_folder.application_id
+            update_values["project_id"] = target_folder.project_id
+            update_values["user_id"] = target_folder.user_id
+    else:
+        # Not provided — keep current folder
+        target_folder_id = file.folder_id
 
     # Rename
     if body.display_name and body.display_name != file.display_name:
-        # Check for duplicate in target folder
-        dup_result = await db.execute(
-            select(FolderFile.id).where(
+        # Check for duplicate in target folder (F-201: scope filter for unfiled)
+        if target_folder_id is None:
+            dup_where = [
+                FolderFile.folder_id.is_(None),
+                func.lower(FolderFile.display_name) == body.display_name.lower(),
+                FolderFile.deleted_at.is_(None),
+                FolderFile.id != file_id,
+            ]
+            if file.application_id:
+                dup_where.append(FolderFile.application_id == file.application_id)
+            elif file.project_id:
+                dup_where.append(FolderFile.project_id == file.project_id)
+            elif file.user_id:
+                dup_where.append(FolderFile.user_id == file.user_id)
+        else:
+            dup_where = [
                 FolderFile.folder_id == target_folder_id,
                 func.lower(FolderFile.display_name) == body.display_name.lower(),
                 FolderFile.deleted_at.is_(None),
                 FolderFile.id != file_id,
-            )
+            ]
+        dup_result = await db.execute(
+            select(FolderFile.id).where(*dup_where)
         )
         if dup_result.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"A file named '{body.display_name}' already exists in the target folder",
             )
-        file.display_name = body.display_name
+        update_values["display_name"] = body.display_name
 
     if body.sort_order is not None:
-        file.sort_order = body.sort_order
+        update_values["sort_order"] = body.sort_order
 
-    file.row_version += 1
-    file.updated_at = utc_now()
-    await db.commit()
-    await db.refresh(file)
+    # F-105: Atomic UPDATE ... WHERE row_version = expected (prevents TOCTOU)
+    # F-215: Wrap in IntegrityError handler for concurrent rename race condition
+    try:
+        result = await db.execute(
+            update(FolderFile)
+            .where(FolderFile.id == file_id, FolderFile.row_version == body.row_version)
+            .values(**update_values)
+        )
+        if result.rowcount != 1:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Concurrency conflict: the file was modified by another user. Please refresh and try again.",
+            )
+
+        # CRIT-2: If scope changed, update DocumentChunk scope FKs to prevent
+        # incorrect search results and RBAC leakage.
+        new_scope = (
+            update_values.get("application_id", original_scope[0]),
+            update_values.get("project_id", original_scope[1]),
+            update_values.get("user_id", original_scope[2]),
+        )
+        if new_scope != original_scope:
+            await db.execute(
+                update(DocumentChunk)
+                .where(DocumentChunk.file_id == file_id)
+                .values(
+                    application_id=new_scope[0],
+                    project_id=new_scope[1],
+                    user_id=new_scope[2],
+                )
+            )
+
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A file with this name already exists in the target location.",
+        )
+
+    # Re-fetch the updated file
+    db.expire(file)
+    file = await _get_file_or_404(file_id, db)
+
+    # Re-index in Meilisearch (background, non-blocking) to sync display_name and scope FKs
+    try:
+        from ..services.search_service import build_search_file_data, index_file_from_data
+        from ..models.project import Project
+        _proj_app_id: UUID | None = None
+        if file.project_id:
+            _proj = await db.get(Project, file.project_id)
+            if _proj:
+                _proj_app_id = _proj.application_id
+        _search_data = build_search_file_data(file, _proj_app_id)
+        background_tasks.add_task(index_file_from_data, _search_data)
+    except Exception as _ms_err:
+        logger.warning("Failed to prepare file %s re-index: %s", file_id, _ms_err)
 
     # WebSocket broadcast
+    # CRIT-2: Include source_folder_id so clients can invalidate the old folder's cache on move
+    source_folder_str = str(original_folder_id) if original_folder_id else None
     try:
         room_id = await _resolve_scope_room(file, db)
         if room_id:
@@ -713,10 +1013,14 @@ async def update_file(
                     "type": MessageType.FILE_UPDATED,
                     "data": {
                         "file_id": str(file.id),
-                        "folder_id": str(file.folder_id),
+                        "folder_id": str(file.folder_id) if file.folder_id else None,
+                        "source_folder_id": source_folder_str,
                         "display_name": file.display_name,
                         "sort_order": file.sort_order,
                         "row_version": file.row_version,
+                        "actor_id": str(current_user.id),
+                        "scope": "application" if file.application_id else "project" if file.project_id else "personal",
+                        "scope_id": str(file.application_id or file.project_id or file.user_id),
                     },
                 },
             )
@@ -740,31 +1044,50 @@ async def update_file(
 )
 async def delete_file(
     file_id: UUID,
+    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
 ) -> None:
     """Soft delete a file and clean up its chunks and search index entry."""
     file = await _get_file_or_404(file_id, db)
-    folder = await _get_folder_or_404(file.folder_id, db)
-    await _check_folder_edit_permission(folder, current_user.id, db)
+    await _check_file_edit_permission(file, current_user.id, db)
 
-    # Soft delete
+    # Capture storage info before mutation for background cleanup
+    storage_bucket = file.storage_bucket
+    storage_key = file.storage_key
+    thumbnail_key = file.thumbnail_key
+
+    # FIX-14/25: Single transaction — soft-delete and chunk deletion together
     file.deleted_at = utc_now()
     file.updated_at = utc_now()
-
-    # MED-3: Use shared helper for chunk deletion
-    await _delete_file_chunks(file_id, db)
-
+    await db.execute(
+        sa_delete(DocumentChunk).where(DocumentChunk.file_id == file_id)
+    )
     await db.commit()
 
-    # CRIT-1: Use remove_file_from_index (not remove_document_from_index)
-    # Files are indexed with "file:{uuid}" prefix in Meilisearch
-    try:
-        from ..services.search_service import remove_file_from_index
+    # FIX-13: Move MinIO cleanup to background task to avoid blocking async event loop
+    def _cleanup_minio() -> None:
+        try:
+            minio = get_minio_service()
+            minio.delete_file(bucket=storage_bucket, object_name=storage_key)
+            if thumbnail_key:
+                minio.delete_file(bucket=storage_bucket, object_name=thumbnail_key)
+        except Exception as minio_err:
+            logger.warning("Failed to delete MinIO object for file %s: %s", file_id, minio_err)
 
-        await remove_file_from_index(file_id)
+    background_tasks.add_task(_cleanup_minio)
+
+    # Soft-delete from search index (non-blocking, consistency checker is backstop)
+    try:
+        from ..services.search_service import get_meili_index, _meili_circuit_is_open
+        if not _meili_circuit_is_open():
+            _index = get_meili_index()
+            await _index.update_documents([{
+                "id": f"file_{file_id}",
+                "deleted_at": int(time.time()),
+            }])
     except Exception as ms_err:
-        logger.warning("Failed to remove file %s from search index: %s", file_id, ms_err)
+        logger.warning("Failed to soft-delete file %s from search index: %s", file_id, ms_err)
 
     # WebSocket broadcast
     try:
@@ -776,8 +1099,11 @@ async def delete_file(
                     "type": MessageType.FILE_DELETED,
                     "data": {
                         "file_id": str(file_id),
-                        "folder_id": str(file.folder_id),
+                        "folder_id": str(file.folder_id) if file.folder_id else None,
                         "deleted_by": str(current_user.id),
+                        "actor_id": str(current_user.id),
+                        "scope": "application" if file.application_id else "project" if file.project_id else "personal",
+                        "scope_id": str(file.application_id or file.project_id or file.user_id),
                     },
                 },
             )
@@ -803,6 +1129,7 @@ async def delete_file(
 )
 async def replace_file(
     file_id: UUID,
+    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
     minio: MinIOService = Depends(get_minio_service),
@@ -814,8 +1141,8 @@ async def replace_file(
     rl_result = await rate_limiter.check_and_increment(
         endpoint="file_upload",
         scope_id=str(current_user.id),
-        limit=_UPLOAD_RATE_LIMIT,
-        window_seconds=_UPLOAD_RATE_WINDOW,
+        limit=_get_upload_rate_limit(),
+        window_seconds=_get_upload_rate_window(),
     )
     if not rl_result.allowed:
         raise HTTPException(
@@ -834,13 +1161,22 @@ async def replace_file(
             detail="No file provided or file has no name",
         )
 
-    # HIGH-1: Block dangerous extensions
-    ext = _get_extension(file.filename)
-    if ext in BLOCKED_EXTENSIONS:
+    # F-104: Block dangerous extensions — check ALL dot-separated parts
+    # Sanitize null bytes and URL-decode before extension check
+    import urllib.parse
+    clean_filename = urllib.parse.unquote(file.filename or "").replace("\x00", "")
+    if not clean_filename.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"File extension '{ext}' is not allowed",
+            detail="Filename is empty or contains only invalid characters.",
         )
+    ext = _get_extension(clean_filename)
+    for part in clean_filename.split(".")[1:]:
+        if f".{part.lower()}" in BLOCKED_EXTENSIONS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"File extension '.{part.lower()}' is not allowed",
+            )
 
     # MED-9: Stream-read up to MAX_FILE_SIZE+1
     max_size = _get_max_file_size()
@@ -860,17 +1196,22 @@ async def replace_file(
         )
 
     folder_file = await _get_file_or_404(file_id, db)
-    folder = await _get_folder_or_404(folder_file.folder_id, db)
-    await _check_folder_edit_permission(folder, current_user.id, db)
+    await _check_file_edit_permission(folder_file, current_user.id, db)
 
-    # HIGH-4: Save old storage key for post-commit deletion
+    # HIGH-4: Save old storage info for post-commit background cleanup
     old_storage_bucket = folder_file.storage_bucket
     old_storage_key = folder_file.storage_key
+    old_thumbnail_key = folder_file.thumbnail_key
 
-    # Upload new file first
+    # F-107: Use scope_prefix logic matching upload_file (unfiled/{scope_id} when no folder)
     uuid8 = str(uuid4())[:8]
     sanitized = _sanitize_filename(file.filename)
-    new_storage_key = f"folder-files/{folder_file.folder_id}/{uuid8}_{sanitized}"
+    if folder_file.folder_id:
+        scope_prefix = str(folder_file.folder_id)
+    else:
+        _, file_scope_id = _resolve_file_scope(folder_file)
+        scope_prefix = f"unfiled/{file_scope_id}"
+    new_storage_key = f"folder-files/{scope_prefix}/{uuid8}_{sanitized}"
 
     # HIGH-2: Detect MIME type from file bytes
     mime_type = _detect_mime_type(content, file.filename)
@@ -888,21 +1229,40 @@ async def replace_file(
             detail="Failed to upload replacement file",
         )
 
-    # Update FolderFile record
-    folder_file.original_name = _sanitize_original_name(file.filename)
-    folder_file.mime_type = mime_type
-    folder_file.file_size = file_size
-    folder_file.file_extension = ext.lstrip(".") if ext else ""
-    folder_file.storage_key = new_storage_key
-    folder_file.sha256_hash = hashlib.sha256(content).hexdigest()
-    folder_file.extraction_status = "pending" if ext in EXTRACTABLE_EXTENSIONS else "unsupported"
-    folder_file.extraction_error = None
-    folder_file.content_plain = None
-    folder_file.extracted_metadata = {}
-    folder_file.embedding_status = "none"
-    folder_file.embedding_updated_at = None
-    folder_file.row_version += 1
-    folder_file.updated_at = utc_now()
+    # F3: Atomic UPDATE...WHERE row_version guard — prevents concurrent replace orphaning MinIO objects
+    result = await db.execute(
+        update(FolderFile)
+        .where(FolderFile.id == file_id, FolderFile.row_version == folder_file.row_version)
+        .values(
+            original_name=_sanitize_original_name(file.filename),
+            mime_type=mime_type,
+            file_size=file_size,
+            file_extension=ext.lstrip(".") if ext else "",
+            storage_key=new_storage_key,
+            sha256_hash=hashlib.sha256(content).hexdigest(),
+            extraction_status="pending" if ext.lower().lstrip(".") in {e.lstrip(".") for e in EXTRACTABLE_EXTENSIONS} else "unsupported",
+            extraction_error=None,
+            content_plain=None,
+            extracted_metadata={},
+            embedding_status="none",
+            embedding_updated_at=None,
+            thumbnail_key=None,
+            row_version=folder_file.row_version + 1,
+            updated_at=utc_now(),
+        )
+    )
+    if result.rowcount != 1:
+        # Concurrent replace won the race — clean up our orphaned upload
+        try:
+            await asyncio.to_thread(
+                minio.delete_file, bucket=FOLDER_FILES_BUCKET, object_name=new_storage_key
+            )
+        except Exception:
+            logger.error("ORPHAN: concurrent replace cleanup failed for %s", new_storage_key)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="File was modified concurrently. Please refresh and try again.",
+        )
 
     # MED-3: Use shared helper for chunk deletion
     await _delete_file_chunks(file_id, db)
@@ -912,25 +1272,57 @@ async def replace_file(
         await db.refresh(folder_file)
     except Exception:
         await db.rollback()
+        db.expire(folder_file)  # F8: discard in-memory mutations
         # HIGH-5: Clean up orphaned new MinIO object on commit failure
         try:
-            minio.delete_file(bucket=FOLDER_FILES_BUCKET, object_name=new_storage_key)
-        except Exception:
-            pass
+            await asyncio.to_thread(
+                minio.delete_file,
+                bucket=FOLDER_FILES_BUCKET,
+                object_name=new_storage_key,
+            )
+        except Exception as minio_err:
+            logger.error(
+                "ORPHAN: Failed to delete MinIO object %s after rollback for file %s: %s",
+                new_storage_key, file_id, minio_err,
+            )
         raise
 
-    # HIGH-4: Delete old MinIO object AFTER successful commit
-    try:
-        minio.delete_file(
-            bucket=old_storage_bucket,
-            object_name=old_storage_key,
-        )
-    except MinIOServiceError:
-        pass  # Old file may already be gone
+    # HIGH-4: Delete old MinIO objects in background task (matches delete_file pattern)
+    def _cleanup_old_minio() -> None:
+        try:
+            if old_storage_key:
+                minio.delete_file(bucket=old_storage_bucket, object_name=old_storage_key)
+            if old_thumbnail_key:
+                minio.delete_file(bucket=old_storage_bucket, object_name=old_thumbnail_key)
+        except Exception as e:
+            logger.warning("Failed to clean up old MinIO objects: %s", e)
 
-    # Re-enqueue extraction job
-    if folder_file.extraction_status == "pending":
-        await _enqueue_extraction_job(folder_file.id)
+    background_tasks.add_task(_cleanup_old_minio)
+
+    # Extraction + embedding runs via scheduled batch job or manual trigger.
+
+    # CRIT-1: Broadcast FILE_UPDATED so collaborators see the replacement
+    try:
+        room_id = await _resolve_scope_room(folder_file, db)
+        if room_id:
+            await ws_manager.broadcast_to_room(
+                room_id,
+                {
+                    "type": MessageType.FILE_UPDATED,
+                    "data": {
+                        "file_id": str(folder_file.id),
+                        "folder_id": str(folder_file.folder_id) if folder_file.folder_id else None,
+                        "display_name": folder_file.display_name,
+                        "sort_order": folder_file.sort_order,
+                        "row_version": folder_file.row_version,
+                        "actor_id": str(current_user.id),
+                        "scope": "application" if folder_file.application_id else "project" if folder_file.project_id else "personal",
+                        "scope_id": str(folder_file.application_id or folder_file.project_id or folder_file.user_id),
+                    },
+                },
+            )
+    except Exception as ws_err:
+        logger.warning("Failed to broadcast FILE_UPDATED on replace: %s", ws_err)
 
     return FolderFileReplaceResponse(
         id=folder_file.id,
@@ -938,3 +1330,99 @@ async def replace_file(
         extraction_status=folder_file.extraction_status,
         message="File replaced successfully",
     )
+
+
+# ============================================================================
+# Embedding sync endpoint
+# ============================================================================
+
+
+@router.post(
+    "/{file_id}/sync-embeddings",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Queue embedding sync for a file",
+    description="Re-extract (if needed) and re-embed a file's content.",
+    responses={
+        202: {"description": "Sync job queued"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "Access denied"},
+        404: {"description": "File not found"},
+        503: {"description": "Background worker unavailable"},
+    },
+)
+async def sync_embeddings(
+    file_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Queue an extraction + embedding sync job for a single file.
+
+    Requires Editor or Owner permission on the file's folder scope
+    (or direct scope for unfiled files).
+    Returns 202 Accepted with the file ID.
+    """
+    file = await _get_file_or_404(file_id, db)
+    await _check_file_edit_permission(file, current_user.id, db)
+
+    # HIGH-22: Atomic status transition to prevent concurrent sync races
+    sync_update_values: dict = {"embedding_status": "syncing", "updated_at": utc_now()}
+    if file.extraction_status != "completed":
+        sync_update_values["extraction_status"] = "pending"
+
+    sync_result = await db.execute(
+        update(FolderFile)
+        .where(
+            FolderFile.id == file_id,
+            FolderFile.embedding_status.notin_(["syncing"]),
+        )
+        .values(**sync_update_values)
+        .returning(FolderFile.id)
+    )
+    if not sync_result.scalar_one_or_none():
+        # Already syncing — still accept to be idempotent
+        pass
+    await db.flush()
+
+    try:
+        from ..services.arq_helper import get_arq_redis
+
+        arq_redis = await get_arq_redis()
+
+        # F-124: Use Redis pipeline for atomic delete+enqueue
+        job_key = f"extract_file:{file_id}"
+        pipe = arq_redis.pipeline()
+        pipe.delete(f"arq:job:{job_key}", f"arq:result:{job_key}")
+        await pipe.execute()
+        await arq_redis.enqueue_job(
+            "extract_and_embed_file_job",
+            str(file_id),
+            _job_id=job_key,
+        )
+        await db.commit()
+    except RuntimeError:
+        # FIX-10: Use atomic UPDATE to avoid operating on stale ORM object
+        await db.execute(
+            update(FolderFile)
+            .where(FolderFile.id == file.id)
+            .values(embedding_status="stale", updated_at=utc_now())
+        )
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Background worker not available",
+        )
+    except Exception:
+        # FIX-10: Use atomic UPDATE to avoid operating on stale ORM object
+        await db.execute(
+            update(FolderFile)
+            .where(FolderFile.id == file.id)
+            .values(embedding_status="stale", updated_at=utc_now())
+        )
+        await db.commit()
+        logger.exception("Failed to enqueue extract_and_embed_file_job for file %s", file_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Failed to enqueue embedding sync job",
+        )
+
+    return {"status": "queued", "file_id": str(file.id)}

@@ -10,7 +10,7 @@
  * Sending a new message in rewind mode branches the conversation from that point.
  */
 
-import { useEffect, useRef, useCallback, useState } from 'react'
+import { useEffect, useRef, useCallback, memo } from 'react'
 import {
   X,
   RotateCcw,
@@ -80,12 +80,81 @@ function StreamingIndicator(): JSX.Element {
 }
 
 // ============================================================================
+// Message List (extracted to subscribe only to messages, avoiding full-store
+// re-renders during streaming when only the message content changes)
+// ============================================================================
+
+interface MessageListProps {
+  rewindMessageIndex: number | null
+  onNavigate: (target: NavigationTarget) => void
+  onResolveInterrupt: (response: Record<string, unknown>) => Promise<void>
+  onRewind: (index: number) => void
+}
+
+const MessageList = memo(function MessageList({
+  rewindMessageIndex,
+  onNavigate,
+  onResolveInterrupt,
+  onRewind,
+}: MessageListProps): JSX.Element {
+  const messages = useAiSidebar(s => s.messages)
+  const isStreaming = useAiSidebar(s => s.isStreaming)
+
+  return (
+    <>
+      {messages.map((msg, index) => (
+        <div
+          key={msg.id}
+          className={cn(
+            'group relative blair-msg-enter min-w-0',
+            rewindMessageIndex !== null && index > rewindMessageIndex && 'blair-rewind-dimmed'
+          )}
+          style={{ animationDelay: `${Math.min(index * 0.05, 0.3)}s` }}
+        >
+          <AiMessageRenderer
+            message={msg}
+            onNavigate={onNavigate}
+            onResolveInterrupt={onResolveInterrupt}
+            isRewinding={
+              rewindMessageIndex !== null && index > rewindMessageIndex
+            }
+          />
+          {/* Rewind icon on assistant messages with checkpoint */}
+          {msg.role === 'assistant' &&
+            msg.checkpoint_id &&
+            !isStreaming &&
+            rewindMessageIndex === null && (
+              <div className="absolute top-0 right-0">
+                <button
+                  type="button"
+                  onClick={() => onRewind(index)}
+                  className={cn(
+                    'flex h-6 w-6 items-center justify-center rounded-full',
+                    'bg-background border border-border shadow-sm',
+                    'opacity-0 group-hover:opacity-100',
+                    'transition-opacity duration-150',
+                    'hover:bg-accent hover:text-accent-foreground',
+                    'focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+                  )}
+                  aria-label="Rewind conversation to this message"
+                >
+                  <RotateCcw className="h-3 w-3" />
+                </button>
+              </div>
+            )}
+        </div>
+      ))}
+    </>
+  )
+})
+
+// ============================================================================
 // AI Sidebar
 // ============================================================================
 
 export function AiSidebar(): JSX.Element | null {
   const queryClient = useQueryClient()
-  // HIGH-15 / MED-18: Single subscription instead of 10+ separate useAiSidebar
+  // Single subscription instead of 10+ separate useAiSidebar
   // selectors, each of which created its own useSyncExternalStore subscription.
   const {
     isOpen, close, resetChat, messages, isStreaming, chatKey,
@@ -100,19 +169,7 @@ export function AiSidebar(): JSX.Element | null {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const chatInputRef = useRef<ChatInputHandle>(null)
   const scrollContainerElRef = useRef<HTMLElement | null>(null)
-  const [scrollContainerVersion, setScrollContainerVersion] = useState(0)
-
-  const scrollAreaRef = useCallback((node: HTMLDivElement | null) => {
-    const viewport = node?.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement | null
-    if (!viewport && node) {
-      console.warn('[AiSidebar] Could not find scroll viewport — infinite scroll and auto-scroll disabled')
-    }
-    if (viewport !== scrollContainerElRef.current) {
-      scrollContainerElRef.current = viewport
-      // Bump version to re-trigger effects that depend on the scroll container
-      setScrollContainerVersion((v) => v + 1)
-    }
-  }, [])
+  const scrollAreaRootRef = useRef<HTMLDivElement | null>(null)
 
   const threadIdRef = useRef(threadId)
   threadIdRef.current = threadId
@@ -186,15 +243,18 @@ export function AiSidebar(): JSX.Element | null {
     useAiSidebar.getState().resetChat()
   }, [cancelStream])
 
-  // Sync session title from the sessions list (picks up LLM-generated titles)
+  // Sync session title from the sessions list (picks up LLM-generated titles).
+  // Read activeSessionTitle from store directly (not reactive) to avoid a
+  // setState → dep change → re-run cycle that triggers "Maximum update depth exceeded".
   const sessionsQuery = useChatSessions()
   useEffect(() => {
     if (!activeSessionId || !sessionsQuery.data) return
     const session = sessionsQuery.data.sessions.find((s) => s.id === activeSessionId)
-    if (session && session.title !== activeSessionTitle) {
+    const currentTitle = useAiSidebar.getState().activeSessionTitle
+    if (session && session.title !== currentTitle) {
       useAiSidebar.getState().setActiveSessionTitle(session.title)
     }
-  }, [activeSessionId, activeSessionTitle, sessionsQuery.data])
+  }, [activeSessionId, sessionsQuery.data])
 
   // Fetch messages when switching to a session
   const messagesQuery = useChatMessages(view === 'chat' ? activeSessionId : null)
@@ -257,8 +317,14 @@ export function AiSidebar(): JSX.Element | null {
   messagesQueryRef.current = messagesQuery
 
   useEffect(() => {
-    const scrollEl = scrollContainerElRef.current
-    if (view !== 'chat' || !scrollEl) return
+    if (view !== 'chat') return
+    // Resolve the scroll viewport from the ScrollArea root on mount.
+    // Done here (not in a ref callback) to avoid calling setState during
+    // React's commit phase, which caused "Maximum update depth exceeded".
+    const root = scrollAreaRootRef.current
+    const viewport = root?.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement | null
+    scrollContainerElRef.current = viewport
+    if (!viewport) return
     const sentinel = sentinelRef.current
     if (!sentinel) return
 
@@ -287,12 +353,12 @@ export function AiSidebar(): JSX.Element | null {
           }).catch(() => setIsLoadingMore(false))
         }
       },
-      { root: scrollEl, threshold: 0.1 }
+      { root: viewport, threshold: 0.1 }
     )
     observer.observe(sentinel)
     return () => observer.disconnect()
-    // scrollContainerVersion triggers re-creation only when the actual DOM element changes
-  }, [view, scrollContainerVersion, setIsLoadingMore])
+    // chatKey changes when resetChat is called (new ScrollArea mounts)
+  }, [view, chatKey, setIsLoadingMore])
 
   const handleSuggestionClick = useCallback(
     (text: string) => {
@@ -306,6 +372,7 @@ export function AiSidebar(): JSX.Element | null {
   const isNearBottomRef = useRef(true)
 
   useEffect(() => {
+    if (view !== 'chat') return
     const el = scrollContainerElRef.current
     if (!el) return
     const handleScroll = () => {
@@ -315,7 +382,7 @@ export function AiSidebar(): JSX.Element | null {
     }
     el.addEventListener('scroll', handleScroll, { passive: true })
     return () => el.removeEventListener('scroll', handleScroll)
-  }, [scrollContainerVersion])
+  }, [view, chatKey])
 
   // Auto-scroll to bottom when messages are added or streaming, if user is near bottom
   const prevMsgCountRef = useRef(messages.length)
@@ -444,7 +511,7 @@ export function AiSidebar(): JSX.Element | null {
         <ChatSessionList onSelectSession={handleSelectSession} />
       ) : (
       <>
-      <ScrollArea className="flex-1" key={chatKey} ref={scrollAreaRef}>
+      <ScrollArea className="flex-1" key={chatKey} ref={scrollAreaRootRef}>
         <div className="flex flex-col gap-3 p-4 overflow-hidden select-text cursor-text" aria-live={isStreaming ? 'off' : 'polite'}>
           {/* Infinite scroll sentinel */}
           {hasMoreMessages && (
@@ -526,48 +593,12 @@ export function AiSidebar(): JSX.Element | null {
             </div>
           )}
 
-          {messages.map((msg, index) => (
-            <div
-              key={msg.id}
-              className={cn(
-                'group relative blair-msg-enter min-w-0',
-                rewindMessageIndex !== null && index > rewindMessageIndex && 'blair-rewind-dimmed'
-              )}
-              style={{ animationDelay: `${Math.min(index * 0.05, 0.3)}s` }}
-            >
-              <AiMessageRenderer
-                message={msg}
-                onNavigate={handleNavigate}
-                onResolveInterrupt={handleResolveInterrupt}
-                isRewinding={
-                  rewindMessageIndex !== null && index > rewindMessageIndex
-                }
-              />
-              {/* Rewind icon on assistant messages with checkpoint */}
-              {msg.role === 'assistant' &&
-                msg.checkpoint_id &&
-                !isStreaming &&
-                rewindMessageIndex === null && (
-                  <div className="absolute top-0 right-0">
-                    <button
-                      type="button"
-                      onClick={() => handleRewind(index)}
-                      className={cn(
-                        'flex h-6 w-6 items-center justify-center rounded-full',
-                        'bg-background border border-border shadow-sm',
-                        'opacity-0 group-hover:opacity-100',
-                        'transition-opacity duration-150',
-                        'hover:bg-accent hover:text-accent-foreground',
-                        'focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
-                      )}
-                      aria-label="Rewind conversation to this message"
-                    >
-                      <RotateCcw className="h-3 w-3" />
-                    </button>
-                  </div>
-                )}
-            </div>
-          ))}
+          <MessageList
+            rewindMessageIndex={rewindMessageIndex}
+            onNavigate={handleNavigate}
+            onResolveInterrupt={handleResolveInterrupt}
+            onRewind={handleRewind}
+          />
 
           {isStreaming && <StreamingIndicator />}
 

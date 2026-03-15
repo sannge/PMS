@@ -28,6 +28,7 @@ from .services.redis_service import redis_service
 from .services.search_service import check_search_index_consistency
 from .services.status_derivation_service import recalculate_aggregation_from_tasks
 from .models.document import Document
+from .models.folder_file import FolderFile
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +52,6 @@ def parse_redis_url(url: str) -> RedisSettings:
 # =============================================================================
 
 from .ai.config_service import get_agent_config
-
-_cfg = get_agent_config()
-
-ARCHIVE_AFTER_DAYS = _cfg.get_int("worker.archive_after_days", 7)
 
 
 async def run_archive_jobs(ctx: dict[str, Any]) -> dict[str, Any]:
@@ -92,14 +89,15 @@ async def run_archive_jobs(ctx: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def archive_stale_done_tasks(db) -> int:
+async def archive_stale_done_tasks(db: AsyncSession) -> int:
     """Archive all tasks that have been in Done status for 7+ days."""
     from sqlalchemy import select, update
     from sqlalchemy.ext.asyncio import AsyncSession
     from .models.project_task_status_agg import ProjectTaskStatusAgg
 
     now = utc_now()
-    cutoff_date = now - timedelta(days=ARCHIVE_AFTER_DAYS)
+    archive_after_days = get_agent_config().get_int("worker.archive_after_days", 7)
+    cutoff_date = now - timedelta(days=archive_after_days)
 
     # Find all "Done" status IDs
     done_status_result = await db.execute(
@@ -110,36 +108,40 @@ async def archive_stale_done_tasks(db) -> int:
     if not done_status_ids:
         return 0
 
-    # Find tasks to archive
-    tasks_to_archive_query = (
-        select(Task.id, Task.task_key, Task.project_id, Task.completed_at)
+    # L5: Use SQL GROUP BY to get affected project IDs and counts without
+    # loading all task rows into memory.
+    from sqlalchemy import func as sa_func
+
+    affected_result = await db.execute(
+        select(Task.project_id, sa_func.count(Task.id))
         .where(
             Task.task_status_id.in_(done_status_ids),
             Task.archived_at.is_(None),
             Task.completed_at.isnot(None),
             Task.completed_at <= cutoff_date,
         )
+        .group_by(Task.project_id)
     )
+    affected_rows = affected_result.all()
 
-    result = await db.execute(tasks_to_archive_query)
-    tasks_to_archive = result.all()
-
-    if not tasks_to_archive:
+    if not affected_rows:
         logger.debug("No tasks eligible for archiving")
         return 0
 
-    task_ids = [row[0] for row in tasks_to_archive]
-    affected_project_ids = set(row[2] for row in tasks_to_archive)
+    total_count = sum(row[1] for row in affected_rows)
+    affected_project_ids = {row[0] for row in affected_rows}
 
-    # Log each task being archived
-    for task_id, task_key, project_id, completed_at in tasks_to_archive:
-        days_since_done = (now - completed_at).days if completed_at else 0
-        logger.info(f"  Archiving task: {task_key} (done {days_since_done} days ago)")
+    logger.info("Archiving %d tasks across %d projects", total_count, len(affected_project_ids))
 
-    # Archive the tasks
+    # Archive the tasks (bulk UPDATE, no need to load all IDs)
     await db.execute(
         update(Task)
-        .where(Task.id.in_(task_ids))
+        .where(
+            Task.task_status_id.in_(done_status_ids),
+            Task.archived_at.is_(None),
+            Task.completed_at.isnot(None),
+            Task.completed_at <= cutoff_date,
+        )
         .values(archived_at=now)
     )
 
@@ -147,10 +149,10 @@ async def archive_stale_done_tasks(db) -> int:
     for project_id in affected_project_ids:
         await _recalculate_project_aggregation(db, project_id)
 
-    return len(task_ids)
+    return total_count
 
 
-async def archive_eligible_projects(db) -> int:
+async def archive_eligible_projects(db: AsyncSession) -> int:
     """Archive projects where all tasks are archived."""
     from sqlalchemy import select, update
 
@@ -208,11 +210,17 @@ async def archive_eligible_projects(db) -> int:
     return len(project_ids_to_archive)
 
 
-async def _recalculate_project_aggregation(db, project_id) -> None:
-    """Recalculate project aggregation after archiving tasks."""
-    from sqlalchemy import select
-    from sqlalchemy.orm import selectinload
+async def _recalculate_project_aggregation(db: AsyncSession, project_id: Any) -> None:
+    """Recalculate project aggregation after archiving tasks.
+
+    Uses a single SQL GROUP BY query instead of loading all tasks in memory.
+    """
+    from sqlalchemy import func, select
     from .models.project_task_status_agg import ProjectTaskStatusAgg
+    from .services.status_derivation_service import (
+        STATUS_TO_COUNTER_FIELD,
+        derive_project_status_from_model,
+    )
 
     result = await db.execute(
         select(ProjectTaskStatusAgg).where(ProjectTaskStatusAgg.project_id == project_id)
@@ -232,19 +240,35 @@ async def _recalculate_project_aggregation(db, project_id) -> None:
         db.add(agg)
         await db.flush()
 
-    # Get non-archived tasks
-    result = await db.execute(
-        select(Task)
-        .options(selectinload(Task.task_status))
+    # Count non-archived tasks grouped by status name in a single SQL query
+    counts_result = await db.execute(
+        select(TaskStatus.name, func.count(Task.id))
+        .join(TaskStatus, Task.task_status_id == TaskStatus.id)
         .where(
             Task.project_id == project_id,
             Task.archived_at.is_(None),
         )
+        .group_by(TaskStatus.name)
     )
-    tasks = result.scalars().all()
+    status_counts: dict[str, int] = dict(counts_result.all())
 
-    # Recalculate aggregation and get derived status name
-    derived_status_name = recalculate_aggregation_from_tasks(agg, tasks)
+    # Reset all counters and rebuild from SQL result
+    agg.total_tasks = 0
+    agg.todo_tasks = 0
+    agg.active_tasks = 0
+    agg.review_tasks = 0
+    agg.issue_tasks = 0
+    agg.done_tasks = 0
+
+    for status_name, count in status_counts.items():
+        counter_field = STATUS_TO_COUNTER_FIELD.get(status_name, "todo_tasks")
+        setattr(agg, counter_field, count)
+        agg.total_tasks += count
+
+    agg.updated_at = utc_now()
+
+    # Derive the new project status
+    derived_status_name = derive_project_status_from_model(agg)
 
     # Update project's derived status
     result = await db.execute(
@@ -293,22 +317,28 @@ async def cleanup_stale_presence(ctx: dict[str, Any]) -> dict[str, int]:
     try:
         keys = await redis_service.scan_keys(f"{PRESENCE_PREFIX}*")
         if keys:
-            # Batch all zremrangebyscore calls in a single pipeline
-            pipe = redis_service.client.pipeline(transaction=False)
+            # L2: Process in batches to avoid sending thousands of commands
+            # in a single pipeline.
+            _SCAN_BATCH_LIMIT = 200
             room_ids = []
-            for key in keys:
-                room_id = key.replace(PRESENCE_PREFIX, "")
-                room_ids.append(room_id)
-                pipe.zremrangebyscore(
-                    f"{PRESENCE_PREFIX}{room_id}",
-                    min="-inf",
-                    max=cutoff,
-                )
-            results = await pipe.execute()
-            for room_id, removed in zip(room_ids, results):
-                if removed > 0:
-                    logger.debug(f"Cleaned {removed} stale entries from room {room_id}")
-                    total_removed += removed
+            for batch_start in range(0, len(keys), _SCAN_BATCH_LIMIT):
+                batch_keys = keys[batch_start:batch_start + _SCAN_BATCH_LIMIT]
+                pipe = redis_service.client.pipeline(transaction=False)
+                batch_room_ids = []
+                for key in batch_keys:
+                    room_id = key.replace(PRESENCE_PREFIX, "")
+                    batch_room_ids.append(room_id)
+                    pipe.zremrangebyscore(
+                        f"{PRESENCE_PREFIX}{room_id}",
+                        min="-inf",
+                        max=cutoff,
+                    )
+                results = await pipe.execute()
+                for room_id, removed in zip(batch_room_ids, results):
+                    if removed > 0:
+                        logger.debug(f"Cleaned {removed} stale entries from room {room_id}")
+                        total_removed += removed
+                room_ids.extend(batch_room_ids)
     except Exception as e:
         logger.error(f"Redis presence cleanup error: {e}")
 
@@ -318,6 +348,50 @@ async def cleanup_stale_presence(ctx: dict[str, Any]) -> dict[str, int]:
 # =============================================================================
 # Embedding Jobs
 # =============================================================================
+
+
+async def _broadcast_embedding_status(
+    doc_scope: dict[str, Any] | None,
+    document_id: str,
+    embedding_status: str,
+    chunk_count: int = 0,
+) -> None:
+    """Broadcast embedding status change to the frontend via WS."""
+    if doc_scope is None:
+        return
+    try:
+        ws_payload = {
+            "type": "embedding_updated",
+            "data": {
+                "document_id": document_id,
+                "chunk_count": chunk_count,
+                "embedding_status": embedding_status,
+                "timestamp": utc_now().isoformat(),
+            },
+        }
+        if doc_scope["application_id"]:
+            room_id = f"application:{doc_scope['application_id']}"
+        elif doc_scope["project_id"]:
+            # Use pre-resolved application_id if available to avoid extra DB session
+            app_id = doc_scope.get("_application_id")
+            if app_id:
+                room_id = f"application:{app_id}"
+            else:
+                from .models.project import Project
+                async with async_session_maker() as ws_db:
+                    proj = await ws_db.get(Project, doc_scope["project_id"])
+                room_id = f"application:{proj.application_id}" if proj and proj.application_id else None
+        elif doc_scope["user_id"]:
+            room_id = f"user:{doc_scope['user_id']}"
+        else:
+            room_id = None
+        if room_id:
+            await redis_service.publish("ws:broadcast", {"room_id": room_id, "message": ws_payload})
+    except Exception as ws_err:
+        logger.warning(
+            "Failed to broadcast embedding_status=%s for document %s: %s",
+            embedding_status, document_id, ws_err,
+        )
 
 
 async def embed_document_job(ctx: dict[str, Any], document_id: str) -> dict[str, Any]:
@@ -340,6 +414,7 @@ async def embed_document_job(ctx: dict[str, Any], document_id: str) -> dict[str,
 
     from sqlalchemy import select
 
+    _cfg = get_agent_config()
     EMBED_TIMEOUT_S = _cfg.get_int("worker.embed_timeout_s", 30)
     MAX_EMBED_RETRIES = _cfg.get_int("worker.max_embed_retries", 3)
     EMBED_RETRY_KEY = f"embed_retry:{document_id}"
@@ -359,13 +434,21 @@ async def embed_document_job(ctx: dict[str, Any], document_id: str) -> dict[str,
                     MAX_EMBED_RETRIES, document_id,
                 )
                 async with async_session_maker() as err_db:
-                    from sqlalchemy import update as sa_update
+                    from sqlalchemy import select as sa_select, update as sa_update
+                    # Fetch scope before update for WS broadcast
+                    doc_row = (await err_db.execute(
+                        sa_select(Document.application_id, Document.project_id, Document.user_id)
+                        .where(Document.id == doc_uuid)
+                    )).one_or_none()
                     await err_db.execute(
                         sa_update(Document)
                         .where(Document.id == doc_uuid)
-                        .values(embedding_status="failed", updated_at=Document.updated_at)
+                        .values(embedding_status="failed", updated_at=utc_now())
                     )
                     await err_db.commit()
+                    if doc_row:
+                        scope = {"application_id": doc_row[0], "project_id": doc_row[1], "user_id": doc_row[2]}
+                        await _broadcast_embedding_status(scope, document_id, "failed")
                 return {"status": "error", "error": "max_retries_exceeded"}
             await redis_service.set(EMBED_RETRY_KEY, str(retry_count + 1), ttl=3600)
     except Exception as retry_err:
@@ -392,11 +475,19 @@ async def embed_document_job(ctx: dict[str, Any], document_id: str) -> dict[str,
                 "user_id": doc.user_id,
             }
 
+            # FIX-6: Pre-resolve project's application_id to avoid second DB session in broadcast
+            if doc.project_id and not doc.application_id:
+                from .models.project import Project
+                proj_row = await db.get(Project, doc.project_id)
+                if proj_row and proj_row.application_id:
+                    doc_scope["_application_id"] = proj_row.application_id
+
             if not doc.content_json:
                 # Reset syncing status for empty documents
                 doc.embedding_status = "none"
                 await db.commit()
                 logger.info("embed_document_job: document %s has no content, reset to none", document_id)
+                await _broadcast_embedding_status(doc_scope, document_id, "none")
                 return {"status": "skipped", "reason": "no_content"}
 
             # Transition to "syncing" BEFORE embedding so the WHERE guard
@@ -405,6 +496,18 @@ async def embed_document_job(ctx: dict[str, Any], document_id: str) -> dict[str,
             await db.flush()
 
             content = json.loads(doc.content_json)
+
+            # Detect canvas format for proper chunking strategy
+            doc_type = "canvas" if isinstance(content, dict) and content.get("format") == "canvas" else "document"
+
+            # Guard against malformed content_json (e.g., empty array from buggy migration)
+            if not isinstance(content, dict):
+                doc.embedding_status = "failed"
+                await db.commit()
+                logger.warning("embed_document_job: document %s has non-dict content_json (type=%s), marked failed", document_id, type(content).__name__)
+                await _broadcast_embedding_status(doc_scope, document_id, "failed")
+                return {"status": "error", "error": "invalid_content_format"}
+
             scope_ids = {
                 "application_id": doc.application_id,
                 "project_id": doc.project_id,
@@ -433,6 +536,7 @@ async def embed_document_job(ctx: dict[str, Any], document_id: str) -> dict[str,
                     content_json=content,
                     title=doc.title,
                     scope_ids=scope_ids,
+                    document_type=doc_type,
                 ),
                 timeout=EMBED_TIMEOUT_S,
             )
@@ -468,42 +572,7 @@ async def embed_document_job(ctx: dict[str, Any], document_id: str) -> dict[str,
                 document_id, embed_result.chunk_count, image_count, embed_result.token_count, embed_result.duration_ms,
             )
 
-            # Broadcast EMBEDDING_UPDATED to the scope room the user is in
-            # (worker runs in separate process, so publish to ws:broadcast directly)
-            try:
-                ws_payload = {
-                    "type": "embedding_updated",
-                    "data": {
-                        "document_id": document_id,
-                        "chunk_count": total_chunks,
-                        "embedding_status": "synced",
-                        "timestamp": utc_now().isoformat(),
-                    },
-                }
-                # Determine the scope room using pre-captured scope data
-                # (safe to use after db.commit — plain dict, not ORM attrs)
-                if doc_scope["application_id"]:
-                    room_id = f"application:{doc_scope['application_id']}"
-                elif doc_scope["project_id"]:
-                    # Project-scoped docs: resolve parent application
-                    from .models.project import Project
-                    proj = await db.get(Project, doc_scope["project_id"])
-                    room_id = f"application:{proj.application_id}" if proj and proj.application_id else None
-                elif doc_scope["user_id"]:
-                    room_id = f"user:{doc_scope['user_id']}"
-                else:
-                    room_id = None
-
-                if room_id:
-                    await redis_service.publish(
-                        "ws:broadcast",
-                        {"room_id": room_id, "message": ws_payload},
-                    )
-            except Exception as ws_err:
-                logger.warning(
-                    "Failed to broadcast EMBEDDING_UPDATED for document %s: %s",
-                    document_id, ws_err,
-                )
+            await _broadcast_embedding_status(doc_scope, document_id, "synced", total_chunks)
 
             # Clear retry counter on success
             try:
@@ -523,45 +592,29 @@ async def embed_document_job(ctx: dict[str, Any], document_id: str) -> dict[str,
 
     except Exception as e:
         logger.error("embed_document_job failed for document %s: %s", document_id, e, exc_info=True)
-        # Reset status to stale on failure
+        # Use "failed" when retries exhausted, "stale" for retryable failures
+        # retry_count was already incremented before the main try block
+        retries_exhausted = (retry_count + 1) >= MAX_EMBED_RETRIES
+        new_status = "failed" if retries_exhausted else "stale"
         try:
             async with async_session_maker() as err_db:
                 from sqlalchemy import update as sa_update
-                await err_db.execute(
+                # FIX-5: Atomic UPDATE...WHERE guards against TOCTOU race
+                err_result = await err_db.execute(
                     sa_update(Document)
-                    .where(Document.id == doc_uuid)
-                    .values(embedding_status="stale", updated_at=Document.updated_at)
+                    .where(Document.id == doc_uuid, Document.embedding_status == "syncing")
+                    .values(embedding_status=new_status, updated_at=utc_now())
                 )
                 await err_db.commit()
+                if err_result.rowcount == 0:
+                    logger.warning(
+                        "Document %s embedding_status already changed, skipping error broadcast",
+                        document_id,
+                    )
+                    return {"status": "error", "error": type(e).__name__}
         except Exception as reset_err:
             logger.warning("Failed to reset embedding_status for %s: %s", document_id, reset_err)
-        # Broadcast failure status to frontend
-        if doc_scope is not None:
-            try:
-                ws_payload = {
-                    "type": "embedding_updated",
-                    "data": {
-                        "document_id": document_id,
-                        "chunk_count": 0,
-                        "embedding_status": "stale",
-                        "timestamp": utc_now().isoformat(),
-                    },
-                }
-                if doc_scope["application_id"]:
-                    room_id = f"application:{doc_scope['application_id']}"
-                elif doc_scope["project_id"]:
-                    from .models.project import Project
-                    async with async_session_maker() as ws_db:
-                        proj = await ws_db.get(Project, doc_scope["project_id"])
-                    room_id = f"application:{proj.application_id}" if proj and proj.application_id else None
-                elif doc_scope["user_id"]:
-                    room_id = f"user:{doc_scope['user_id']}"
-                else:
-                    room_id = None
-                if room_id:
-                    await redis_service.publish("ws:broadcast", {"room_id": room_id, "message": ws_payload})
-            except Exception:
-                pass
+        await _broadcast_embedding_status(doc_scope, document_id, new_status)
         # Return type name only (not str(e)) to avoid leaking sensitive context
         return {"status": "error", "error": type(e).__name__}
 
@@ -569,8 +622,6 @@ async def embed_document_job(ctx: dict[str, Any], document_id: str) -> dict[str,
 # =============================================================================
 # File Extraction & Embedding Job
 # =============================================================================
-
-from .models.folder_file import FolderFile
 
 
 async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[str, Any]:
@@ -601,6 +652,7 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
 
     from sqlalchemy import select, update as sa_update
 
+    _cfg = get_agent_config()
     EXTRACT_TIMEOUT_S = _cfg.get_int("worker.extract_timeout_s", 120)
     MAX_EXTRACT_RETRIES = _cfg.get_int("worker.max_extract_retries", 3)
     RETRY_KEY = f"extract_retry:{file_id}"
@@ -626,7 +678,7 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
                         .values(
                             extraction_status="failed",
                             extraction_error="Max retries exceeded",
-                            updated_at=FolderFile.updated_at,
+                            updated_at=utc_now(),
                         )
                     )
                     await err_db.commit()
@@ -638,6 +690,7 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
     import shutil
 
     # HIGH-10: Max content_plain size (2MB), configurable at runtime (QE-NEW-1)
+    # FIX-7: Reuse _cfg from top of function instead of opening a second config handle
     MAX_CONTENT_PLAIN = max(1024, _cfg.get_int("worker.max_content_plain", 2_000_000))
     # HIGH-7: Use configurable embed timeout
     EMBED_TIMEOUT_S = _cfg.get_int("worker.embed_timeout_s", 30)
@@ -656,22 +709,37 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
         file_updated_at_ts: int = 0
 
         async with async_session_maker() as db:
-            result = await db.execute(
-                select(FolderFile).where(
+            # HIGH-12: Atomic status transition — only grab the job if status
+            # is pending or failed (prevents double-processing)
+            atomic_result = await db.execute(
+                sa_update(FolderFile)
+                .where(
                     FolderFile.id == file_uuid,
                     FolderFile.deleted_at.is_(None),
+                    FolderFile.extraction_status.in_(["pending", "failed"]),
                 )
+                .values(extraction_status="processing", updated_at=utc_now())
+                .returning(FolderFile.id)
             )
-            ff = result.scalar_one_or_none()
+            if not atomic_result.scalar_one_or_none():
+                # Either not found, deleted, or already being processed
+                check_result = await db.execute(
+                    select(FolderFile.extraction_status).where(FolderFile.id == file_uuid)
+                )
+                current_status = check_result.scalar_one_or_none()
+                if current_status is None:
+                    logger.warning("extract_and_embed_file_job: file %s not found or deleted", file_id)
+                    return {"status": "skipped", "reason": "not_found"}
+                logger.info("extract_and_embed_file_job: file %s is %s, skipping", file_id, current_status)
+                return {"status": "skipped", "reason": current_status}
 
-            if ff is None:
-                logger.warning("extract_and_embed_file_job: file %s not found or deleted", file_id)
-                return {"status": "skipped", "reason": "not_found"}
+            await db.commit()
 
-            # MED-7: Skip if already completed, unsupported, or currently processing
-            if ff.extraction_status in ("completed", "unsupported", "processing"):
-                logger.info("extract_and_embed_file_job: file %s is %s, skipping", file_id, ff.extraction_status)
-                return {"status": "skipped", "reason": ff.extraction_status}
+            # Re-fetch to cache fields needed after session close
+            result = await db.execute(
+                select(FolderFile).where(FolderFile.id == file_uuid)
+            )
+            ff = result.scalar_one()
 
             # Save scope for WS broadcast
             file_scope = {
@@ -679,6 +747,15 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
                 "project_id": ff.project_id,
                 "user_id": ff.user_id,
             }
+
+            # FIX-6: Pre-resolve project's application_id to avoid second DB session in broadcast
+            project_application_id = None
+            if ff.project_id and not ff.application_id:
+                from .models.project import Project
+                proj_row = await db.get(Project, ff.project_id)
+                if proj_row and proj_row.application_id:
+                    file_scope["_application_id"] = proj_row.application_id
+                    project_application_id = proj_row.application_id
 
             # Cache fields needed after session close
             file_display_name = ff.display_name
@@ -690,10 +767,6 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
             file_folder_id = ff.folder_id
             file_created_by = ff.created_by
             file_updated_at_ts = int(ff.updated_at.timestamp())
-
-            # MED-8: Commit "processing" status immediately
-            ff.extraction_status = "processing"
-            await db.commit()
         # Session closed here — no DB held during extraction
 
         # HIGH-3: Wrap entire temp dir usage in try/finally for guaranteed cleanup
@@ -706,8 +779,10 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
             tmp_path = Path(tmp_dir) / f"file{ext}"
 
             # QE-NEW-2: Stream download to temp file instead of buffering in memory
+            # FIX-3: Wrap synchronous MinIO call in asyncio.to_thread to avoid blocking event loop
             try:
-                minio_service.download_to_file(
+                await asyncio.to_thread(
+                    minio_service.download_to_file,
                     bucket=file_storage_bucket,
                     object_name=file_storage_key,
                     file_path=str(tmp_path),
@@ -735,28 +810,45 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
         if not extraction_result.success:
             error_category = _categorize_extraction_error(extraction_result.error)
             async with async_session_maker() as db2:
-                result2 = await db2.execute(
-                    select(FolderFile).where(FolderFile.id == file_uuid)
+                # FIX-3: Atomic UPDATE...WHERE prevents TOCTOU race with reaper
+                err_result = await db2.execute(
+                    sa_update(FolderFile)
+                    .where(
+                        FolderFile.id == file_uuid,
+                        FolderFile.extraction_status == "processing",
+                    )
+                    .values(
+                        extraction_status="failed",
+                        extraction_error=error_category,
+                        embedding_status="failed",
+                        updated_at=utc_now(),
+                    )
                 )
-                ff2 = result2.scalar_one_or_none()
-                if ff2:
-                    ff2.extraction_status = "failed"
-                    ff2.extraction_error = error_category
-                    await db2.commit()
-            # Broadcast failure with safe category only
-            await _broadcast_file_event(
-                file_scope, file_id, "file_extraction_failed",
-                {"error": error_category, "folder_id": str(file_folder_id) if file_folder_id else None},
-            )
+                await db2.commit()
+            # FIX-6: Skip broadcast if reaper already reset the status
+            if err_result.rowcount == 0:
+                logger.warning("File %s status already changed by reaper, skipping error broadcast", file_id)
+            else:
+                await _broadcast_file_event(
+                    file_scope, file_id, "file_extraction_failed",
+                    {"error": error_category, "folder_id": str(file_folder_id) if file_folder_id else None},
+                )
             return {"status": "error", "error": error_category}
 
         # HIGH-11: Re-open session for final updates
         async with async_session_maker() as db3:
             result3 = await db3.execute(
-                select(FolderFile).where(FolderFile.id == file_uuid)
+                select(FolderFile).where(
+                    FolderFile.id == file_uuid,
+                    FolderFile.deleted_at.is_(None),
+                )
             )
             ff3 = result3.scalar_one_or_none()
             if ff3 is None:
+                logger.warning(
+                    "extract_and_embed_file_job: file %s was deleted during processing, skipping",
+                    file_id,
+                )
                 return {"status": "skipped", "reason": "deleted_during_extraction"}
 
             # HIGH-10: Truncate content_plain to cap
@@ -773,7 +865,7 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
             try:
                 from .services.search_service import build_search_file_data, index_file_from_data
 
-                search_data = build_search_file_data(ff3)
+                search_data = build_search_file_data(ff3, project_application_id=project_application_id)
                 await index_file_from_data(search_data)
             except Exception as ms_err:
                 logger.warning(
@@ -822,6 +914,8 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
                     embed_chunk_count = embed_result.chunk_count
                     embed_token_count = embed_result.token_count
                     embed_duration_ms = embed_result.duration_ms
+                    ff3.embedding_status = "synced"
+                    ff3.embedding_updated_at = utc_now()
                 except Exception as embed_err:
                     logger.warning(
                         "extract_and_embed_file_job: embedding failed for %s (non-fatal): %s",
@@ -849,6 +943,12 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
                 },
             )
 
+            # Broadcast embedding status so the frontend updates the file's
+            # embedding badge without a full refetch (mirrors embed_document_job).
+            await _broadcast_embedding_status(
+                file_scope, file_id, ff3.embedding_status or "none", embed_chunk_count,
+            )
+
             # Clear retry counter on success
             try:
                 if redis_service.is_connected:
@@ -870,24 +970,37 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
         error_category = _categorize_extraction_error(str(e))
         try:
             async with async_session_maker() as err_db:
-                await err_db.execute(
+                # FIX-3: Atomic UPDATE...WHERE prevents TOCTOU race with reaper.
+                # Only transition from "processing" to "failed" — if the reaper
+                # already reset to "pending", skip the error update.
+                err_result = await err_db.execute(
                     sa_update(FolderFile)
-                    .where(FolderFile.id == file_uuid)
+                    .where(
+                        FolderFile.id == file_uuid,
+                        FolderFile.extraction_status == "processing",
+                    )
                     .values(
                         extraction_status="failed",
                         extraction_error=error_category,
-                        updated_at=FolderFile.updated_at,
+                        embedding_status="failed",
+                        updated_at=utc_now(),
                     )
                 )
                 await err_db.commit()
+                # FIX-6: Skip broadcast if reaper already reset the status
+                if err_result.rowcount == 0:
+                    logger.warning(
+                        "File %s status already changed by reaper, skipping error broadcast",
+                        file_id,
+                    )
+                else:
+                    if file_scope is not None:
+                        await _broadcast_file_event(
+                            file_scope, file_id, "file_extraction_failed",
+                            {"error": error_category, "folder_id": str(file_folder_id) if file_folder_id else None},
+                        )
         except Exception as reset_err:
             logger.warning("Failed to set extraction_status for %s: %s", file_id, reset_err)
-
-        if file_scope is not None:
-            await _broadcast_file_event(
-                file_scope, file_id, "file_extraction_failed",
-                {"error": error_category, "folder_id": str(file_folder_id) if file_folder_id else None},
-            )
 
         return {"status": "error", "error": type(e).__name__}
 
@@ -905,7 +1018,9 @@ def _categorize_extraction_error(error_text: str | None) -> str:
 
     if "password" in lower or "encrypted" in lower:
         return "password_protected"
-    if "corrupt" in lower or "invalid" in lower or "bad zip" in lower or "badzipfile" in lower:
+    if "corrupt file" in lower or "corrupted" in lower or "bad zip" in lower or "badzipfile" in lower:
+        return "corrupt_file"
+    if "invalid file" in lower or "invalid format" in lower:
         return "corrupt_file"
     if "timeout" in lower:
         return "extraction_timeout"
@@ -927,11 +1042,27 @@ async def _broadcast_file_event(
         return
 
     try:
+        # Derive scope and scope_id from the scope dict for targeted cache invalidation
+        if scope.get("application_id"):
+            derived_scope = "application"
+            derived_scope_id = str(scope["application_id"])
+        elif scope.get("project_id"):
+            derived_scope = "project"
+            derived_scope_id = str(scope["project_id"])
+        elif scope.get("user_id"):
+            derived_scope = "personal"
+            derived_scope_id = str(scope["user_id"])
+        else:
+            derived_scope = None
+            derived_scope_id = None
+
         ws_payload: dict[str, Any] = {
             "type": event_type,
             "data": {
                 "file_id": file_id,
                 "timestamp": utc_now().isoformat(),
+                "scope": derived_scope,
+                "scope_id": derived_scope_id,
                 **(extra_data or {}),
             },
         }
@@ -940,11 +1071,16 @@ async def _broadcast_file_event(
         if scope.get("application_id"):
             room_id = f"application:{scope['application_id']}"
         elif scope.get("project_id"):
-            from .models.project import Project
-            async with async_session_maker() as _db:
-                proj = await _db.get(Project, scope["project_id"])
-                if proj and proj.application_id:
-                    room_id = f"application:{proj.application_id}"
+            # Use pre-resolved application_id if available to avoid extra DB session
+            app_id = scope.get("_application_id")
+            if app_id:
+                room_id = f"application:{app_id}"
+            else:
+                from .models.project import Project
+                async with async_session_maker() as _db:
+                    proj = await _db.get(Project, scope["project_id"])
+                    if proj and proj.application_id:
+                        room_id = f"application:{proj.application_id}"
         elif scope.get("user_id"):
             room_id = f"user:{scope['user_id']}"
 
@@ -961,11 +1097,6 @@ async def _broadcast_file_event(
 # Nightly Batch Embedding Job (Phase 9.6)
 # =============================================================================
 
-NIGHTLY_EMBED_BATCH_SIZE = _cfg.get_int("worker.nightly_embed_batch_size", 10)
-NIGHTLY_EMBED_BATCH_DELAY_S = _cfg.get_int("worker.nightly_embed_batch_delay_s", 5)
-MAX_NIGHTLY_EMBED = _cfg.get_int("worker.max_nightly_embed", 500)
-
-
 async def batch_embed_stale_documents(ctx: dict[str, Any]) -> dict[str, Any]:
     """Nightly cron job: embed all documents with stale or missing embeddings.
 
@@ -976,9 +1107,12 @@ async def batch_embed_stale_documents(ctx: dict[str, Any]) -> dict[str, Any]:
     Returns:
         dict with count of documents queued.
     """
-    import asyncio
-
     from sqlalchemy import select
+
+    _cfg = get_agent_config()
+    NIGHTLY_EMBED_BATCH_SIZE = _cfg.get_int("worker.nightly_embed_batch_size", 10)
+    NIGHTLY_EMBED_BATCH_DELAY_S = _cfg.get_int("worker.nightly_embed_batch_delay_s", 5)
+    MAX_NIGHTLY_EMBED = _cfg.get_int("worker.max_nightly_embed", 500)
 
     queued = 0
     try:
@@ -1001,14 +1135,9 @@ async def batch_embed_stale_documents(ctx: dict[str, Any]) -> dict[str, Any]:
                 len(stale_ids),
             )
 
-            # Bulk-update to 'syncing' before enqueuing
-            from sqlalchemy import update as sa_update
-            await db.execute(
-                sa_update(Document)
-                .where(Document.id.in_(stale_ids))
-                .values(embedding_status="syncing", updated_at=Document.updated_at)
-            )
-            await db.commit()
+            # M5: Removed bulk pre-update to 'syncing'. Each embed_document_job
+            # transitions its own document to 'syncing' atomically, preventing
+            # 24h limbo on crash.
 
             from .services.arq_helper import get_arq_redis
 
@@ -1045,7 +1174,6 @@ async def batch_embed_stale_documents(ctx: dict[str, Any]) -> dict[str, Any]:
 # Document Import Jobs
 # =============================================================================
 
-MAX_CONCURRENT_IMPORTS = _cfg.get_int("worker.max_concurrent_imports", 5)
 MAX_IMPORT_RETRIES = 5
 IMPORT_CONCURRENCY_KEY = "import:concurrency:count"
 IMPORT_CONCURRENCY_TTL = 3600  # 1hr safety TTL
@@ -1393,6 +1521,8 @@ async def process_document_import(ctx: dict[str, Any], job_id: str, _retry_count
     from .models.document import Document
     from .services.document_service import set_scope_fks
 
+    MAX_CONCURRENT_IMPORTS = get_agent_config().get_int("worker.max_concurrent_imports", 5)
+
     job_uuid = _UUID(job_id)
     temp_path: str | None = None
 
@@ -1453,16 +1583,19 @@ async def process_document_import(ctx: dict[str, Any], job_id: str, _retry_count
                             _retry_count + 1,
                             MAX_IMPORT_RETRIES,
                         )
-                        from arq.connections import create_pool
-                        redis_pool = await create_pool(parse_redis_url(settings.redis_url))
-                        await redis_pool.enqueue_job(
+                        # M4: Reuse shared ARQ pool instead of creating a fresh one
+                        from .services.arq_helper import get_arq_redis
+                        _arq_pool = await get_arq_redis()
+                        # M6: Exponential backoff with jitter to prevent thundering herd
+                        import random as _rnd
+                        _retry_delay = 15 * (2 ** _retry_count) + _rnd.uniform(0, 5)
+                        await _arq_pool.enqueue_job(
                             "process_document_import",
                             job_id,
                             _retry_count + 1,
                             _job_id=f"import:{job_id}:retry:{_retry_count + 1}",
-                            _defer_by=timedelta(seconds=15),
+                            _defer_by=timedelta(seconds=_retry_delay),
                         )
-                        await redis_pool.aclose()
                         return {"status": "deferred", "reason": "concurrency_limit"}
                     _concurrency_acquired = True
                     logger.info(
@@ -1967,13 +2100,28 @@ async def startup(ctx: dict[str, Any]) -> None:
             result = await db.execute(
                 sa_update(Document)
                 .where(Document.embedding_status == "syncing")
-                .values(embedding_status="stale", updated_at=Document.updated_at)
+                .values(embedding_status="stale", updated_at=utc_now())
             )
             if result.rowcount > 0:
                 logger.info("Crash recovery: reset %d stuck syncing documents to stale", result.rowcount)
             await db.commit()
     except Exception as e:
-        logger.warning("Crash recovery failed: %s", e)
+        logger.warning("Crash recovery (documents) failed: %s", e)
+
+    # Crash recovery: reset stuck 'syncing' folder files back to 'stale'
+    try:
+        from sqlalchemy import update as sa_update
+        async with async_session_maker() as db:
+            result = await db.execute(
+                sa_update(FolderFile)
+                .where(FolderFile.embedding_status == "syncing")
+                .values(embedding_status="stale", updated_at=utc_now())
+            )
+            if result.rowcount > 0:
+                logger.info("Crash recovery: reset %d stuck syncing files to stale", result.rowcount)
+            await db.commit()
+    except Exception as e:
+        logger.warning("Crash recovery (files) failed: %s", e)
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:
@@ -2054,6 +2202,57 @@ async def generate_session_title(ctx: dict[str, Any], session_id: str, first_mes
         return {"status": "success", "title": new_title}
 
 
+async def cleanup_stale_processing_files(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Reset files stuck in 'processing' for >10 minutes.
+
+    Standalone cron job to prevent livelock from per-job reapers resetting
+    other workers' active jobs. Runs every 5 minutes.
+    """
+    from sqlalchemy import update as sa_update
+
+    try:
+        async with async_session_maker() as reaper_db:
+            _cfg = get_agent_config()
+            stale_minutes = _cfg.get_int("worker.stale_processing_cutoff_minutes", 10)
+            stale_cutoff = utc_now() - timedelta(minutes=stale_minutes)
+            # F15: Use RETURNING clause to get reset IDs atomically (no post-commit SELECT)
+            stale_result = await reaper_db.execute(
+                sa_update(FolderFile)
+                .where(
+                    FolderFile.extraction_status == "processing",
+                    FolderFile.updated_at < stale_cutoff,
+                    FolderFile.deleted_at.is_(None),
+                )
+                .values(extraction_status="pending", updated_at=utc_now())
+                .returning(FolderFile.id)
+            )
+            reset_ids = [row[0] for row in stale_result.all()]
+            await reaper_db.commit()
+
+            if reset_ids:
+                logger.warning(
+                    "cleanup_stale_processing_files: Reset %d stale 'processing' files back to 'pending'",
+                    len(reset_ids),
+                )
+                try:
+                    from .services.arq_helper import get_arq_redis
+
+                    arq_redis = await get_arq_redis()
+                    for fid in reset_ids:
+                        await arq_redis.enqueue_job(
+                            "extract_and_embed_file_job",
+                            str(fid),
+                            _job_id=f"extract_file:{fid}",
+                        )
+                except Exception as enq_err:
+                    logger.warning("Failed to re-enqueue reset files: %s", enq_err)
+
+            return {"status": "success", "reset_count": len(reset_ids)}
+    except Exception as reaper_err:
+        logger.error("cleanup_stale_processing_files failed: %s", reaper_err, exc_info=True)
+        return {"status": "error", "error": str(type(reaper_err).__name__)}
+
+
 def build_archive_cron():
     """Build archive cron job based on config (hours or minutes)."""
     hours = get_archive_hours()
@@ -2091,6 +2290,7 @@ class WorkerSettings:
         process_document_import,
         cleanup_checkpoints,
         generate_session_title,
+        cleanup_stale_processing_files,
     ]
 
     # Scheduled cron jobs (configured via .env)
@@ -2106,6 +2306,8 @@ class WorkerSettings:
         cron(batch_embed_stale_documents, hour={2}, minute=0, second=0),
         # Daily checkpoint cleanup: 3:00 AM (DB-001 — prevent unbounded table growth)
         cron(cleanup_checkpoints, hour={3}, minute=0, run_at_startup=False),
+        # Stale processing file reaper: every 5 minutes (replaces per-job reaper)
+        cron(cleanup_stale_processing_files, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}, second=30),
     ]
 
     # Lifecycle hooks

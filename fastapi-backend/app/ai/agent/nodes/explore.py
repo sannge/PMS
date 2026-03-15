@@ -348,12 +348,15 @@ async def execute_tools(
 
     # S4: Collect tool results into the research field for downstream synthesis.
     result_messages = result.get("messages", [])
+    # H3: Raise per-entry cap from 500 to 3000 chars so search results
+    # survive into synthesis.  Window is capped at 8 entries (see below).
+    _TOOL_RESULT_CHARS = 3000
     tool_results = []
     for msg in result_messages:
         if isinstance(msg, ToolMessage):
             tool_results.append({
                 "tool": getattr(msg, "name", "unknown"),
-                "result": str(msg.content)[:500],
+                "result": str(msg.content)[:_TOOL_RESULT_CHARS],
             })
 
     return_dict: dict[str, Any] = {

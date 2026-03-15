@@ -42,8 +42,9 @@ def route_after_understand(state: AgentState) -> str:
     # B1: Enforce clarify round limit — prevent infinite clarify loop
     clarify_count = state.get("clarify_count", 0)
 
-    # High confidence greeting/follow_up -> fast path
-    if confidence >= get_confidence_fast_path() and intent in ("greeting", "follow_up"):
+    # H5: High confidence greeting only -> fast path.
+    # Follow-up questions may need document exploration, so they go through explore.
+    if confidence >= get_confidence_fast_path() and intent == "greeting":
         logger.info(
             "route_after_understand: fast path (intent=%s, confidence=%.2f)",
             intent, confidence,
@@ -102,6 +103,11 @@ def route_after_explore(state: AgentState) -> str:
         if state.get("iteration_count", 0) >= get_max_iterations():
             logger.info("route_after_explore: iteration limit reached, going to respond")
             return "respond"
+        # L1: TODO — Wire explore-specific iteration limit once a dedicated
+        # explore_iteration_count field is added to AgentState.  Currently
+        # only total_llm_calls/total_tool_calls/iteration_count are tracked
+        # globally, so the explore-specific limits (max_explore_iterations=10,
+        # max_explore_llm_calls=15) cannot be enforced without a new counter.
         return "explore_tools"
 
     # No tool calls -- check if synthesis needed

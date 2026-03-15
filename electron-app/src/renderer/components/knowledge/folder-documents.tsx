@@ -107,6 +107,7 @@ export function FolderDocuments({
           depth={depth}
           isSelected={selectedFileId === file.id}
           isRenaming={renamingItemId === file.id}
+          sortableId={sortableIdPrefix ? `${sortableIdPrefix}-file-${file.id}` : undefined}
           onSelect={() => onSelectFile?.(file)}
           onContextMenu={(e) => onFileContextMenu?.(e, file)}
           onRenameSubmit={onRenameSubmit}

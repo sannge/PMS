@@ -29,15 +29,32 @@ import { clearAll as clearQueryCacheDB } from './query-cache-db'
 // Electron's document.visibilitychange doesn't fire on window focus/blur
 // (only on minimize). Override with window focus/blur events so that
 // refetchOnWindowFocus works correctly in the Electron renderer.
+//
+// Debounced to 300ms to prevent thundering-herd refetches on rapid
+// Alt-Tab / taskbar clicks. React Query will only refetch queries with
+// active observers (mounted components), so this naturally limits
+// refetches to what's currently on screen.
 
 focusManager.setEventListener((handleFocus) => {
-  const onFocus = () => handleFocus(true)
-  const onBlur = () => handleFocus(false)
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null
+
+  const onFocus = () => {
+    if (debounceTimer) clearTimeout(debounceTimer)
+    debounceTimer = setTimeout(() => handleFocus(true), 300)
+  }
+  const onBlur = () => {
+    if (debounceTimer) {
+      clearTimeout(debounceTimer)
+      debounceTimer = null
+    }
+    handleFocus(false)
+  }
 
   window.addEventListener('focus', onFocus)
   window.addEventListener('blur', onBlur)
 
   return () => {
+    if (debounceTimer) clearTimeout(debounceTimer)
     window.removeEventListener('focus', onFocus)
     window.removeEventListener('blur', onBlur)
   }
@@ -136,7 +153,7 @@ export const queryKeys = {
   documentTags: (scope: string, scopeId: string) => ['documentTags', scope, scopeId] as const,
 
   // Document Scopes Summary
-  scopesSummary: () => ['documents', 'scopes-summary'] as const,
+  scopesSummary: () => ['knowledge', 'scopes-summary'] as const,
 
   // Document Locks
   documentLock: (documentId: string) => ['documentLock', documentId] as const,
@@ -181,6 +198,7 @@ export const queryKeys = {
 
   // Folder Files (file uploads to document folders)
   folderFiles: (folderId: string) => ['folderFiles', folderId] as const,
+  unfiledFiles: (scope: string, scopeId: string) => ['folderFiles', 'unfiled', scope, scopeId] as const,
   folderFile: (fileId: string) => ['folderFile', fileId] as const,
   folderFileDownloadUrl: (fileId: string) => ['folderFileDownloadUrl', fileId] as const,
 }
@@ -201,7 +219,9 @@ export const queryClient = new QueryClient({
       // Keep unused data in cache for 24 hours (for offline support)
       gcTime: DEFAULT_GC_TIME,
 
-      // Refresh data when window regains focus
+      // Re-enabled with debounced focusManager (300ms) above. Only queries
+      // with active observers (mounted components) refetch, so this
+      // naturally limits to what's currently on screen.
       refetchOnWindowFocus: true,
 
       // Refresh data when network reconnects

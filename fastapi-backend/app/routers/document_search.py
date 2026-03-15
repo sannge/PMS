@@ -23,6 +23,7 @@ from ..services.search_service import (
     CONTROL_CHAR_RE,
     get_fallback_scope_ids,
 )
+from ..ai.rate_limiter import AIRateLimiter, get_rate_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ async def search_documents_endpoint(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     redis: RedisService = Depends(get_redis),
+    rate_limiter: AIRateLimiter = Depends(get_rate_limiter),
 ):
     """Search documents with RBAC filtering via Meilisearch.
 
@@ -56,26 +58,28 @@ async def search_documents_endpoint(
     if CONTROL_CHAR_RE.search(q_clean) or len(q_clean) < 2:
         raise HTTPException(400, "Query contains invalid characters or is too short")
 
-    # 2. Rate limiting (Redis-backed, skip if Redis unavailable)
-    try:
-        rate_key = f"ratelimit:search:{current_user.id}"
-        allowed, current_count = await redis.rate_limit_check(
-            rate_key, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW
+    # R2-19: Use AIRateLimiter.check_and_increment (atomic, with in-memory fallback)
+    # instead of redis_service.rate_limit_check which is non-atomic and has no fallback.
+    result = await rate_limiter.check_and_increment(
+        endpoint="ai_query",
+        scope_id=str(current_user.id),
+        limit=RATE_LIMIT_MAX,
+        window_seconds=RATE_LIMIT_WINDOW,
+    )
+    if not result.allowed:
+        logger.warning(
+            "Search rate limit hit: user_id=%s, remaining=%d",
+            current_user.id, result.remaining,
         )
-        if not allowed:
-            logger.warning(
-                "Search rate limit hit: user_id=%s, count=%d",
-                current_user.id, current_count,
-            )
-            raise HTTPException(
-                429,
-                "Too many search requests. Please wait.",
-                headers={"Retry-After": str(RATE_LIMIT_WINDOW)},
-            )
-    except HTTPException:
-        raise  # Re-raise 429
-    except Exception:
-        logger.warning("Redis unavailable for rate limiting, skipping rate limit check")
+        raise HTTPException(
+            429,
+            "Too many search requests. Please wait.",
+            headers={
+                "Retry-After": str(result.reset_seconds),
+                "X-RateLimit-Limit": str(result.limit),
+                "X-RateLimit-Remaining": str(result.remaining),
+            },
+        )
 
     # 3. Get RBAC filter (cached in Redis for 30s)
     filter_expr = await get_cached_scope_filter(redis, db, current_user.id)

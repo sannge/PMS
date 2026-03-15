@@ -92,17 +92,32 @@ class SemanticChunker:
         overlap_tokens: Token overlap between adjacent chunks (default 100).
     """
 
-    # Token bounds for merge/split logic — read from config at class init
+    # M3: Getter functions read from config at call time so admin changes
+    # take effect without worker restart.
+    @staticmethod
+    def _get_min_tokens() -> int:
+        from .config_service import get_agent_config
+        return get_agent_config().get_int("embedding.min_chunk_tokens", 500)
+
+    @staticmethod
+    def _get_max_tokens() -> int:
+        from .config_service import get_agent_config
+        return get_agent_config().get_int("embedding.max_chunk_tokens", 800)
+
+    @staticmethod
+    def _get_canvas_proximity() -> float:
+        from .config_service import get_agent_config
+        return get_agent_config().get_float("embedding.canvas_proximity_threshold", 300.0)
+
+    # Backward compat class attrs (frozen at definition, prefer getters)
     from .config_service import get_agent_config as _get_cfg
     _chunker_cfg = _get_cfg()
     MIN_TOKENS = _chunker_cfg.get_int("embedding.min_chunk_tokens", 500)
     MAX_TOKENS = _chunker_cfg.get_int("embedding.max_chunk_tokens", 800)
-
-    # Spatial proximity threshold for canvas clustering (pixels)
     CANVAS_PROXIMITY_THRESHOLD = _chunker_cfg.get_float(
         "embedding.canvas_proximity_threshold", 300.0
     )
-    del _chunker_cfg, _get_cfg  # cleanup class namespace
+    del _chunker_cfg, _get_cfg
 
     def __init__(self, target_tokens: int = 600, overlap_tokens: int = 100) -> None:
         self.target_tokens = target_tokens
@@ -217,6 +232,28 @@ class SemanticChunker:
                         text=text,
                         heading_context=current_heading,
                     ))
+                # Extract non-text nodes (drawio, tables) nested inside list items.
+                # _extract_list_text only extracts plain text via _extract_text_recursive,
+                # so drawio diagrams and other rich nodes inside list items are lost.
+                for item in node.get("content", []):
+                    for child in item.get("content", []):
+                        child_type = child.get("type", "")
+                        if child_type == "drawio":
+                            drawio_text = self._extract_drawio_text(child)
+                            if drawio_text.strip():
+                                blocks.append(_TextBlock(
+                                    text=drawio_text,
+                                    heading_context=current_heading,
+                                ))
+                        elif child_type == "table":
+                            table_text, header_cells = self._extract_table_text_with_headers(child)
+                            if table_text.strip():
+                                blocks.append(_TextBlock(
+                                    text=table_text,
+                                    heading_context=current_heading,
+                                    is_table=True,
+                                    table_columns=header_cells,
+                                ))
 
             elif node_type == "codeBlock":
                 code = self._extract_text_recursive(node.get("content", []))
@@ -290,8 +327,8 @@ class SemanticChunker:
                 parts.append(node.get("text", ""))
             elif node.get("type") == "hardBreak":
                 parts.append("\n")
-            elif node.get("type") == "image":
-                continue  # Skip images
+            elif node.get("type") in ("image", "table", "drawio"):
+                continue  # Skip: images handled by vision, tables/drawio extracted separately
             elif "content" in node:
                 parts.append(self._extract_text_recursive(node["content"]))
                 if node.get("type") in (
@@ -371,8 +408,9 @@ class SemanticChunker:
             cleaned = re.sub(r"<[^>]+>", " ", text).strip()
             return re.sub(r"\s+", " ", cleaned)
 
-        # Pass 1 -- Vertices: collect mxCell[vertex="1"]
+        # Single pass -- collect vertices and edges
         vertices: dict[str, dict[str, str]] = {}
+        edges: list[tuple[str, str, str]] = []
         for cell in root.iter("mxCell"):
             if cell.get("vertex") == "1":
                 cell_id = cell.get("id", "")
@@ -381,17 +419,15 @@ class SemanticChunker:
                 parent_id = cell.get("parent", "")
                 if cell_id:
                     vertices[cell_id] = {"label": label, "parent": parent_id}
-
-        # Pass 2 -- Edges: collect mxCell[edge="1"]
-        edges: list[tuple[str, str, str]] = []
-        for cell in root.iter("mxCell"):
-            if cell.get("edge") == "1":
+            elif cell.get("edge") == "1":
                 source = cell.get("source", "")
                 target = cell.get("target", "")
-                if source and target and source in vertices and target in vertices:
-                    value = cell.get("value", "")
-                    edge_label = clean_html(value) if value else ""
-                    edges.append((source, target, edge_label))
+                value = cell.get("value", "")
+                edge_label = clean_html(value) if value else ""
+                edges.append((source, target, edge_label))
+
+        # Filter edges to only include those with valid source/target vertices
+        edges = [(s, t, l) for s, t, l in edges if s in vertices and t in vertices]
 
         # Pass 3 -- Containment: build parent->children map
         # Only include parents that are actual vertices (not root "0" or layer "1")
@@ -484,6 +520,14 @@ class SemanticChunker:
         for block in blocks:
             # --- Table blocks: flush buffer, emit as own chunk, bypass MAX_TOKENS ---
             if block.is_table:
+                # Tiny "tables" (< 10 tokens) are likely Docling artifacts
+                # (e.g. "| filename |"). Merge them into the text buffer instead
+                # of emitting as standalone table chunks.
+                if block.token_count < 10:
+                    current_text += block.text
+                    current_tokens += block.token_count
+                    continue
+
                 # Flush accumulated text buffer
                 if current_text.strip():
                     chunks.append(ChunkResult(
@@ -509,7 +553,7 @@ class SemanticChunker:
                 table_text = f"{preamble}\n{block.text.strip()}"
                 table_tokens = self.count_tokens(table_text)
 
-                if table_tokens > self.MAX_TOKENS:
+                if table_tokens > self._get_max_tokens():
                     # Split oversized table by row groups (MED-2: thread rows_per_chunk)
                     table_chunks = self._split_table_by_rows(
                         block.text.strip(), preamble, block.heading_context,
@@ -583,7 +627,7 @@ class SemanticChunker:
             # BUT if the buffer is tiny (≤50 tokens, e.g. just a title or
             # heading line), keep it so it merges with the next content
             # instead of being emitted as a near-empty chunk.
-            if current_tokens + block.token_count > self.MAX_TOKENS and current_text.strip():
+            if current_tokens + block.token_count > self._get_max_tokens() and current_text.strip():
                 if current_tokens > 50:
                     chunks.append(ChunkResult(
                         text=current_text.strip(),
@@ -595,7 +639,7 @@ class SemanticChunker:
                     current_tokens = 0
 
             # If single block exceeds MAX, split at sentence boundaries
-            if block.token_count > self.MAX_TOKENS:
+            if block.token_count > self._get_max_tokens():
                 if current_text.strip():
                     if current_tokens > 50:
                         # Buffer is large enough — emit as its own chunk
@@ -720,7 +764,7 @@ class SemanticChunker:
             sentence_tokens = self.count_tokens(sentence)
 
             # Fallback: hard-split sentences that exceed MAX_TOKENS
-            if sentence_tokens > self.MAX_TOKENS:
+            if sentence_tokens > self._get_max_tokens():
                 # Flush any accumulated text first
                 if current_text.strip():
                     chunks.append(ChunkResult(
@@ -734,8 +778,8 @@ class SemanticChunker:
 
                 # Hard-split at token boundaries
                 tokens = self._encoder.encode(sentence)
-                for start in range(0, len(tokens), self.MAX_TOKENS):
-                    sub_tokens = tokens[start:start + self.MAX_TOKENS]
+                for start in range(0, len(tokens), self._get_max_tokens()):
+                    sub_tokens = tokens[start:start + self._get_max_tokens()]
                     sub_text = self._encoder.decode(sub_tokens)
                     if sub_text.strip():
                         chunks.append(ChunkResult(
@@ -746,7 +790,7 @@ class SemanticChunker:
                         ))
                 continue
 
-            if current_tokens + sentence_tokens > self.MAX_TOKENS and current_text.strip():
+            if current_tokens + sentence_tokens > self._get_max_tokens() and current_text.strip():
                 chunks.append(ChunkResult(
                     text=current_text.strip(),
                     heading_context=heading_context,
@@ -781,13 +825,30 @@ class SemanticChunker:
         return result
 
     def _add_overlap(self, chunks: list[ChunkResult]) -> list[ChunkResult]:
-        """Add overlap tokens from end of chunk N to start of chunk N+1."""
+        """Add overlap tokens from end of chunk N to start of chunk N+1.
+
+        Skips overlap when the heading context changes between adjacent
+        chunks (C2) or when the previous chunk is a table (M2), to prevent
+        cross-section contamination in embeddings.
+        """
         if len(chunks) <= 1:
             return chunks
 
         result: list[ChunkResult] = [chunks[0]]
 
         for i in range(1, len(chunks)):
+            # C2: skip overlap at heading boundaries
+            if chunks[i - 1].heading_context != chunks[i].heading_context:
+                result.append(chunks[i])
+                continue
+
+            # M2: skip overlap at table boundaries
+            prev_type = getattr(chunks[i - 1], "chunk_type", "text")
+            curr_type = getattr(chunks[i], "chunk_type", "text")
+            if prev_type == "table" or curr_type == "table":
+                result.append(chunks[i])
+                continue
+
             prev_text = chunks[i - 1].text
             # Get last ~overlap_tokens worth of text from previous chunk
             prev_tokens = self._encoder.encode(prev_text)
@@ -835,6 +896,11 @@ class SemanticChunker:
         if not markdown or not markdown.strip():
             return []
 
+        # Clean Docling extraction artifacts before chunking
+        markdown = self._clean_docling_artifacts(markdown, title)
+        if not markdown or not markdown.strip():
+            return []
+
         blocks = self._extract_markdown_blocks(markdown, title)
         if not blocks:
             return []
@@ -854,6 +920,46 @@ class SemanticChunker:
             chunk.chunk_index = i
 
         return with_overlap
+
+    @staticmethod
+    def _clean_docling_artifacts(markdown: str, title: str = "") -> str:
+        """Remove Docling extraction artifacts that produce meaningless chunks.
+
+        Docling outputs spurious content for certain document elements:
+        - ``<!-- image -->`` HTML comments for embedded images/logos
+        - ``Table: filename`` preamble lines echoing the source filename
+        - Single-cell pipe rows containing just the filename (``| filename``)
+
+        These create tiny, semantically empty chunks that hurt retrieval quality.
+        """
+        # Normalize title for comparison (strip extension for partial matches)
+        title_lower = title.lower().strip() if title else ""
+        title_stem = re.sub(r"\.[^.]+$", "", title_lower)  # "report.pdf" -> "report"
+
+        lines = markdown.split("\n")
+        cleaned: list[str] = []
+        for line in lines:
+            stripped = line.strip()
+            # Skip HTML comments (e.g. <!-- image -->)
+            if re.match(r"^<!--.*-->$", stripped):
+                continue
+            # Skip pipe rows containing only an HTML comment
+            if re.match(r"^\|?\s*<!--.*-->\s*\|?$", stripped):
+                continue
+            # Skip "Table: filename" artifact lines from Docling
+            if title_lower and stripped.lower().startswith("table:"):
+                table_label = stripped[6:].strip().lower()
+                table_stem = re.sub(r"\.[^.]+$", "", table_label)
+                if table_label == title_lower or table_stem == title_stem:
+                    continue
+            # Skip single-cell pipe rows that just echo the filename
+            if title_lower and stripped.startswith("|"):
+                cell_text = stripped.strip("|").strip().lower()
+                cell_stem = re.sub(r"\.[^.]+$", "", cell_text)
+                if cell_text == title_lower or cell_stem == title_stem:
+                    continue
+            cleaned.append(line)
+        return "\n".join(cleaned)
 
     def _extract_markdown_blocks(
         self,
@@ -1008,7 +1114,7 @@ class SemanticChunker:
 
             token_count = self.count_tokens(chunk_text)
 
-            if token_count > self.MAX_TOKENS:
+            if token_count > self._get_max_tokens():
                 # Split oversized cluster at element boundaries
                 split_chunks = self._split_cluster(cluster, connectors)
                 chunks.extend(split_chunks)
@@ -1126,10 +1232,11 @@ class SemanticChunker:
                 union(elem_map[conn.source_id], elem_map[conn.target_id])
 
         # Union by spatial proximity
+        proximity = self._get_canvas_proximity()
         for i in range(len(elements)):
             for j in range(i + 1, len(elements)):
                 dist = self._element_distance(elements[i], elements[j])
-                if dist < self.CANVAS_PROXIMITY_THRESHOLD:
+                if dist < proximity:
                     union(i, j)
 
         # Group by root
@@ -1214,7 +1321,7 @@ class SemanticChunker:
             elem_tokens = self.count_tokens(elem_text)
 
             # Single element exceeds MAX_TOKENS — sub-split via _split_large_text
-            if elem_tokens > self.MAX_TOKENS:
+            if elem_tokens > self._get_max_tokens():
                 # Flush accumulated elements first
                 if current_elements:
                     text = self._build_cluster_text(current_elements, connectors)
@@ -1240,7 +1347,7 @@ class SemanticChunker:
                 chunks.extend(sub_chunks)
                 continue
 
-            if current_tokens + elem_tokens > self.MAX_TOKENS and current_elements:
+            if current_tokens + elem_tokens > self._get_max_tokens() and current_elements:
                 text = self._build_cluster_text(current_elements, connectors)
                 heading = self._canvas_heading_context(current_elements[0])
                 chunks.append(ChunkResult(

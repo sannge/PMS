@@ -257,6 +257,7 @@ export function ChecklistCard({
         'rounded-lg border border-border bg-card',
         'transition-shadow duration-150',
         'hover:shadow-sm',
+        disabled && 'opacity-60 pointer-events-none',
         className
       )}
     >

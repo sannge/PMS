@@ -5,7 +5,7 @@
  * Supports rename, archive, and delete actions via dropdown menu.
  */
 
-import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
+import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { MoreHorizontal, MessageSquare, Pencil, Archive, Trash2, Loader2 } from 'lucide-react'
 import {
   DropdownMenu,
@@ -30,8 +30,10 @@ function getDateGroup(dateStr: string): DateGroup {
   const date = new Date(dateStr)
   const now = new Date()
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  const yesterday = new Date(today.getTime() - 86_400_000)
-  const weekAgo = new Date(today.getTime() - 7 * 86_400_000)
+  const yesterday = new Date(today)
+  yesterday.setDate(yesterday.getDate() - 1)
+  const weekAgo = new Date(today)
+  weekAgo.setDate(weekAgo.getDate() - 7)
 
   if (date >= today) return 'Today'
   if (date >= yesterday) return 'Yesterday'
@@ -101,7 +103,7 @@ interface SessionRowProps {
   onDelete: (id: string) => void
 }
 
-function SessionRow({ session, busyState, onSelect, onRename, onArchive, onDelete }: SessionRowProps): JSX.Element {
+const SessionRow = React.memo(function SessionRow({ session, busyState, onSelect, onRename, onArchive, onDelete }: SessionRowProps): JSX.Element {
   const [isEditing, setIsEditing] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -195,7 +197,7 @@ function SessionRow({ session, busyState, onSelect, onRename, onArchive, onDelet
       </div>
     </button>
   )
-}
+})
 
 // ============================================================================
 // Chat Session List

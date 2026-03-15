@@ -137,7 +137,7 @@ class FileExtractionService:
         svc = DoclingService()
         file_type = ext.lstrip(".")
 
-        result = await svc.convert(
+        result = await svc.process_file(
             file_path=str(file_path),
             file_type=file_type,
         )
@@ -145,7 +145,7 @@ class FileExtractionService:
         return ExtractionResult(
             markdown=result.markdown,
             metadata={
-                "page_count": getattr(result, "page_count", None),
+                "page_count": result.metadata.get("page_count"),
                 "image_count": len(result.images) if result.images else 0,
                 "warnings": result.warnings,
             },

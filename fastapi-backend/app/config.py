@@ -24,8 +24,11 @@ class Settings(BaseSettings):
     db_user: str
     db_password: str
     db_port: int = 5432
-    db_pool_size: int = 50
-    db_max_overflow: int = 100
+    # C4: Reduced defaults to prevent exceeding PostgreSQL max_connections
+    # across multiple workers. Recommend PgBouncer in transaction mode for
+    # production deployments with 3+ Uvicorn workers.
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
     sql_echo: bool = False
 
     # MinIO settings
@@ -52,10 +55,13 @@ class Settings(BaseSettings):
 
     # Redis settings (for WebSocket pub/sub and distributed caching)
     redis_url: str = "redis://localhost:6379/0"
-    redis_max_connections: int = 50
+    # H13: Increased from 50 to 200 for 5K-user broadcast storms
+    redis_max_connections: int = 200
     redis_socket_timeout: float = 5.0
     redis_retry_on_timeout: bool = True
-    redis_required: bool = False  # Set True for multi-worker deployment
+    # H8: Default to True so token blacklist fails closed in production.
+    # Set to False only for single-worker dev/test environments.
+    redis_required: bool = True
 
     # ARQ Worker settings (background job scheduling)
     # Archive job: runs at these hours (comma-separated, 24h format)
@@ -126,6 +132,10 @@ class Settings(BaseSettings):
     anthropic_oauth_client_id: str = ""
     oauth_state_ttl_seconds: int = 600  # 10 minutes
 
+    # M11: Trusted proxy IPs for X-Forwarded-For extraction (comma-separated)
+    # Only set this when running behind a known reverse proxy (nginx, ALB, etc.)
+    trusted_proxy_ips: str = ""
+
     # CORS settings
     cors_origins: str = "http://localhost:5173,http://localhost:8001"  # Comma-separated origins
 
@@ -168,9 +178,16 @@ if not settings.ai_encryption_key and settings.ai_default_provider:
             "AI provider credentials cannot be stored without encryption."
         )
 
-# Warn when refresh token secret falls back to access token secret
+# H8: Warn if redis_required is False outside test mode
+if not settings.redis_required and _os.environ.get("TESTING") != "1":
+    _config_logger.warning(
+        "SECURITY: REDIS_REQUIRED is False — token blacklist will fail-open "
+        "during Redis outages.  Set REDIS_REQUIRED=true for production."
+    )
+
+# M12: Enforce separate JWT_REFRESH_SECRET in production
 if not settings.jwt_refresh_secret:
-    if settings.redis_required:
+    if settings.redis_required and _os.environ.get("TESTING") != "1":
         _config_logger.warning(
             "SECURITY: JWT_REFRESH_SECRET is not set — refresh tokens share the "
             "access token signing secret. Set JWT_REFRESH_SECRET for production."
@@ -178,4 +195,19 @@ if not settings.jwt_refresh_secret:
     elif _os.environ.get("TESTING") != "1":
         _config_logger.info(
             "JWT_REFRESH_SECRET not set — falling back to JWT_SECRET for refresh tokens."
+        )
+
+# M14: Warn about insecure defaults in production-like environments
+if settings.redis_required and _os.environ.get("TESTING") != "1":
+    _weak: list[str] = []
+    if settings.minio_access_key == "minioadmin":
+        _weak.append("MINIO_ACCESS_KEY is still 'minioadmin'")
+    if settings.minio_secret_key == "minioadmin":
+        _weak.append("MINIO_SECRET_KEY is still 'minioadmin'")
+    if not settings.ai_encryption_key:
+        _weak.append("AI_ENCRYPTION_KEY is empty")
+    if _weak:
+        _config_logger.warning(
+            "SECURITY: Insecure defaults detected in production config: %s",
+            "; ".join(_weak),
         )

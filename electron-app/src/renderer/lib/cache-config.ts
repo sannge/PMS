@@ -59,6 +59,7 @@ export const HYDRATION_PRIORITY = {
 export const NON_PERSISTENT_KEYS = [
   'downloadUrl',
   'downloadUrls',
+  'folderFileDownloadUrl',
   'search',
   'presence',
   'activeLocks',

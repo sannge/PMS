@@ -37,7 +37,7 @@ const LIGHTBOX_MAX_WIDTH = 1200
  * `maxWidth` (keeping aspect ratio), and returns a data URL at the
  * given JPEG quality.  Returns `fallback` on decode failure.
  *
- * LOW-18: Extracted from createThumbnailDataUrl / createLightboxDataUrl
+ * Extracted from createThumbnailDataUrl / createLightboxDataUrl
  * which were ~50 lines of near-identical logic.
  */
 async function _resizeImageToDataUrl(
@@ -190,7 +190,7 @@ function evictOldestCompleted(map: Map<string, ActivityItem>): void {
  * Uses a unified activity timeline that merges thinking_step (pipeline nodes)
  * and tool_call_start/end events into a single chronological list.
  */
-/** FE-013: Max SSE buffer size (1 MB) to prevent unbounded growth from malformed events */
+/** Max SSE buffer size (1 MB) to prevent unbounded growth from malformed events */
 const MAX_BUFFER_SIZE = 1_048_576
 
 async function processSSEStream(
@@ -209,7 +209,7 @@ async function processSSEStream(
   const reader = res.body!.getReader()
   const decoder = new TextDecoder()
   let contentAccum = ''
-  // HIGH-16: Use a Map for in-flight activity tracking to avoid O(n) array
+  // Use a Map for in-flight activity tracking to avoid O(n) array
   // spreads on every tool_call_start/end event. Convert to array only on flush.
   const activityMap = new Map<string, ActivityItem>()
   let buffer = ''
@@ -218,11 +218,18 @@ async function processSSEStream(
   let receivedError = false
   let receivedSessionId = ''
 
-  // FE-004: Batch flags — accumulate changes per chunk, flush once
+  // Batch flags — accumulate changes per chunk, flush once
   let contentDirty = false
   let activityDirty = false
+  // Monotonic counter incremented on every activityMap mutation.
+  // flushBatch only creates a new array when the version has advanced,
+  // which correctly detects mid-list updates (e.g. a non-last tool
+  // transitioning from running → complete) that the old size+last-item
+  // heuristic silently dropped.
+  let activityVersion = 0
+  let lastFlushedVersion = 0
 
-  // F9: Timeout if no events received for 60 seconds
+  // Timeout if no events received for 60 seconds
   const SSE_TIMEOUT_MS = 60_000
   const resetTimeout = () => {
     if (timeoutId) clearTimeout(timeoutId)
@@ -256,6 +263,7 @@ async function processSSEStream(
           if (activityMap.has(nodeKey) || activityMap.size < MAX_ACTIVITY_ITEMS) {
             activityMap.set(nodeKey, step)
             activityDirty = true
+            activityVersion++
           }
           break
         }
@@ -273,6 +281,7 @@ async function processSSEStream(
               status: 'running' as const,
             })
             activityDirty = true
+            activityVersion++
           }
           break
         }
@@ -290,6 +299,7 @@ async function processSSEStream(
               error: evt.data.error,
             })
             activityDirty = true
+            activityVersion++
           }
           break
         }
@@ -311,24 +321,13 @@ async function processSSEStream(
         }
 
         case 'phase_changed': {
-          // Update current_phase on the assistant message
+          // Update current_phase on the assistant message for the phase
+          // indicator text. Do NOT add an activity item — the thinking_step
+          // event already handles the timeline entry (adding one here with
+          // a different key caused every step to render twice).
           callbacks.updateLastAssistantMessage({
             current_phase: evt.data.phase,
           })
-          // Also add as an activity item for the timeline
-          const phaseKey = `phase:${evt.data.phase}`
-          if (!activityMap.has(phaseKey) && activityMap.size >= MAX_ACTIVITY_ITEMS) {
-            evictOldestCompleted(activityMap)
-          }
-          if (activityMap.has(phaseKey) || activityMap.size < MAX_ACTIVITY_ITEMS) {
-            activityMap.set(phaseKey, {
-              type: 'node' as const,
-              node: evt.data.phase,
-              label: evt.data.label,
-              status: 'active' as const,
-            })
-            activityDirty = true
-          }
           break
         }
 
@@ -379,8 +378,9 @@ async function processSSEStream(
       partial.content = contentAccum
       contentDirty = false
     }
-    if (activityDirty) {
+    if (activityDirty && activityVersion !== lastFlushedVersion) {
       partial.activity = Array.from(activityMap.values())
+      lastFlushedVersion = activityVersion
       activityDirty = false
     }
     if (Object.keys(partial).length > 0) {
@@ -388,7 +388,7 @@ async function processSSEStream(
     }
   }
 
-  /** QE-HIGH07: Rate-limit flushBatch to at most once per animation frame */
+  /** Rate-limit flushBatch to at most once per animation frame */
   let rafId: number | null = null
   function scheduleFlush() {
     if (rafId !== null) return
@@ -408,7 +408,7 @@ async function processSSEStream(
       resetTimeout()
       const decoded = decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
 
-      // FE-013 + MED-11: Check buffer size BEFORE appending to catch malformed
+      // Check buffer size BEFORE appending to catch malformed
       // events that never terminate with double-newline. If the buffer already
       // exceeds MAX_BUFFER_SIZE, try to salvage complete events first.
       if (buffer.length + decoded.length > MAX_BUFFER_SIZE) {
@@ -452,7 +452,7 @@ async function processSSEStream(
       flushBatch()
     }
 
-    // QE-011: If stream completed without content, run_finished, or error event, treat as connection lost
+    // If stream completed without content, run_finished, or error event, treat as connection lost
     if (!contentAccum && !receivedRunFinished && !receivedError) {
       callbacks.updateLastAssistantMessage({
         content: 'Connection lost. Please try again.',
@@ -520,6 +520,7 @@ async function sseFetchWithRetry(
     fetch(url, { ...init, headers: { ...(init.headers as Record<string, string>), ...headers } })
 
   let lastError: unknown
+  let authRetries = 0
   for (let attempt = 0; attempt <= SSE_MAX_RETRIES; attempt++) {
     // Bail out early if already aborted (avoids stalling during backoff)
     if (signal?.aborted) throw new DOMException('The operation was aborted.', 'AbortError')
@@ -531,6 +532,10 @@ async function sseFetchWithRetry(
       // Continue loop so the refreshed token goes through sseAuthHeaders()
       // and gets full exponential backoff retry coverage on subsequent failures.
       if (res.status === 401) {
+        if (authRetries >= 1) {
+          throw new Error('Authentication failed. Please sign in again.')
+        }
+        authRetries++
         let newToken: string | null = null
         try {
           newToken = await refreshTokens()
@@ -589,7 +594,7 @@ export function useAiChat() {
   }, [])
 
   /**
-   * HIGH-9: Shared streaming lifecycle used by sendMessage, resumeInterrupt,
+   * Shared streaming lifecycle used by sendMessage, resumeInterrupt,
    * and sendReplayMessage. Handles abort controller setup, placeholder
    * assistant message, sseFetchWithRetry, error handling, processSSEStream,
    * and the finally block.
@@ -618,7 +623,7 @@ export function useAiChat() {
         }
         addMessage(userMsg)
 
-        // FE-007: Immediately strip base64 from stored message to free memory.
+        // Immediately strip base64 from stored message to free memory.
         // The fetch body uses the original images, not the stored message.
         if (userMsg.images?.length) {
           updateMessage(userMsg.id, (msg) => ({
@@ -660,8 +665,16 @@ export function useAiChat() {
 
         if (!res.ok) {
           const errText = await res.text().catch(() => 'Unknown error')
+          let userMessage: string
+          if (res.status === 503) {
+            userMessage = 'Blair is temporarily unavailable. Please try again in a moment.'
+          } else if (res.status === 429) {
+            userMessage = 'Rate limit reached. Please wait a moment before sending another message.'
+          } else {
+            userMessage = `Error: ${res.status} - ${errText}`
+          }
           updateLastAssistantMessage({
-            content: `Error: ${res.status} - ${errText}`,
+            content: userMessage,
             isError: true,
           })
           setIsStreaming(false)
@@ -726,7 +739,7 @@ export function useAiChat() {
                   return res.data as { next_sequence?: number } | null
                 } catch {
                   if (attempt === retries) {
-                    // DA-F6: Check staleness before throwing — avoids spurious warning on wrong session
+                    // Check staleness before throwing — avoids spurious warning on wrong session
                     if (isSessionStale()) return null
                     throw new Error('persist failed')
                   }
@@ -905,7 +918,10 @@ export function useAiChat() {
     // 2. Client-side abort
     abortRef.current?.abort()
     abortRef.current = null
-    setIsStreaming(false)
+    // Only update if actually streaming to avoid unnecessary store emit → re-render
+    if (useAiSidebar.getState().isStreaming) {
+      setIsStreaming(false)
+    }
 
     // 3. Mark empty assistant messages as cancelled
     const messages = useAiSidebar.getState().messages

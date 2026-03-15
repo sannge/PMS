@@ -128,7 +128,7 @@ class DocumentResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     embedding_updated_at: Optional[datetime] = None
-    embedding_status: Literal["none", "stale", "syncing", "synced"] = "none"
+    embedding_status: Literal["none", "stale", "syncing", "synced", "failed"] = "none"
     tags: list[TagResponse] = []
 
     @field_validator("tags", mode="before")
@@ -154,7 +154,7 @@ class DocumentListItem(BaseModel):
     created_at: datetime
     updated_at: datetime
     deleted_at: Optional[datetime] = None
-    embedding_status: Literal["none", "stale", "syncing", "synced"] = "none"
+    embedding_status: Literal["none", "stale", "syncing", "synced", "failed"] = "none"
 
 
 class DocumentListResponse(BaseModel):

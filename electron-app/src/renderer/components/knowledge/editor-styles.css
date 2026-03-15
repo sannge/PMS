@@ -326,3 +326,27 @@ ul[data-type="taskList"] li > div > p:first-child {
   background-color: rgba(250, 204, 21, 0.6);
   box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.5);
 }
+
+/* File viewer search highlights (DOM-based, same visual style) */
+mark.file-search-highlight {
+  background-color: hsl(var(--warning) / 0.3);
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px hsl(var(--warning) / 0.2);
+  color: inherit;
+}
+
+.dark mark.file-search-highlight {
+  background-color: rgba(250, 204, 21, 0.3);
+  box-shadow: 0 0 0 1px rgba(250, 204, 21, 0.2);
+}
+
+mark.file-search-highlight-active {
+  background-color: hsl(var(--warning) / 0.6);
+  box-shadow: 0 0 0 2px hsl(var(--warning) / 0.5);
+  transition: background-color 0.3s, box-shadow 0.3s;
+}
+
+.dark mark.file-search-highlight-active {
+  background-color: rgba(250, 204, 21, 0.6);
+  box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.5);
+}

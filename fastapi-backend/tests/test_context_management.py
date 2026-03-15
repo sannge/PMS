@@ -2,7 +2,7 @@
 
 Tests cover:
 - _strip_completed_tool_messages: single completed group, multiple groups,
-  in-progress preserved, short messages (<=3)
+  in-progress preserved, short messages (<=3), knowledge tool preservation
 - _sanitize_orphaned_tool_calls: orphaned IDs removed, matched IDs kept, mixed
 - _maybe_summarize: under threshold returns unchanged, over threshold summarizes,
   timeout returns unchanged, exception returns unchanged, GraphBubbleUp propagates,
@@ -129,6 +129,75 @@ class TestStripCompletedToolMessages:
         assert len(result) == 2
         assert result[0].content == "Hello"
         assert result[1].content == "Combined results"
+
+    # -- Knowledge tool preservation --
+
+    def test_knowledge_tool_results_preserved_in_closing_message(self):
+        """search_knowledge results should be appended to closing AIMessage."""
+        messages = [
+            HumanMessage(content="Find docs about X"),
+            AIMessage(content="", tool_calls=[{"name": "search_knowledge", "id": "tc1", "args": {}}]),
+            ToolMessage(content="Found: Document A about X...", name="search_knowledge", tool_call_id="tc1"),
+            AIMessage(content="Based on the search, here is what I found..."),
+        ]
+        result = _strip_completed_tool_messages(messages)
+        assert len(result) == 2  # HumanMessage + closing AIMessage
+        assert "[search_knowledge]" in result[1].content
+        assert "Document A about X" in result[1].content
+
+    def test_non_knowledge_tool_results_still_stripped(self):
+        """Non-knowledge tools should be stripped without preservation."""
+        messages = [
+            HumanMessage(content="List tasks"),
+            AIMessage(content="", tool_calls=[{"name": "list_tasks", "id": "tc1", "args": {}}]),
+            ToolMessage(content="Task 1, Task 2, Task 3", name="list_tasks", tool_call_id="tc1"),
+            AIMessage(content="Here are your tasks..."),
+        ]
+        result = _strip_completed_tool_messages(messages)
+        assert len(result) == 2
+        assert "Task 1" not in result[1].content
+        assert "[Previous knowledge search results]" not in result[1].content
+
+    def test_knowledge_tool_result_truncated_at_limit(self):
+        """KB results should be truncated at _KB_RESULT_MAX_CHARS."""
+        long_content = "x" * 5000
+        messages = [
+            HumanMessage(content="Search"),
+            AIMessage(content="", tool_calls=[{"name": "search_knowledge", "id": "tc1", "args": {}}]),
+            ToolMessage(content=long_content, name="search_knowledge", tool_call_id="tc1"),
+            AIMessage(content="Done"),
+        ]
+        result = _strip_completed_tool_messages(messages)
+        # The preserved content should be truncated
+        preserved = result[1].content
+        assert len(preserved) < len(long_content)
+
+    def test_multiple_knowledge_tools_in_same_turn(self):
+        """Multiple KB tools in same group should all be preserved."""
+        messages = [
+            HumanMessage(content="Research"),
+            AIMessage(content="", tool_calls=[
+                {"name": "search_knowledge", "id": "tc1", "args": {}},
+                {"name": "read_document", "id": "tc2", "args": {}},
+            ]),
+            ToolMessage(content="Search result A", name="search_knowledge", tool_call_id="tc1"),
+            ToolMessage(content="Document content B", name="read_document", tool_call_id="tc2"),
+            AIMessage(content="Here is what I found"),
+        ]
+        result = _strip_completed_tool_messages(messages)
+        assert "[search_knowledge]" in result[1].content
+        assert "[read_document]" in result[1].content
+
+    def test_empty_knowledge_tool_result_not_preserved(self):
+        """KB tool with empty content should not produce a preservation entry."""
+        messages = [
+            HumanMessage(content="Search"),
+            AIMessage(content="", tool_calls=[{"name": "search_knowledge", "id": "tc1", "args": {}}]),
+            ToolMessage(content="", name="search_knowledge", tool_call_id="tc1"),
+            AIMessage(content="Nothing found"),
+        ]
+        result = _strip_completed_tool_messages(messages)
+        assert "[Previous knowledge search results]" not in result[1].content
 
 
 # ---------------------------------------------------------------------------

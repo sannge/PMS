@@ -11,6 +11,9 @@
  * - External URLs are validated before opening
  */
 
+import * as nodePath from 'path'
+import * as nodeFs from 'fs'
+
 import {
   ipcMain,
   BrowserWindow,
@@ -543,7 +546,40 @@ export function registerIpcHandlers(): void {
     if (!path || typeof path !== 'string') {
       throw new Error('Invalid path')
     }
-    return shell.openPath(path)
+
+    // Step 1: syntactic normalization
+    const normalizedPath = nodePath.resolve(path)
+
+    // Step 2: Resolve all symlinks/junctions to real target
+    let realPath: string
+    try {
+      realPath = nodeFs.realpathSync(normalizedPath)
+    } catch {
+      throw new Error('Path does not exist or cannot be resolved')
+    }
+
+    // Only allow opening paths in safe directories
+    // userData REMOVED — no UX reason to open app data dir in Explorer
+    const safeDirs = [
+      app.getPath('temp'),
+      app.getPath('downloads'),
+      app.getPath('documents'),
+    ]
+
+    // Case-insensitive comparison on Windows (fs.realpathSync may return different casing)
+    const normalize = (p: string) => process.platform === 'win32' ? p.toLowerCase() : p
+    const sep = nodePath.sep
+    const isSafe = safeDirs.some(
+      (dir: string) => normalize(realPath) === normalize(dir) || normalize(realPath).startsWith(normalize(dir) + sep)
+    )
+    if (!isSafe) {
+      throw new Error('Path not in allowed directory')
+    }
+    // NOTE: TOCTOU race exists between realpathSync and shell.openPath.
+    // A local attacker could replace the file with a symlink in the ~1ms window.
+    // Accepted risk: requires local filesystem write access + precise timing.
+    // shell.openPath only opens Explorer/Finder, limiting blast radius.
+    return shell.openPath(realPath)
   })
 
   // ============================================

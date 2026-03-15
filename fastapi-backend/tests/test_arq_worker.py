@@ -20,9 +20,12 @@ from app.worker import (
     archive_eligible_projects,
     cleanup_stale_presence,
     run_archive_jobs,
-    ARCHIVE_AFTER_DAYS,
     PRESENCE_PREFIX,
 )
+
+# ARCHIVE_AFTER_DAYS was removed from worker.py (now runtime-configurable);
+# use the old default value (7) directly in the test.
+ARCHIVE_AFTER_DAYS = 7
 
 
 # =============================================================================
@@ -450,13 +453,13 @@ class TestWorkerSettings:
         """Cron jobs should be configured."""
         from app.worker import WorkerSettings
 
-        assert len(WorkerSettings.cron_jobs) == 5
+        assert len(WorkerSettings.cron_jobs) == 6
 
     def test_functions_registered(self):
         """Job functions should be registered."""
         from app.worker import WorkerSettings
 
-        assert len(WorkerSettings.functions) == 9
+        assert len(WorkerSettings.functions) == 10
         function_names = [f.__name__ for f in WorkerSettings.functions]
         assert "run_archive_jobs" in function_names
         assert "cleanup_stale_presence" in function_names
@@ -467,3 +470,4 @@ class TestWorkerSettings:
         assert "process_document_import" in function_names
         assert "cleanup_checkpoints" in function_names
         assert "generate_session_title" in function_names
+        assert "cleanup_stale_processing_files" in function_names

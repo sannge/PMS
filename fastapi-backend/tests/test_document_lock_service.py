@@ -21,7 +21,7 @@ import pytest
 from app.services.document_lock_service import (
     DocumentLockService,
     LOCK_KEY_PREFIX,
-    LOCK_TTL_SECONDS,
+    _get_lock_ttl,
     _ACQUIRE_LOCK_SCRIPT,
     _RELEASE_LOCK_SCRIPT,
     _HEARTBEAT_SCRIPT,
@@ -134,7 +134,7 @@ class TestAcquireLock:
         value = json.loads(args[0][3])
         assert value["user_id"] == USER_ID_A
         assert value["user_name"] == USER_NAME_A
-        assert args[0][4] == str(LOCK_TTL_SECONDS)
+        assert args[0][4] == str(_get_lock_ttl())
         assert args[0][5] == USER_ID_A
 
 
@@ -228,7 +228,7 @@ class TestHeartbeat:
         assert args[0][1] == 1
         assert args[0][2] == _lock_key(DOC_ID)
         assert args[0][3] == USER_ID_A
-        assert args[0][4] == str(LOCK_TTL_SECONDS)
+        assert args[0][4] == str(_get_lock_ttl())
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +275,7 @@ class TestForceTakeLock:
         value = json.loads(args[0][3])
         assert value["user_id"] == USER_ID_B
         assert value["user_name"] == USER_NAME_B
-        assert args[0][4] == str(LOCK_TTL_SECONDS)
+        assert args[0][4] == str(_get_lock_ttl())
 
 
 # ---------------------------------------------------------------------------
