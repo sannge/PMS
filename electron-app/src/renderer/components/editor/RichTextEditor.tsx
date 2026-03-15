@@ -18,6 +18,7 @@ import { useEditor, EditorContent, Editor, Extension, NodeViewWrapper, NodeViewP
 import type { RawCommands } from '@tiptap/core'
 import type { Transaction, EditorState } from '@tiptap/pm/state'
 import { DOMParser as PmDOMParser } from '@tiptap/pm/model'
+import DOMPurify from 'dompurify'
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import StarterKit from '@tiptap/starter-kit'
 import Underline from '@tiptap/extension-underline'
@@ -1048,7 +1049,10 @@ export function RichTextEditor({
               .replace(/\s*xmlns:[a-z]+="[^"]*"/gi, '')
             const parser = PmDOMParser.fromSchema(view.state.schema)
             const tmpDoc = document.implementation.createHTMLDocument()
-            tmpDoc.body.innerHTML = cleanHtml
+            tmpDoc.body.innerHTML = DOMPurify.sanitize(cleanHtml, {
+              ADD_TAGS: ['table', 'thead', 'tbody', 'tr', 'td', 'th', 'colgroup', 'col'],
+              ADD_ATTR: ['colspan', 'rowspan', 'scope', 'headers'],
+            })
             const slice = parser.parseSlice(tmpDoc.body)
             const tr = view.state.tr.replaceSelection(slice)
             view.dispatch(tr)
@@ -1082,7 +1086,10 @@ export function RichTextEditor({
                 ).join('') + '</table>'
               const parser = PmDOMParser.fromSchema(view.state.schema)
               const tmpDoc = document.implementation.createHTMLDocument()
-              tmpDoc.body.innerHTML = tableHtml
+              tmpDoc.body.innerHTML = DOMPurify.sanitize(tableHtml, {
+                ADD_TAGS: ['table', 'thead', 'tbody', 'tr', 'td', 'th', 'colgroup', 'col'],
+                ADD_ATTR: ['colspan', 'rowspan', 'scope', 'headers'],
+              })
               const slice = parser.parseSlice(tmpDoc.body)
               const tr = view.state.tr.replaceSelection(slice)
               view.dispatch(tr)

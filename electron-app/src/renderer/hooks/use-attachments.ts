@@ -20,7 +20,7 @@ import {
   UseMutationResult,
 } from '@tanstack/react-query'
 import { useAuthToken } from '@/contexts/auth-context'
-import { queryKeys } from '@/lib/query-client'
+import { queryKeys, CONTENT_GC_TIME } from '@/lib/query-client'
 import { authGet, authPost, authDelete, getAccessToken } from '@/lib/api-client'
 
 // ============================================================================
@@ -130,7 +130,7 @@ export function useAttachments(taskId: string | undefined): UseQueryResult<Attac
     },
     enabled: !!token && !!taskId,
     staleTime: 30 * 1000, // 30 seconds - attachments can change when comments are deleted
-    gcTime: 24 * 60 * 60 * 1000, // 24 hours for offline
+    gcTime: CONTENT_GC_TIME, // 4 hours - consistent with other content queries
     refetchOnWindowFocus: false, // WS real-time invalidation handles freshness
   })
 }
@@ -160,7 +160,7 @@ export function useEntityAttachments(
     },
     enabled: !!token && !!entityType && !!entityId,
     staleTime: 30 * 1000, // 30 seconds - consistent with useAttachments
-    gcTime: 24 * 60 * 60 * 1000, // 24 hours for offline
+    gcTime: CONTENT_GC_TIME, // 4 hours - consistent with other content queries
   })
 }
 

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import traceback
+from contextlib import asynccontextmanager
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect, status
@@ -21,11 +22,7 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # STARTUP BANNER - Confirms which backend is running
 # ============================================================================
-print("\n" + "=" * 60, flush=True)
-print("  PM API - WORKTREE 019-knowledge-base", flush=True)
-print("  WebSocket logging ENABLED", flush=True)
-print("=" * 60 + "\n", flush=True)
-from contextlib import asynccontextmanager
+logger.info("PM API starting up - WebSocket logging ENABLED")
 
 from .database import warmup_connection_pool
 from .routers import admin_config_router, ai_chat_router, ai_config_router, ai_import_router, ai_oauth_router, ai_query_router, application_members_router, applications_router, auth_router, chat_sessions_router, checklists_router, comments_router, dashboard_router, document_folders_router, document_locks_router, document_search_router, document_tags_router, documents_router, files_router, folder_files_router, invitations_router, notifications_router, project_assignments_router, project_members_router, projects_router, tasks_router, users_router
@@ -168,13 +165,18 @@ async def lifespan(app: FastAPI):
         logger.info("Rate limits reloaded from config")
 
         # Start Redis invalidation listener as background task
-        asyncio.create_task(_agent_cfg.subscribe_invalidation())
+        from .utils.tasks import fire_and_forget
+        fire_and_forget(_agent_cfg.subscribe_invalidation(), name="agent-cfg-subscription")
     except Exception as e:
         logger.warning(f"AgentConfigService initialization failed: {e}")
 
     yield
 
     # Shutdown
+    # Drain any in-flight background tasks before tearing down connections
+    from .utils.tasks import drain_background_tasks
+    await drain_background_tasks(timeout=5.0)
+
     # Close Postgres checkpointer connection pool (DB-002: bounded psycopg_pool)
     checkpointer_pool = getattr(app.state, "_checkpointer_pool", None)
     if checkpointer_pool:
@@ -193,12 +195,14 @@ async def lifespan(app: FastAPI):
 
 
 # Create FastAPI application
+_is_dev = settings.environment == "development"
 app = FastAPI(
     title="PM API",
     description="Project Management API with Jira-like features and knowledge base",
     version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url="/docs" if _is_dev else None,
+    redoc_url="/redoc" if _is_dev else None,
+    openapi_url="/openapi.json" if _is_dev else None,
     lifespan=lifespan,
 )
 
@@ -220,7 +224,7 @@ async def add_security_headers(request: Request, call_next):
     response = await call_next(request)
     # Swagger/ReDoc UI needs permissive CSP to load scripts/styles
     path = request.url.path
-    if path in ("/docs", "/redoc", "/openapi.json"):
+    if _is_dev and path in ("/docs", "/redoc", "/openapi.json"):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
     else:
@@ -316,13 +320,25 @@ async def root():
 
 
 @app.get("/health")
-async def health_check():
+async def health_check(request: Request):
     """Health check endpoint for monitoring.
 
-    Includes AI service health sub-checks, each wrapped in a 2s timeout
-    so the overall endpoint stays fast (<500ms even with degraded AI).
-    Database and MinIO connectivity are now checked with lightweight probes.
+    Returns minimal status for unauthenticated requests.
+    Returns detailed info (DB, Redis, AI health) only for authenticated users.
     """
+    # Check for valid JWT to decide detail level
+    auth_header = request.headers.get("authorization", "")
+    authenticated = False
+    if auth_header.startswith("Bearer "):
+        raw_token = auth_header[7:]
+        token_data = decode_access_token(raw_token)
+        if token_data and token_data.user_id:
+            if not (token_data.jti and await is_token_blacklisted(token_data.jti)):
+                authenticated = True
+
+    if not authenticated:
+        return {"status": "healthy"}
+
     redis_health = await redis_service.health_check()
 
     # Lightweight DB health check
@@ -341,11 +357,8 @@ async def health_check():
     ai_health = await _build_ai_health()
 
     # QE-R2-001: Include AI agent semaphore utilization
-    from .routers.ai_chat import _agent_semaphore, _MAX_CONCURRENT_AGENTS
-    ai_agent_slots = {
-        "used": _MAX_CONCURRENT_AGENTS - _agent_semaphore._value,
-        "max": _MAX_CONCURRENT_AGENTS,
-    }
+    from .routers.ai_chat import get_agent_semaphore_usage
+    ai_agent_slots = get_agent_semaphore_usage()
 
     return {
         "status": "healthy",
@@ -540,44 +553,30 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = None):
 
     Args:
         websocket: The WebSocket connection
-        token: JWT token for authentication (query parameter)
+        token: Opaque connection token for authentication (query parameter)
 
-    Authentication is done via query parameter since WebSocket
-    doesn't support custom headers in the initial handshake
-    from browser clients.
+    Authentication uses opaque connection tokens obtained via POST /auth/ws-token.
+    JWT tokens are NOT accepted directly to avoid exposing them in URLs/logs.
 
     Usage:
-        ws://localhost:8000/ws?token=<jwt_token>
+        ws://localhost:8000/ws?token=<opaque_connection_token>
     """
-    # Validate token — try opaque connection token first, fall back to JWT
+    # Validate token — only accept opaque connection tokens
     if not token:
         logger.debug("WebSocket connection attempt without token")
         await websocket.close(code=4001, reason="Authentication required")
         return
 
     user_id: UUID | None = None
-    using_jwt_directly = False
 
     try:
-        # Try opaque connection token first (preferred, keeps JWT out of URL)
         ws_user_id = await validate_ws_connection_token(token)
         if ws_user_id:
             user_id = UUID(ws_user_id)
         else:
-            # Fall back to JWT (backwards compat during migration)
-            using_jwt_directly = True
-            token_data = decode_access_token(token)
-            if token_data is None or token_data.user_id is None:
-                logger.debug("WebSocket connection with invalid token")
-                await websocket.close(code=4001, reason="Invalid token")
-                return
-            # Check blacklist on initial connection (logout support)
-            if token_data.jti and await is_token_blacklisted(token_data.jti):
-                logger.warning(f"WebSocket connection with blacklisted token (jti={token_data.jti})")
-                await websocket.close(code=4001, reason="Token revoked")
-                return
-            user_id = UUID(token_data.user_id)
-            logger.info("WebSocket using JWT directly — migrate to POST /auth/ws-token")
+            logger.debug("WebSocket connection with invalid token")
+            await websocket.close(code=4001, reason="Invalid token")
+            return
     except Exception as e:
         logger.warning(f"WebSocket token validation error: {e}")
         await websocket.close(code=4001, reason="Invalid token")
@@ -596,7 +595,6 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = None):
     _ws_cfg = _get_ws_cfg()
     RECEIVE_TIMEOUT = _ws_cfg.get_int("websocket.receive_timeout", 45)
     SERVER_PING_INTERVAL = _ws_cfg.get_int("websocket.ping_interval", 30)
-    TOKEN_REVALIDATION_INTERVAL = _ws_cfg.get_int("websocket.token_revalidation_interval", 1800)
     RATE_LIMIT_MESSAGES = _ws_cfg.get_int("websocket.rate_limit_messages", 100)
     RATE_LIMIT_WINDOW = _ws_cfg.get_int("websocket.rate_limit_window", 10)
 
@@ -605,47 +603,16 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = None):
 
     # Token validity tracking
     token_valid = True
-    last_token_check = asyncio.get_event_loop().time()
 
     async def server_ping_task():
-        """Background task to send periodic pings and validate token."""
-        nonlocal token_valid, last_token_check
+        """Background task to send periodic pings."""
+        nonlocal token_valid
         try:
             while True:
                 await asyncio.sleep(SERVER_PING_INTERVAL)
                 try:
                     # Send ping
                     await websocket.send_json({"type": "ping", "data": {}})
-
-                    # Check if token needs re-validation (only for JWT-based connections;
-                    # opaque connection tokens are single-use and cannot be re-validated)
-                    current_time = asyncio.get_event_loop().time()
-                    if using_jwt_directly and current_time - last_token_check > TOKEN_REVALIDATION_INTERVAL:
-                        # Re-validate token
-                        token_data = decode_access_token(token)
-                        if token_data is None or token_data.user_id is None:
-                            logger.warning(f"Token expired for user {user_id}, closing connection")
-                            token_valid = False
-                            await websocket.send_json({
-                                "type": "error",
-                                "data": {"error": "TOKEN_EXPIRED", "message": "Session expired, please re-authenticate"},
-                            })
-                            await websocket.close(code=4001, reason="Token expired")
-                            break
-
-                        # Check token blacklist (logout support)
-                        if token_data.jti and await is_token_blacklisted(token_data.jti):
-                            logger.warning(f"Token blacklisted for user {user_id}, closing connection")
-                            token_valid = False
-                            await websocket.send_json({
-                                "type": "error",
-                                "data": {"error": "TOKEN_REVOKED", "message": "Session revoked, please re-authenticate"},
-                            })
-                            await websocket.close(code=4001, reason="Token revoked")
-                            break
-
-                        last_token_check = current_time
-
                 except Exception:
                     break  # Connection is dead, exit task
         except asyncio.CancelledError:

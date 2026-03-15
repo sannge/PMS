@@ -20,6 +20,7 @@ from sqlalchemy.orm import make_transient
 from ..config import settings
 from ..database import get_db
 from ..models.user import User
+from ..utils.tasks import fire_and_forget
 from ..schemas.user import UserCreate
 from ..utils.security import get_password_hash, verify_password
 from ..utils.timezone import utc_now
@@ -425,7 +426,7 @@ async def create_user(db: AsyncSession, user_data: UserCreate) -> User:
         )
 
     # Send verification email (fire-and-forget, don't block response)
-    asyncio.create_task(send_verification_email(user_data.email, code))
+    fire_and_forget(send_verification_email(user_data.email, code))
 
     return db_user
 
@@ -546,7 +547,7 @@ async def resend_verification_code(db: AsyncSession, email: str) -> None:
     user.verification_attempts = 0
     await db.commit()
 
-    asyncio.create_task(send_verification_email(email, code))
+    fire_and_forget(send_verification_email(email, code))
 
 
 async def request_password_reset(db: AsyncSession, email: str) -> None:
@@ -589,7 +590,7 @@ async def request_password_reset(db: AsyncSession, email: str) -> None:
     user.reset_attempts = 0
     await db.commit()
 
-    asyncio.create_task(send_password_reset_email(email, code))
+    fire_and_forget(send_password_reset_email(email, code))
 
 
 async def generate_and_send_login_code(db: AsyncSession, user: User) -> None:
@@ -611,7 +612,7 @@ async def generate_and_send_login_code(db: AsyncSession, user: User) -> None:
     user.verification_attempts = 0
     await db.commit()
 
-    asyncio.create_task(send_login_code_email(user.email, code))
+    fire_and_forget(send_login_code_email(user.email, code))
 
 
 async def verify_login_code(db: AsyncSession, email: str, code: str) -> User:
@@ -753,6 +754,10 @@ def _user_from_cache(cached: CachedUser) -> User:
     authentication checks without requiring database queries.
     The object is not bound to any session.
 
+    WARNING: The returned User is detached from any session. Accessing
+    ORM relationships (e.g. user.applications, user.members) will raise
+    DetachedInstanceError. Only scalar column attributes are safe to read.
+
     Args:
         cached: The cached user data
 
@@ -885,22 +890,3 @@ async def validate_ws_connection_token(token: str) -> Optional[str]:
     return None
 
 
-async def get_current_active_user(
-    current_user: User = Depends(get_current_user),
-) -> User:
-    """
-    Get the current active user (can be extended with is_active check).
-
-    Args:
-        current_user: Current authenticated user
-
-    Returns:
-        Active User object
-
-    Raises:
-        HTTPException: If user is inactive (future enhancement)
-    """
-    # Future: Check if user.is_active is True
-    # if not current_user.is_active:
-    #     raise HTTPException(status_code=400, detail="Inactive user")
-    return current_user

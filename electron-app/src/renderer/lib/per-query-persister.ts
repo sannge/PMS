@@ -16,7 +16,7 @@ import { Query, QueryClient, QueryKey, QueryState, hydrate } from '@tanstack/rea
 import {
   QueryCacheEntry,
   getEntry,
-  setEntry,
+  setEntries,
   deleteEntry,
   getEntriesByPrefixes,
   getAllEntries,
@@ -62,6 +62,15 @@ let hydrationComplete = false
  */
 let entryCountEstimate = 0
 let entryCountEstimateInitialized = false
+
+/**
+ * In-memory set of query key hashes known to be persisted in IndexedDB.
+ * Populated during hydration to avoid per-write getEntry() existence checks.
+ */
+const knownPersistedKeys = new Set<string>()
+
+/** Guard to prevent concurrent eviction scans */
+let evictionInProgress = false
 
 // ============================================================================
 // Helpers
@@ -145,32 +154,36 @@ async function flushPendingWrites(): Promise<void> {
 
   const now = Date.now()
 
-  // Track new vs update: if entryCountEstimate is initialized, we can infer
-  // that a hash already seen in a previous flush is an update. However, we
-  // don't maintain a full key set, so after eviction we reset the estimate
-  // from actual stats (see below). For the normal path, count new inserts
-  // by checking if the entry already exists in IndexedDB.
+  // Track new vs update using the in-memory knownPersistedKeys set
+  // instead of per-write getEntry() calls (avoids N IDB reads per flush).
   let newInserts = 0
 
-  // Process all pending writes
-  await Promise.all(
-    writes.map(async ([hash, { queryKey, state }]) => {
-      // Check if this is a new entry (not already in IndexedDB)
-      const existing = await getEntry(queryKey)
-      if (!existing) newInserts++
+  // Build all entries for a single batched IDB transaction
+  // Do NOT update knownPersistedKeys here — wait until setEntries succeeds
+  const entries: QueryCacheEntry[] = []
+  for (const [hash, { queryKey, state }] of writes) {
+    if (!knownPersistedKeys.has(hash)) {
+      newInserts++
+    }
 
-      const compressed = compressState(state)
-      const entry: QueryCacheEntry = {
-        queryKeyHash: hash,
-        queryKey: JSON.stringify(queryKey),
-        data: compressed,
-        dataUpdatedAt: now,
-        accessedAt: now,
-        size: JSON.stringify(state).length,
-      }
-      await setEntry(entry)
+    const compressed = compressState(state)
+    entries.push({
+      queryKeyHash: hash,
+      queryKey: JSON.stringify(queryKey),
+      data: compressed,
+      dataUpdatedAt: now,
+      accessedAt: now,
+      size: JSON.stringify(state).length,
     })
-  )
+  }
+
+  // Write all entries in a single IDB transaction
+  await setEntries(entries)
+
+  // Only update knownPersistedKeys AFTER successful write
+  for (const [hash] of writes) {
+    knownPersistedKeys.add(hash)
+  }
 
   // Only increment by genuinely new entries (not updates to existing keys)
   entryCountEstimate += newInserts
@@ -178,7 +191,8 @@ async function flushPendingWrites(): Promise<void> {
   // Only hit IndexedDB for eviction when in-memory estimate exceeds 90% threshold.
   // This avoids expensive getCacheStats calls on every write flush.
   const evictionThreshold = CACHE_CONFIG.maxEntries * CACHE_CONFIG.cleanupThreshold
-  if (entryCountEstimate >= evictionThreshold || !entryCountEstimateInitialized) {
+  if ((entryCountEstimate >= evictionThreshold || !entryCountEstimateInitialized) && !evictionInProgress) {
+    evictionInProgress = true
     performLRUEviction()
       .then(async () => {
         // After eviction, reset estimate to actual count from IndexedDB
@@ -192,6 +206,9 @@ async function flushPendingWrites(): Promise<void> {
         entryCountEstimateInitialized = true
       })
       .catch((err) => console.warn('[Persister] LRU eviction failed:', err))
+      .finally(() => {
+        evictionInProgress = false
+      })
   }
 }
 
@@ -203,6 +220,7 @@ export async function removeQuery(queryKey: QueryKey): Promise<void> {
 
   // Remove from pending writes if present
   pendingWrites.delete(hash)
+  knownPersistedKeys.delete(hash)
 
   // Remove from IndexedDB
   await deleteEntry(queryKey)
@@ -295,6 +313,9 @@ export async function loadAllQueries(): Promise<PersistedQuery[]> {
  */
 function hydrateQueries(queryClient: QueryClient, queries: PersistedQuery[]): void {
   for (const query of queries) {
+    // Track known persisted keys to avoid IDB reads during writes
+    knownPersistedKeys.add(query.queryHash)
+
     // Use the hydrate function to restore query state
     hydrate(queryClient, {
       mutations: [],
@@ -421,6 +442,8 @@ export async function clearPersistedCache(): Promise<void> {
   hydrationComplete = false
   entryCountEstimate = 0
   entryCountEstimateInitialized = false
+  knownPersistedKeys.clear()
+  evictionInProgress = false
   console.log('[Persister] Cache cleared')
 }
 

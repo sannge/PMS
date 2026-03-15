@@ -456,7 +456,9 @@ async def add_project_member(
         entity_type=EntityType.PROJECT,
         entity_id=project_id,
     )
-    await NotificationService.create_notification(db, notification_data)
+    notification = await NotificationService.create_notification(db, notification_data)
+    await db.commit()
+    await NotificationService.deliver_via_websocket(notification)
 
     # Broadcast member added via handler (includes message_id, timestamp)
     await handle_project_member_added(
@@ -623,7 +625,9 @@ async def remove_project_member(
         entity_type=EntityType.PROJECT,
         entity_id=project_id,
     )
-    await NotificationService.create_notification(db, removed_notification)
+    notification = await NotificationService.create_notification(db, removed_notification)
+    await db.commit()
+    await NotificationService.deliver_via_websocket(notification)
 
     # Broadcast member removed via handler (includes message_id, timestamp)
     await handle_project_member_removed(
@@ -769,7 +773,9 @@ async def change_project_member_role(
         entity_type=EntityType.PROJECT,
         entity_id=project_id,
     )
-    await NotificationService.create_notification(db, role_notification)
+    notification = await NotificationService.create_notification(db, role_notification)
+    await db.commit()
+    await NotificationService.deliver_via_websocket(notification)
 
     # Broadcast role change via handler (includes message_id, timestamp)
     await handle_project_member_role_changed(

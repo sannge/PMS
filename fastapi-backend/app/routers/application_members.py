@@ -550,7 +550,9 @@ async def update_member_role(
             entity_type=EntityType.APPLICATION_MEMBER,
             entity_id=member.id,
         )
-        await NotificationService.create_notification(db, notification_data)
+        notification = await NotificationService.create_notification(db, notification_data)
+        await db.commit()
+        await NotificationService.deliver_via_websocket(notification)
 
         # Send WebSocket notification
         await handle_role_updated(
@@ -717,7 +719,7 @@ async def remove_member(
     # Invalidate role cache for removed user
     invalidate_app_role(user_id, application_id)
 
-    # Create notification for removed user (with WebSocket broadcast, unless self-removal)
+    # Create notification for removed user (commit then deliver via WS, unless self-removal)
     if not is_self_removal:
         remover_name = current_user.display_name or current_user.email
         notification_data = NotificationCreate(
@@ -728,7 +730,9 @@ async def remove_member(
             entity_type=EntityType.APPLICATION,
             entity_id=application_id,
         )
-        await NotificationService.create_notification(db, notification_data)
+        notification = await NotificationService.create_notification(db, notification_data)
+        await db.commit()
+        await NotificationService.deliver_via_websocket(notification)
 
     # Send WebSocket notification
     remover_name = current_user.display_name or current_user.email

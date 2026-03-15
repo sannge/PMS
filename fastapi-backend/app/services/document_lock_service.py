@@ -99,6 +99,11 @@ return old_data
 """
 
 
+class DocumentLockUnavailableError(Exception):
+    """Raised when the document lock service cannot reach Redis."""
+    pass
+
+
 class DocumentLockService:
     """
     Service for managing document locks via Redis.
@@ -129,6 +134,9 @@ class DocumentLockService:
 
         Returns:
             Lock holder dict on success, None if already locked by another user.
+
+        Raises:
+            DocumentLockUnavailableError: If Redis is unavailable.
         """
         key = _lock_key(document_id)
         lock_data = {
@@ -138,9 +146,13 @@ class DocumentLockService:
         }
         value = json.dumps(lock_data)
 
-        result_str = await redis_service.client.eval(
-            _ACQUIRE_LOCK_SCRIPT, 1, key, value, str(_get_lock_ttl()), user_id
-        )
+        try:
+            result_str = await redis_service.client.eval(
+                _ACQUIRE_LOCK_SCRIPT, 1, key, value, str(_get_lock_ttl()), user_id
+            )
+        except Exception as exc:
+            logger.error("Redis error during lock acquire for document %s: %s", document_id, exc)
+            raise DocumentLockUnavailableError(f"Lock service unavailable: {exc}") from exc
 
         result = json.loads(result_str)
 
@@ -178,9 +190,13 @@ class DocumentLockService:
             True if lock was released, False if not owner or no lock exists.
         """
         key = _lock_key(document_id)
-        result = await redis_service.client.eval(
-            _RELEASE_LOCK_SCRIPT, 1, key, user_id
-        )
+        try:
+            result = await redis_service.client.eval(
+                _RELEASE_LOCK_SCRIPT, 1, key, user_id
+            )
+        except Exception as exc:
+            logger.error("Redis error during lock release for document %s: %s", document_id, exc)
+            raise DocumentLockUnavailableError(f"Lock service unavailable: {exc}") from exc
 
         released = result == 1
         if released:
@@ -210,9 +226,13 @@ class DocumentLockService:
             True if TTL was extended, False if not owner or no lock exists.
         """
         key = _lock_key(document_id)
-        result = await redis_service.client.eval(
-            _HEARTBEAT_SCRIPT, 1, key, user_id, str(_get_lock_ttl())
-        )
+        try:
+            result = await redis_service.client.eval(
+                _HEARTBEAT_SCRIPT, 1, key, user_id, str(_get_lock_ttl())
+            )
+        except Exception as exc:
+            logger.error("Redis error during lock heartbeat for document %s: %s", document_id, exc)
+            raise DocumentLockUnavailableError(f"Lock service unavailable: {exc}") from exc
 
         extended = result == 1
         if extended:
@@ -253,9 +273,13 @@ class DocumentLockService:
         }
         new_value = json.dumps(new_lock_data)
 
-        old_holder_str = await redis_service.client.eval(
-            _FORCE_TAKE_SCRIPT, 1, key, new_value, str(_get_lock_ttl())
-        )
+        try:
+            old_holder_str = await redis_service.client.eval(
+                _FORCE_TAKE_SCRIPT, 1, key, new_value, str(_get_lock_ttl())
+            )
+        except Exception as exc:
+            logger.error("Redis error during force-take lock for document %s: %s", document_id, exc)
+            raise DocumentLockUnavailableError(f"Lock service unavailable: {exc}") from exc
 
         logger.info(
             f"Lock force-taken: document={document_id}, new_user={new_user_id}, "
@@ -286,7 +310,11 @@ class DocumentLockService:
             return {}
 
         keys = [_lock_key(doc_id) for doc_id in document_ids]
-        values = await redis_service.client.mget(keys)
+        try:
+            values = await redis_service.client.mget(keys)
+        except Exception as exc:
+            logger.error("Redis error during batch lock check: %s", exc)
+            return {}
 
         result: dict[str, dict] = {}
         for doc_id, value in zip(document_ids, values):
@@ -306,11 +334,19 @@ class DocumentLockService:
         Returns:
             Dict mapping document_id -> lock holder data for all locked documents.
         """
-        keys = await redis_service.scan_keys(f"{LOCK_KEY_PREFIX}*", count=200)
+        try:
+            keys = await redis_service.scan_keys(f"{LOCK_KEY_PREFIX}*", count=200)
+        except Exception as exc:
+            logger.error("Redis error during scan active locks: %s", exc)
+            return {}
         if not keys:
             return {}
 
-        values = await redis_service.client.mget(keys)
+        try:
+            values = await redis_service.client.mget(keys)
+        except Exception as exc:
+            logger.error("Redis error during mget active locks: %s", exc)
+            return {}
 
         result: dict[str, dict] = {}
         prefix_len = len(LOCK_KEY_PREFIX)
@@ -335,7 +371,11 @@ class DocumentLockService:
             Lock holder dict if locked, None if no lock exists.
         """
         key = _lock_key(document_id)
-        value = await redis_service.client.get(key)
+        try:
+            value = await redis_service.client.get(key)
+        except Exception as exc:
+            logger.error("Redis error during get lock holder for document %s: %s", document_id, exc)
+            return None
 
         if value:
             return json.loads(value)

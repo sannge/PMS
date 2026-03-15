@@ -108,7 +108,7 @@ export function getAuthHeaders(token: string | null): Record<string, string> {
   }
 }
 
-export function parseApiError(status: number, data: unknown): AuthError {
+export function parseAuthError(status: number, data: unknown): AuthError {
   if (typeof data === 'object' && data !== null) {
     const errorData = data as Record<string, unknown>
     if (typeof errorData.detail === 'string') {
@@ -401,7 +401,7 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
       }
 
       if (response.status !== 200) {
-        const error = parseApiError(response.status, response.data)
+        const error = parseAuthError(response.status, response.data)
         dispatch({ type: 'SET_ERROR', payload: error })
         dispatch({ type: 'SET_LOADING', payload: false })
         return false
@@ -409,7 +409,7 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
 
       const tokenData = response.data
 
-      // Check if 2FA is required (login returns requires_2fa instead of access_token)
+      // Backend always requires 2FA — login returns requires_2fa instead of access_token
       if ('requires_2fa' in tokenData && tokenData.requires_2fa) {
         dispatch({ type: 'SET_PENDING_VERIFICATION', payload: credentials.email })
         dispatch({ type: 'SET_PENDING_CONTEXT', payload: 'login' })
@@ -417,25 +417,9 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
         return false
       }
 
-      dispatch({
-        type: 'LOGIN_SUCCESS',
-        payload: {
-          token: tokenData.access_token as string,
-          refreshToken: (tokenData.refresh_token as string) || '',
-        },
-      })
-
-      // Fetch user profile
-      const userResponse = await window.electronAPI.get<User>(
-        '/auth/me',
-        getAuthHeaders(tokenData.access_token as string)
-      )
-
-      if (userResponse.status === 200) {
-        dispatch({ type: 'SET_USER', payload: userResponse.data })
-      }
-
-      return true
+      // Unreachable: backend always requires 2FA, but handle gracefully
+      dispatch({ type: 'SET_LOADING', payload: false })
+      return false
     } catch (err) {
       const error: AuthError = {
         message: err instanceof Error ? err.message : 'Login failed',
@@ -462,7 +446,7 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
       })
 
       if (response.status !== 201) {
-        const error = parseApiError(response.status, response.data)
+        const error = parseAuthError(response.status, response.data)
         dispatch({ type: 'SET_ERROR', payload: error })
         dispatch({ type: 'SET_LOADING', payload: false })
         return false
@@ -553,10 +537,9 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
         return false
       }
     } catch {
-      // Network error: keep existing state
+      // Network error: keep existing state (do not log out)
       dispatch({ type: 'SET_INITIALIZED', payload: true })
       dispatch({ type: 'SET_LOADING', payload: false })
-      dispatch({ type: 'SET_AUTHENTICATED', payload: false })
       return false
     }
   }, [])
@@ -592,7 +575,7 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
       })
 
       if (response.status !== 200) {
-        const error = parseApiError(response.status, response.data)
+        const error = parseAuthError(response.status, response.data)
         dispatch({ type: 'SET_ERROR', payload: error })
         dispatch({ type: 'SET_LOADING', payload: false })
         return false
@@ -640,7 +623,7 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
       })
 
       if (response.status !== 200) {
-        const error = parseApiError(response.status, response.data)
+        const error = parseAuthError(response.status, response.data)
         dispatch({ type: 'SET_ERROR', payload: error })
         dispatch({ type: 'SET_LOADING', payload: false })
         return false
@@ -687,7 +670,7 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
       })
 
       if (response.status !== 200) {
-        const error = parseApiError(response.status, response.data)
+        const error = parseAuthError(response.status, response.data)
         dispatch({ type: 'SET_ERROR', payload: error })
         dispatch({ type: 'SET_LOADING', payload: false })
         return false
@@ -719,7 +702,7 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
       })
 
       if (response.status !== 200) {
-        const error = parseApiError(response.status, response.data)
+        const error = parseAuthError(response.status, response.data)
         dispatch({ type: 'SET_ERROR', payload: error })
         dispatch({ type: 'SET_LOADING', payload: false })
         return false
@@ -753,7 +736,7 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
       })
 
       if (response.status !== 200) {
-        const error = parseApiError(response.status, response.data)
+        const error = parseAuthError(response.status, response.data)
         dispatch({ type: 'SET_ERROR', payload: error })
         dispatch({ type: 'SET_LOADING', payload: false })
         return false
@@ -821,9 +804,10 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
 // ============================================================================
 
 /**
- * @deprecated Use `useAuthState()` for state or `useAuthActions()` for actions.
- * This hook reads from the legacy monolithic AuthContext and does not benefit
- * from the split-context re-render optimization.
+ * @deprecated **DO NOT USE IN NEW CODE.** Use `useAuthState()` for state or
+ * `useAuthActions()` for actions. This hook reads from the legacy monolithic
+ * AuthContext and does not benefit from the split-context re-render
+ * optimization. It will be removed in a future release.
  */
 export function useAuthStore(): AuthContextValue
 export function useAuthStore<T>(selector: (state: AuthContextValue) => T): T

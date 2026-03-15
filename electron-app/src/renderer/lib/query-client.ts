@@ -67,8 +67,11 @@ focusManager.setEventListener((handleFocus) => {
 /** Default stale time (30 seconds) */
 const DEFAULT_STALE_TIME = 30 * 1000
 
-/** Default garbage collection time (24 hours) */
+/** Default garbage collection time (24 hours) — used for structural data (apps, projects, statuses) */
 const DEFAULT_GC_TIME = 24 * 60 * 60 * 1000
+
+/** Shorter garbage collection time (4 hours) — used for content-heavy queries (documents, comments, checklists) */
+export const CONTENT_GC_TIME = 4 * 60 * 60 * 1000
 
 // ============================================================================
 // Query Keys
@@ -219,10 +222,10 @@ export const queryClient = new QueryClient({
       // Keep unused data in cache for 24 hours (for offline support)
       gcTime: DEFAULT_GC_TIME,
 
-      // Re-enabled with debounced focusManager (300ms) above. Only queries
-      // with active observers (mounted components) refetch, so this
-      // naturally limits to what's currently on screen.
-      refetchOnWindowFocus: true,
+      // Disabled globally to prevent refetch storms on Electron Alt-Tab.
+      // Hooks that genuinely need window-focus refresh (invitations, oauth
+      // status) set refetchOnWindowFocus: true explicitly.
+      refetchOnWindowFocus: false,
 
       // Refresh data when network reconnects
       refetchOnReconnect: true,
@@ -325,20 +328,6 @@ export async function clearQueryCache(): Promise<void> {
 export async function clearAllIndexedDB(): Promise<void> {
   await clearQueryCacheDB()
   console.log('[QueryClient] All IndexedDB data cleared')
-}
-
-/**
- * Invalidate all queries for a specific entity type.
- * Useful for bulk invalidation after major changes.
- */
-export function invalidateEntity(entityType: keyof typeof queryKeys): void {
-  const key = queryKeys[entityType]
-  if (typeof key === 'function') {
-    // For factory functions, we can only invalidate with exact key
-    console.warn(`[QueryClient] Cannot bulk invalidate factory key: ${entityType}`)
-    return
-  }
-  queryClient.invalidateQueries({ queryKey: key })
 }
 
 /**

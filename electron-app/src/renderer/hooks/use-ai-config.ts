@@ -15,7 +15,7 @@ import {
   type UseQueryResult,
   type UseMutationResult,
 } from '@tanstack/react-query'
-import { useAuthToken, parseApiError as parseApiErrorAuth } from '@/contexts/auth-context'
+import { useAuthToken, parseAuthError } from '@/contexts/auth-context'
 import { authGet, authPost, authPut, authDelete } from '@/lib/api-client'
 import { queryKeys } from '@/lib/query-client'
 
@@ -149,7 +149,7 @@ export type EffectiveChatConfig = AiConfigSummaryResponse
 // ============================================================================
 
 function parseApiError(status: number, data: unknown): string {
-  const result = parseApiErrorAuth(status, data)
+  const result = parseAuthError(status, data)
   return result.message
 }
 

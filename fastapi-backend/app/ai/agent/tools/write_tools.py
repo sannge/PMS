@@ -23,7 +23,6 @@ All tools:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -66,25 +65,9 @@ from .helpers import (
     _truncate,
 )
 
+from ....utils.tasks import fire_and_forget
+
 logger = logging.getLogger(__name__)
-
-
-_pending_write_tasks: set[asyncio.Task] = set()  # type: ignore[type-arg]
-
-
-def _fire_and_forget(coro) -> None:  # type: ignore[type-arg]
-    """Schedule a coroutine as fire-and-forget (non-blocking, logs exceptions)."""
-    task = asyncio.create_task(coro)
-    _pending_write_tasks.add(task)
-
-    def _done(t: asyncio.Task) -> None:  # type: ignore[type-arg]
-        _pending_write_tasks.discard(t)
-        if not t.cancelled():
-            exc = t.exception()
-            if exc is not None:
-                logger.warning("Fire-and-forget task failed: %s: %s", type(exc).__name__, exc)
-
-    task.add_done_callback(_done)
 
 
 async def _broadcast_doc_event(
@@ -353,7 +336,7 @@ async def create_task(
 
     # Broadcast AFTER commit (block exit committed)
     if _broadcast_data:
-        _fire_and_forget(handle_task_update(
+        fire_and_forget(handle_task_update(
             project_id=_broadcast_data["project_id"],
             task_id=_broadcast_data["task_id"],
             action=UpdateAction.CREATED,
@@ -516,7 +499,7 @@ async def update_task_status(
 
     # Broadcast AFTER commit (block exit committed)
     if _broadcast_data:
-        _fire_and_forget(handle_task_update(
+        fire_and_forget(handle_task_update(
             project_id=_broadcast_data["project_id"],
             task_id=_broadcast_data["task_id"],
             action=UpdateAction.STATUS_CHANGED,
@@ -694,7 +677,7 @@ async def assign_task(
 
     # Broadcast AFTER commit (block exit committed)
     if _broadcast_data:
-        _fire_and_forget(handle_task_update(
+        fire_and_forget(handle_task_update(
             project_id=_broadcast_data["project_id"],
             task_id=_broadcast_data["task_id"],
             action=UpdateAction.UPDATED,
@@ -949,7 +932,7 @@ async def create_document(
 
     # Broadcast AFTER commit (block exit committed)
     if _doc_broadcast:
-        _fire_and_forget(_broadcast_doc_event(
+        fire_and_forget(_broadcast_doc_event(
             message_type=MessageType.DOCUMENT_CREATED,
             doc_id=_doc_broadcast["doc_id"],
             application_id=_doc_broadcast["application_id"],
@@ -1383,7 +1366,7 @@ async def update_document(
 
     # Broadcast AFTER commit (block exit committed)
     if _doc_broadcast:
-        _fire_and_forget(_broadcast_doc_event(
+        fire_and_forget(_broadcast_doc_event(
             message_type=MessageType.DOCUMENT_UPDATED,
             doc_id=_doc_broadcast["doc_id"],
             application_id=_doc_broadcast["application_id"],
@@ -1527,7 +1510,7 @@ async def delete_document(
 
     # Broadcast AFTER commit (block exit committed)
     if _doc_broadcast:
-        _fire_and_forget(_broadcast_doc_event(
+        fire_and_forget(_broadcast_doc_event(
             message_type=MessageType.DOCUMENT_DELETED,
             doc_id=_doc_broadcast["doc_id"],
             application_id=_doc_broadcast["application_id"],
@@ -1791,7 +1774,7 @@ async def update_task(
 
     # Broadcast AFTER commit (block exit committed)
     if _broadcast_data:
-        _fire_and_forget(handle_task_update(
+        fire_and_forget(handle_task_update(
             project_id=_broadcast_data["project_id"],
             task_id=_broadcast_data["task_id"],
             action=UpdateAction.UPDATED,
@@ -1970,7 +1953,7 @@ async def add_task_comment(
             "author_id": _comment_broadcast["author_id"],
             "body_text": _comment_broadcast["body_text"],
         }
-        _fire_and_forget(handle_comment_added(
+        fire_and_forget(handle_comment_added(
             task_id=_comment_broadcast["task_id"],
             comment_data=comment_data,
             mentioned_user_ids=_comment_broadcast["mentioned_user_ids"],
@@ -2104,7 +2087,7 @@ async def delete_task(
 
     # Broadcast AFTER commit (block exit committed)
     if _broadcast_data:
-        _fire_and_forget(handle_task_update(
+        fire_and_forget(handle_task_update(
             project_id=_broadcast_data["project_id"],
             task_id=_broadcast_data["task_id"],
             action=UpdateAction.DELETED,

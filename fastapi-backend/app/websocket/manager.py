@@ -628,32 +628,7 @@ class ConnectionManager:
         if not connections:
             return 0
 
-        # Send in batches with a 2s timeout per send to prevent
-        # amplification and stalled connections from blocking the loop
-        _BATCH_SIZE = _WS_BATCH_SIZE
-        _SEND_TIMEOUT_S = 2.0
-        success_count = 0
-
-        for i in range(0, len(connections), _BATCH_SIZE):
-            batch = connections[i:i + _BATCH_SIZE]
-            tasks = [
-                asyncio.wait_for(
-                    self.send_personal(conn, message),
-                    timeout=_SEND_TIMEOUT_S,
-                )
-                for conn in batch
-            ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            success_count += sum(1 for r in results if r is True)
-            # Yield to event loop between batches
-            if i + _BATCH_SIZE < len(connections):
-                await asyncio.sleep(0)
-
-        logger.debug(
-            f"Broadcast to room {room_id}: "
-            f"{success_count}/{len(connections)} successful"
-        )
-        return success_count
+        return await self._batched_send(connections, message)
 
     async def broadcast_to_user(
         self,

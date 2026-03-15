@@ -128,7 +128,9 @@ async def create_invitation_notification(
         entity_type=EntityType.INVITATION,
         entity_id=invitation.id,
     )
-    await NotificationService.create_notification(db, notification_data)
+    notification = await NotificationService.create_notification(db, notification_data)
+    await db.commit()
+    await NotificationService.deliver_via_websocket(notification)
 
     # Send WebSocket notification (for invitation-specific UI updates)
     await handle_invitation_notification(
@@ -437,7 +439,9 @@ async def accept_invitation(
         entity_type=EntityType.INVITATION,
         entity_id=invitation.id,
     )
-    await NotificationService.create_notification(db, notification_data)
+    notification = await NotificationService.create_notification(db, notification_data)
+    await db.commit()
+    await NotificationService.deliver_via_websocket(notification)
 
     # Send WebSocket notifications
     await handle_invitation_response(
@@ -550,7 +554,9 @@ async def reject_invitation(
         entity_type=EntityType.INVITATION,
         entity_id=invitation.id,
     )
-    await NotificationService.create_notification(db, notification_data)
+    notification = await NotificationService.create_notification(db, notification_data)
+    await db.commit()
+    await NotificationService.deliver_via_websocket(notification)
 
     # Send WebSocket notification to inviter
     await handle_invitation_response(

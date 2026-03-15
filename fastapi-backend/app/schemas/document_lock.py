@@ -20,7 +20,7 @@ class LockHolder(BaseModel):
 class DocumentLockResponse(BaseModel):
     """Schema for document lock status response."""
 
-    locked: bool = Field(..., description="Whether the document is currently locked")
+    is_locked: bool = Field(..., description="Whether the document is currently locked")
     lock_holder: Optional[LockHolder] = Field(
         None, description="Lock holder info if locked"
     )

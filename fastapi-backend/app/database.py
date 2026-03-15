@@ -16,11 +16,11 @@ logger = logging.getLogger(__name__)
 engine = create_async_engine(
     settings.database_url,
     echo=settings.sql_echo,
-    pool_size=settings.db_pool_size,      # 50 base connections
-    max_overflow=settings.db_max_overflow,  # 100 overflow connections
+    pool_size=settings.db_pool_size,      # default: 10 base connections
+    max_overflow=settings.db_max_overflow,  # default: 20 overflow connections
     pool_timeout=15,  # Fail fast - let clients retry rather than hang
     pool_pre_ping=True,
-    pool_recycle=3600,
+    pool_recycle=300,  # 5 min — safe for cloud proxies (PgBouncer, RDS Proxy)
 )
 
 # Create async session factory
@@ -70,7 +70,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             raise
 
 
-async def warmup_connection_pool(pool_size: int = None) -> None:
+async def warmup_connection_pool(pool_size: int | None = None) -> None:
     """
     Pre-warm the database connection pool at startup.
 

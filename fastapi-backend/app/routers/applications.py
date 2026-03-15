@@ -32,89 +32,16 @@ from ..schemas.invitation import ApplicationRole
 from ..schemas.project import ProjectCursorPage, ProjectResponse, ProjectWithTasks
 from ..schemas.task import TaskCursorPage, TaskResponse, TaskStatusInfo, TaskUserInfo
 from ..services.auth_service import get_current_user
+from ..services.permission_service import (
+    can_edit_application,
+    get_user_application_role,
+    is_application_member,
+    is_application_owner,
+)
 from ..services.task_helpers import get_task_status_info
 from ..websocket.handlers import handle_application_update, UpdateAction
 
 router = APIRouter(prefix="/api/applications", tags=["Applications"])
-
-
-# ============================================================================
-# Helper Functions
-# ============================================================================
-
-
-async def get_user_application_role(
-    db: AsyncSession,
-    user_id: UUID,
-    application_id: UUID,
-    application: Optional[Application] = None,
-) -> Optional[str]:
-    """
-    Get the user's role in an application.
-
-    Args:
-        db: Database session
-        user_id: The user's ID
-        application_id: The application's ID
-        application: Optional pre-fetched application to avoid extra query
-
-    Returns:
-        The role string ('owner', 'editor', 'viewer') or None if not a member.
-    """
-    # If application is provided, use it; otherwise fetch
-    if application is None:
-        result = await db.execute(
-            select(Application).where(Application.id == application_id)
-        )
-        application = result.scalar_one_or_none()
-
-    if not application:
-        return None
-
-    # Check if user is the original owner
-    if application.owner_id == user_id:
-        return "owner"
-
-    # Check ApplicationMembers table
-    result = await db.execute(
-        select(ApplicationMember).where(
-            ApplicationMember.application_id == application_id,
-            ApplicationMember.user_id == user_id,
-        )
-    )
-    member = result.scalar_one_or_none()
-
-    return member.role if member else None
-
-
-async def is_application_owner(
-    db: AsyncSession,
-    user_id: UUID,
-    application_id: UUID,
-) -> bool:
-    """Check if the user is the owner of the application."""
-    role = await get_user_application_role(db, user_id, application_id)
-    return role == "owner"
-
-
-async def is_application_member(
-    db: AsyncSession,
-    user_id: UUID,
-    application_id: UUID,
-) -> bool:
-    """Check if the user is a member of the application (any role)."""
-    role = await get_user_application_role(db, user_id, application_id)
-    return role is not None
-
-
-async def can_edit_application(
-    db: AsyncSession,
-    user_id: UUID,
-    application_id: UUID,
-) -> bool:
-    """Check if the user can edit the application (owner or editor)."""
-    role = await get_user_application_role(db, user_id, application_id)
-    return role in ["owner", "editor"]
 
 
 # ============================================================================

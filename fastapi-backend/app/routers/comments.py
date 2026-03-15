@@ -34,7 +34,7 @@ from ..services.comment_service import (
     get_comments_for_task,
     update_comment,
 )
-from ..services.notification_service import create_mention_notification
+from ..services.notification_service import NotificationService, create_mention_notification
 from ..websocket.handlers import (
     handle_comment_added,
     handle_comment_deleted,
@@ -237,15 +237,22 @@ async def create_comment_endpoint(
     )
 
     # Create notifications for mentioned users
+    mention_notifications = []
     for user_id in mentioned_user_ids:
         if user_id != current_user.id:  # Don't notify self
-            await create_mention_notification(
+            n = await create_mention_notification(
                 db=db,
                 mentioned_user_id=user_id,
                 mentioner_id=current_user.id,
                 task_id=task_id,
                 comment_id=comment.id,
             )
+            if n:
+                mention_notifications.append(n)
+    if mention_notifications:
+        await db.commit()
+        for n in mention_notifications:
+            await NotificationService.deliver_via_websocket(n)
 
     return CommentResponse(**response)
 
@@ -304,15 +311,22 @@ async def update_comment_endpoint(
     )
 
     # Create notifications for newly mentioned users
+    mention_notifications = []
     for user_id in added_mentions:
         if user_id != current_user.id:
-            await create_mention_notification(
+            n = await create_mention_notification(
                 db=db,
                 mentioned_user_id=user_id,
                 mentioner_id=current_user.id,
                 task_id=comment.task_id,
                 comment_id=comment.id,
             )
+            if n:
+                mention_notifications.append(n)
+    if mention_notifications:
+        await db.commit()
+        for n in mention_notifications:
+            await NotificationService.deliver_via_websocket(n)
 
     return CommentResponse(**response)
 

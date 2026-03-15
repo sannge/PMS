@@ -34,7 +34,6 @@ from ..schemas.user import (
     VerifyLoginRequest,
 )
 from ..services.auth_service import (
-    Token,
     authenticate_user,
     blacklist_token,
     create_access_token,
@@ -258,16 +257,28 @@ async def logout(
     """
     Logout the current user.
 
-    Blacklists the JWT token in Redis so it cannot be reused.
-    The client should also discard the stored access token.
+    Blacklists the access and refresh JWT tokens in Redis so they cannot be reused.
+    The client should also discard the stored tokens.
     """
-    # Extract raw token from Authorization header and blacklist its JTI
+    # Extract raw access token from Authorization header and blacklist its JTI
     auth_header = request.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
         raw_token = auth_header[7:]
         token_data = decode_access_token(raw_token)
         if token_data and token_data.jti and token_data.exp:
             await blacklist_token(token_data.jti, token_data.exp)
+
+    # Also blacklist the refresh token if provided in the request body
+    try:
+        body = await request.json()
+        refresh_token = body.get("refresh_token") if isinstance(body, dict) else None
+    except Exception:
+        refresh_token = None
+
+    if refresh_token:
+        refresh_data = validate_refresh_token(refresh_token)
+        if refresh_data and refresh_data.jti and refresh_data.exp:
+            await blacklist_token(refresh_data.jti, refresh_data.exp)
 
     return MessageResponse(message="Successfully logged out")
 

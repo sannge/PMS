@@ -37,7 +37,7 @@ import {
   useAuthUserId,
   useAuthUser,
   getAuthHeaders,
-  parseApiError,
+  parseAuthError,
   selectUser,
   selectIsAuthenticated,
   selectIsLoading,
@@ -79,27 +79,27 @@ describe('getAuthHeaders', () => {
   })
 })
 
-describe('parseApiError', () => {
+describe('parseAuthError', () => {
   it('extracts string detail', () => {
-    expect(parseApiError(400, { detail: 'Bad request' })).toEqual({ message: 'Bad request' })
+    expect(parseAuthError(400, { detail: 'Bad request' })).toEqual({ message: 'Bad request' })
   })
 
   it('extracts validation array detail', () => {
     const data = { detail: [{ loc: ['body', 'email'], msg: 'invalid email' }] }
-    expect(parseApiError(422, data)).toEqual({ message: 'invalid email', field: 'email' })
+    expect(parseAuthError(422, data)).toEqual({ message: 'invalid email', field: 'email' })
   })
 
   it('falls back to status-based messages', () => {
-    expect(parseApiError(401, {})).toEqual({ message: 'Invalid credentials. Please try again.' })
-    expect(parseApiError(403, {})).toEqual({ message: 'Access denied.' })
-    expect(parseApiError(404, {})).toEqual({ message: 'Resource not found.' })
-    expect(parseApiError(500, {})).toEqual({ message: 'Server error. Please try again later.' })
-    expect(parseApiError(418, {})).toEqual({ message: 'An unexpected error occurred.' })
+    expect(parseAuthError(401, {})).toEqual({ message: 'Invalid credentials. Please try again.' })
+    expect(parseAuthError(403, {})).toEqual({ message: 'Access denied.' })
+    expect(parseAuthError(404, {})).toEqual({ message: 'Resource not found.' })
+    expect(parseAuthError(500, {})).toEqual({ message: 'Server error. Please try again later.' })
+    expect(parseAuthError(418, {})).toEqual({ message: 'An unexpected error occurred.' })
   })
 
   it('handles null/non-object data', () => {
-    expect(parseApiError(400, null)).toEqual({ message: 'Invalid request. Please check your input.' })
-    expect(parseApiError(400, 'string')).toEqual({ message: 'Invalid request. Please check your input.' })
+    expect(parseAuthError(400, null)).toEqual({ message: 'Invalid request. Please check your input.' })
+    expect(parseAuthError(400, 'string')).toEqual({ message: 'Invalid request. Please check your input.' })
   })
 })
 

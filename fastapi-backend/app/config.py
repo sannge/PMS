@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     # Server settings
     host: str = "0.0.0.0"
     port: int = 8000
+    environment: str = "production"  # "development" | "production"
 
     # WebSocket settings (DDoS protection)
     ws_max_connections_per_user: int = 15  # Normal user: ~5-10, attack: 100+

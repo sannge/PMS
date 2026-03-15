@@ -9,7 +9,7 @@ from typing import Annotated, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
@@ -25,6 +25,7 @@ from ..schemas.notification import (
     NotificationUpdate,
 )
 from ..services.auth_service import get_current_user
+from ..utils.timezone import utc_now
 from ..websocket.handlers import handle_notification_read
 
 router = APIRouter(prefix="/api/notifications", tags=["Notifications"])
@@ -349,10 +350,21 @@ async def mark_notifications_read(
 
     await db.commit()
 
-    # Broadcast read status for each notification via WebSocket
+    # Broadcast bulk read event via WebSocket (single message instead of N)
     if bulk_data.is_read:
-        for notification_id in bulk_data.notification_ids:
-            await handle_notification_read(current_user.id, notification_id)
+        from ..websocket.manager import manager, MessageType
+        await manager.broadcast_to_user(
+            current_user.id,
+            {
+                "type": MessageType.NOTIFICATION_READ.value,
+                "data": {
+                    "notification_ids": [str(nid) for nid in bulk_data.notification_ids],
+                    "user_id": str(current_user.id),
+                    "timestamp": utc_now().isoformat(),
+                    "bulk": True,
+                },
+            },
+        )
 
     return {
         "message": f"Updated {updated_count} notifications",
@@ -420,19 +432,14 @@ async def delete_all_notifications(
 
     This action is irreversible.
     """
-    query = select(Notification).where(
+    stmt = delete(Notification).where(
         Notification.user_id == current_user.id,
     )
 
     if read_only:
-        query = query.where(Notification.is_read == True)
+        stmt = stmt.where(Notification.is_read == True)
 
-    result = await db.execute(query)
-    notifications = result.scalars().all()
-
-    for notification in notifications:
-        await db.delete(notification)
-
+    await db.execute(stmt)
     await db.commit()
 
     return None

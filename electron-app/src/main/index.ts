@@ -239,7 +239,7 @@ function setupSessionSecurity(): void {
 
   // Set permission request handler
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
-    const allowedPermissions = ['clipboard-read', 'clipboard-write', 'notifications']
+    const allowedPermissions = ['clipboard-write', 'notifications']
 
     if (allowedPermissions.includes(permission)) {
       callback(true)
@@ -250,7 +250,7 @@ function setupSessionSecurity(): void {
 
   // Set permission check handler
   session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
-    const allowedPermissions = ['clipboard-read', 'clipboard-write', 'notifications', 'media']
+    const allowedPermissions = ['clipboard-write', 'notifications', 'media']
     return allowedPermissions.includes(permission)
   })
 }
@@ -431,8 +431,9 @@ app.on('window-all-closed', () => {
 
 // Security: Handle certificate errors
 app.on('certificate-error', (event, _webContents, url, _error, _certificate, callback) => {
-  // In development, ignore certificate errors for localhost
-  if (is.dev && url.includes('localhost')) {
+  // In development, ignore certificate errors for localhost only
+  const hostname = (() => { try { return new URL(url).hostname } catch { return '' } })()
+  if (is.dev && (hostname === 'localhost' || hostname === '127.0.0.1')) {
     event.preventDefault()
     callback(true)
   } else {

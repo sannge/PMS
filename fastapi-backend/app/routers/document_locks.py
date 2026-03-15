@@ -23,7 +23,7 @@ from ..schemas.document_lock import (
     LockHolder,
 )
 from ..services.auth_service import get_current_user
-from ..services.document_lock_service import DocumentLockService, get_lock_service
+from ..services.document_lock_service import DocumentLockService, DocumentLockUnavailableError, get_lock_service
 from ..services.document_service import get_scope_filter
 from ..services.permission_service import PermissionService
 from ..websocket.handlers import handle_document_lock_change
@@ -197,11 +197,17 @@ async def acquire_lock(
             detail="You do not have permission to edit this document",
         )
 
-    result = await lock_service.acquire_lock(
-        document_id=str(document_id),
-        user_id=str(current_user.id),
-        user_name=current_user.display_name or current_user.email,
-    )
+    try:
+        result = await lock_service.acquire_lock(
+            document_id=str(document_id),
+            user_id=str(current_user.id),
+            user_name=current_user.display_name or current_user.email,
+        )
+    except DocumentLockUnavailableError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Lock service temporarily unavailable",
+        )
 
     if result is None:
         # Already locked by another user
@@ -214,15 +220,11 @@ async def acquire_lock(
             },
         )
 
-    # Resolve scope IDs for WebSocket broadcast
-    doc_result = await db.execute(
-        select(Document.application_id, Document.project_id).where(Document.id == document_id)
-    )
-    doc_scope = doc_result.one_or_none()
+    # Resolve scope IDs for WebSocket broadcast (reuse first query result)
     app_id, proj_id = await _resolve_lock_broadcast_ids(
         db,
-        doc_scope.application_id if doc_scope else None,
-        doc_scope.project_id if doc_scope else None,
+        document.application_id,
+        document.project_id,
     )
 
     await handle_document_lock_change(
@@ -234,7 +236,7 @@ async def acquire_lock(
     )
 
     return DocumentLockResponse(
-        locked=True,
+        is_locked=True,
         lock_holder=LockHolder(**result),
     )
 
@@ -257,10 +259,16 @@ async def release_lock(
     lock_service: DocumentLockService = Depends(get_lock_service),
 ) -> DocumentLockResponse:
     """Release an edit lock on a document."""
-    released = await lock_service.release_lock(
-        document_id=str(document_id),
-        user_id=str(current_user.id),
-    )
+    try:
+        released = await lock_service.release_lock(
+            document_id=str(document_id),
+            user_id=str(current_user.id),
+        )
+    except DocumentLockUnavailableError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Lock service temporarily unavailable",
+        )
 
     if released:
         # Resolve scope IDs for WebSocket broadcast
@@ -282,13 +290,13 @@ async def release_lock(
             project_id=proj_id,
         )
 
-        return DocumentLockResponse(locked=False, lock_holder=None)
+        return DocumentLockResponse(is_locked=False, lock_holder=None)
 
     # Lock not held by this user (or already expired)
     holder = await lock_service.get_lock_holder(str(document_id))
     if holder is None:
         # Lock already expired/released — return success (idempotent)
-        return DocumentLockResponse(locked=False, lock_holder=None)
+        return DocumentLockResponse(is_locked=False, lock_holder=None)
 
     raise HTTPException(
         status_code=status.HTTP_409_CONFLICT,
@@ -336,10 +344,10 @@ async def get_lock_status(
 
     if holder:
         return DocumentLockResponse(
-            locked=True,
+            is_locked=True,
             lock_holder=LockHolder(**holder),
         )
-    return DocumentLockResponse(locked=False, lock_holder=None)
+    return DocumentLockResponse(is_locked=False, lock_holder=None)
 
 
 @router.post(
@@ -358,10 +366,16 @@ async def lock_heartbeat(
     lock_service: DocumentLockService = Depends(get_lock_service),
 ) -> dict:
     """Extend the lock TTL (heartbeat)."""
-    extended = await lock_service.heartbeat(
-        document_id=str(document_id),
-        user_id=str(current_user.id),
-    )
+    try:
+        extended = await lock_service.heartbeat(
+            document_id=str(document_id),
+            user_id=str(current_user.id),
+        )
+    except DocumentLockUnavailableError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Lock service temporarily unavailable",
+        )
 
     if not extended:
         raise HTTPException(
@@ -461,6 +475,6 @@ async def force_take_lock(
     )
 
     return DocumentLockResponse(
-        locked=True,
+        is_locked=True,
         lock_holder=LockHolder(**new_holder) if new_holder else None,
     )

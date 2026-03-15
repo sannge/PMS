@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ..utils.timezone import utc_now
+from ..utils.tasks import fire_and_forget
 from ..database import async_session_maker, get_db
 from ..models.application import Application
 from ..models.application_member import ApplicationMember
@@ -39,7 +40,7 @@ from ..schemas.task import (
 from ..services.auth_service import get_current_user
 from ..services.notification_service import NotificationService
 from ..services.task_helpers import get_task_status_info
-from ..services.permission_service import PermissionService, get_permission_service
+from ..services.permission_service import PermissionService, get_permission_service, get_user_application_role
 from ..services.status_derivation_service import (
     derive_project_status_from_model,
     recalculate_aggregation_from_tasks,
@@ -64,60 +65,40 @@ async def _background_auto_archive(project_id) -> None:
     """Run auto-archive in background with its own DB session."""
     try:
         async with async_session_maker() as db:
-            archived_count = await auto_archive_stale_done_tasks(db, project_id)
-            if archived_count > 0:
-                await db.commit()
+            await auto_archive_stale_done_tasks(db, project_id)
     except Exception:
         logger.exception("Background auto-archive failed for project %s", project_id)
+
+
+_ARCHIVE_DEBOUNCE_TTL = 300  # 5-minute debounce per project
+
+
+async def _debounced_auto_archive(project_id) -> None:
+    """Run auto-archive only if not already run recently (Redis-debounced)."""
+    from ..services.redis_service import redis_service
+
+    lock_key = f"archive_lock:{project_id}"
+    if not redis_service.is_connected:
+        logger.warning("Redis unavailable for archive debounce on project %s, skipping archival", project_id)
+        return  # Skip archival when Redis is down to prevent thundering herd
+
+    try:
+        # SET NX with TTL: only one archival per project per 5 minutes
+        acquired = await redis_service.client.set(
+            lock_key, "1", nx=True, ex=_ARCHIVE_DEBOUNCE_TTL
+        )
+        if not acquired:
+            return  # Another request already triggered archival recently
+    except Exception:
+        logger.warning("Redis error during archive debounce on project %s, skipping archival", project_id)
+        return
+
+    await _background_auto_archive(project_id)
 
 
 # ============================================================================
 # Helper Functions for Role-Based Access Control
 # ============================================================================
-
-
-async def get_user_application_role(
-    db: AsyncSession,
-    user_id: UUID,
-    application_id: UUID,
-    application: Optional[Application] = None,
-) -> Optional[str]:
-    """
-    Get the user's role in an application.
-
-    Args:
-        db: Database session
-        user_id: The user's ID
-        application_id: The application's ID
-        application: Optional pre-fetched application to avoid extra query
-
-    Returns:
-        The role string ('owner', 'editor', 'viewer') or None if not a member.
-    """
-    # If application is provided, use it; otherwise fetch
-    if application is None:
-        result = await db.execute(
-            select(Application).where(Application.id == application_id)
-        )
-        application = result.scalar_one_or_none()
-
-    if not application:
-        return None
-
-    # Check if user is the original owner
-    if application.owner_id == user_id:
-        return "owner"
-
-    # Check ApplicationMembers table
-    result = await db.execute(
-        select(ApplicationMember).where(
-            ApplicationMember.application_id == application_id,
-            ApplicationMember.user_id == user_id,
-        )
-    )
-    member = result.scalar_one_or_none()
-
-    return member.role if member else None
 
 
 async def verify_project_access(
@@ -684,6 +665,9 @@ async def auto_archive_stale_done_tasks(
             agg.done_tasks = max(0, agg.done_tasks - archived_count)
             agg.total_tasks = max(0, agg.total_tasks - archived_count)
 
+        # Commit inside this function so it owns its own transaction
+        await db.commit()
+
     return archived_count
 
 
@@ -816,29 +800,20 @@ async def get_rank_for_position(
     before_rank: Optional[str] = None
     after_rank: Optional[str] = None
 
-    # Get the rank of the task to position before
-    if before_task_id:
+    # Fetch before/after tasks in a single query when both IDs are provided
+    neighbor_ids = [tid for tid in [before_task_id, after_task_id] if tid]
+    if neighbor_ids:
         result = await db.execute(
             select(Task).where(
-                Task.id == before_task_id,
+                Task.id.in_(neighbor_ids),
                 Task.project_id == project_id,
             )
         )
-        before_task = result.scalar_one_or_none()
-        if before_task:
-            before_rank = before_task.task_rank
-
-    # Get the rank of the task to position after
-    if after_task_id:
-        result = await db.execute(
-            select(Task).where(
-                Task.id == after_task_id,
-                Task.project_id == project_id,
-            )
-        )
-        after_task = result.scalar_one_or_none()
-        if after_task:
-            after_rank = after_task.task_rank
+        neighbor_tasks = {t.id: t for t in result.scalars().all()}
+        if before_task_id and before_task_id in neighbor_tasks:
+            before_rank = neighbor_tasks[before_task_id].task_rank
+        if after_task_id and after_task_id in neighbor_tasks:
+            after_rank = neighbor_tasks[after_task_id].task_rank
 
     # If neither provided, get the last task in the target status to append
     if not before_task_id and not after_task_id and target_status_id:
@@ -909,8 +884,8 @@ async def list_tasks(
     # Verify project access (any member can view)
     await verify_project_access(project_id, current_user, db)
 
-    # Schedule archival as background task (non-blocking)
-    asyncio.ensure_future(_background_auto_archive(project_id))
+    # Schedule archival as background task (non-blocking, Redis-debounced)
+    fire_and_forget(_debounced_auto_archive(project_id))
 
     # Build query for tasks with subtask count
     # Use a subquery for counting subtasks
@@ -1179,7 +1154,7 @@ async def create_task(
     await db.refresh(task, attribute_names=["task_status", "assignee", "reporter", "project"])
 
     # Emit WebSocket event if derived status changed (fire-and-forget for performance)
-    asyncio.create_task(
+    fire_and_forget(
         emit_project_status_changed_if_needed(
             project=project,
             old_status=old_derived_status,
@@ -1218,7 +1193,7 @@ async def create_task(
         "completed_at": task.completed_at.isoformat() if task.completed_at else None,
     }
     # Broadcast task creation (fire-and-forget for performance)
-    asyncio.create_task(
+    fire_and_forget(
         handle_task_update(
             project_id=project_id,
             task_id=task.id,
@@ -1232,7 +1207,7 @@ async def create_task(
     if project_was_restored:
         app_room_id = f"application:{project.application_id}"
         # Fire-and-forget for performance
-        asyncio.create_task(
+        fire_and_forget(
             manager.broadcast_to_room(
                 app_room_id,
                 {
@@ -1258,12 +1233,15 @@ async def create_task(
         )
         assignee = result.scalar_one_or_none()
         if assignee:
-            await NotificationService.notify_task_assigned(
+            notification = await NotificationService.notify_task_assigned(
                 db=db,
                 task=task,
                 assignee=assignee,
                 assigner=current_user,
             )
+            if notification:
+                await db.commit()
+                await NotificationService.deliver_via_websocket(notification)
 
     return task
 
@@ -1648,12 +1626,15 @@ async def update_task(
         )
         new_assignee = result.scalar_one_or_none()
         if new_assignee:
-            await NotificationService.notify_task_assigned(
+            notification = await NotificationService.notify_task_assigned(
                 db=db,
                 task=task,
                 assignee=new_assignee,
                 assigner=current_user,
             )
+            if notification:
+                await db.commit()
+                await NotificationService.deliver_via_websocket(notification)
 
     return task
 

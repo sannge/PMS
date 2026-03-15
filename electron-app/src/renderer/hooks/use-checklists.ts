@@ -18,7 +18,7 @@ import {
   UseMutationResult,
 } from '@tanstack/react-query'
 import { useAuthToken } from '@/contexts/auth-context'
-import { queryKeys } from '@/lib/query-client'
+import { queryKeys, CONTENT_GC_TIME } from '@/lib/query-client'
 import { authGet, authPost, authPut, authDelete } from '@/lib/api-client'
 
 // ============================================================================
@@ -126,7 +126,7 @@ export function useChecklists(taskId: string | undefined): UseQueryResult<Checkl
     },
     enabled: !!token && !!taskId,
     staleTime: 30 * 1000, // 30 seconds
-    gcTime: 24 * 60 * 60 * 1000, // 24 hours for offline
+    gcTime: CONTENT_GC_TIME, // 4 hours for content-heavy queries
     refetchOnWindowFocus: false, // WS real-time invalidation handles freshness
   })
 }

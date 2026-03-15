@@ -603,9 +603,9 @@ async def save_document_content(
     # to ensure Meilisearch only receives data that PostgreSQL has committed.
     project_application_id = None
     if document.application_id is None and document.project_id is not None:
-        project = await db.get(Project, document.project_id)
-        if project:
-            project_application_id = project.application_id
+        project_application_id = await db.scalar(
+            select(Project.application_id).where(Project.id == document.project_id)
+        )
 
     from .search_service import build_search_doc_data
     search_doc_data = build_search_doc_data(document, project_application_id=project_application_id)

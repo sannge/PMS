@@ -11,6 +11,7 @@ import type { Editor } from '@tiptap/core'
 import { DOMParser } from '@tiptap/pm/model'
 import { useEffect, useRef, useMemo, useCallback } from 'react'
 import { toast } from 'sonner'
+import DOMPurify from 'dompurify'
 import { createDocumentExtensions, createStaticExtensions, updateImagePlaceholder, removeImagePlaceholder } from './editor-extensions'
 import { generateStaticHTML, escapeHtml } from './canvas-utils'
 import './editor-styles.css'
@@ -144,7 +145,10 @@ export function ContainerEditor({
               .replace(/\s*xmlns:[a-z]+="[^"]*"/gi, '')
             const parser = DOMParser.fromSchema(view.state.schema)
             const tmpDoc = document.implementation.createHTMLDocument()
-            tmpDoc.body.innerHTML = cleanHtml
+            tmpDoc.body.innerHTML = DOMPurify.sanitize(cleanHtml, {
+              ADD_TAGS: ['table', 'thead', 'tbody', 'tr', 'td', 'th', 'colgroup', 'col'],
+              ADD_ATTR: ['colspan', 'rowspan', 'scope', 'headers'],
+            })
             const slice = parser.parseSlice(tmpDoc.body)
             const tr = view.state.tr.replaceSelection(slice)
             view.dispatch(tr)
@@ -181,7 +185,10 @@ export function ContainerEditor({
                 ).join('') + '</table>'
               const parser = DOMParser.fromSchema(view.state.schema)
               const tmpDoc = document.implementation.createHTMLDocument()
-              tmpDoc.body.innerHTML = tableHtml
+              tmpDoc.body.innerHTML = DOMPurify.sanitize(tableHtml, {
+                ADD_TAGS: ['table', 'thead', 'tbody', 'tr', 'td', 'th', 'colgroup', 'col'],
+                ADD_ATTR: ['colspan', 'rowspan', 'scope', 'headers'],
+              })
               const slice = parser.parseSlice(tmpDoc.body)
               const tr = view.state.tr.replaceSelection(slice)
               view.dispatch(tr)
@@ -401,7 +408,10 @@ export function ContainerEditor({
     <div ref={staticWrapperRef} className="canvas-static-preview max-w-none">
       <div
         className="ProseMirror"
-        dangerouslySetInnerHTML={{ __html: staticHTML }}
+        dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(staticHTML, {
+          ADD_TAGS: ['table', 'thead', 'tbody', 'tr', 'td', 'th', 'colgroup', 'col'],
+          ADD_ATTR: ['colspan', 'rowspan', 'scope', 'headers'],
+        }) }}
       />
     </div>
   )

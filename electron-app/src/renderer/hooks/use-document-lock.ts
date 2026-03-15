@@ -135,7 +135,8 @@ export function useDocumentLock({
     },
     // Skip temp IDs from optimistic updates - they don't exist on the server yet
     enabled: !!token && !!documentId && !isTempId(documentId),
-    refetchInterval: LOCK_POLL_INTERVAL_MS,
+    // Only poll when WebSocket is disconnected; WS events handle real-time updates
+    refetchInterval: wsStatus.isConnected ? false : LOCK_POLL_INTERVAL_MS,
     // WS events (DOCUMENT_LOCKED/UNLOCKED/FORCE_TAKEN) update the cache
     // in-place via setQueryData, so we don't need staleTime: 0. Normal
     // staleTime + refetchOnMount ensures fresh data on component mount
@@ -537,7 +538,7 @@ export function useActiveLocks(
 
       return response.data;
     },
-    enabled: !!token && !!scope && (scope === "personal" || !!scopeId),
+    enabled: !!token && !!scope && (scope !== 'personal' || !!userId) && (scope === 'personal' || !!scopeId),
     // WS events update individual documentLock caches; this batch query
     // uses normal staleTime since WS handles real-time updates.
     staleTime: 30_000,

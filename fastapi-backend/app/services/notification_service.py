@@ -39,15 +39,17 @@ class NotificationService:
     async def create_notification(
         db: AsyncSession,
         notification_data: NotificationCreate,
-        deliver_realtime: bool = True,
     ) -> Notification:
         """
-        Create a notification and optionally deliver it via WebSocket.
+        Create a notification and flush to DB.
+
+        Does NOT deliver via WebSocket -- callers must commit the transaction
+        first and then call ``deliver_via_websocket()`` to avoid phantom
+        notifications when the commit fails.
 
         Args:
             db: Database session
             notification_data: Notification data
-            deliver_realtime: Whether to send via WebSocket immediately
 
         Returns:
             Notification: The created notification
@@ -63,24 +65,19 @@ class NotificationService:
             is_read=False,
         )
 
-        # Save to database
+        # Save to database (caller owns the transaction)
         db.add(notification)
-        await db.commit()
-        await db.refresh(notification)
+        await db.flush()
 
         logger.info(
             f"Notification created: id={notification.id}, "
             f"user={notification.user_id}, type={notification.type}"
         )
 
-        # Deliver via WebSocket if requested
-        if deliver_realtime:
-            await NotificationService._deliver_via_websocket(notification)
-
         return notification
 
     @staticmethod
-    async def _deliver_via_websocket(notification: Notification) -> int:
+    async def deliver_via_websocket(notification: Notification) -> int:
         """
         Deliver a notification via WebSocket.
 
@@ -346,11 +343,10 @@ class NotificationService:
 async def create_notification(
     db: AsyncSession,
     notification_data: NotificationCreate,
-    deliver_realtime: bool = True,
 ) -> Notification:
     """Create a notification. Convenience wrapper for NotificationService."""
     return await NotificationService.create_notification(
-        db, notification_data, deliver_realtime
+        db, notification_data
     )
 
 

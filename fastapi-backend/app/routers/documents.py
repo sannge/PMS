@@ -83,13 +83,15 @@ def _log_task_exception(task: asyncio.Task) -> None:
 
 def _create_search_task(coro: Any) -> asyncio.Task:
     """Create a tracked background task for search indexing."""
-    # L11: Refuse to create new tasks if set is at capacity
+    # L11: Refuse to track new tasks if set is at capacity, but still log exceptions
     if len(_pending_search_tasks) >= _MAX_PENDING_SEARCH_TASKS:
         logger.warning(
-            "Search task set at capacity (%d), skipping new task",
+            "Search task set at capacity (%d), running untracked",
             _MAX_PENDING_SEARCH_TASKS,
         )
-        return asyncio.create_task(coro)  # still run it, just don't track
+        task = asyncio.create_task(coro)
+        task.add_done_callback(_log_task_exception)
+        return task
     task = asyncio.create_task(coro)
     _pending_search_tasks.add(task)
     task.add_done_callback(_log_task_exception)

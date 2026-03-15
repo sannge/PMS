@@ -16,6 +16,7 @@ import { DOMParser } from '@tiptap/pm/model'
 import { useCallback, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
+import DOMPurify from 'dompurify'
 import { useAuthToken } from '@/contexts/auth-context'
 import { createDocumentExtensions, type SetImageAttrs, updateImagePlaceholder, removeImagePlaceholder } from './editor-extensions'
 import { EditorToolbar } from './editor-toolbar'
@@ -178,7 +179,10 @@ export function DocumentEditor({
               .replace(/\s*xmlns:[a-z]+="[^"]*"/gi, '')
             const parser = DOMParser.fromSchema(view.state.schema)
             const tmpDoc = document.implementation.createHTMLDocument()
-            tmpDoc.body.innerHTML = cleanHtml
+            tmpDoc.body.innerHTML = DOMPurify.sanitize(cleanHtml, {
+              ADD_TAGS: ['table', 'thead', 'tbody', 'tr', 'td', 'th', 'colgroup', 'col'],
+              ADD_ATTR: ['colspan', 'rowspan', 'scope', 'headers'],
+            })
             const slice = parser.parseSlice(tmpDoc.body)
             const tr = view.state.tr.replaceSelection(slice)
             view.dispatch(tr)
@@ -212,7 +216,10 @@ export function DocumentEditor({
                 ).join('') + '</table>'
               const parser = DOMParser.fromSchema(view.state.schema)
               const tmpDoc = document.implementation.createHTMLDocument()
-              tmpDoc.body.innerHTML = tableHtml
+              tmpDoc.body.innerHTML = DOMPurify.sanitize(tableHtml, {
+                ADD_TAGS: ['table', 'thead', 'tbody', 'tr', 'td', 'th', 'colgroup', 'col'],
+                ADD_ATTR: ['colspan', 'rowspan', 'scope', 'headers'],
+              })
               const slice = parser.parseSlice(tmpDoc.body)
               const tr = view.state.tr.replaceSelection(slice)
               view.dispatch(tr)

@@ -857,6 +857,19 @@ async def search_documents_pg_fallback(
     """
     from sqlalchemy import text
 
+    # Validate scope IDs as UUIDs to prevent SQL injection via f-string interpolation
+    from uuid import UUID as _UUID
+    if scope_application_id:
+        try:
+            _UUID(scope_application_id)
+        except (ValueError, AttributeError):
+            return {"documents": [], "files": [], "total_count": 0}
+    if scope_project_id:
+        try:
+            _UUID(scope_project_id)
+        except (ValueError, AttributeError):
+            return {"documents": [], "files": [], "total_count": 0}
+
     all_scope_ids = [str(uid) for uid in accessible_app_ids]
     all_project_ids = [str(uid) for uid in project_ids]
 

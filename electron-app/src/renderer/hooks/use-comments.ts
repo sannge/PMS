@@ -20,7 +20,7 @@ import {
 } from '@tanstack/react-query'
 import { useAuthToken, useAuthUser } from '@/contexts/auth-context'
 import { authGet, authPost, authPut, authDelete } from '@/lib/api-client'
-import { queryKeys } from '@/lib/query-client'
+import { queryKeys, CONTENT_GC_TIME } from '@/lib/query-client'
 
 // ============================================================================
 // Types
@@ -164,7 +164,7 @@ export function useComments(
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     enabled: !!token && !!taskId,
     staleTime: 30 * 1000, // 30 seconds - comments change frequently
-    gcTime: 24 * 60 * 60 * 1000,
+    gcTime: CONTENT_GC_TIME,
     refetchOnWindowFocus: false, // WS real-time invalidation handles freshness
   })
 }
@@ -215,7 +215,7 @@ export function useComment(id: string | undefined): UseQueryResult<Comment, Erro
     },
     enabled: !!token && !!id,
     staleTime: 30 * 1000,
-    gcTime: 24 * 60 * 60 * 1000,
+    gcTime: CONTENT_GC_TIME,
   })
 }
 

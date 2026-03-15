@@ -1,5 +1,6 @@
 """Dashboard aggregation service."""
 
+import asyncio
 from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
 
@@ -470,16 +471,24 @@ async def get_dashboard_data(
     app_count = len(app_id_list)
     project_count = len(project_id_list)
 
-    # Run queries sequentially (single session, safe for async)
-    stats_result = await _query_stats(
-        db, project_id_list, user_id, today, week_start
-    )
-    health_result = await _query_project_health(db, app_id_list)
-    tasks_result = await _query_task_lists(
-        db, project_id_list, today, seven_days_ago
-    )
-    trend_result = await _query_trends(
-        db, project_id_list, now, thirty_days_ago, sixty_days_ago
+    # Run queries in 2 parallel groups (2 sessions max instead of 4)
+    # to reduce connection pool pressure.
+    from ..database import async_session_maker
+
+    async def _stats_and_health():
+        async with async_session_maker() as s:
+            stats = await _query_stats(s, project_id_list, user_id, today, week_start)
+            health = await _query_project_health(s, app_id_list)
+            return stats, health
+
+    async def _tasks_and_trends():
+        async with async_session_maker() as s:
+            tasks = await _query_task_lists(s, project_id_list, today, seven_days_ago)
+            trends = await _query_trends(s, project_id_list, now, thirty_days_ago, sixty_days_ago)
+            return tasks, trends
+
+    (stats_result, health_result), (tasks_result, trend_result) = await asyncio.gather(
+        _stats_and_health(), _tasks_and_trends()
     )
 
     # Unpack stats

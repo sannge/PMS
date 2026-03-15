@@ -303,6 +303,22 @@ async def upload_file(
             detail="No file provided or file has no name",
         )
 
+    # Sanitize filename: strip null bytes and control characters, enforce max length
+    import re as _re
+    sanitized_name = _re.sub(r'[\x00-\x1f\x7f]', '', file.filename)
+    if len(sanitized_name) > 255:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Filename exceeds maximum length of 255 characters",
+        )
+    if not sanitized_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Filename is empty after sanitization",
+        )
+    # Use sanitized filename going forward
+    file.filename = sanitized_name
+
     # Read file content
     content = await file.read()
     file_size = len(content)
@@ -332,6 +348,32 @@ async def upload_file(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Image type '{content_type}' is not allowed. Accepted: PNG, JPEG, GIF, WebP.",
         )
+
+    # Magic byte validation for image uploads (reject mismatched Content-Type)
+    if content_type in ALLOWED_IMAGE_MIMES:
+        _MAGIC_BYTES: dict[bytes, str] = {
+            b'\xff\xd8\xff': 'image/jpeg',
+            b'\x89PNG': 'image/png',
+            b'GIF8': 'image/gif',
+        }
+        detected_mime: str | None = None
+        for magic, mime in _MAGIC_BYTES.items():
+            if content[:len(magic)] == magic:
+                detected_mime = mime
+                break
+        # WebP: starts with RIFF....WEBP
+        if content[:4] == b'RIFF' and len(content) >= 12 and content[8:12] == b'WEBP':
+            detected_mime = 'image/webp'
+        if detected_mime is not None and detected_mime != content_type:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"File content does not match declared type '{content_type}'. Detected: {detected_mime}.",
+            )
+        if detected_mime is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"File content does not appear to be a valid image for type '{content_type}'.",
+            )
 
     # Determine entity type and ID
     resolved_entity_type = entity_type.value if entity_type else None

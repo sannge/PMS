@@ -82,6 +82,14 @@ _DISTRIBUTED_SEM_KEY = "agent:concurrent_count"
 _DISTRIBUTED_SEM_TTL = 600  # safety TTL to prevent leaked counters
 
 
+def get_agent_semaphore_usage() -> dict[str, int]:
+    """Return agent semaphore utilization (public API, avoids private ._value access)."""
+    return {
+        "used": _MAX_CONCURRENT_AGENTS - _agent_semaphore._value,
+        "max": _MAX_CONCURRENT_AGENTS,
+    }
+
+
 async def _distributed_acquire() -> bool:
     """Atomically increment the distributed counter; return True if under limit.
 
@@ -128,14 +136,20 @@ async def _distributed_acquire() -> bool:
 
 
 async def _distributed_release() -> None:
-    """Decrement the distributed counter (floor at 0)."""
+    """Decrement the distributed counter (floor at 0).
+
+    Always releases the local semaphore regardless of Redis availability
+    to prevent semaphore leaks.
+    """
     from ..services.redis_service import redis_service
 
+    # Always release local semaphore to prevent leaks
+    try:
+        _agent_semaphore.release()
+    except ValueError:
+        pass
+
     if not redis_service.is_connected:
-        try:
-            _agent_semaphore.release()
-        except ValueError:
-            pass
         return
 
     try:
@@ -148,15 +162,12 @@ async def _distributed_release() -> None:
         await redis_service.client.eval(_LUA, 1, _DISTRIBUTED_SEM_KEY)
     except Exception:
         logger.debug("Distributed semaphore release Redis error", exc_info=True)
-        try:
-            _agent_semaphore.release()
-        except ValueError:
-            pass
 
 # Module-level cancel tracking
 _MAX_CANCEL_EVENTS = 1000  # Safety cap — should never hit this in practice
 
 _active_stream_cancels: OrderedDict[str, asyncio.Event] = OrderedDict()
+_cancel_lock = asyncio.Lock()
 
 
 def _register_cancel_event(thread_id: str) -> asyncio.Event:
@@ -185,6 +196,7 @@ _THREAD_OWNER_TTL = _cfg.get_int("stream.thread_owner_ttl", 86400)  # 24 hours
 
 # In-memory fallback (used only when Redis is down)
 _thread_owners_fallback: OrderedDict[str, str] = OrderedDict()
+_fallback_lock = asyncio.Lock()
 _FALLBACK_MAX_SIZE = 10_000
 
 # F5: Simple time-based circuit breaker for Redis — skip Redis for a cooldown
@@ -208,9 +220,10 @@ async def _register_thread(thread_id: str, user_id: str) -> None:
         _redis_circuit_open_until = _time.monotonic() + _REDIS_CIRCUIT_COOLDOWN_S
 
     # TE-R4-011: Evict BEFORE adding (consistent with _register_cancel_event)
-    if len(_thread_owners_fallback) >= _FALLBACK_MAX_SIZE:
-        _thread_owners_fallback.popitem(last=False)
-    _thread_owners_fallback[thread_id] = user_id
+    async with _fallback_lock:
+        if len(_thread_owners_fallback) >= _FALLBACK_MAX_SIZE:
+            _thread_owners_fallback.popitem(last=False)
+        _thread_owners_fallback[thread_id] = user_id
 
 
 async def _validate_thread_owner(
@@ -252,7 +265,8 @@ async def _validate_thread_owner(
 
     # F10: Prune from in-memory fallback when Redis has the authoritative answer
     if redis_available and owner is not None:
-        _thread_owners_fallback.pop(thread_id, None)
+        async with _fallback_lock:
+            _thread_owners_fallback.pop(thread_id, None)
 
     # CRIT-4: For strict endpoints, refuse immediately when Redis is down
     if strict and not redis_available:
@@ -267,14 +281,16 @@ async def _validate_thread_owner(
         )
 
     if owner is None and not strict:
-        owner = _thread_owners_fallback.get(thread_id)
+        async with _fallback_lock:
+            owner = _thread_owners_fallback.get(thread_id)
         # F10: Backfill into Redis if it's now available (owner was only in fallback)
         if owner is not None and redis_available:
             try:
                 await redis_service.set(
                     f"thread_owner:{thread_id}", owner, ttl=_THREAD_OWNER_TTL
                 )
-                _thread_owners_fallback.pop(thread_id, None)
+                async with _fallback_lock:
+                    _thread_owners_fallback.pop(thread_id, None)
             except Exception:
                 pass  # Best-effort backfill; fallback still has the entry
 

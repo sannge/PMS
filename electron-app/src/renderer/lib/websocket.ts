@@ -31,7 +31,8 @@ export enum WebSocketState {
 }
 
 /**
- * Message types matching the backend MessageType enum
+ * Message types matching the backend MessageType enum.
+ * NOTE: This enum must stay in sync with the backend's websocket/manager.py MessageType.
  */
 export enum MessageType {
   // Connection events
@@ -69,7 +70,9 @@ export enum MessageType {
   APPLICATION_UPDATED = 'application_updated',
   APPLICATION_DELETED = 'application_deleted',
 
-  // Collaboration events
+  // Collaboration / presence events
+  PRESENCE_UPDATE = 'presence_update',
+  TASK_VIEWERS = 'task_viewers',
   USER_PRESENCE = 'user_presence',
   USER_TYPING = 'user_typing',
   USER_VIEWING = 'user_viewing',
@@ -128,6 +131,7 @@ export enum MessageType {
   // AI indexing events
   EMBEDDING_UPDATED = 'embedding_updated',
   ENTITIES_EXTRACTED = 'entities_extracted',
+  DOCUMENT_EMBEDDING_SYNCED = 'document_embedding_synced',
 
   // AI import events
   IMPORT_COMPLETED = 'import_completed',
@@ -362,13 +366,15 @@ export type Unsubscribe = () => void
 // Constants
 // ============================================================================
 
+/** Base API URL — single source of truth for WebSocket URL construction */
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8001'
+
 /**
  * Get WebSocket URL from API URL environment variable
  */
 function getWebSocketUrl(): string {
-  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8001'
   // Convert http(s):// to ws(s)://
-  const wsUrl = apiUrl.replace(/^http/, 'ws')
+  const wsUrl = API_BASE_URL.replace(/^http/, 'ws')
   return `${wsUrl}/ws`
 }
 
@@ -399,7 +405,6 @@ export class WebSocketClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private pingTimer: ReturnType<typeof setInterval> | null = null
   private pongTimer: ReturnType<typeof setTimeout> | null = null
-  private dedupCleanupTimer: ReturnType<typeof setInterval> | null = null
   private messageQueue: WebSocketMessage[] = []
   private rooms: Set<string> = new Set()
   private roomRefs: Map<string, number> = new Map() // Reference counting for rooms
@@ -496,6 +501,7 @@ export class WebSocketClient {
         // Connection is stale - reconnect
         console.log('[WebSocket] Connection stale after visibility resume, reconnecting')
         this.reconnectAttempts = 0
+        this.clearTimers()
         this.ws = null
         this.setState(WebSocketState.DISCONNECTED)
         if (this.config.token) {
@@ -566,9 +572,8 @@ export class WebSocketClient {
    * Falls back to using the JWT directly if the endpoint is unavailable.
    */
   private async fetchConnectionToken(): Promise<string> {
-    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8001'
     try {
-      const res = await this._fetchWsToken(apiUrl, this.config.token)
+      const res = await this._fetchWsToken(API_BASE_URL, this.config.token)
       if (res.ok) {
         const data = await res.json()
         return data.token as string
@@ -577,7 +582,7 @@ export class WebSocketClient {
         const newToken = await refreshTokens()
         if (newToken) {
           this.config.token = newToken
-          const retryRes = await this._fetchWsToken(apiUrl, newToken)
+          const retryRes = await this._fetchWsToken(API_BASE_URL, newToken)
           if (retryRes.ok) {
             const retryData = await retryRes.json()
             return retryData.token as string
@@ -594,7 +599,7 @@ export class WebSocketClient {
    * Connect to WebSocket server
    */
   connect(token?: string): void {
-    console.log('[WebSocket] connect() called, token provided:', !!token)
+    if (import.meta.env.DEV) console.log('[WebSocket] connect() called, token provided:', !!token)
     // Update token if provided
     if (token !== undefined) {
       this.config.token = token || ''
@@ -608,11 +613,11 @@ export class WebSocketClient {
 
     // Don't connect without token
     if (!this.config.token) {
-      console.log('[WebSocket] No token, staying disconnected')
+      if (import.meta.env.DEV) console.log('[WebSocket] No token, staying disconnected')
       this.setState(WebSocketState.DISCONNECTED)
       return
     }
-    console.log('[WebSocket] Has token, proceeding to connect')
+    if (import.meta.env.DEV) console.log('[WebSocket] Has token, proceeding to connect')
 
     // Don't connect if already connecting
     if (this.state === WebSocketState.CONNECTING) {
@@ -640,7 +645,7 @@ export class WebSocketClient {
       try {
         const url = new URL(this.config.url)
         url.searchParams.set('token', connToken)
-        console.log('[WebSocket] Connecting to:', url.origin + url.pathname)
+        if (import.meta.env.DEV) console.log('[WebSocket] Connecting to:', url.origin + url.pathname)
 
         this.ws = new WebSocket(url.toString())
 
@@ -889,9 +894,6 @@ export class WebSocketClient {
     // Start ping interval
     this.startPingInterval()
 
-    // Start dedup cache cleanup interval
-    this.startDedupCleanupInterval()
-
     // Flush queued messages
     this.flushMessageQueue()
 
@@ -905,6 +907,7 @@ export class WebSocketClient {
   private handleClose(event: CloseEvent): void {
     console.log('[WebSocket] Connection closed:', event.code, event.reason)
     this.clearTimers()
+    this.processedMessageIds.clear()
     this.ws = null
 
     // Check if we should reconnect
@@ -956,8 +959,10 @@ export class WebSocketClient {
 
       // Emit to wildcard listeners
       this.emit('*', message)
-    } catch {
-      // Ignore parse errors
+    } catch (err) {
+      if (import.meta.env.DEV) {
+        console.warn('[WebSocket] Failed to parse message:', err)
+      }
     }
   }
 
@@ -1034,8 +1039,10 @@ export class WebSocketClient {
       listeners.forEach((listener) => {
         try {
           listener(data)
-        } catch {
-          // Ignore listener errors
+        } catch (err) {
+          if (import.meta.env.DEV) {
+            console.warn('[WebSocket] Listener error:', err)
+          }
         }
       })
     }
@@ -1092,6 +1099,19 @@ export class WebSocketClient {
   }
 
   private rejoinRooms(): void {
+    // Remove any pending JOIN_ROOM messages for rooms being rejoined
+    // to avoid duplicate joins after reconnect
+    const rejoiningRooms = new Set(this.rooms)
+    this.messageQueue = this.messageQueue.filter((msg) => {
+      if (msg.type === MessageType.JOIN_ROOM) {
+        const data = msg.data as Record<string, unknown>
+        if (typeof data?.room_id === 'string' && rejoiningRooms.has(data.room_id)) {
+          return false
+        }
+      }
+      return true
+    })
+
     this.rooms.forEach((roomId) => {
       this.send(MessageType.JOIN_ROOM, { room_id: roomId })
     })
@@ -1123,13 +1143,6 @@ export class WebSocketClient {
         this.sendPing()
       }
     }, this.config.pingInterval)
-  }
-
-  private startDedupCleanupInterval(): void {
-    // Clean up dedup cache every 30 seconds to prevent memory leaks
-    this.dedupCleanupTimer = setInterval(() => {
-      this.cleanupDedupCache(Date.now())
-    }, 30000)
   }
 
   private sendPing(): void {
@@ -1177,10 +1190,6 @@ export class WebSocketClient {
     if (this.pongTimer) {
       clearTimeout(this.pongTimer)
       this.pongTimer = null
-    }
-    if (this.dedupCleanupTimer) {
-      clearInterval(this.dedupCleanupTimer)
-      this.dedupCleanupTimer = null
     }
   }
 }

@@ -17,7 +17,7 @@ import {
 } from '@tanstack/react-query'
 import { useAuthToken, useAuthUserId } from '@/contexts/auth-context'
 import { authGet, authPost, authPut, authDelete, parseApiError } from '@/lib/api-client'
-import { queryKeys } from '@/lib/query-client'
+import { queryKeys, CONTENT_GC_TIME } from '@/lib/query-client'
 
 // ============================================================================
 // Types
@@ -182,15 +182,16 @@ export function useDocuments(
 
       return response.data
     },
+    // Prevent leaked query key when userId is null for personal scope
     enabled:
       !!token &&
       !!scope &&
-      (scope === 'personal' || !!scopeId),
+      (scope === 'personal' ? !!userId : !!scopeId),
     // Sort items case-insensitively so order is consistent regardless of
     // backend collation, stale cache, or optimistic update timing.
     select: sortedSelect,
     // Use default staleTime (30s) - fresh data won't refetch on focus, stale data will
-    gcTime: 24 * 60 * 60 * 1000,
+    gcTime: CONTENT_GC_TIME,
     // WebSocket subscriptions keep cache fresh while mounted; window focus refetch is redundant.
     refetchOnWindowFocus: false,
     // No placeholderData - let isLoading be true on initial fetch so skeleton shows
@@ -218,7 +219,7 @@ export function useDocument(id: string | null): UseQueryResult<Document, Error> 
     },
     enabled: !!token && !!id,
     staleTime: 30 * 1000,
-    gcTime: 24 * 60 * 60 * 1000,
+    gcTime: CONTENT_GC_TIME,
     refetchOnWindowFocus: false,
   })
 }
@@ -677,7 +678,12 @@ export function useReorderDocument(
     onSuccess: (data) => {
       queryClient.setQueryData(queryKeys.document(data.id), data)
     },
-    // No rollback needed for reorder - worst case user refreshes
+    onError: () => {
+      // Rollback: refetch the correct order from the server
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.documents(scope, effectiveScopeId),
+      })
+    },
   })
 }
 

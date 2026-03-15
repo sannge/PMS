@@ -24,6 +24,7 @@ from ..utils.timezone import utc_now
 from sqlalchemy.orm import lazyload, selectinload
 
 from ..database import get_db
+from ..utils.tasks import fire_and_forget
 
 # Module-level cache for auto-archive throttling (per-application)
 # Key: application_id (str), Value: last_run timestamp
@@ -497,7 +498,7 @@ async def create_project(
 
     # Broadcast project creation to application room (fire-and-forget for performance)
     app_room_id = f"application:{application_id}"
-    asyncio.create_task(
+    fire_and_forget(
         manager.broadcast_to_room(
             app_room_id,
             {
@@ -1082,9 +1083,10 @@ async def delete_project(
     )
 
     # Send notifications and broadcast to all affected users (excluding deleter)
+    notifications_to_deliver = []
     for user_id in users_to_notify:
         # Create stored notification
-        await NotificationService.notify_system(
+        notification = await NotificationService.notify_system(
             db=db,
             user_id=user_id,
             title="Project Deleted",
@@ -1092,7 +1094,13 @@ async def delete_project(
             entity_type=None,  # Project no longer exists
             entity_id=None,
         )
+        notifications_to_deliver.append(notification)
+    # Commit all notifications then deliver via WS
+    await db.commit()
+    for n in notifications_to_deliver:
+        await NotificationService.deliver_via_websocket(n)
 
+    for user_id in users_to_notify:
         # Broadcast WebSocket event (reuse same data for deduplication)
         await manager.broadcast_to_user(
             user_id,

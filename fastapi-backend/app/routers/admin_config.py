@@ -121,6 +121,34 @@ async def update_agent_config(
             detail="Invalid config key format",
         )
 
+    # Enforce min_value / max_value constraints from DB record
+    existing = await db.scalar(
+        select(AgentConfiguration).where(AgentConfiguration.key == key)
+    )
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Config key not found: {key}",
+        )
+    if existing.value_type in ("int", "float"):
+        try:
+            numeric_val = float(body.value)
+            if existing.min_value is not None and numeric_val < float(existing.min_value):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Value {body.value} is below minimum {existing.min_value}",
+                )
+            if existing.max_value is not None and numeric_val > float(existing.max_value):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Value {body.value} is above maximum {existing.max_value}",
+                )
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Value {body.value!r} is not a valid {existing.value_type}",
+            )
+
     cfg_service = get_agent_config()
     try:
         await cfg_service.set_value(key, body.value, current_user.id, db)

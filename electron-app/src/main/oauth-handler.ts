@@ -39,6 +39,17 @@ interface OAuthResult {
 
 const OAUTH_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
 
+/** Allowlist of known OAuth provider URL prefixes */
+const ALLOWED_OAUTH_PREFIXES = [
+  'https://accounts.google.com/',
+  'https://login.microsoftonline.com/',
+  'https://github.com/login/oauth/',
+  'https://api.openai.com/',
+  'https://auth.openai.com/',
+  'https://console.anthropic.com/',
+  'https://auth0.openai.com/',
+]
+
 function escapeHtml(str: string): string {
   return str
     .replace(/&/g, '&amp;')
@@ -52,7 +63,27 @@ function escapeHtml(str: string): string {
 // OAuth Window
 // ============================================================================
 
+function validateOAuthUrl(authUrl: string): void {
+  try {
+    const parsed = new URL(authUrl)
+    if (parsed.protocol !== 'https:') {
+      throw new Error('OAuth URL must use HTTPS')
+    }
+    const isAllowed = ALLOWED_OAUTH_PREFIXES.some((prefix) => authUrl.startsWith(prefix))
+    if (!isAllowed) {
+      throw new Error(`OAuth URL not in allowlist: ${parsed.origin}`)
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith('OAuth URL')) {
+      throw err
+    }
+    throw new Error(`Invalid OAuth URL: ${authUrl}`)
+  }
+}
+
 function createOAuthWindow(authUrl: string): BrowserWindow {
+  validateOAuthUrl(authUrl)
+
   const window = new BrowserWindow({
     width: 600,
     height: 700,
