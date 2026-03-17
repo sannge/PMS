@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..ai.config_service import get_agent_config
 from ..ai.rate_limiter import AIRateLimiter, get_rate_limiter
 from ..database import get_db
+from ..models.attachment import Attachment
 from ..models.document_chunk import DocumentChunk
 from ..models.document_folder import DocumentFolder
 from ..models.folder_file import FolderFile
@@ -62,8 +63,10 @@ BLOCKED_EXTENSIONS = {
     ".rgs", ".sct", ".hta", ".php",
 }
 
-# MinIO bucket for folder files
-FOLDER_FILES_BUCKET = "pm-attachments"
+# MinIO bucket for folder files — read from config at runtime
+def _folder_files_bucket() -> str:
+    from ..config import settings
+    return settings.minio_attachments_bucket
 
 # Sanitize filename: keep alphanumeric, dash, underscore, dot
 _SANITIZE_RE = re.compile(r"[^a-zA-Z0-9_.\-]")
@@ -558,7 +561,7 @@ async def upload_file(
     # Upload to MinIO
     try:
         minio.upload_bytes(
-            bucket=FOLDER_FILES_BUCKET,
+            bucket=_folder_files_bucket(),
             object_name=storage_key,
             data=content,
             content_type=mime_type,
@@ -608,7 +611,7 @@ async def upload_file(
             mime_type=mime_type,
             file_size=file_size,
             file_extension=ext.lstrip(".") if ext else "",
-            storage_bucket=FOLDER_FILES_BUCKET,
+            storage_bucket=_folder_files_bucket(),
             storage_key=storage_key,
             extraction_status=extraction_status,
             sha256_hash=sha256_hash,
@@ -623,7 +626,7 @@ async def upload_file(
         await db.rollback()
         # Clean up orphaned MinIO object
         try:
-            minio.delete_file(bucket=FOLDER_FILES_BUCKET, object_name=storage_key)
+            minio.delete_file(bucket=_folder_files_bucket(), object_name=storage_key)
         except Exception as minio_err:
             logger.error(
                 "ORPHAN: Failed to delete MinIO object %s after error for upload: %s",
@@ -645,7 +648,7 @@ async def upload_file(
         await db.rollback()
         # Clean up orphaned MinIO object
         try:
-            minio.delete_file(bucket=FOLDER_FILES_BUCKET, object_name=storage_key)
+            minio.delete_file(bucket=_folder_files_bucket(), object_name=storage_key)
         except Exception as minio_err:
             logger.error(
                 "ORPHAN: Failed to delete MinIO object %s after error for upload: %s",
@@ -1057,12 +1060,27 @@ async def delete_file(
     storage_key = file.storage_key
     thumbnail_key = file.thumbnail_key
 
-    # FIX-14/25: Single transaction — soft-delete and chunk deletion together
-    file.deleted_at = utc_now()
-    file.updated_at = utc_now()
+    # FIX-14/25: Single transaction — soft-delete, chunk deletion, and image attachment cleanup
+    _now = utc_now()
+    file.deleted_at = _now
+    file.updated_at = _now
     await db.execute(
         sa_delete(DocumentChunk).where(DocumentChunk.file_id == file_id)
     )
+    # Delete image Attachments and collect MinIO refs for background cleanup
+    # (query + delete in same transaction to avoid TOCTOU race)
+    att_result = await db.execute(
+        sa_delete(Attachment)
+        .where(
+            Attachment.entity_type == "file",
+            Attachment.entity_id == file_id,
+        )
+        .returning(Attachment.minio_bucket, Attachment.minio_key)
+    )
+    image_minio_refs = [
+        (row[0], row[1]) for row in att_result.all()
+        if row[0] and row[1]
+    ]
     await db.commit()
 
     # FIX-13: Move MinIO cleanup to background task to avoid blocking async event loop
@@ -1072,8 +1090,14 @@ async def delete_file(
             minio.delete_file(bucket=storage_bucket, object_name=storage_key)
             if thumbnail_key:
                 minio.delete_file(bucket=storage_bucket, object_name=thumbnail_key)
+            # Clean up vision-processed image objects
+            for img_bucket, img_key in image_minio_refs:
+                try:
+                    minio.delete_file(bucket=img_bucket, object_name=img_key)
+                except Exception:
+                    logger.warning("Failed to delete image %s/%s for file %s", img_bucket, img_key, file_id)
         except Exception as minio_err:
-            logger.warning("Failed to delete MinIO object for file %s: %s", file_id, minio_err)
+            logger.warning("Failed to delete MinIO objects for file %s: %s", file_id, minio_err)
 
     background_tasks.add_task(_cleanup_minio)
 
@@ -1218,7 +1242,7 @@ async def replace_file(
 
     try:
         minio.upload_bytes(
-            bucket=FOLDER_FILES_BUCKET,
+            bucket=_folder_files_bucket(),
             object_name=new_storage_key,
             data=content,
             content_type=mime_type,
@@ -1255,7 +1279,7 @@ async def replace_file(
         # Concurrent replace won the race — clean up our orphaned upload
         try:
             await asyncio.to_thread(
-                minio.delete_file, bucket=FOLDER_FILES_BUCKET, object_name=new_storage_key
+                minio.delete_file, bucket=_folder_files_bucket(), object_name=new_storage_key
             )
         except Exception:
             logger.error("ORPHAN: concurrent replace cleanup failed for %s", new_storage_key)
@@ -1267,6 +1291,20 @@ async def replace_file(
     # MED-3: Use shared helper for chunk deletion
     await _delete_file_chunks(file_id, db)
 
+    # Clean up old image Attachments from previous vision processing
+    old_att_result = await db.execute(
+        sa_delete(Attachment)
+        .where(
+            Attachment.entity_type == "file",
+            Attachment.entity_id == file_id,
+        )
+        .returning(Attachment.minio_bucket, Attachment.minio_key)
+    )
+    old_image_refs = [
+        (row[0], row[1]) for row in old_att_result.all()
+        if row[0] and row[1]
+    ]
+
     try:
         await db.commit()
         await db.refresh(folder_file)
@@ -1277,7 +1315,7 @@ async def replace_file(
         try:
             await asyncio.to_thread(
                 minio.delete_file,
-                bucket=FOLDER_FILES_BUCKET,
+                bucket=_folder_files_bucket(),
                 object_name=new_storage_key,
             )
         except Exception as minio_err:
@@ -1294,6 +1332,12 @@ async def replace_file(
                 minio.delete_file(bucket=old_storage_bucket, object_name=old_storage_key)
             if old_thumbnail_key:
                 minio.delete_file(bucket=old_storage_bucket, object_name=old_thumbnail_key)
+            # Clean up old vision-processed image objects
+            for img_bucket, img_key in old_image_refs:
+                try:
+                    minio.delete_file(bucket=img_bucket, object_name=img_key)
+                except Exception:
+                    logger.warning("Failed to delete old image %s/%s", img_bucket, img_key)
         except Exception as e:
             logger.warning("Failed to clean up old MinIO objects: %s", e)
 

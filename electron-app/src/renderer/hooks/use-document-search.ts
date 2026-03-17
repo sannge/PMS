@@ -38,6 +38,7 @@ export interface SearchResultHit {
   created_by: string | null
   snippet?: string            // HTML snippet with <mark> around the match
   occurrenceIndex?: number    // 0-based index when a doc has multiple matches
+  matchCount?: number         // Total matches in this document
   matchedTerms?: string[]     // Actual matched text (may differ from query due to fuzzy matching)
   _formatted?: {
     title?: string

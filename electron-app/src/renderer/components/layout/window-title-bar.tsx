@@ -12,32 +12,30 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { cn } from '@/lib/utils'
+import appIcon from '@/icon.png'
 import { useAuth, useCurrentUser } from '@/hooks/use-auth'
 import {
   Minus,
   Square,
   X,
   Copy,
-  Search,
-  Sun,
-  Moon,
-  Monitor,
   LogOut,
   User,
   ChevronDown,
+  RefreshCw,
 } from 'lucide-react'
+import { toast } from 'sonner'
+import { clearQueryCache } from '@/lib/query-client'
+import { clearEventDedup } from '@/hooks/use-websocket-cache'
+import { wsClient } from '@/lib/websocket'
 
 // ============================================================================
 // Types
 // ============================================================================
 
-type Theme = 'light' | 'dark' | 'system'
-
 export interface WindowTitleBarProps {
   className?: string
   variant?: 'default' | 'auth'
-  theme?: Theme
-  onThemeChange?: (theme: Theme) => void
   extraControls?: React.ReactNode
 }
 
@@ -49,65 +47,14 @@ function PMSLogo({ variant = 'default' }: { variant?: 'default' | 'auth' }): JSX
   return (
     <div className="flex items-center gap-3">
       {/* Logo Icon */}
-      <div className={cn(
-        'relative flex items-center justify-center rounded-lg',
-        'transition-all duration-300',
-        variant === 'auth' ? 'h-7 w-7' : 'h-6 w-6'
-      )}>
-        {/* Modern geometric logo */}
-        <svg
-          viewBox="0 0 32 32"
-          fill="none"
-          className={cn(
-            'w-full h-full',
-            variant === 'auth' ? 'drop-shadow-lg' : ''
-          )}
-        >
-          {/* Background gradient circle */}
-          <defs>
-            <linearGradient id="pms-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stopColor="#F59E0B" />
-              <stop offset="50%" stopColor="#EA580C" />
-              <stop offset="100%" stopColor="#F59E0B" />
-            </linearGradient>
-            <linearGradient id="pms-shine" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stopColor="#FCD34D" stopOpacity="0.8" />
-              <stop offset="50%" stopColor="#F59E0B" stopOpacity="0" />
-            </linearGradient>
-          </defs>
-
-          {/* Main shape - rounded square */}
-          <rect
-            x="2"
-            y="2"
-            width="28"
-            height="28"
-            rx="8"
-            fill="url(#pms-gradient)"
-          />
-
-          {/* Shine overlay */}
-          <rect
-            x="2"
-            y="2"
-            width="28"
-            height="14"
-            rx="8"
-            fill="url(#pms-shine)"
-          />
-
-          {/* P letter - stylized */}
-          <path
-            d="M10 8H17C19.7614 8 22 10.2386 22 13C22 15.7614 19.7614 18 17 18H14V24H10V8Z"
-            fill="white"
-            fillOpacity="0.95"
-          />
-          <path
-            d="M14 11V15H16.5C17.6046 15 18.5 14.1046 18.5 13C18.5 11.8954 17.6046 11 16.5 11H14Z"
-            fill="url(#pms-gradient)"
-          />
-        </svg>
-      </div>
+      <img
+        src={appIcon}
+        alt="PMS"
+        className={cn(
+          'rounded-lg object-contain',
+          variant === 'auth' ? 'h-7 w-7 drop-shadow-lg' : 'h-6 w-6'
+        )}
+      />
 
       {/* Logo Text */}
       <div className="flex flex-col">
@@ -129,161 +76,6 @@ function PMSLogo({ variant = 'default' }: { variant?: 'default' | 'auth' }): JSX
         </span>
       </div>
     </div>
-  )
-}
-
-// ============================================================================
-// Search Button with Popup
-// ============================================================================
-
-function SearchButton(): JSX.Element {
-  const [isOpen, setIsOpen] = useState(false)
-  const [query, setQuery] = useState('')
-  const inputRef = useRef<HTMLInputElement>(null)
-  const containerRef = useRef<HTMLDivElement>(null)
-
-  // Handle keyboard shortcut
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault()
-        setIsOpen(true)
-      }
-      if (e.key === 'Escape' && isOpen) {
-        setIsOpen(false)
-        setQuery('')
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen])
-
-  // Focus input when opened
-  useEffect(() => {
-    if (isOpen && inputRef.current) {
-      inputRef.current.focus()
-    }
-  }, [isOpen])
-
-  // Close on click outside
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setIsOpen(false)
-        setQuery('')
-      }
-    }
-    if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside)
-      return () => document.removeEventListener('mousedown', handleClickOutside)
-    }
-  }, [isOpen])
-
-  return (
-    <div className="relative app-no-drag" ref={containerRef}>
-      {/* Search Icon Button */}
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className={cn(
-          'flex h-6 w-6 items-center justify-center rounded',
-          'text-sidebar-foreground/50 transition-colors',
-          'hover:bg-sidebar-muted/40 hover:text-sidebar-foreground',
-          isOpen && 'bg-sidebar-muted/40 text-sidebar-foreground'
-        )}
-        title="Search (⌘K)"
-      >
-        <Search className="h-3.5 w-3.5" />
-      </button>
-
-      {/* Search Popup */}
-      {isOpen && (
-        <div className="absolute right-0 top-full z-50 mt-1 w-72 rounded-lg border border-border bg-card shadow-xl overflow-hidden">
-          {/* Search Input */}
-          <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-            <Search className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-            <input
-              ref={inputRef}
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search everything..."
-              className={cn(
-                'flex-1 bg-transparent text-sm text-foreground',
-                'placeholder:text-muted-foreground',
-                'focus:outline-none'
-              )}
-            />
-            <kbd className="flex h-5 items-center rounded border border-border bg-muted px-1.5 text-[10px] font-medium text-muted-foreground">
-              ESC
-            </kbd>
-          </div>
-
-          {/* Search Results Placeholder */}
-          <div className="max-h-64 overflow-y-auto p-2">
-            {query ? (
-              <div className="py-8 text-center">
-                <Search className="mx-auto h-8 w-8 text-muted-foreground/30" />
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Search results for "{query}"
-                </p>
-                <p className="text-xs text-muted-foreground/70">
-                  Coming soon...
-                </p>
-              </div>
-            ) : (
-              <div className="py-6 text-center">
-                <p className="text-xs text-muted-foreground">
-                  Type to search applications, projects, tasks, and notes
-                </p>
-              </div>
-            )}
-          </div>
-
-          {/* Footer */}
-          <div className="flex items-center justify-between border-t border-border px-3 py-1.5 text-[10px] text-muted-foreground">
-            <span>Press <kbd className="mx-0.5 rounded border border-border bg-muted px-1">⌘K</kbd> to open</span>
-            <span>Global Search</span>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ============================================================================
-// Theme Toggle Component
-// ============================================================================
-
-function ThemeToggle({
-  theme,
-  onThemeChange,
-}: {
-  theme: Theme
-  onThemeChange?: (theme: Theme) => void
-}): JSX.Element {
-  const cycleTheme = useCallback(() => {
-    const themes: Theme[] = ['light', 'dark', 'system']
-    const currentIndex = themes.findIndex((t) => t === theme)
-    const nextIndex = (currentIndex + 1) % themes.length
-    onThemeChange?.(themes[nextIndex])
-  }, [theme, onThemeChange])
-
-  const icon = theme === 'light' ? <Sun className="h-3.5 w-3.5" /> :
-               theme === 'dark' ? <Moon className="h-3.5 w-3.5" /> :
-               <Monitor className="h-3.5 w-3.5" />
-
-  return (
-    <button
-      onClick={cycleTheme}
-      className={cn(
-        'flex h-6 w-6 items-center justify-center rounded app-no-drag',
-        'text-sidebar-foreground/50 transition-colors',
-        'hover:bg-sidebar-muted/40 hover:text-sidebar-foreground'
-      )}
-      title={`Theme: ${theme}`}
-    >
-      {icon}
-    </button>
   )
 }
 
@@ -388,25 +180,76 @@ function CompactUserMenu(): JSX.Element {
 }
 
 // ============================================================================
-// Utility Controls (Search, Theme, User)
+// Hard Refresh Button
+// ============================================================================
+
+function HardRefreshButton(): JSX.Element {
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const refreshingRef = useRef(false)
+  const mountedRef = useRef(true)
+
+  useEffect(() => () => { mountedRef.current = false }, [])
+
+  const handleRefresh = useCallback(async () => {
+    if (refreshingRef.current) return
+    refreshingRef.current = true
+    setIsRefreshing(true)
+    try {
+      // Snapshot active rooms before disconnect so we can rejoin
+      const activeRooms = wsClient.getRooms()
+      wsClient.disconnect()
+      clearEventDedup()
+      try {
+        await clearQueryCache()
+      } finally {
+        // Always reconnect — rooms are restored so rejoinRooms()
+        // in handleOpen() sends JOIN_ROOM for each (no duplicates)
+        for (const room of activeRooms) {
+          wsClient.joinRoom(room)
+        }
+        wsClient.connect()
+      }
+      if (mountedRef.current) toast.success('Reconnected', { duration: 2000 })
+    } catch {
+      if (mountedRef.current) toast.error('Refresh failed', { duration: 3000 })
+    } finally {
+      refreshingRef.current = false
+      if (mountedRef.current) setIsRefreshing(false)
+    }
+  }, [])
+
+  return (
+    <button
+      onClick={handleRefresh}
+      disabled={isRefreshing}
+      aria-label="Refresh connection and clear cache"
+      className={cn(
+        'flex h-6 w-6 items-center justify-center rounded app-no-drag',
+        'text-sidebar-foreground/50 transition-colors',
+        'hover:bg-sidebar-muted/40 hover:text-sidebar-foreground',
+        'disabled:opacity-50'
+      )}
+      title="Refresh connection & clear cache"
+    >
+      <RefreshCw className={cn('h-3.5 w-3.5', isRefreshing && 'animate-spin')} />
+    </button>
+  )
+}
+
+// ============================================================================
+// Utility Controls (User Menu, Refresh)
 // ============================================================================
 
 function UtilityControls({
-  theme,
-  onThemeChange,
   extraControls,
 }: {
-  theme: Theme
-  onThemeChange?: (theme: Theme) => void
   extraControls?: React.ReactNode
 }): JSX.Element {
   return (
     <div className="flex items-center gap-1 app-no-drag">
-      <SearchButton />
-
-      <ThemeToggle theme={theme} onThemeChange={onThemeChange} />
-
       {extraControls}
+
+      <HardRefreshButton />
 
       <div className="h-4 w-px bg-sidebar-muted/20 mx-0.5" />
 
@@ -511,8 +354,6 @@ function WindowControls({ variant = 'default' }: { variant?: 'default' | 'auth' 
 export function WindowTitleBar({
   className,
   variant = 'default',
-  theme = 'system',
-  onThemeChange,
   extraControls,
 }: WindowTitleBarProps): JSX.Element {
   return (
@@ -533,7 +374,7 @@ export function WindowTitleBar({
       {/* Center/Right - Utility Controls + Window Controls */}
       <div className="flex items-center">
         {variant !== 'auth' && (
-          <UtilityControls theme={theme} onThemeChange={onThemeChange} extraControls={extraControls} />
+          <UtilityControls extraControls={extraControls} />
         )}
         <WindowControls variant={variant} />
       </div>

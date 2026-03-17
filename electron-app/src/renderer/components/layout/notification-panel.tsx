@@ -340,7 +340,7 @@ function InvitationDetailPopup({ notification, onClose, onSuccess }: InvitationP
   const getRoleDescription = (role: string) => {
     switch (role) {
       case 'owner':
-        return 'Full access to manage the application, members, and all projects'
+        return 'Full access to manage the workspace, members, and all projects'
       case 'editor':
         return 'Can create and edit projects, tasks, and notes'
       case 'viewer':
@@ -357,7 +357,7 @@ function InvitationDetailPopup({ notification, onClose, onSuccess }: InvitationP
         <div className="flex items-center justify-between p-4 border-b border-border">
           <div className="flex items-center gap-2">
             <Mail className="h-5 w-5 text-blue-500" />
-            <h3 className="text-lg font-semibold text-foreground">Application Invitation</h3>
+            <h3 className="text-lg font-semibold text-foreground">Workspace Invitation</h3>
           </div>
           <button
             onClick={onClose}
@@ -395,7 +395,7 @@ function InvitationDetailPopup({ notification, onClose, onSuccess }: InvitationP
                   <p className="text-sm font-medium text-foreground">
                     {invitation.application?.name || 'Unknown Application'}
                   </p>
-                  <p className="text-xs text-muted-foreground mt-0.5">Application</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Workspace</p>
                 </div>
               </div>
 

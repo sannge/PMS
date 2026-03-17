@@ -195,12 +195,12 @@ export function ApplicationForm({
           </div>
           <div>
             <h2 className="text-lg font-semibold text-foreground">
-              {isEditMode ? 'Edit Application' : 'Create Application'}
+              {isEditMode ? 'Edit Workspace' : 'Create Workspace'}
             </h2>
             <p className="text-sm text-muted-foreground">
               {isEditMode
-                ? 'Update the application details below'
-                : 'Fill in the details to create a new application'}
+                ? 'Update the workspace details below'
+                : 'Fill in the details to create a new workspace'}
             </p>
           </div>
         </div>
@@ -245,7 +245,7 @@ export function ApplicationForm({
             value={name}
             onChange={handleNameChange}
             onBlur={() => handleBlur('name')}
-            placeholder="Enter application name"
+            placeholder="Enter workspace name"
             disabled={isSubmitting}
             autoFocus
             className={cn(
@@ -275,7 +275,7 @@ export function ApplicationForm({
             value={description}
             onChange={handleDescriptionChange}
             onBlur={() => handleBlur('description')}
-            placeholder="Enter a description for this application (optional)"
+            placeholder="Enter a description for this workspace (optional)"
             disabled={isSubmitting}
             rows={4}
             className={cn(
@@ -335,7 +335,7 @@ export function ApplicationForm({
             ) : isEditMode ? (
               'Save Changes'
             ) : (
-              'Create Application'
+              'Create Workspace'
             )}
           </button>
         </div>

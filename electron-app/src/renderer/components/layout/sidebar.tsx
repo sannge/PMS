@@ -36,6 +36,7 @@ export interface SidebarProps {
   isCollapsed?: boolean
   onCollapsedChange?: (collapsed: boolean) => void
   onNotificationClick?: () => void
+  onQuickCreate?: () => void
   className?: string
 }
 
@@ -114,6 +115,7 @@ export function Sidebar({
   isCollapsed = false,
   onCollapsedChange,
   onNotificationClick,
+  onQuickCreate,
   className,
 }: SidebarProps): JSX.Element {
   // Use TanStack Query for unread count (auto-refreshes)
@@ -142,7 +144,7 @@ export function Sidebar({
 
   const navItems = [
     { id: 'dashboard' as NavItem, icon: <LayoutDashboard className="h-4 w-4" />, label: 'Dashboard' },
-    { id: 'applications' as NavItem, icon: <FolderKanban className="h-4 w-4" />, label: 'Applications' },
+    { id: 'applications' as NavItem, icon: <FolderKanban className="h-4 w-4" />, label: 'Workspaces' },
     { id: 'tasks' as NavItem, icon: <ListTodo className="h-4 w-4" />, label: 'Tasks' },
     { id: 'notes' as NavItem, icon: <FileText className="h-4 w-4" />, label: 'Notes' },
   ]
@@ -159,6 +161,7 @@ export function Sidebar({
       {/* Quick Create Button */}
       <div className="p-2">
         <button
+          onClick={onQuickCreate}
           className={cn(
             'flex w-full items-center gap-2 rounded-lg border border-dashed border-sidebar-muted/40 px-2 py-1.5',
             'text-xs font-medium text-sidebar-foreground/50',

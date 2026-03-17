@@ -30,7 +30,8 @@ import { requestNotificationPermission } from '@/lib/notifications'
 import { useAuthStore } from '@/contexts/auth-context'
 import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '@/lib/query-client'
-import { useDashboardStats } from '@/hooks/use-queries'
+import { useDashboardStats, useApplications, useCreateApplication, useCreateProject } from '@/hooks/use-queries'
+import type { ApplicationCreate, ProjectCreate } from '@/hooks/use-queries'
 import { useDashboardWebSocket } from '@/hooks/use-dashboard-websocket'
 import { DashboardSkeleton } from '@/components/dashboard/DashboardSkeleton'
 import { TaskDistributionChart } from '@/components/dashboard/TaskDistributionChart'
@@ -61,17 +62,19 @@ import {
   Target,
   Activity,
   AlertTriangle,
+  X,
+  Layers,
+  Plus,
+  ChevronRight,
 } from 'lucide-react'
+import { toast } from 'sonner'
 
 // ============================================================================
 // Types
 // ============================================================================
 
-type Theme = 'light' | 'dark' | 'system'
-
 export interface DashboardProps {
-  theme?: Theme
-  onThemeChange?: (theme: Theme) => void
+  // Reserved for future props
 }
 
 interface StatCardProps {
@@ -406,7 +409,7 @@ function DashboardContent({
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <StatCard
           icon={<FolderKanban className="h-6 w-6" />}
-          label="Applications"
+          label="Workspaces"
           value={data?.applications_count ?? 0}
           color="amber"
           index={0}
@@ -501,7 +504,7 @@ function DashboardContent({
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <QuickAction
             icon={<FolderKanban className="h-6 w-6" />}
-            label="Create Application"
+            label="Create Workspace"
             description="Start a new project container"
             color="amber"
             onClick={onNavigateToApplications}
@@ -537,9 +540,9 @@ function DashboardContent({
                 )}>
                   <LayoutDashboard className="h-8 w-8 text-muted-foreground/50" />
                 </div>
-                <p className="font-medium text-foreground">Select an application</p>
+                <p className="font-medium text-foreground">Select a workspace</p>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Choose an application from the sidebar to see your projects and tasks
+                  Choose a workspace from the sidebar to see your projects and tasks
                 </p>
                 <button
                   onClick={onNavigateToApplications}
@@ -552,7 +555,7 @@ function DashboardContent({
                     'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
                   )}
                 >
-                  Go to Applications
+                  Go to Workspaces
                   <ArrowRight className="h-4 w-4" />
                 </button>
               </div>
@@ -566,14 +569,283 @@ function DashboardContent({
 
 
 // ============================================================================
+// Quick Create Dialog
+// ============================================================================
+
+type QuickCreateStep = 'choose' | 'application' | 'project-pick-app' | 'project-form'
+
+function QuickCreateDialog({
+  isOpen,
+  onClose,
+  onCreated,
+}: {
+  isOpen: boolean
+  onClose: () => void
+  onCreated: (type: 'application' | 'project', id: string, applicationId?: string) => void
+}): JSX.Element | null {
+  const [step, setStep] = useState<QuickCreateStep>('choose')
+  const [appName, setAppName] = useState('')
+  const [appDescription, setAppDescription] = useState('')
+  const [projectName, setProjectName] = useState('')
+  const [projectDescription, setProjectDescription] = useState('')
+  const [selectedAppId, setSelectedAppId] = useState<string | null>(null)
+  const [appSearch, setAppSearch] = useState('')
+
+  const { data: applications } = useApplications()
+  const createApp = useCreateApplication()
+  const createProject = useCreateProject(selectedAppId || '')
+
+  // Reset state when dialog opens
+  useEffect(() => {
+    if (isOpen) {
+      setStep('choose')
+      setAppName('')
+      setAppDescription('')
+      setProjectName('')
+      setProjectDescription('')
+      setSelectedAppId(null)
+      setAppSearch('')
+    }
+  }, [isOpen])
+
+  const handleCreateApp = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!appName.trim()) return
+    try {
+      const app = await createApp.mutateAsync({ name: appName.trim(), description: appDescription.trim() || undefined } as ApplicationCreate)
+      toast.success(`Workspace "${app.name}" created`)
+      onCreated('application', app.id)
+      onClose()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to create workspace')
+    }
+  }, [appName, appDescription, createApp, onCreated, onClose])
+
+  const handleCreateProject = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!projectName.trim() || !selectedAppId) return
+    try {
+      const project = await createProject.mutateAsync({ name: projectName.trim(), description: projectDescription.trim() || undefined } as ProjectCreate)
+      toast.success(`Project "${project.name}" created`)
+      onCreated('project', project.id, selectedAppId)
+      onClose()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to create project')
+    }
+  }, [projectName, projectDescription, selectedAppId, createProject, onCreated, onClose])
+
+  if (!isOpen) return null
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+
+      {/* Dialog */}
+      <div className="relative w-full max-w-md rounded-xl border border-border bg-card shadow-2xl">
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-border px-5 py-4">
+          <h2 className="text-sm font-semibold text-foreground">
+            {step === 'choose' && 'Create New'}
+            {step === 'application' && 'New Workspace'}
+            {step === 'project-pick-app' && 'Select Workspace'}
+            {step === 'project-form' && 'New Project'}
+          </h2>
+          <button onClick={onClose} className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="p-5">
+          {/* Step 1: Choose type */}
+          {step === 'choose' && (
+            <div className="space-y-2">
+              <button
+                onClick={() => setStep('application')}
+                className={cn(
+                  'flex w-full items-center gap-3 rounded-lg border border-border p-4',
+                  'text-left transition-colors hover:bg-muted/50 hover:border-accent/50'
+                )}
+              >
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-accent/10 text-accent">
+                  <Layers className="h-5 w-5" />
+                </div>
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-foreground">Workspace</p>
+                  <p className="text-xs text-muted-foreground">Top-level container for projects</p>
+                </div>
+                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+              </button>
+
+              <button
+                onClick={() => {
+                  if (!applications?.length) {
+                    toast.error('Create a workspace first before adding a project')
+                    return
+                  }
+                  setStep('project-pick-app')
+                }}
+                className={cn(
+                  'flex w-full items-center gap-3 rounded-lg border border-border p-4',
+                  'text-left transition-colors hover:bg-muted/50 hover:border-accent/50'
+                )}
+              >
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-500/10 text-blue-400">
+                  <FolderKanban className="h-5 w-5" />
+                </div>
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-foreground">Project</p>
+                  <p className="text-xs text-muted-foreground">Board with tasks under a workspace</p>
+                </div>
+                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+              </button>
+            </div>
+          )}
+
+          {/* Step 2a: Create Application form */}
+          {step === 'application' && (
+            <form onSubmit={handleCreateApp} className="space-y-4">
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-foreground">Name</label>
+                <input
+                  type="text"
+                  value={appName}
+                  onChange={(e) => setAppName(e.target.value)}
+                  placeholder="e.g. Marketing Team"
+                  autoFocus
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-foreground">Description <span className="text-muted-foreground">(optional)</span></label>
+                <input
+                  type="text"
+                  value={appDescription}
+                  onChange={(e) => setAppDescription(e.target.value)}
+                  placeholder="Brief description"
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+              </div>
+              <div className="flex gap-2 justify-end pt-2">
+                <button type="button" onClick={() => setStep('choose')} className="rounded-lg px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted transition-colors">
+                  Back
+                </button>
+                <button
+                  type="submit"
+                  disabled={!appName.trim() || createApp.isPending}
+                  className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground hover:bg-accent/90 transition-colors disabled:opacity-50"
+                >
+                  {createApp.isPending ? 'Creating...' : 'Create Workspace'}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* Step 2b: Pick application for project */}
+          {step === 'project-pick-app' && (() => {
+            const filtered = applications?.filter((app) =>
+              app.name.toLowerCase().includes(appSearch.toLowerCase())
+            ) || []
+            return (
+              <div className="space-y-2">
+                <p className="mb-1 text-xs text-muted-foreground">Which workspace should this project belong to?</p>
+                <input
+                  type="text"
+                  value={appSearch}
+                  onChange={(e) => setAppSearch(e.target.value)}
+                  placeholder="Search workspaces..."
+                  autoFocus
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+                <div className="max-h-52 space-y-1 overflow-y-auto">
+                  {filtered.length === 0 ? (
+                    <p className="py-4 text-center text-xs text-muted-foreground">
+                      {appSearch ? 'No workspaces match your search' : 'No workspaces found'}
+                    </p>
+                  ) : (
+                    filtered.map((app) => (
+                      <button
+                        key={app.id}
+                        onClick={() => {
+                          setSelectedAppId(app.id)
+                          setStep('project-form')
+                        }}
+                        className={cn(
+                          'flex w-full items-center gap-3 rounded-lg border border-border px-3 py-2.5',
+                          'text-left text-sm transition-colors hover:bg-muted/50 hover:border-accent/50'
+                        )}
+                      >
+                        <Layers className="h-4 w-4 text-accent flex-shrink-0" />
+                        <span className="truncate text-foreground">{app.name}</span>
+                        <ChevronRight className="ml-auto h-3.5 w-3.5 text-muted-foreground" />
+                      </button>
+                    ))
+                  )}
+                </div>
+                <div className="flex justify-start pt-2">
+                  <button onClick={() => { setStep('choose'); setAppSearch('') }} className="rounded-lg px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted transition-colors">
+                    Back
+                  </button>
+                </div>
+              </div>
+            )
+          })()}
+
+          {/* Step 3: Create Project form */}
+          {step === 'project-form' && (
+            <form onSubmit={handleCreateProject} className="space-y-4">
+              <div className="rounded-lg bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+                Creating in: <span className="font-medium text-foreground">{applications?.find(a => a.id === selectedAppId)?.name}</span>
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-foreground">Project Name</label>
+                <input
+                  type="text"
+                  value={projectName}
+                  onChange={(e) => setProjectName(e.target.value)}
+                  placeholder="e.g. Q1 Campaign"
+                  autoFocus
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-foreground">Description <span className="text-muted-foreground">(optional)</span></label>
+                <input
+                  type="text"
+                  value={projectDescription}
+                  onChange={(e) => setProjectDescription(e.target.value)}
+                  placeholder="Brief description"
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+              </div>
+              <div className="flex gap-2 justify-end pt-2">
+                <button type="button" onClick={() => setStep('project-pick-app')} className="rounded-lg px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted transition-colors">
+                  Back
+                </button>
+                <button
+                  type="submit"
+                  disabled={!projectName.trim() || createProject.isPending}
+                  className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground hover:bg-accent/90 transition-colors disabled:opacity-50"
+                >
+                  {createProject.isPending ? 'Creating...' : 'Create Project'}
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ============================================================================
 // Dashboard Page Component
 // ============================================================================
 
-export function DashboardPage({
-  theme = 'system',
-  onThemeChange,
-}: DashboardProps): JSX.Element {
+export function DashboardPage({}: DashboardProps): JSX.Element {
   const [activeItem, setActiveItem] = useState<NavItem>('dashboard')
+  const [showQuickCreate, setShowQuickCreate] = useState(false)
   const [selectedApplicationId, setSelectedApplicationId] = useState<string | null>(null)
   const [selectedApplicationName, setSelectedApplicationName] = useState<string | null>(null)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
@@ -791,6 +1063,18 @@ export function DashboardPage({
     setIsCollapsed(collapsed)
   }, [])
 
+  const handleQuickCreated = useCallback((type: 'application' | 'project', id: string, applicationId?: string) => {
+    if (type === 'application') {
+      setSelectedApplicationId(id)
+      setSelectedApplicationName(null)
+      setActiveItem('applications')
+    } else if (type === 'project' && applicationId) {
+      setSelectedApplicationId(applicationId)
+      setSelectedProjectId(id)
+      setActiveItem('applications')
+    }
+  }, [])
+
   const renderContent = (): ReactNode => {
     switch (activeItem) {
       case 'dashboard':
@@ -878,7 +1162,7 @@ export function DashboardPage({
               </div>
               <h2 className="text-xl font-semibold text-foreground">Projects</h2>
               <p className="mt-2 text-muted-foreground">
-                Select an application to view its projects
+                Select a workspace to view its projects
               </p>
               <button
                 onClick={() => handleNavigate('applications')}
@@ -891,7 +1175,7 @@ export function DashboardPage({
                   'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
                 )}
               >
-                Go to Applications
+                Go to Workspaces
                 <ArrowRight className="h-4 w-4" />
               </button>
             </div>
@@ -947,7 +1231,7 @@ export function DashboardPage({
   return (
     <div className="flex h-screen flex-col bg-background">
       {/* Unified Title Bar with utility controls */}
-      <WindowTitleBar theme={theme} onThemeChange={onThemeChange} extraControls={<AiToggleButton />} />
+      <WindowTitleBar extraControls={<AiToggleButton />} />
 
       {/* Main Layout */}
       <div className="flex flex-1 overflow-hidden">
@@ -957,6 +1241,7 @@ export function DashboardPage({
           onNavigate={handleNavigate}
           isCollapsed={isCollapsed}
           onCollapsedChange={handleCollapsedChange}
+          onQuickCreate={() => setShowQuickCreate(true)}
         />
 
         {/* Main Content Area - reduced padding for space efficiency */}
@@ -970,6 +1255,13 @@ export function DashboardPage({
 
       {/* Notification Panel */}
       <NotificationPanel sidebarCollapsed={isCollapsed} />
+
+      {/* Quick Create Dialog */}
+      <QuickCreateDialog
+        isOpen={showQuickCreate}
+        onClose={() => setShowQuickCreate(false)}
+        onCreated={handleQuickCreated}
+      />
     </div>
   )
 }

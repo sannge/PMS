@@ -1,8 +1,11 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { parseBackendDate } from '@/lib/time-utils'
 import { X, FileText } from 'lucide-react'
 import DOMPurify from 'dompurify'
 import type { SearchResultHit, SearchResponse } from '@/hooks/use-document-search'
+
+/** Max visible sub-entries per document (must match backend MAX_OCCURRENCES_PER_DOC) */
+const MAX_VISIBLE_OCCURRENCES = 5
 
 /** Sanitize Meilisearch _formatted HTML to only allow <mark> tags */
 function sanitizeHighlightHtml(html: string): string {
@@ -13,7 +16,7 @@ function sanitizeHighlightHtml(html: string): string {
 }
 
 function SearchResultSnippet({ html }: { html: string }) {
-  const sanitized = sanitizeHighlightHtml(html)
+  const sanitized = useMemo(() => sanitizeHighlightHtml(html), [html])
   return (
     <span dangerouslySetInnerHTML={{ __html: sanitized }} />
   )
@@ -184,8 +187,9 @@ export function SearchResultsPanel({
       {/* Results */}
       {results?.hits.map((hit, index) => {
         const snippetHtml = hit.snippet || hit._formatted?.content_plain || ''
-        const isFollowUp = hit.occurrenceIndex != null && hit.occurrenceIndex > 0
+        const isFollowUp = (hit.occurrenceIndex ?? 0) > 0
         const resultKey = `${hit.id}-${hit.occurrenceIndex ?? 0}`
+        const matchCount = hit.matchCount ?? 0
         return (
           <button
             key={resultKey}
@@ -197,7 +201,7 @@ export function SearchResultsPanel({
             className={`w-full text-left px-3 py-2 hover:bg-accent
                        focus:bg-accent focus:outline-none border-b last:border-b-0
                        ${index === selectedIndex ? 'bg-accent' : ''}
-                       ${isFollowUp ? 'pl-6' : ''}`}
+                       ${isFollowUp ? 'pl-6 py-1.5' : ''}`}
           >
             {!isFollowUp && (
               <div className="font-medium text-sm truncate flex items-center gap-1.5">
@@ -205,6 +209,11 @@ export function SearchResultsPanel({
                   <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 )}
                 <SearchResultSnippet html={hit._formatted?.title ?? hit.title} />
+                {matchCount >= MAX_VISIBLE_OCCURRENCES && (
+                  <span className="ml-auto shrink-0 text-[10px] font-normal text-muted-foreground/70 tabular-nums">
+                    {matchCount} matches
+                  </span>
+                )}
               </div>
             )}
             {snippetHtml && (

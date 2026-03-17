@@ -1,6 +1,6 @@
 # Comments & Collaboration
 
-PM Desktop enables rich collaboration through task comments, @mentions, checklists, and real-time presence features.
+PM Desktop enables rich collaboration through task comments, threaded replies, @mentions, checklists, and real-time presence features.
 
 ---
 
@@ -22,6 +22,7 @@ Each comment shows:
 - **Timestamp**: When posted (relative time, e.g., "2 hours ago")
 - **Content**: The formatted message
 - **Attachments**: Any files attached to the comment
+- **Reply count**: Number of threaded replies (if any)
 
 ---
 
@@ -33,6 +34,10 @@ Each comment shows:
 2. Scroll to the comment input at the bottom
 3. Type your message
 4. Click **Send** or press `Ctrl/Cmd + Enter`
+
+### Adding Comments with the AI Assistant
+
+You can ask Blair to add a comment to a task. For example, "Add a comment to SP1-15 saying 'Deployment completed successfully.'" Blair will confirm before posting.
 
 ### Rich Text Formatting
 
@@ -68,6 +73,8 @@ Tag team members to notify them and draw their attention to a comment.
 3. Click a name or use arrow keys and Enter to select
 4. The mention appears highlighted in the comment
 
+Mentions are stored as structured data, so they remain linked to the correct user even if display names change.
+
 ### Mention Dropdown
 
 The dropdown shows:
@@ -91,6 +98,31 @@ When you mention someone:
 
 ---
 
+## Threaded Replies
+
+Comments support threaded replies, allowing focused discussions on specific topics within a task.
+
+### Replying to a Comment
+
+1. Find the comment you want to reply to
+2. Click the **Reply** button
+3. Type your reply
+4. Click **Send** or press `Ctrl/Cmd + Enter`
+
+### Viewing Threads
+
+- Replies appear nested under the parent comment
+- Thread count is shown on the parent comment
+- Click to expand or collapse a thread
+
+### When to Use Threads
+
+- Responding to a specific question or point
+- Following up on a particular topic without cluttering the main comment stream
+- Having a back-and-forth discussion about a specific aspect of the task
+
+---
+
 ## Editing Comments
 
 ### Edit Your Comments
@@ -104,7 +136,6 @@ When you mention someone:
 
 - You can only edit your own comments
 - Edits are saved immediately
-- No edit history is shown (coming soon)
 
 ---
 
@@ -124,15 +155,6 @@ When you mention someone:
 
 ---
 
-## Comment Threads (Coming Soon)
-
-Future update will include:
-- Reply to specific comments
-- Threaded discussions
-- Resolve threads when addressed
-
----
-
 ## Checklists
 
 Checklists help track sub-tasks, requirements, or steps within a task.
@@ -149,7 +171,7 @@ Each checklist shows:
 - **Title**: Checklist name (e.g., "Testing Steps")
 - **Progress bar**: Visual completion status
 - **Progress text**: "3/5 items complete"
-- **Items**: Individual checklist items
+- **Items**: Individual checklist items with ordered positioning
 
 ---
 
@@ -162,6 +184,8 @@ Each checklist shows:
 3. Click **Add Checklist**
 4. Enter a checklist title (e.g., "Acceptance Criteria")
 5. Press Enter or click Create
+
+You can also ask the AI assistant to create checklists: "Add a checklist called 'Testing Steps' to task SP1-15."
 
 ### Multiple Checklists
 
@@ -183,11 +207,15 @@ Tasks can have multiple checklists for different purposes:
 3. Press Enter to add
 4. Continue adding more items
 
+You can also ask Blair to add items: "Add item 'Verify login flow' to the Testing Steps checklist on SP1-15."
+
 ### Completing Items
 
 - Click the checkbox to mark complete
 - Click again to unmark
 - Progress bar updates automatically
+
+Blair can toggle items too: "Mark the first item in 'Testing Steps' as complete on SP1-15."
 
 ### Editing Items
 
@@ -240,7 +268,7 @@ PM Desktop shows who's currently viewing and working on the same content.
 Look for avatar icons showing active users:
 - **Project board**: See who's viewing the project
 - **Task detail**: See who's looking at the same task
-- **Notes**: See real-time collaborators
+- **Notes**: See real-time collaborators with cursor positions
 
 ### What Presence Shows
 
@@ -260,10 +288,11 @@ Look for avatar icons showing active users:
 
 ### Automatic Sync
 
-All changes sync instantly:
-- Comments appear immediately for all viewers
+All changes sync instantly via WebSocket:
+- Comments and replies appear immediately for all viewers
 - Checklist updates reflect in real-time
 - Status changes show without refresh
+- Presence indicators update automatically
 
 ### Conflict Handling
 
@@ -321,6 +350,7 @@ A small indicator shows your connection:
 - Keep comments focused and relevant
 - Use formatting for readability
 - @mention sparingly but appropriately
+- Use threaded replies to keep discussions organized
 - Update progress regularly
 
 ### Checklists
@@ -351,7 +381,7 @@ A small indicator shows your connection:
 ### @Mention Not Working
 
 - Ensure exact name match
-- User must be a member
+- User must be a member of the project's application
 - Wait for dropdown to appear
 - Use arrow keys to select
 

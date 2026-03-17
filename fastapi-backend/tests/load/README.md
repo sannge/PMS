@@ -4,15 +4,16 @@ Load testing suite using Locust to validate the API can handle 5,000 concurrent 
 
 ## Prerequisites
 
-1. **Install Locust:**
+1. **Install load test dependencies:**
    ```bash
-   pip install -r requirements.txt
+   cd fastapi-backend
+   uv sync --group load
    ```
 
 2. **Start the backend server:**
    ```bash
    cd fastapi-backend
-   uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers 4
+   uv run uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers 4
    ```
 
 3. **Ensure database is running** with test data or empty (users will be created dynamically)
@@ -23,7 +24,7 @@ Load testing suite using Locust to validate the API can handle 5,000 concurrent 
 
 ```bash
 cd fastapi-backend/tests/load
-locust -f locustfile.py --host=http://localhost:8001
+uv run locust -f locustfile.py --host=http://localhost:8001
 ```
 
 Then open http://localhost:8089 in your browser to configure and start the test.
@@ -32,17 +33,17 @@ Then open http://localhost:8089 in your browser to configure and start the test.
 
 **Quick test (100 users):**
 ```bash
-locust -f locustfile.py --host=http://localhost:8001 -u 100 -r 10 --headless -t 2m
+uv run locust -f locustfile.py --host=http://localhost:8001 -u 100 -r 10 --headless -t 2m
 ```
 
 **Medium test (1,000 users):**
 ```bash
-locust -f locustfile.py --host=http://localhost:8001 -u 1000 -r 50 --headless -t 5m
+uv run locust -f locustfile.py --host=http://localhost:8001 -u 1000 -r 50 --headless -t 5m
 ```
 
 **Full scale test (5,000 users):**
 ```bash
-locust -f locustfile.py --host=http://localhost:8001 -u 5000 -r 100 --headless -t 10m
+uv run locust -f locustfile.py --host=http://localhost:8001 -u 5000 -r 100 --headless -t 10m
 ```
 
 ### Parameters
@@ -138,10 +139,10 @@ The load test covers all major API endpoints:
 
 ```bash
 # CSV report
-locust -f locustfile.py --host=http://localhost:8001 -u 1000 -r 50 --headless -t 5m --csv=load_test_results
+uv run locust -f locustfile.py --host=http://localhost:8001 -u 1000 -r 50 --headless -t 5m --csv=load_test_results
 
 # HTML report
-locust -f locustfile.py --host=http://localhost:8001 -u 1000 -r 50 --headless -t 5m --html=load_test_report.html
+uv run locust -f locustfile.py --host=http://localhost:8001 -u 1000 -r 50 --headless -t 5m --html=load_test_report.html
 ```
 
 ## Distributed Testing
@@ -150,12 +151,12 @@ For testing with more than 5,000 users, use distributed mode:
 
 **Master:**
 ```bash
-locust -f locustfile.py --master --host=http://localhost:8001
+uv run locust -f locustfile.py --master --host=http://localhost:8001
 ```
 
 **Workers (run on multiple machines):**
 ```bash
-locust -f locustfile.py --worker --master-host=<master-ip>
+uv run locust -f locustfile.py --worker --master-host=<master-ip>
 ```
 
 ## Troubleshooting

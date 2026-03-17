@@ -40,6 +40,7 @@ class ExtractionResult:
     markdown: str
     metadata: dict = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    images: list = field(default_factory=list)  # list[DoclingImage] from docling_service
     success: bool = True
     error: str | None = None
 
@@ -150,6 +151,7 @@ class FileExtractionService:
                 "warnings": result.warnings,
             },
             warnings=result.warnings,
+            images=result.images or [],
             success=True,
         )
 

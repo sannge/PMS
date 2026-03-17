@@ -30,9 +30,13 @@ class MinIOService:
     Automatically creates required buckets on initialization.
     """
 
-    # Default bucket names
-    ATTACHMENTS_BUCKET = "pm-attachments"
-    IMAGES_BUCKET = "pm-images"
+    @property
+    def ATTACHMENTS_BUCKET(self) -> str:
+        return settings.minio_attachments_bucket
+
+    @property
+    def IMAGES_BUCKET(self) -> str:
+        return settings.minio_images_bucket
 
     # Default URL expiration
     DEFAULT_URL_EXPIRY = timedelta(hours=1)
@@ -70,9 +74,9 @@ class MinIOService:
         """
         Ensure all required buckets exist, creating them if necessary.
 
-        Creates the following buckets:
-        - pm-attachments: For general file attachments
-        - pm-images: For image files
+        Creates the following buckets (names from config):
+        - ATTACHMENTS_BUCKET: For general file attachments
+        - IMAGES_BUCKET: For image files
 
         Raises:
             MinIOServiceError: If bucket creation fails

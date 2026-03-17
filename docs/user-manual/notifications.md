@@ -1,6 +1,6 @@
 # Notifications
 
-PM Desktop keeps you informed about important activities through in-app notifications and optional email alerts.
+PM Desktop keeps you informed about important activities through real-time in-app notifications and optional email alerts.
 
 ---
 
@@ -10,9 +10,12 @@ Notifications alert you when:
 - Someone @mentions you in a comment
 - You're assigned to a task
 - Task status changes on your assignments
-- You receive an invitation
-- Members join or leave
+- You receive an application or project membership invitation
+- Members join or leave your applications or projects
 - Project updates occur
+- Comments are added to tasks you're watching
+
+All notifications are delivered in real-time via WebSocket, so you see them instantly without refreshing.
 
 ---
 
@@ -65,7 +68,6 @@ When you're assigned to a task:
 
 **Actions**:
 - Click to view task
-- Accept or decline (coming soon)
 
 ### Status Changes
 
@@ -73,7 +75,7 @@ When a task you're involved with changes status:
 
 **Shows**:
 - Task title
-- Old → New status
+- Old to new status
 - Who made the change
 
 **Actions**:
@@ -81,25 +83,25 @@ When a task you're involved with changes status:
 
 ### Invitations
 
-When invited to an application:
+When invited to an application or project:
 
 **Shows**:
 - Who invited you
-- Application name
+- Application or project name
 - Your assigned role
 
 **Actions**:
 - Accept invitation
 - Decline invitation
-- View application details
+- View details
 
 ### Member Updates
 
-When members are added or removed:
+When members are added or removed from your applications or projects:
 
 **Shows**:
 - Who was added/removed
-- Application affected
+- Application or project affected
 - Role assigned (if added)
 
 ### Project Updates
@@ -153,7 +155,7 @@ Some notifications can be permanently deleted:
 
 The notification dropdown includes:
 - **Header**: "Notifications" title
-- **Filter tabs**: All, Unread, Mentions (coming soon)
+- **Filter tabs**: All, Unread, Mentions
 - **Notification list**: Recent notifications
 - **Actions**: Mark all read, settings link
 
@@ -176,7 +178,7 @@ When no notifications:
 
 ## Notification Preferences
 
-### In-App Settings (Coming Soon)
+### In-App Settings
 
 Control which notifications you receive:
 
@@ -206,7 +208,7 @@ Set times when notifications are silenced:
 
 ## Desktop Notifications
 
-### Browser/System Notifications
+### System Notifications
 
 PM Desktop can show system notifications:
 - Pop-up alerts outside the app
@@ -221,7 +223,7 @@ PM Desktop can show system notifications:
 
 ### Disabling Desktop Notifications
 
-**In your browser/OS**:
+**In your OS settings**:
 1. Go to system notification settings
 2. Find PM Desktop
 3. Toggle off notifications
@@ -235,12 +237,7 @@ PM Desktop can show system notifications:
 - WebSocket connection pushes notifications instantly
 - No need to refresh
 - Works across all open tabs
-
-### Notification Sound (Coming Soon)
-
-- Audible alert for new notifications
-- Configurable per notification type
-- Can be muted entirely
+- The notification bell updates immediately
 
 ### Connection Status
 
@@ -263,7 +260,7 @@ If disconnected:
 ### Reducing Noise
 
 1. Unwatch projects you're not active on
-2. Configure email preferences
+2. Configure notification preferences
 3. Use quiet hours during focus time
 4. Mute non-essential notification types
 
@@ -302,14 +299,14 @@ If disconnected:
 ### Desktop Notifications Not Showing
 
 **Check**:
-- Browser permission granted
+- System permission granted
 - System notifications enabled
 - Focus assist/DND mode off
 - PM Desktop allowed in notification settings
 
 **Try**:
 - Re-grant notification permission
-- Check browser-specific settings
+- Check system-specific settings
 - Restart the application
 
 ### Notifications Not Marking as Read

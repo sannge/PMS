@@ -232,28 +232,12 @@ class SemanticChunker:
                         text=text,
                         heading_context=current_heading,
                     ))
-                # Extract non-text nodes (drawio, tables) nested inside list items.
-                # _extract_list_text only extracts plain text via _extract_text_recursive,
-                # so drawio diagrams and other rich nodes inside list items are lost.
-                for item in node.get("content", []):
-                    for child in item.get("content", []):
-                        child_type = child.get("type", "")
-                        if child_type == "drawio":
-                            drawio_text = self._extract_drawio_text(child)
-                            if drawio_text.strip():
-                                blocks.append(_TextBlock(
-                                    text=drawio_text,
-                                    heading_context=current_heading,
-                                ))
-                        elif child_type == "table":
-                            table_text, header_cells = self._extract_table_text_with_headers(child)
-                            if table_text.strip():
-                                blocks.append(_TextBlock(
-                                    text=table_text,
-                                    heading_context=current_heading,
-                                    is_table=True,
-                                    table_columns=header_cells,
-                                ))
+                # Extract non-text nodes (drawio, tables) nested at any depth
+                # inside list items. _extract_list_text only extracts plain text,
+                # so rich nodes must be found recursively.
+                self._extract_rich_nodes_from_tree(
+                    node, blocks, current_heading,
+                )
 
             elif node_type == "codeBlock":
                 code = self._extract_text_recursive(node.get("content", []))
@@ -358,6 +342,44 @@ class SemanticChunker:
         """Extract text from table nodes."""
         text, _ = self._extract_table_text_with_headers(node)
         return text
+
+    def _extract_rich_nodes_from_tree(
+        self,
+        node: dict[str, Any],
+        blocks: list[_TextBlock],
+        heading_context: str | None,
+        _depth: int = 0,
+    ) -> None:
+        """Recursively find drawio and table nodes at any depth in a subtree.
+
+        Used to extract rich content embedded inside list items, blockquotes,
+        or any other container where _extract_list_text/plain text extraction
+        would skip non-text nodes.
+        """
+        if _depth > 20:
+            return
+        for child in node.get("content", []):
+            child_type = child.get("type", "")
+            if child_type == "drawio":
+                drawio_text = self._extract_drawio_text(child)
+                if drawio_text.strip():
+                    blocks.append(_TextBlock(
+                        text=drawio_text,
+                        heading_context=heading_context,
+                    ))
+            elif child_type == "table":
+                table_text, header_cells = self._extract_table_text_with_headers(child)
+                if table_text.strip():
+                    blocks.append(_TextBlock(
+                        text=table_text,
+                        heading_context=heading_context,
+                        is_table=True,
+                        table_columns=header_cells,
+                    ))
+            elif "content" in child:
+                self._extract_rich_nodes_from_tree(
+                    child, blocks, heading_context, _depth + 1,
+                )
 
     def _extract_table_text_with_headers(
         self, node: dict[str, Any]
@@ -528,14 +550,20 @@ class SemanticChunker:
                     current_tokens += block.token_count
                     continue
 
-                # Flush accumulated text buffer
+                # Flush accumulated text buffer — but if tiny (e.g. just a heading
+                # like "## SheetName"), carry it into the table preamble instead of
+                # emitting a near-empty chunk.
+                carry_forward = ""
                 if current_text.strip():
-                    chunks.append(ChunkResult(
-                        text=current_text.strip(),
-                        heading_context=current_heading,
-                        token_count=current_tokens,
-                        chunk_index=0,
-                    ))
+                    if current_tokens <= 20:
+                        carry_forward = current_text.strip() + "\n"
+                    else:
+                        chunks.append(ChunkResult(
+                            text=current_text.strip(),
+                            heading_context=current_heading,
+                            token_count=current_tokens,
+                            chunk_index=0,
+                        ))
                     current_text = ""
                     current_tokens = 0
 
@@ -549,6 +577,9 @@ class SemanticChunker:
                     if cols:
                         preamble_parts.append(f" — columns: {cols}")
                 preamble = "".join(preamble_parts)
+                # Prepend carry_forward (orphaned heading) into preamble
+                if carry_forward:
+                    preamble = f"{carry_forward}{preamble}"
 
                 table_text = f"{preamble}\n{block.text.strip()}"
                 table_tokens = self.count_tokens(table_text)

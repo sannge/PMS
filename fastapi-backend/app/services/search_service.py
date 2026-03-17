@@ -44,15 +44,20 @@ CONTROL_CHAR_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
 _MARK_OPEN = "<mark>"
 _MARK_CLOSE = "</mark>"
 
-# Content size limit for indexing (~50K words)
-MAX_CONTENT_LENGTH = _cfg.get_int("search.max_content_length", 300_000)
-
-# RBAC scope cache TTL
-SCOPE_CACHE_TTL = _cfg.get_int("search.scope_cache_ttl", 30)
-
-# Snippet extraction settings
-SNIPPET_CONTEXT_CHARS = _cfg.get_int("search.snippet_context_chars", 60)
 MAX_OCCURRENCES_PER_DOC = 5  # cap occurrences per document to avoid huge lists
+
+
+# Runtime config getters (NOT frozen module-level constants)
+def _get_max_content_length() -> int:
+    return get_agent_config().get_int("search.max_content_length", 300_000)
+
+
+def _get_scope_cache_ttl() -> int:
+    return get_agent_config().get_int("search.scope_cache_ttl", 30)
+
+
+def _get_snippet_context_chars() -> int:
+    return get_agent_config().get_int("search.snippet_context_chars", 60)
 
 # Index settings (configure BEFORE adding documents)
 MEILISEARCH_INDEX_SETTINGS = {
@@ -111,13 +116,17 @@ MEILISEARCH_INDEX_SETTINGS = {
 
 _meili_failure_count: int = 0
 _meili_circuit_open_until: float = 0.0  # Unix timestamp when circuit closes
-_MEILI_FAILURE_THRESHOLD = _cfg.get_int("search.circuit_failure_threshold", 3)
-_MEILI_CIRCUIT_OPEN_SECONDS = _cfg.get_int("search.circuit_open_seconds", 30)
+def _get_meili_failure_threshold() -> int:
+    return get_agent_config().get_int("search.circuit_failure_threshold", 3)
+
+
+def _get_meili_circuit_open_seconds() -> int:
+    return get_agent_config().get_int("search.circuit_open_seconds", 30)
 
 
 def _meili_circuit_is_open() -> bool:
     """Check if the Meilisearch circuit breaker is open (service considered down)."""
-    if _meili_failure_count < _MEILI_FAILURE_THRESHOLD:
+    if _meili_failure_count < _get_meili_failure_threshold():
         return False
     return time.time() < _meili_circuit_open_until
 
@@ -133,12 +142,12 @@ def _meili_record_failure() -> None:
     """Record a Meilisearch failure. Opens circuit after threshold consecutive failures."""
     global _meili_failure_count, _meili_circuit_open_until
     _meili_failure_count += 1
-    if _meili_failure_count >= _MEILI_FAILURE_THRESHOLD:
-        _meili_circuit_open_until = time.time() + _MEILI_CIRCUIT_OPEN_SECONDS
+    if _meili_failure_count >= _get_meili_failure_threshold():
+        _meili_circuit_open_until = time.time() + _get_meili_circuit_open_seconds()
         logger.warning(
             "Meilisearch circuit breaker OPEN after %d failures (will retry in %ds)",
             _meili_failure_count,
-            _MEILI_CIRCUIT_OPEN_SECONDS,
+            _get_meili_circuit_open_seconds(),
         )
 
 
@@ -349,7 +358,7 @@ async def get_cached_scope_filter(
     filter_expr = await build_search_filter(db, user_id)
 
     try:
-        await redis_service.set(cache_key, json.dumps(filter_expr), ttl=SCOPE_CACHE_TTL)
+        await redis_service.set(cache_key, json.dumps(filter_expr), ttl=_get_scope_cache_ttl())
     except Exception:
         logger.warning("Failed to cache scope filter in Redis")
 
@@ -382,7 +391,7 @@ def build_search_doc_data(
     return {
         "id": str(doc.id),
         "title": doc.title,
-        "content_plain": (doc.content_plain or "")[:MAX_CONTENT_LENGTH],
+        "content_plain": (doc.content_plain or "")[:_get_max_content_length()],
         "application_id": str(application_id) if application_id else None,
         "project_id": str(doc.project_id) if doc.project_id else None,
         "user_id": str(doc.user_id) if doc.user_id else None,
@@ -516,7 +525,7 @@ def build_search_file_data(
         "id": f"file_{ff.id}",
         "title": ff.display_name,
         "file_name": ff.display_name,
-        "content_plain": (ff.content_plain or "")[:MAX_CONTENT_LENGTH],
+        "content_plain": (ff.content_plain or "")[:_get_max_content_length()],
         "content_type": "file",
         "mime_type": ff.mime_type,
         "application_id": str(application_id) if application_id else None,
@@ -568,7 +577,7 @@ def _pg_extract_snippet(text: str, start: int, length: int) -> str:
     Returns an HTML string with the matched portion inside <mark> tags
     and surrounding context trimmed to word boundaries.
     """
-    ctx = SNIPPET_CONTEXT_CHARS
+    ctx = _get_snippet_context_chars()
     snippet_start = max(0, start - ctx)
     snippet_end = min(len(text), start + length + ctx)
 
@@ -598,7 +607,7 @@ def _highlight_terms_in_window(content: str, start: int, length: int, terms: set
     Used for additional occurrences (occurrenceIndex > 0) where Meilisearch
     only provides the best-match crop for the first occurrence.
     """
-    ctx = SNIPPET_CONTEXT_CHARS
+    ctx = _get_snippet_context_chars()
     window_start = max(0, start - ctx)
     window_end = min(len(content), start + length + ctx)
 
@@ -619,12 +628,13 @@ def _highlight_terms_in_window(content: str, start: int, length: int, terms: set
     prefix = "..." if window_start > 0 else ""
     suffix = "..." if window_end < len(content) else ""
 
-    if not terms:
-        # No terms to highlight -- just return escaped window
+    # Drop single-character terms — they highlight random characters everywhere
+    highlight_terms = {t for t in terms if len(t) >= 2}
+    if not highlight_terms:
         return f"{prefix}{window}{suffix}"
 
     # Build one combined pattern (longest first to avoid partial overlap)
-    sorted_terms = sorted(terms, key=len, reverse=True)
+    sorted_terms = sorted(highlight_terms, key=len, reverse=True)
     combined_pattern = "|".join(re.escape(html_mod.escape(t)) for t in sorted_terms)
     compiled = re.compile(f"(?i)({combined_pattern})")
     window = compiled.sub(r"<mark>\1</mark>", window)
@@ -669,15 +679,32 @@ def _sanitize_meili_snippet(html: str) -> str:
     return "".join(result)
 
 
+def _byte_to_char_offset(encoded: bytes, byte_offset: int) -> int:
+    """Convert a UTF-8 byte offset to a Python character offset.
+
+    Meilisearch _matchesPosition returns byte offsets, but Python strings
+    use character offsets. For ASCII-only content they're identical, but
+    documents with multi-byte chars (box-drawing, emoji, CJK, PDF extracted
+    text) will have diverging offsets.
+
+    Args:
+        encoded: Pre-encoded UTF-8 bytes of the text (cached per hit to
+                 avoid re-encoding on every position).
+        byte_offset: Byte offset from Meilisearch.
+    """
+    byte_offset = min(byte_offset, len(encoded))
+    return len(encoded[:byte_offset].decode("utf-8", errors="replace"))
+
+
 def _expand_hits(hits: list[dict]) -> list[dict]:
-    """Expand search hits so each content match becomes a separate entry.
+    """Expand search hits into multiple entries per document.
 
-    The first occurrence uses Meilisearch's native highlighting (from
-    ``_formatted.content_plain``).  Additional occurrences use regex-based
-    highlighting around the ``_matchesPosition`` region.
+    First entry uses Meilisearch's native crop+highlight. Additional entries
+    use regex highlighting in windows around each match position, with
+    byte-to-char offset conversion for multi-byte content (PDF, DOCX, etc.).
 
-    Title-only matches produce a single entry with the cropped formatted
-    content_plain as the snippet (no manual position math).
+    Each entry carries ``matchCount`` (total matches in the document) and
+    ``occurrenceIndex`` (0-based position of this entry).
     """
     expanded: list[dict] = []
 
@@ -692,27 +719,44 @@ def _expand_hits(hits: list[dict]) -> list[dict]:
             if k not in ("content_plain", "_matchesPosition", "_formatted",
                          "_rankingScore", "_rankingScoreDetails")
         }
-        # Detect file entries (id prefixed with "file_")
         hit_id = hit.get("id", "")
         if isinstance(hit_id, str) and hit_id.startswith("file_"):
             base["content_type"] = "file"
             base["file_name"] = hit.get("file_name") or hit.get("title", "")
         base["_formatted"] = {"title": formatted.get("title", hit.get("title", ""))}
 
-        # Collect actual matched text from title and content positions
+        # Collect matched terms from title (byte-to-char converted for Unicode safety)
         title_positions = (hit.get("_matchesPosition") or {}).get("title", [])
         title_text = hit.get("title") or ""
-        matched_terms_set: set[str] = {
-            title_text[p.get("start", 0):p.get("start", 0) + p.get("length", 0)].lower()
-            for p in title_positions
-            if p.get("length", 0) > 0
-        }
+        title_encoded = title_text.encode("utf-8") if title_text else b""
+        matched_terms_set: set[str] = set()
+        for p in title_positions:
+            if p.get("length", 0) > 1:
+                cs = _byte_to_char_offset(title_encoded, p.get("start", 0))
+                ce = _byte_to_char_offset(title_encoded, p.get("start", 0) + p.get("length", 0))
+                if cs < len(title_text):
+                    matched_terms_set.add(title_text[cs:ce].lower())
+
+        # Pre-encode content once per hit for byte-to-char offset conversion
+        content_encoded = content.encode("utf-8") if content else b""
+
+        # Collect content terms using byte-to-char conversion
+        for pos in positions:
+            byte_start = pos.get("start", 0)
+            byte_length = pos.get("length", 0)
+            if byte_length > 1:
+                char_start = _byte_to_char_offset(content_encoded, byte_start)
+                char_end = _byte_to_char_offset(content_encoded, byte_start + byte_length)
+                if char_start < len(content):
+                    matched_terms_set.add(content[char_start:char_end].lower())
+
+        valid_positions = [p for p in positions if p.get("length", 0) > 0]
+        total_matches = len(valid_positions) or (1 if title_positions else 0)
 
         if not positions:
-            # Title-only match -- use Meilisearch's cropped+highlighted content
+            # Title-only match
             formatted_snippet = formatted.get("content_plain", "")
             if not formatted_snippet and content:
-                # Truncate to ~200 chars at word boundary
                 truncated = content[:200]
                 space = truncated.rfind(' ', 150)
                 if space > 0:
@@ -720,55 +764,51 @@ def _expand_hits(hits: list[dict]) -> list[dict]:
                 formatted_snippet = html_mod.escape(truncated) + "..."
             base["snippet"] = _sanitize_meili_snippet(formatted_snippet) if formatted_snippet else ""
             base["occurrenceIndex"] = 0
-            base["matchedTerms"] = list(matched_terms_set) if matched_terms_set else []
+            base["matchCount"] = total_matches
+            base["matchedTerms"] = list(matched_terms_set)
             expanded.append(base)
             continue
 
-        # Track where this document's entries start in the expanded list
         doc_start_idx = len(expanded)
 
-        # Collect matched terms from content positions
-        for pos in positions:
-            start = pos.get("start", 0)
-            length = pos.get("length", 0)
-            if length > 0 and start < len(content):
-                matched_terms_set.add(content[start:start + length].lower())
-
-        # Deduplicate overlapping positions and cap at MAX_OCCURRENCES_PER_DOC
-        seen_starts: set[int] = set()
+        # Deduplicate and expand up to MAX_OCCURRENCES_PER_DOC
+        seen_char_starts: set[int] = set()
         occ_idx = 0
         for pos in positions:
             if occ_idx >= MAX_OCCURRENCES_PER_DOC:
                 break
-            start = pos.get("start", 0)
-            length = pos.get("length", 0)
-            if start in seen_starts or length == 0 or start >= len(content):
+            byte_start = pos.get("start", 0)
+            byte_length = pos.get("length", 0)
+            if byte_length == 0:
                 continue
-            seen_starts.add(start)
+
+            char_start = _byte_to_char_offset(content_encoded, byte_start)
+            char_length = _byte_to_char_offset(content_encoded, byte_start + byte_length) - char_start
+
+            if char_start in seen_char_starts or char_start >= len(content):
+                continue
+            seen_char_starts.add(char_start)
 
             entry = {**base}
             if occ_idx == 0:
-                # First occurrence: use Meilisearch's native highlight+crop
                 formatted_snippet = formatted.get("content_plain", "")
                 if formatted_snippet:
                     entry["snippet"] = _sanitize_meili_snippet(formatted_snippet)
                 elif content and matched_terms_set:
-                    # Fallback: use regex highlight on raw content around first position
                     entry["snippet"] = _highlight_terms_in_window(
-                        content, start, length, matched_terms_set,
+                        content, char_start, char_length, matched_terms_set,
                     )
                 else:
                     entry["snippet"] = ""
             else:
-                # Additional occurrences: regex-based highlight in a window
                 entry["snippet"] = _highlight_terms_in_window(
-                    content, start, length, matched_terms_set,
+                    content, char_start, char_length, matched_terms_set,
                 )
             entry["occurrenceIndex"] = occ_idx
+            entry["matchCount"] = total_matches
             expanded.append(entry)
             occ_idx += 1
 
-        # Attach matched terms to all entries from this document
         unique_terms = list(matched_terms_set)
         for entry in expanded[doc_start_idx:]:
             entry["matchedTerms"] = unique_terms
@@ -793,9 +833,16 @@ async def search_documents(
     if _meili_circuit_is_open():
         raise RuntimeError("Meilisearch circuit breaker is open")
 
+    # Drop single-character words — they match everywhere and pollute results
+    # (e.g. "pm d" → "pm" instead of matching every "d" in every document).
+    words = [w for w in query.split() if len(w) >= 2]
+    if not words:
+        # All words were single chars — use original query as-is (prefix search)
+        words = query.split()
+    query = " ".join(words)
+
     # Use "all" for short queries (1-2 words) to require every term,
     # "last" for longer queries so partial matches still surface results.
-    words = query.split()
     strategy = "all" if len(words) <= 2 else "last"
 
     try:
@@ -1020,6 +1067,7 @@ async def search_documents_pg_fallback(
             },
             "snippet": _sanitize_meili_snippet(row.snippet) if row.snippet else "",
             "occurrenceIndex": 0,
+            "matchCount": 1,
             "matchedTerms": [t for t in query.lower().split() if len(t) >= 2],
         }
 
@@ -1191,7 +1239,7 @@ async def check_search_index_consistency(ctx: dict) -> None:
                     reindex_batch.append({
                         "id": str(row.id),
                         "title": row.title,
-                        "content_plain": (row.content_plain or "")[:MAX_CONTENT_LENGTH],
+                        "content_plain": (row.content_plain or "")[:_get_max_content_length()],
                         "application_id": str(app_id) if app_id else None,
                         "project_id": str(row.project_id) if row.project_id else None,
                         "user_id": str(row.user_id) if row.user_id else None,
@@ -1304,7 +1352,7 @@ async def check_search_index_consistency(ctx: dict) -> None:
                             "id": f"file_{row.id}",
                             "title": row.display_name,
                             "file_name": row.display_name,
-                            "content_plain": (row.content_plain or "")[:MAX_CONTENT_LENGTH],
+                            "content_plain": (row.content_plain or "")[:_get_max_content_length()],
                             "content_type": "file",
                             "mime_type": row.mime_type,
                             "application_id": str(app_id) if app_id else None,
@@ -1445,7 +1493,7 @@ async def full_reindex(db: AsyncSession) -> dict:
         batch = [{
             "id": str(row.id),
             "title": row.title,
-            "content_plain": (row.content_plain or "")[:MAX_CONTENT_LENGTH],
+            "content_plain": (row.content_plain or "")[:_get_max_content_length()],
             "application_id": str(row.application_id or row.project_app_id) if (row.application_id or row.project_app_id) else None,
             "project_id": str(row.project_id) if row.project_id else None,
             "user_id": str(row.user_id) if row.user_id else None,
@@ -1496,7 +1544,7 @@ async def full_reindex(db: AsyncSession) -> dict:
             "id": f"file_{row.id}",
             "title": row.display_name,
             "file_name": row.display_name,
-            "content_plain": (row.content_plain or "")[:MAX_CONTENT_LENGTH],
+            "content_plain": (row.content_plain or "")[:_get_max_content_length()],
             "content_type": "file",
             "mime_type": row.mime_type,
             "application_id": str(row.application_id or row.project_app_id) if (row.application_id or row.project_app_id) else None,

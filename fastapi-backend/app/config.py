@@ -1,18 +1,31 @@
 """Configuration management using pydantic-settings."""
 
 import logging
+import os
+import re
 import warnings
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _config_logger = logging.getLogger(__name__)
 
+# APP_ENV selects which env file to load: "dev" → .env.dev, "prod" → .env.prod
+# Default: "prod"
+_app_env = os.getenv("APP_ENV", "prod")
+if not re.fullmatch(r"[a-zA-Z0-9_-]{1,32}", _app_env):
+    raise ValueError(
+        f"APP_ENV contains invalid characters: {_app_env!r}. "
+        "Only alphanumerics, hyphens, and underscores are allowed."
+    )
+_env_file = f".env.{_app_env}"
+_config_logger.info("Loading config from %s (APP_ENV=%s)", _env_file, _app_env)
+
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=_env_file,
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -36,6 +49,8 @@ class Settings(BaseSettings):
     minio_access_key: str
     minio_secret_key: str
     minio_secure: bool = False
+    minio_attachments_bucket: str = "pm-attachments"
+    minio_images_bucket: str = "pm-images"
 
     # JWT settings
     jwt_secret: str

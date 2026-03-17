@@ -26,7 +26,10 @@ import { useKnowledgePermissions } from '@/hooks/use-knowledge-permissions'
 import { SearchBar } from './search-bar'
 import { KnowledgeTree } from './knowledge-tree'
 import { EditorPanel } from './editor-panel'
+import { FileViewerPanel } from './file-viewer-panel'
+import { useFileDetail } from '@/hooks/use-folder-files'
 import { CreateDialog } from './create-dialog'
+import { Skeleton } from '@/components/ui/skeleton'
 import { FileConflictDialog } from './file-conflict-dialog'
 import { toast } from 'sonner'
 
@@ -64,7 +67,8 @@ const MAX_TREE_WIDTH = 500
 const DEFAULT_TREE_WIDTH = 280
 
 function InnerPanel({ scope, scopeId, showProjectFolders, className }: InnerPanelProps) {
-  const { selectDocument, selectedFolderId } = useKnowledgeBase()
+  const { selectDocument, selectedFolderId, selectedFileId } = useKnowledgeBase()
+  const { data: selectedFile, isLoading: isFileLoading } = useFileDetail(selectedFileId)
 
   // Resizable tree panel state
   const [treeWidth, setTreeWidth] = useState(DEFAULT_TREE_WIDTH)
@@ -226,8 +230,27 @@ function InnerPanel({ scope, scopeId, showProjectFolders, className }: InnerPane
         onMouseDown={handleResizeMouseDown}
       />
 
-      {/* Right panel: editor */}
-      <EditorPanel canEdit={canEdit} isOwner={isOwner} />
+      {/* Right panel: file viewer or document editor */}
+      {selectedFileId && isFileLoading ? (
+        <div className="flex-1 flex flex-col min-h-0">
+          <div className="flex items-center justify-between px-4 py-2 border-b border-border">
+            <Skeleton className="h-4 w-40" />
+          </div>
+          <div className="flex-1 p-6 space-y-4">
+            <Skeleton className="h-5 w-48" />
+            <Skeleton className="h-3.5 w-full" />
+            <Skeleton className="h-3.5 w-[80%]" />
+          </div>
+        </div>
+      ) : selectedFileId && selectedFile ? (
+        <FileViewerPanel file={selectedFile} />
+      ) : selectedFileId && !isFileLoading && !selectedFile ? (
+        <div className="flex-1 flex items-center justify-center text-muted-foreground">
+          <p>File not found or has been deleted.</p>
+        </div>
+      ) : (
+        <EditorPanel canEdit={canEdit} isOwner={isOwner} />
+      )}
 
       {/* Create dialog */}
       <CreateDialog open={createDialogOpen} onOpenChange={setCreateDialogOpen} type={createType} onSubmit={handleCreateSubmit} />

@@ -73,10 +73,22 @@ After logging in for the first time:
 The Dashboard provides an overview of your work:
 
 - **Quick Stats**: Applications, Projects, Active Tasks, and Completed counts
+- **Project Health Charts**: Visual indicators of project progress and task distribution
+- **Completion Trends**: See how your team's velocity has changed over time
 - **Quick Actions**: Buttons to create new applications or view projects
-- **Recent Activity**: Updates from your team (coming soon)
 
-### 2. Set Your Theme
+### 2. Meet Blair, Your AI Assistant
+
+Blair is a built-in AI assistant that can help you work more efficiently. After logging in, you can access Blair from the sidebar to:
+
+- Search across your knowledge base using natural language
+- Ask questions about your projects and tasks
+- Create, update, or manage tasks and projects through conversation
+- Export documents to PDF
+
+See [AI Assistant (Blair)](./tips-shortcuts.md#ai-assistant-blair) for more details.
+
+### 3. Set Your Theme
 
 Click the theme toggle in the title bar to switch between:
 
@@ -84,7 +96,7 @@ Click the theme toggle in the title bar to switch between:
 - **Dark Mode**: Reduced eye strain for low-light conditions
 - **System**: Follows your operating system preference
 
-### 3. Join or Create an Application
+### 4. Join or Create an Application
 
 - If invited: Check your notifications for pending invitations
 - If starting fresh: Click **New Application** from the Dashboard or Applications page
@@ -108,11 +120,12 @@ The left sidebar provides primary navigation:
 
 | Icon | Section | Description |
 |------|---------|-------------|
-| Grid | Dashboard | Overview and quick stats |
+| Grid | Dashboard | Overview, charts, and quick stats |
 | Squares | Applications | List all your applications |
 | Folder | Projects | Direct project access |
 | File | Notes | Knowledge base and documentation |
-| Gear | Settings | Preferences (coming soon) |
+| Bot | AI Assistant | Chat with Blair |
+| Gear | Settings | Preferences |
 
 **Tip**: Click the collapse button to minimize the sidebar and gain more screen space.
 
@@ -123,6 +136,7 @@ The central area displays the current section's content. This adapts based on yo
 - Card grids for applications and projects
 - Kanban board for project tasks
 - Multi-tab editor for notes
+- Chat interface for the AI assistant
 
 ---
 
@@ -141,6 +155,7 @@ You're now the Owner of this application and can:
 - Create projects within it
 - Invite team members
 - Manage all content
+- Build a knowledge base with documents and diagrams
 
 See [Applications](./applications.md) for detailed application management.
 
@@ -156,6 +171,8 @@ With an application created:
    - **Name**: Project display name (e.g., "Sprint 1")
    - **Key**: Short unique identifier (e.g., "SP1")
    - **Description**: Optional project description
+   - **Due Date**: Optional target completion date
+   - **Priority**: Optional project priority level
 4. Click **Create**
 
 The project now appears in your application. Click it to access the Kanban board.
@@ -177,9 +194,10 @@ Your task appears as a card on the board. Click it to:
 
 - Add a description
 - Assign team members
-- Set priority and type
+- Set priority, type, and reporter
 - Add checklists
 - Leave comments
+- Create subtasks
 
 See [Tasks & Kanban Board](./tasks.md) for complete task management.
 
@@ -193,6 +211,7 @@ Now that you're set up:
 2. **Organize with projects**: See [Projects](./projects.md)
 3. **Track work with tasks**: See [Tasks & Kanban Board](./tasks.md)
 4. **Document knowledge**: See [Notes & Knowledge Base](./notes-knowledge-base.md)
+5. **Try the AI assistant**: See [AI Assistant (Blair)](./tips-shortcuts.md#ai-assistant-blair)
 
 ---
 

@@ -5,7 +5,7 @@ Background job processing with Redis-backed task queue.
 Handles scheduled jobs that were previously run via asyncio loops.
 
 Run with:
-    arq app.worker.WorkerSettings
+    uv run arq app.worker.WorkerSettings
 """
 
 import asyncio
@@ -26,7 +26,6 @@ from .models.task import Task
 from .models.task_status import StatusName, TaskStatus
 from .services.redis_service import redis_service
 from .services.search_service import check_search_index_consistency
-from .services.status_derivation_service import recalculate_aggregation_from_tasks
 from .models.document import Document
 from .models.folder_file import FolderFile
 
@@ -802,6 +801,8 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
                 ),
                 timeout=EXTRACT_TIMEOUT_S,
             )
+            # Cache images before temp dir cleanup (in-memory bytes, safe)
+            extraction_images = extraction_result.images if extraction_result.success else []
         finally:
             # HIGH-3: Guaranteed temp dir cleanup
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -877,6 +878,8 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
             embed_chunk_count = 0
             embed_token_count = 0
             embed_duration_ms = 0
+            registry = None  # Sentinel — reused by image processing if created
+            embed_svc = None
             if content_plain.strip():
                 try:
                     ff3.embedding_status = "syncing"
@@ -923,13 +926,102 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
                     )
                     ff3.embedding_status = "failed"
 
+            # Process extracted images through vision LLM (non-fatal)
+            image_chunk_count = 0
+            if extraction_images:
+                try:
+                    from .ai.image_understanding_service import (
+                        ExtractedImage as IUSExtractedImage,
+                        ImageUnderstandingService,
+                    )
+                    from .services.minio_service import minio_service as _minio_svc
+
+                    # Reuse registry/embed_svc if created during text embedding
+                    if registry is None or embed_svc is None:
+                        from .ai.provider_registry import ProviderRegistry
+                        from .ai.chunking_service import SemanticChunker
+                        from .ai.embedding_normalizer import EmbeddingNormalizer
+                        from .ai.embedding_service import EmbeddingService
+                        registry = ProviderRegistry()
+                        chunker = SemanticChunker()
+                        normalizer = EmbeddingNormalizer()
+                        embed_svc = EmbeddingService(
+                            provider_registry=registry,
+                            chunker=chunker,
+                            normalizer=normalizer,
+                            db=db3,
+                        )
+
+                    image_svc = ImageUnderstandingService(
+                        provider_registry=registry,
+                        embedding_service=embed_svc,
+                        minio_service=_minio_svc,
+                        db=db3,
+                    )
+
+                    _ALLOWED_IMG_FMTS = {"png", "jpg", "jpeg", "gif", "webp", "tiff"}
+                    _MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB per image
+                    _MAX_TOTAL_IMAGE_BYTES = 50 * 1024 * 1024  # 50 MB total
+
+                    ius_images: list[IUSExtractedImage] = []
+                    total_image_bytes = 0
+                    for img in extraction_images:
+                        fmt = img.image_format
+                        if fmt not in _ALLOWED_IMG_FMTS:
+                            logger.warning("Skipping image with unknown format: %s", fmt)
+                            continue
+                        img_size = len(img.image_bytes)
+                        if img_size > _MAX_IMAGE_BYTES:
+                            logger.warning(
+                                "Skipping oversized image (%d bytes > %d limit)",
+                                img_size, _MAX_IMAGE_BYTES,
+                            )
+                            continue
+                        if total_image_bytes + img_size > _MAX_TOTAL_IMAGE_BYTES:
+                            logger.warning(
+                                "Total image bytes cap reached (%d + %d > %d), skipping remaining",
+                                total_image_bytes, img_size, _MAX_TOTAL_IMAGE_BYTES,
+                            )
+                            break
+                        total_image_bytes += img_size
+                        content_type = f"image/{'jpeg' if fmt in ('jpg', 'jpeg') else fmt}"
+                        filename = f"page{img.page_number or 0}_pos{img.position}.{fmt}"
+                        ius_images.append(IUSExtractedImage(
+                            data=img.image_bytes,
+                            content_type=content_type,
+                            filename=filename,
+                            caption=img.caption or "",
+                            page_number=img.page_number or 0,
+                        ))
+
+                    descriptions = await image_svc.process_file_images(
+                        images=ius_images,
+                        file_id=file_uuid,
+                        scope_ids={
+                            "application_id": ff3.application_id,
+                            "project_id": ff3.project_id,
+                            "user_id": ff3.user_id,
+                        },
+                    )
+                    image_chunk_count = len(descriptions)
+                    if image_chunk_count > 0:
+                        logger.info(
+                            "extract_and_embed_file_job: processed %d images for file %s",
+                            image_chunk_count, file_id,
+                        )
+                except Exception as img_err:
+                    logger.warning(
+                        "extract_and_embed_file_job: image processing failed for %s (non-fatal): %s",
+                        file_id, img_err,
+                    )
+
             await db3.commit()
 
             logger.info(
                 "extract_and_embed_file_job: file %s processed — extraction=%s, "
-                "%d chunks, %d tokens, %dms",
+                "%d text chunks, %d image chunks, %d tokens, %dms",
                 file_id, ff3.extraction_status,
-                embed_chunk_count, embed_token_count, embed_duration_ms,
+                embed_chunk_count, image_chunk_count, embed_token_count, embed_duration_ms,
             )
 
             # CRIT-2: Include folder_id in broadcast payload
@@ -1705,10 +1797,22 @@ async def process_document_import(ctx: dict[str, Any], job_id: str, _retry_count
                     )
 
                     # Convert Docling ExtractedImage to ImageUnderstandingService ExtractedImage
+                    _ALLOWED_IMG_FMTS_IMP = {"png", "jpg", "jpeg", "gif", "webp", "tiff"}
+                    _MAX_IMAGE_BYTES_IMP = 5 * 1024 * 1024  # 5 MB per image
+
                     ius_images: list[IUSExtractedImage] = []
                     for img in extracted_images:
-                        fmt = img.image_format  # "png" or "jpg"
-                        content_type = f"image/{'jpeg' if fmt == 'jpg' else fmt}"
+                        fmt = img.image_format
+                        if fmt not in _ALLOWED_IMG_FMTS_IMP:
+                            logger.warning("Import: skipping image with unknown format: %s", fmt)
+                            continue
+                        if len(img.image_bytes) > _MAX_IMAGE_BYTES_IMP:
+                            logger.warning(
+                                "Import: skipping oversized image (%d bytes > %d limit)",
+                                len(img.image_bytes), _MAX_IMAGE_BYTES_IMP,
+                            )
+                            continue
+                        content_type = f"image/{'jpeg' if fmt in ('jpg', 'jpeg') else fmt}"
                         filename = f"page{img.page_number or 0}_pos{img.position}.{fmt}"
                         ius_images.append(IUSExtractedImage(
                             data=img.image_bytes,

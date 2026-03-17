@@ -8,10 +8,12 @@ Projects are containers for related tasks within an application. They represent 
 
 ```
 Project
-    ├── Tasks (unlimited)
-    ├── Kanban Board (status-based columns)
+    ├── Tasks (unlimited, with subtask hierarchy)
+    ├── Kanban Board (custom status columns)
+    ├── Dashboard (charts and health metrics)
     ├── Members (project-specific assignments)
-    └── Status (aggregated from tasks)
+    ├── Knowledge Base (project-scoped documents)
+    └── Custom Task Statuses (TODO, IN_PROGRESS, DONE categories)
 ```
 
 Each project:
@@ -19,7 +21,11 @@ Each project:
 - Belongs to exactly one application
 - Contains multiple tasks organized on a Kanban board
 - Has a unique key for quick reference (e.g., "SPRINT-1")
+- Supports custom task status workflows
+- Has optional due date and priority fields
+- Provides a dashboard with charts and health metrics
 - Tracks progress through task status aggregation
+- Can have its own knowledge base documents
 
 ---
 
@@ -44,6 +50,8 @@ Each project card displays:
 - **Name**: Project display name
 - **Key**: Unique identifier (e.g., "SP1")
 - **Status**: Overall project status (derived or overridden)
+- **Priority**: Project priority level (if set)
+- **Due Date**: Target completion date (if set)
 - **Progress**: Visual indicator of task completion
 - **Lead**: Assigned project lead (if set)
 
@@ -61,6 +69,8 @@ Each project card displays:
 | Key | Yes | Short unique identifier (e.g., "SP1", "AUTH") |
 | Description | No | Project scope and objectives |
 | Lead | No | Primary responsible person |
+| Due Date | No | Target completion date |
+| Priority | No | Priority level for the project |
 
 4. Click **Create**
 
@@ -78,6 +88,50 @@ Each project card displays:
 
 ---
 
+## Project Dashboard
+
+Each project has a dashboard that provides visual insights into project health and progress.
+
+### Task Distribution Chart
+
+- Shows how tasks are distributed across status columns (To Do, In Progress, Done, etc.)
+- Helps identify bottlenecks (e.g., too many tasks stuck in one column)
+
+### Completion Trends
+
+- Tracks how many tasks are completed over time
+- Shows team velocity and whether the project is on track
+
+### Project Health Indicators
+
+- Overall health status based on task progress, due dates, and blockers
+- At-a-glance view of whether the project needs attention
+
+Access the dashboard from the project detail view by clicking the **Dashboard** tab or icon.
+
+---
+
+## Custom Task Status Workflows
+
+Projects support custom task statuses organized into three categories:
+
+| Category | Purpose | Examples |
+|----------|---------|---------|
+| **TODO** | Work not yet started | Backlog, To Do, Ready |
+| **IN_PROGRESS** | Work currently underway | In Progress, In Review, Testing |
+| **DONE** | Completed work | Done, Deployed, Closed |
+
+### Managing Statuses
+
+1. Open project settings
+2. Navigate to the **Statuses** section
+3. Add, rename, reorder, or remove status columns
+4. Each status must belong to one of the three categories (TODO, IN_PROGRESS, DONE)
+
+Custom statuses appear as columns on the Kanban board. Tasks can be dragged between any columns.
+
+---
+
 ## Project Detail View
 
 Click a project to open its detail view, which includes:
@@ -86,19 +140,14 @@ Click a project to open its detail view, which includes:
 
 - **Project name** and key
 - **Status badge**: Current project status
+- **Priority**: Project priority level
+- **Due date**: Target completion date
 - **Progress bar**: Visual completion percentage
-- **Action buttons**: Edit, Delete, Members, Settings
+- **Action buttons**: Edit, Archive, Delete, Members, Settings
 
 ### Kanban Board
 
-The main workspace showing tasks organized by status columns:
-
-- **To Do**: Tasks not yet started
-- **In Progress**: Active work
-- **In Review**: Awaiting review
-- **Done**: Completed tasks
-
-(Columns may vary based on configuration)
+The main workspace showing tasks organized by status columns. The columns reflect the project's custom task statuses (or defaults: To Do, In Progress, In Review, Done).
 
 ### Side Panels
 
@@ -117,19 +166,43 @@ The main workspace showing tasks organized by status columns:
    - Key (if no tasks reference it yet)
    - Description
    - Lead assignment
+   - Due date
+   - Priority
 4. Click **Save**
 
 ### What Can Be Changed
 
-- Project name and description
-- Project lead
-- Project key (with restrictions)
+- Project name, description, and key (with restrictions)
+- Project lead, due date, and priority
+- Custom task statuses
 
 ### What Cannot Be Changed
 
 - Parent application
 - Project ID (system-generated)
 - Creation date
+
+---
+
+## Archiving and Restoring Projects
+
+Instead of permanently deleting a project, you can archive it to hide it from active views.
+
+### Archiving
+
+1. Open the project
+2. Click the **Archive** button
+3. Confirm the action
+
+Archived projects are hidden from the default project list but can be restored at any time.
+
+### Restoring
+
+1. Navigate to the archived projects view
+2. Find the archived project
+3. Click **Restore**
+
+The project and all its tasks become active again.
 
 ---
 
@@ -144,9 +217,9 @@ The main workspace showing tasks organized by status columns:
 
 ### Deletion Rules
 
-- Requires Editor or Owner role
+- Requires Manager or Owner role
 - All tasks are permanently deleted
-- Consider archiving instead of deleting (coming soon)
+- Consider archiving instead of deleting to preserve data
 
 ---
 
@@ -189,6 +262,16 @@ The override persists until:
 
 ---
 
+## Project Knowledge Base
+
+Projects can have their own scoped knowledge base documents. These documents are visible to all project members and are organized separately from application-level documents.
+
+Use project-scoped documents to keep project-specific documentation (design specs, meeting notes, technical decisions) alongside the tasks they relate to.
+
+See [Notes & Knowledge Base](./notes-knowledge-base.md) for details.
+
+---
+
 ## Project Views
 
 ### Grid View
@@ -217,13 +300,6 @@ Type in the search bar to filter projects by:
 - Project key
 - Description text
 
-### Advanced Filters (Coming Soon)
-
-- Filter by status
-- Filter by lead
-- Filter by date range
-- Filter by member assignment
-
 ---
 
 ## Working with Tasks
@@ -247,8 +323,9 @@ From the project detail view, you can:
 Click any task card to open the detail panel with:
 
 - Full description editor
-- Assignee selection
-- Priority and type settings
+- Assignee and reporter selection
+- Priority, type, and due date settings
+- Parent task linkage (subtasks)
 - Checklists
 - Comments
 - File attachments
@@ -270,7 +347,8 @@ See [Tasks & Kanban Board](./tasks.md) for complete task management.
 | Role | Project Capabilities |
 |------|---------------------|
 | Owner | Full control, can delete project |
-| Editor | Create/edit tasks, manage members |
+| Manager | Manage project settings, members, and content |
+| Member | Create/edit tasks, contribute to knowledge base |
 | Viewer | View tasks, add comments |
 
 ### Assigning Members
@@ -280,6 +358,8 @@ See [Tasks & Kanban Board](./tasks.md) for complete task management.
 3. Search for the user
 4. Select their role
 5. Click **Add**
+
+Note: Application membership grants access to projects within. A user who is a Member of an application automatically has access to its projects.
 
 ---
 
@@ -325,12 +405,14 @@ A small indicator shows connection status:
 ### Task Organization
 
 - Keep task counts manageable per column
-- Archive completed projects regularly
+- Use custom statuses to match your team's workflow
+- Archive completed projects to keep the active list clean
 - Use checklists for large tasks instead of many small ones
 
 ### Team Coordination
 
 - Assign a project lead for accountability
+- Use the dashboard charts to monitor progress
 - Use status overrides to communicate blocks
 - Regular standups using the Kanban view
 
@@ -340,14 +422,14 @@ A small indicator shows connection status:
 
 ### Can't Create Projects
 
-- Verify you have Editor or Owner role in the application
+- Verify you have Member, Manager, or Owner role in the application
 - Check that the project key is unique
 - Ensure all required fields are filled
 
 ### Can't See a Project
 
 - You may not have access to the parent application
-- The project may have been deleted
+- The project may have been archived or deleted
 - Contact the application owner
 
 ### Status Not Updating
@@ -363,3 +445,4 @@ A small indicator shows connection status:
 - [Applications](./applications.md) - Parent container for projects
 - [Tasks & Kanban Board](./tasks.md) - Managing tasks within projects
 - [Members & Permissions](./members-permissions.md) - Role-based access control
+- [Notes & Knowledge Base](./notes-knowledge-base.md) - Project-level documentation

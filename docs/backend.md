@@ -8,19 +8,36 @@ The backend is built with FastAPI, a modern Python web framework with automatic 
 fastapi-backend/
 ├── app/
 │   ├── main.py              # Application entry point
-│   ├── config.py            # Environment configuration
-│   ├── database.py          # SQLAlchemy setup
-│   ├── models/              # SQLAlchemy ORM models
-│   ├── schemas/             # Pydantic request/response schemas
-│   ├── routers/             # API endpoint definitions
-│   ├── services/            # Business logic layer
-│   ├── utils/               # Utility functions
-│   └── websocket/           # WebSocket handlers
+│   ├── config.py            # Pydantic Settings
+│   ├── database.py          # SQLAlchemy async engine (pool_size=50, max_overflow=100)
+│   ├── models/              # 32 SQLAlchemy models
+│   ├── schemas/             # 24 Pydantic schema files
+│   ├── routers/             # 28 router files
+│   ├── services/            # 20 service files
+│   ├── ai/                  # 29 AI module files
+│   │   ├── agent/           # LangGraph agent
+│   │   │   ├── graph.py     # 7-node pipeline
+│   │   │   ├── state.py     # TypedDict state
+│   │   │   ├── constants.py # Runtime-configurable via getters
+│   │   │   ├── prompts.py   # System prompts per node
+│   │   │   ├── routing.py   # Intent classification
+│   │   │   ├── nodes/       # 6 pipeline nodes
+│   │   │   └── tools/       # 16 tool files (51 tools)
+│   │   ├── providers/       # OpenAI, Anthropic, Ollama
+│   │   ├── embedding_service.py
+│   │   ├── chunking_service.py
+│   │   ├── retrieval_service.py
+│   │   ├── pdf_export.py
+│   │   ├── excel_export.py
+│   │   └── ...
+│   ├── websocket/           # WebSocket handlers
+│   ├── dependencies/        # DI + Redis gate
+│   └── utils/               # Shared utilities
 ├── alembic/                 # Database migrations
 │   ├── versions/            # Migration scripts
 │   └── env.py               # Alembic configuration
-├── tests/                   # Test suite
-└── requirements.txt         # Python dependencies
+├── tests/                   # Test suite (90+ files, 901+ tests)
+└── pyproject.toml           # Python dependencies and tool config
 ```
 
 ## Application Entry Point
@@ -36,7 +53,8 @@ from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Initialize presence manager, connections
+    # Startup: Warm up DB pool, connect Redis, initialize WebSocket manager,
+    #          start Redis pub/sub listener, start health monitor
     yield
     # Shutdown: Cleanup resources
 
@@ -55,12 +73,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include all routers
-app.include_router(auth.router, prefix="/auth", tags=["auth"])
-app.include_router(applications.router, prefix="/applications", tags=["applications"])
-app.include_router(projects.router, prefix="/projects", tags=["projects"])
-app.include_router(tasks.router, prefix="/tasks", tags=["tasks"])
-# ... more routers
+# Include all routers (28 total)
+app.include_router(auth_router, prefix="/auth", tags=["auth"])
+app.include_router(applications_router, prefix="/applications", tags=["applications"])
+app.include_router(projects_router, prefix="/projects", tags=["projects"])
+app.include_router(tasks_router, prefix="/tasks", tags=["tasks"])
+# ... 24 more routers
 
 # WebSocket endpoint
 @app.websocket("/ws")
@@ -232,15 +250,6 @@ Task and comment attachments rely on PostgreSQL CASCADE DELETE — when a task o
 | `415` | Unsupported image MIME type |
 | `422` | Batch request exceeds 50 IDs |
 
-### WebSocket Events
-
-| Event | Trigger |
-|-------|---------|
-| `ATTACHMENT_UPLOADED` | File upload succeeds |
-| `ATTACHMENT_DELETED` | File deletion succeeds |
-
-Events are broadcast to the entity room (`{entity_type}:{entity_id}`).
-
 ## Database Layer
 
 ### database.py
@@ -279,9 +288,66 @@ async def get_db():
             await session.close()
 ```
 
-## Models Layer
+## Models Layer (32 Models)
 
 Models define the database schema using SQLAlchemy ORM.
+
+### Model Organization
+
+**Core Domain:**
+
+| Model | File | Purpose |
+|-------|------|---------|
+| User | `models/user.py` | User accounts and profiles |
+| Application | `models/application.py` | Top-level project containers |
+| ApplicationMember | `models/application_member.py` | App role assignments |
+| Project | `models/project.py` | Project boards |
+| ProjectMember | `models/project_member.py` | Project role assignments |
+| ProjectAssignment | `models/project_assignment.py` | Task assignments to projects |
+| Task | `models/task.py` | Tasks/issues |
+| TaskStatus | `models/task_status.py` | Status columns per project |
+| ProjectTaskStatusAgg | `models/project_task_status_agg.py` | Denormalized status counts |
+
+**Knowledge Base:**
+
+| Model | File | Purpose |
+|-------|------|---------|
+| Document | `models/document.py` | Documents with `row_version`, `embedding_updated_at`, soft delete (`deleted_at`) |
+| DocumentFolder | `models/document_folder.py` | Folder hierarchy |
+| DocumentSnapshot | `models/document_snapshot.py` | Document version snapshots |
+| DocumentTag | `models/document_tag.py` | Tag definitions |
+| DocumentTagAssignment | `models/document_tag.py` | Tag-to-document assignments |
+| DocumentChunk | `models/document_chunk.py` | Embedding vector chunks (pgvector) |
+| FolderFile | `models/folder_file.py` | Files attached to folders |
+| ImportJob | `models/import_job.py` | Document import job tracking |
+
+**Collaboration:**
+
+| Model | File | Purpose |
+|-------|------|---------|
+| Comment | `models/comment.py` | Task comments (threaded) |
+| Mention | `models/mention.py` | @mention tracking |
+| Attachment | `models/attachment.py` | File attachments |
+| Checklist | `models/checklist.py` | Task checklists |
+| ChecklistItem | `models/checklist_item.py` | Checklist items |
+
+**AI Agent:**
+
+| Model | File | Purpose |
+|-------|------|---------|
+| ChatSession | `models/chat_session.py` | Agent conversation sessions |
+| ChatMessage | `models/chat_message.py` | Agent messages |
+| AiProvider | `models/ai_provider.py` | Provider configs (encrypted API keys) |
+| AiModel | `models/ai_model.py` | Model configurations |
+| AiSystemPrompt | `models/ai_system_prompt.py` | System prompts |
+| AgentConfiguration | `models/agent_config.py` | Runtime agent config (81 seed rows) |
+
+**Other:**
+
+| Model | File | Purpose |
+|-------|------|---------|
+| Notification | `models/notification.py` | User notifications |
+| Invitation | `models/invitation.py` | App invitations |
 
 ### Example: Task Model
 
@@ -332,31 +398,47 @@ class Task(Base):
     attachments = relationship("Attachment", back_populates="task", cascade="all, delete-orphan")
 ```
 
-### Model Organization
-
-| Model | File | Purpose |
-|-------|------|---------|
-| User | `models/user.py` | User accounts and profiles |
-| Application | `models/application.py` | Top-level project containers |
-| ApplicationMember | `models/application_member.py` | App role assignments |
-| Project | `models/project.py` | Project boards |
-| ProjectMember | `models/project_member.py` | Project role assignments |
-| Task | `models/task.py` | Tasks/issues |
-| TaskStatus | `models/task_status.py` | Status columns per project |
-| Comment | `models/comment.py` | Task comments |
-| Mention | `models/mention.py` | @mention tracking |
-| Checklist | `models/checklist.py` | Task checklists |
-| ChecklistItem | `models/checklist_item.py` | Checklist items |
-| Attachment | `models/attachment.py` | File attachments |
-| Notification | `models/notification.py` | User notifications |
-| Invitation | `models/invitation.py` | App invitations |
-| DocumentFolder | `models/document_folder.py` | Knowledge base folder hierarchy |
-| Document | `models/document.py` | Knowledge base documents |
-| DocumentSnapshot | `models/document_snapshot.py` | Document version snapshots |
-
-## Schemas Layer
+## Schemas Layer (24 Files)
 
 Pydantic schemas define request/response validation and serialization.
+
+### Schema Files
+
+| File | Purpose |
+|------|---------|
+| `schemas/user.py` | User profiles |
+| `schemas/application.py` | Application CRUD |
+| `schemas/application_member.py` | Application membership |
+| `schemas/project.py` | Project CRUD |
+| `schemas/project_member.py` | Project membership |
+| `schemas/project_assignment.py` | Project assignments |
+| `schemas/task.py` | Task CRUD |
+| `schemas/comment.py` | Comments |
+| `schemas/checklist.py` | Checklists |
+| `schemas/file.py` | File attachments |
+| `schemas/document.py` | Document CRUD |
+| `schemas/document_folder.py` | Folder hierarchy |
+| `schemas/document_tag.py` | Document tags |
+| `schemas/document_lock.py` | Document locks |
+| `schemas/folder_file.py` | Folder files |
+| `schemas/notification.py` | Notifications |
+| `schemas/invitation.py` | Invitations |
+| `schemas/dashboard.py` | Dashboard aggregations |
+| `schemas/ai_chat.py` | AI chat requests/responses |
+| `schemas/ai_config.py` | AI provider/model config |
+| `schemas/oauth.py` | OAuth2 flows |
+| `schemas/sql_query.py` | SQL query execution |
+| `schemas/import_job.py` | Import jobs |
+
+### Schema Conventions
+
+| Category | Purpose | Example |
+|----------|---------|---------|
+| `*Create` | Request body for creating | `TaskCreate` |
+| `*Update` | Request body for updating | `TaskUpdate` |
+| `*Response` | Response serialization | `TaskResponse` |
+| `*Base` | Shared fields | `TaskBase` |
+| `*Query` | Query parameters | `TaskQuery` |
 
 ### Example: Task Schemas
 
@@ -410,19 +492,56 @@ class TaskResponse(TaskBase):
         from_attributes = True  # Enable ORM mode
 ```
 
-### Schema Categories
-
-| Category | Purpose | Example |
-|----------|---------|---------|
-| `*Create` | Request body for creating | `TaskCreate` |
-| `*Update` | Request body for updating | `TaskUpdate` |
-| `*Response` | Response serialization | `TaskResponse` |
-| `*Base` | Shared fields | `TaskBase` |
-| `*Query` | Query parameters | `TaskQuery` |
-
-## Routers Layer
+## Routers Layer (28 Files)
 
 Routers define API endpoints and route handling.
+
+### Core Domain Routers
+
+| Router | Prefix | Purpose |
+|--------|--------|---------|
+| `auth.py` | `/auth` | Register, login, logout, password reset, 2FA, email verification |
+| `applications.py` | `/applications` | Application CRUD |
+| `application_members.py` | `/applications/{id}/members` | Application membership (roles) |
+| `projects.py` | `/projects` | Project CRUD |
+| `project_members.py` | `/projects/{id}/members` | Project membership and roles |
+| `project_assignments.py` | `/project-assignments` | Task assignments to projects |
+| `tasks.py` | `/tasks` | Task CRUD with status, priority, assignee |
+| `comments.py` | `/comments` | Threaded comments with @-mentions |
+| `checklists.py` | `/checklists` | Task checklists |
+| `dashboard.py` | `/dashboard` | Dashboard aggregations |
+
+### Knowledge Base Routers
+
+| Router | Prefix | Purpose |
+|--------|--------|---------|
+| `documents.py` | `/documents` | Document CRUD (includes trash, scopes-summary, permissions) |
+| `document_folders.py` | `/document-folders` | Folder hierarchy (tree) |
+| `document_tags.py` | `/document-tags` | Tag management |
+| `document_locks.py` | `/document-locks` | Real-time locks (GET, POST, DELETE + batch) |
+| `document_search.py` | `/document-search` | Meilisearch integration (search, health, reindex) |
+| `folder_files.py` | `/folder-files` | Files in folders |
+
+### Files and Users Routers
+
+| Router | Prefix | Purpose |
+|--------|--------|---------|
+| `files.py` | `/files` | File upload/download via MinIO |
+| `users.py` | `/users` | User profiles |
+| `invitations.py` | `/invitations` | User invitations |
+| `notifications.py` | `/notifications` | Push notifications |
+
+### AI Agent Routers
+
+| Router | Prefix | Purpose |
+|--------|--------|---------|
+| `ai_chat.py` | `/ai/chat` | Streaming chat, resume, time-travel/replay, cancel |
+| `ai_config.py` | `/ai/config` | Provider/model configuration |
+| `ai_oauth.py` | `/ai/oauth` | OAuth2 for external providers |
+| `ai_query.py` | `/ai/query` | SQL generation and execution (query, validate, schema, export, index-status) |
+| `ai_import.py` | `/ai/import` | Document import jobs |
+| `chat_sessions.py` | `/chat-sessions` | Session management (CRUD + messages) |
+| `admin_config.py` | `/admin/config` | Runtime agent config (GET, PUT, POST reset) |
 
 ### Example: Tasks Router
 
@@ -451,7 +570,6 @@ async def get_tasks(
     current_user: User = Depends(get_current_user)
 ):
     """Get all tasks for a project."""
-    # Check user has access to project
     await check_project_access(db, project_id, current_user.id)
 
     result = await db.execute(
@@ -464,7 +582,6 @@ async def get_tasks(
         .order_by(Task.task_rank)
     )
     tasks = result.scalars().all()
-
     return tasks
 
 @router.post("/", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
@@ -474,97 +591,61 @@ async def create_task(
     current_user: User = Depends(get_current_user)
 ):
     """Create a new task."""
-    # Check user has access to project
     await check_project_access(db, task_data.project_id, current_user.id)
 
-    # Create task
-    task = Task(
-        **task_data.dict(),
-        reporter_id=current_user.id
-    )
+    task = Task(**task_data.dict(), reporter_id=current_user.id)
     db.add(task)
     await db.commit()
     await db.refresh(task)
 
-    # Broadcast via WebSocket
     await handle_task_created(task)
-
     return task
-
-@router.patch("/{task_id}", response_model=TaskResponse)
-async def update_task(
-    task_id: UUID,
-    task_data: TaskUpdate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Update an existing task."""
-    result = await db.execute(select(Task).filter(Task.id == task_id))
-    task = result.scalar_one_or_none()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    # Check user has access
-    await check_project_access(db, task.project_id, current_user.id)
-
-    # Update fields
-    for field, value in task_data.dict(exclude_unset=True).items():
-        setattr(task, field, value)
-
-    await db.commit()
-    await db.refresh(task)
-
-    # Broadcast via WebSocket
-    await handle_task_updated(task)
-
-    return task
-
-@router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_task(
-    task_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Delete a task."""
-    result = await db.execute(select(Task).filter(Task.id == task_id))
-    task = result.scalar_one_or_none()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    # Check user has access
-    await check_project_access(db, task.project_id, current_user.id)
-
-    project_id = task.project_id
-    await db.delete(task)
-    await db.commit()
-
-    # Broadcast via WebSocket
-    await handle_task_deleted(task_id, project_id)
 ```
 
-### Available Routers
-
-| Router | Prefix | Purpose |
-|--------|--------|---------|
-| `auth.py` | `/auth` | Login, register, logout, current user |
-| `applications.py` | `/applications` | Application CRUD |
-| `application_members.py` | `/applications/{id}/members` | App membership |
-| `projects.py` | `/projects` | Project CRUD |
-| `project_members.py` | `/projects/{id}/members` | Project membership |
-| `tasks.py` | `/tasks` | Task CRUD and Kanban operations |
-| `comments.py` | `/comments` | Comment threads |
-| `checklists.py` | `/checklists` | Checklist management |
-| `files.py` | `/files` | File upload/download |
-| `notifications.py` | `/notifications` | User notifications |
-| `invitations.py` | `/invitations` | App invitations |
-| `users.py` | `/users` | User lookup |
-| `notes.py` | `/notes` | Knowledge base notes |
-| `documents.py` | `/documents` | Knowledge base document CRUD |
-| `document_search.py` | `/documents/search` | Full-text search via Meilisearch |
-
-## Services Layer
+## Services Layer (20 Files)
 
 Services encapsulate business logic and cross-cutting concerns.
+
+### Service Organization
+
+**Core:**
+
+| Service | File | Purpose |
+|---------|------|---------|
+| Auth | `services/auth_service.py` | JWT, 2FA, password hashing |
+| Permission | `services/permission_service.py` | RBAC role hierarchy |
+| User Cache | `services/user_cache_service.py` | User data caching |
+| Notification | `services/notification_service.py` | Push notification delivery |
+| Email | `services/email_service.py` | SMTP email delivery |
+
+**Knowledge Base:**
+
+| Service | File | Purpose |
+|---------|------|---------|
+| Document | `services/document_service.py` | Document CRUD business logic |
+| Document Lock | `services/document_lock_service.py` | Redis-based document locking |
+| Search | `services/search_service.py` | Meilisearch integration |
+
+**Project and Task:**
+
+| Service | File | Purpose |
+|---------|------|---------|
+| Status Derivation | `services/status_derivation_service.py` | Task status aggregation |
+| Checklist | `services/checklist_service.py` | Checklist operations |
+| Comment | `services/comment_service.py` | Comment operations |
+| Task Helpers | `services/task_helpers.py` | Shared task utilities |
+
+**Integration:**
+
+| Service | File | Purpose |
+|---------|------|---------|
+| Redis | `services/redis_service.py` | Redis pub/sub and caching |
+| MinIO | `services/minio_service.py` | S3 object storage |
+| ARQ Helper | `services/arq_helper.py` | Background job processing |
+| Dashboard | `services/dashboard_service.py` | Dashboard aggregation queries |
+| Content Converter | `services/content_converter.py` | Content format conversion |
+| Draw.io Graph | `services/drawio_graph_service.py` | Draw.io diagram processing |
+| Archive | `services/archive_service.py` | Data archival |
 
 ### Authentication Service
 
@@ -582,33 +663,15 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against its hash."""
     return pwd_context.verify(plain_password, hashed_password)
 
 def hash_password(password: str) -> str:
-    """Hash a password for storage."""
     return pwd_context.hash(password)
 
 def create_access_token(user_id: str, email: str) -> str:
-    """Create a JWT access token."""
     expire = datetime.utcnow() + timedelta(minutes=settings.jwt_expiration_minutes)
-    payload = {
-        "sub": user_id,
-        "email": email,
-        "exp": expire
-    }
+    payload = {"sub": user_id, "email": email, "exp": expire}
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
-
-def decode_token(token: str) -> dict:
-    """Decode and validate a JWT token."""
-    try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
-        return payload
-    except JWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token"
-        )
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
@@ -617,12 +680,10 @@ async def get_current_user(
     """Dependency to get the current authenticated user."""
     payload = decode_token(token)
     user_id = payload.get("sub")
-
     result = await db.execute(select(User).filter(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
-
     return user
 ```
 
@@ -630,15 +691,6 @@ async def get_current_user(
 
 ```python
 # app/services/permission_service.py
-from uuid import UUID
-from fastapi import HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
-from sqlalchemy.orm import selectinload
-
-from app.models.application_member import ApplicationMember
-from app.models.project_member import ProjectMember
-
 async def check_app_member(
     db: AsyncSession,
     application_id: UUID,
@@ -646,106 +698,393 @@ async def check_app_member(
     required_role: str = None
 ) -> ApplicationMember:
     """Check if user is a member of the application."""
-    result = await db.execute(
-        select(ApplicationMember).filter(
-            ApplicationMember.application_id == application_id,
-            ApplicationMember.user_id == user_id
-        )
-    )
-    member = result.scalar_one_or_none()
-
-    if not member:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not a member of this application"
-        )
-
-    if required_role:
-        role_hierarchy = {"owner": 3, "editor": 2, "viewer": 1}
-        if role_hierarchy.get(member.role, 0) < role_hierarchy.get(required_role, 0):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Requires {required_role} role or higher"
-            )
-
-    return member
+    # Role hierarchy: owner (3) > editor (2) > viewer (1)
+    ...
 
 async def check_project_access(
     db: AsyncSession,
     project_id: UUID,
     user_id: UUID
 ) -> bool:
-    """Check if user has access to a project."""
-    result = await db.execute(
-        select(Project)
-        .options(selectinload(Project.application))
-        .filter(Project.id == project_id)
-    )
-    project = result.scalar_one_or_none()
-
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-    # Check app membership
-    await check_app_member(db, project.application_id, user_id)
-
-    return True
+    """Check if user has access to a project (via app membership)."""
+    ...
 ```
 
-### Status Derivation Service
+## AI Module (29 Files)
 
-```python
-# app/services/status_derivation_service.py
-from uuid import UUID
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
-from sqlalchemy import func, delete
+The AI module implements the Blair AI Copilot, a LangGraph-based agent with 51 tools (25 read + 26 write), hybrid search, and document processing.
 
-from app.models.task import Task
-from app.models.project_task_status_agg import ProjectTaskStatusAgg
+### LLM Providers
 
-async def update_status_aggregation(db: AsyncSession, project_id: UUID):
-    """Recalculate task status counts for a project."""
-    # Clear existing aggregation
-    await db.execute(
-        delete(ProjectTaskStatusAgg)
-        .where(ProjectTaskStatusAgg.project_id == project_id)
-    )
+| File | Purpose |
+|------|---------|
+| `ai/provider_interface.py` | Abstract base for all providers |
+| `ai/openai_provider.py` | OpenAI API integration |
+| `ai/anthropic_provider.py` | Anthropic API integration |
+| `ai/ollama_provider.py` | Ollama local model integration |
+| `ai/provider_registry.py` | Provider selection and routing |
+| `ai/codex_provider.py` | Legacy Codex provider |
 
-    # Count tasks per status
-    result = await db.execute(
-        select(Task.task_status_id, func.count(Task.id).label("count"))
-        .filter(Task.project_id == project_id)
-        .group_by(Task.task_status_id)
-    )
-    counts = result.all()
+### Embeddings and Search
 
-    # Insert new aggregations
-    for status_id, count in counts:
-        agg = ProjectTaskStatusAgg(
-            project_id=project_id,
-            task_status_id=status_id,
-            task_count=count
-        )
-        db.add(agg)
+| File | Purpose |
+|------|---------|
+| `ai/embedding_service.py` | Vector generation (tiktoken tokenizer) |
+| `ai/chunking_service.py` | Document chunking (table/canvas/slide boundaries, oversized fallback) |
+| `ai/retrieval_service.py` | Hybrid search (semantic + BM25 + pg_trgm, RRF fusion) |
+| `ai/embedding_normalizer.py` | Cosine similarity normalization |
 
-    await db.commit()
+### Document Processing
 
-async def derive_project_status(db: AsyncSession, project_id: UUID) -> str:
-    """Derive overall project status from task distribution."""
-    result = await db.execute(select(Project).filter(Project.id == project_id))
-    project = result.scalar_one_or_none()
+| File | Purpose |
+|------|---------|
+| `ai/file_extraction_service.py` | PDF/DOCX/PPTX text extraction |
+| `ai/docling_service.py` | Document conversion via Docling |
+| `ai/spreadsheet_extractor.py` | Excel extraction (python-calamine) |
+| `ai/visio_extractor.py` | Visio diagram extraction |
+| `ai/image_understanding_service.py` | Image analysis via LLM |
+| `ai/pdf_export.py` | PDF generation (fpdf2) |
+| `ai/excel_export.py` | Excel export (openpyxl) |
 
-    # Check for manual override
-    if project.override_status_id and project.override_expires_at:
-        if project.override_expires_at > datetime.utcnow():
-            return project.override_status_id
+### Agent Infrastructure
 
-    # Calculate from aggregation
-    # Logic: If all tasks done → "Done", if any in progress → "In Progress", else "To Do"
-    # Implementation depends on business rules
-    pass
-```
+| File | Purpose |
+|------|---------|
+| `ai/config_service.py` | Runtime config (in-memory cache + Redis pub/sub invalidation) |
+| `ai/rate_limiter.py` | Per-user rate limiting |
+| `ai/oauth_service.py` | OAuth2 token management |
+| `ai/encryption.py` | API key encryption |
+| `ai/sql_generator.py` | SQL generation from natural language |
+| `ai/sql_executor.py` | SQL execution (SET TRANSACTION READ ONLY, 6s timeout) |
+| `ai/sql_validator.py` | SQL safety validation (blocks EXPLAIN, LOCK) |
+| `ai/schema_context.py` | Scoped DB schema for LLM context |
+| `ai/telemetry.py` | Token usage tracking |
+| `ai/exceptions.py` | AI-specific exception classes |
+| `ai/agent_tools.py` | Tool registration utilities |
+
+### Agent Graph (7-Node LangGraph Pipeline)
+
+| File | Purpose |
+|------|---------|
+| `ai/agent/graph.py` | Pipeline definition (MAX_TOOL_CALLS=50) |
+| `ai/agent/state.py` | TypedDict state definition |
+| `ai/agent/constants.py` | Runtime getters (NOT frozen imports) |
+| `ai/agent/prompts.py` | Per-node system prompts |
+| `ai/agent/routing.py` | Intent classification |
+| `ai/agent/rbac_context.py` | RBAC context for tool execution |
+| `ai/agent/source_references.py` | Source reference accumulation |
+| `ai/agent/copilotkit_runtime.py` | Optional CopilotKit AG-UI mount |
+
+### Agent Nodes (6 Pipeline Nodes)
+
+| File | Purpose |
+|------|---------|
+| `ai/agent/nodes/intake.py` | Message intake, research reset on HITL resume |
+| `ai/agent/nodes/understand.py` | Query understanding and classification |
+| `ai/agent/nodes/clarify.py` | Clarification question generation |
+| `ai/agent/nodes/explore.py` | Tool execution and data gathering |
+| `ai/agent/nodes/synthesize.py` | Multi-source result synthesis |
+| `ai/agent/nodes/respond.py` | Final response generation |
+
+### Agent Tools (51 Total: 25 Read + 26 Write)
+
+| File | Tools | Purpose |
+|------|-------|---------|
+| `ai/agent/tools/identity_tools.py` | Read | Current user identity |
+| `ai/agent/tools/application_tools.py` | Read | Application queries |
+| `ai/agent/tools/application_write_tools.py` | Write (HITL) | Application CRUD |
+| `ai/agent/tools/member_write_tools.py` | Write (HITL) | Application member management |
+| `ai/agent/tools/project_tools.py` | Read | Project queries |
+| `ai/agent/tools/project_write_tools.py` | Write (HITL) | Project CRUD |
+| `ai/agent/tools/project_member_write_tools.py` | Write (HITL) | Project member management |
+| `ai/agent/tools/task_tools.py` | Read + Write | Task queries + update/delete/comment |
+| `ai/agent/tools/checklist_write_tools.py` | Write (HITL) | Checklist management |
+| `ai/agent/tools/knowledge_tools.py` | Read + Write | Document queries + update/delete, PDF export |
+| `ai/agent/tools/web_tools.py` | Read | DuckDuckGo search + URL scrape (SSRF protection) |
+| `ai/agent/tools/write_tools.py` | Shared | Write tool infrastructure |
+| `ai/agent/tools/utility_tools.py` | Read | list_capabilities tool |
+| `ai/agent/tools/helpers.py` | Shared | Tool helper functions |
+| `ai/agent/tools/context.py` | Shared | Tool execution context |
+
+All HITL (Human-in-the-Loop) write tools require RBAC hierarchy validation before execution.
+
+## WebSocket Layer
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `websocket/manager.py` | WebSocket connection manager, MessageType enum, room management |
+| `websocket/handlers.py` | Event routing and broadcast handlers |
+| `websocket/presence.py` | Online presence tracking |
+| `websocket/room_auth.py` | Room access authorization |
+
+### Message Types
+
+**Connection:**
+
+| Type | Description |
+|------|-------------|
+| `connected` | Client connected |
+| `disconnected` | Client disconnected |
+| `error` | Error message |
+| `ping` / `pong` | Keepalive |
+
+**Room Management:**
+
+| Type | Description |
+|------|-------------|
+| `join_room` | Join a room |
+| `leave_room` | Leave a room |
+| `room_joined` | Room join confirmed |
+| `room_left` | Room leave confirmed |
+
+**Task Events:**
+
+| Type | Description |
+|------|-------------|
+| `task_created` | Task created |
+| `task_updated` | Task updated |
+| `task_deleted` | Task deleted |
+| `task_status_changed` | Task status changed |
+| `task_moved` | Task moved (DnD) |
+
+**Comment Events:**
+
+| Type | Description |
+|------|-------------|
+| `comment_added` | Comment created |
+| `comment_updated` | Comment edited |
+| `comment_deleted` | Comment removed |
+
+**Checklist Events:**
+
+| Type | Description |
+|------|-------------|
+| `checklist_created` | Checklist created |
+| `checklist_updated` | Checklist updated |
+| `checklist_deleted` | Checklist deleted |
+| `checklists_reordered` | Checklists reordered |
+| `checklist_item_toggled` | Item checked/unchecked |
+| `checklist_item_added` | Item added |
+| `checklist_item_updated` | Item updated |
+| `checklist_item_deleted` | Item deleted |
+| `checklist_items_reordered` | Items reordered |
+
+**Attachment Events:**
+
+| Type | Description |
+|------|-------------|
+| `attachment_uploaded` | File upload succeeded |
+| `attachment_deleted` | File deleted |
+
+**Presence Events:**
+
+| Type | Description |
+|------|-------------|
+| `presence_update` | User presence changed |
+| `user_presence` | User online/offline |
+| `user_typing` | User typing indicator |
+| `user_viewing` | User viewing entity |
+| `task_viewers` | Active task viewers |
+
+**Project Events:**
+
+| Type | Description |
+|------|-------------|
+| `project_created` | Project created |
+| `project_updated` | Project updated |
+| `project_deleted` | Project deleted |
+| `project_status_changed` | Project status changed |
+
+**Application Events:**
+
+| Type | Description |
+|------|-------------|
+| `application_created` | Application created |
+| `application_updated` | Application updated |
+| `application_deleted` | Application deleted |
+
+**Membership Events:**
+
+| Type | Description |
+|------|-------------|
+| `invitation_received` | Invitation sent |
+| `invitation_response` | Invitation accepted/rejected |
+| `member_added` | App member added |
+| `member_removed` | App member removed |
+| `role_updated` | App role changed |
+| `project_member_added` | Project member added |
+| `project_member_removed` | Project member removed |
+| `project_role_changed` | Project role changed |
+
+**Document Events:**
+
+| Type | Description |
+|------|-------------|
+| `document_created` | Document created |
+| `document_updated` | Document updated |
+| `document_deleted` | Document deleted |
+| `document_locked` | Document locked for editing |
+| `document_unlocked` | Document lock released |
+| `document_force_taken` | Document lock force-taken |
+| `document_embedding_synced` | Embedding sync complete |
+
+**Folder/File Events:**
+
+| Type | Description |
+|------|-------------|
+| `folder_created` | Folder created |
+| `folder_updated` | Folder updated |
+| `folder_deleted` | Folder deleted |
+| `file_uploaded` | File uploaded to folder |
+| `file_updated` | File metadata updated |
+| `file_deleted` | File deleted |
+| `file_extraction_completed` | File text extraction done |
+| `file_extraction_failed` | File text extraction failed |
+
+**AI Events:**
+
+| Type | Description |
+|------|-------------|
+| `embedding_updated` | Document embedding updated |
+| `entities_extracted` | Entities extracted from document |
+| `import_completed` | Document import finished |
+| `import_failed` | Document import failed |
+| `reindex_progress` | Meilisearch reindex progress |
+
+**Infrastructure:**
+
+| Type | Description |
+|------|-------------|
+| `notification` | Push notification |
+| `notification_read` | Notification marked read |
+| `redis_status_changed` | Redis connectivity changed |
+
+## Dependencies Layer
+
+| File | Purpose |
+|------|---------|
+| `dependencies/redis_gate.py` | `require_redis` dependency — gates endpoints that need Redis |
+
+## Utilities Layer
+
+| File | Purpose |
+|------|---------|
+| `utils/security.py` | Security utilities |
+| `utils/tasks.py` | Task-related utilities |
+| `utils/timezone.py` | Timezone helpers (`utc_now()`) |
+
+## Dependencies (pyproject.toml)
+
+### Core Framework
+
+| Package | Purpose |
+|---------|---------|
+| `fastapi[standard]>=0.115.0` | Web framework |
+| `uvicorn[standard]>=0.32.0` | ASGI server |
+| `pydantic-settings>=2.4.0` | Settings management |
+| `python-multipart>=0.0.17` | Form data parsing |
+| `sse-starlette>=2.0.0` | Server-Sent Events (AI streaming) |
+
+### Database
+
+| Package | Purpose |
+|---------|---------|
+| `sqlalchemy>=2.0.0` | ORM |
+| `asyncpg>=0.29.0` | PostgreSQL async driver |
+| `greenlet>=3.0.0` | SQLAlchemy async support |
+| `psycopg2-binary>=2.9.9` | PostgreSQL sync driver |
+| `alembic>=1.14.0` | Database migrations |
+| `pgvector>=0.3.0` | Vector similarity search |
+
+### Authentication and Security
+
+| Package | Purpose |
+|---------|---------|
+| `python-jose[cryptography]>=3.3.0` | JWT tokens |
+| `passlib[bcrypt]>=1.7.4` | Password hashing |
+| `cryptography>=42.0.0` | API key encryption |
+| `defusedxml>=0.7.0` | XXE prevention |
+
+### Storage and Search
+
+| Package | Purpose |
+|---------|---------|
+| `minio>=7.2.0` | S3-compatible object storage |
+| `redis[hiredis]>=5.0.0` | Cache, pub/sub, locks |
+| `msgpack>=1.0.0` | Binary serialization |
+| `meilisearch-python-sdk>=5.5` | Full-text search |
+
+### AI Agent (LangGraph)
+
+| Package | Purpose |
+|---------|---------|
+| `langgraph>=1.0.0,<2.0.0` | Agent pipeline framework |
+| `langgraph-checkpoint-postgres>=3.0.0,<4.0.0` | Persistent checkpoints |
+| `psycopg[binary]>=3.1.0,<4.0.0` | Checkpoint driver |
+| `langchain-core>=1.0.0,<2.0.0` | LangChain core abstractions |
+| `langchain-openai>=1.0.0,<2.0.0` | OpenAI LangChain integration |
+| `langchain-anthropic>=1.0.0,<2.0.0` | Anthropic LangChain integration |
+| `tiktoken>=0.7.0` | Token counting |
+| `sqlglot>=25.0.0` | SQL parsing and validation |
+
+### AI Providers
+
+| Package | Purpose |
+|---------|---------|
+| `openai>=1.30.0` | OpenAI API client |
+| `anthropic>=0.40.0` | Anthropic API client |
+
+### Document Processing
+
+| Package | Purpose |
+|---------|---------|
+| `docling>=2.0.0,<3.0.0` | PDF/DOCX/PPTX conversion |
+| `python-calamine>=0.6.0,<1.0.0` | Excel extraction (calamine) |
+| `chardet>=5.0.0,<6.0.0` | Character encoding detection |
+| `vsdx>=0.5.0,<1.0.0` | Visio file extraction |
+| `python-magic-bin>=0.4.14` | MIME type detection |
+
+### Export
+
+| Package | Purpose |
+|---------|---------|
+| `fpdf2>=2.8.0,<3.0.0` | PDF generation |
+| `openpyxl>=3.1.0` | Excel export |
+
+### Web Tools
+
+| Package | Purpose |
+|---------|---------|
+| `duckduckgo-search>=7.0.0,<8.0.0` | Web search |
+| `trafilatura>=2.0.0,<3.0.0` | Web page content extraction |
+
+### Background Jobs
+
+| Package | Purpose |
+|---------|---------|
+| `arq>=0.26.0` | Redis-based job queue |
+
+### Email
+
+| Package | Purpose |
+|---------|---------|
+| `aiosmtplib>=3.0.0` | Async SMTP |
+
+### Real-time
+
+| Package | Purpose |
+|---------|---------|
+| `websockets>=13.0` | WebSocket protocol |
+
+### Testing
+
+| Package | Purpose |
+|---------|---------|
+| `pytest>=8.3.0` | Test framework |
+| `pytest-asyncio>=0.24.0` | Async test support |
+| `httpx>=0.27.0` | Async HTTP test client |
 
 ## Error Handling
 
@@ -782,10 +1121,7 @@ from fastapi.responses import JSONResponse
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    # Log the error
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
-
-    # Return generic error to client
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal server error"}
@@ -794,137 +1130,127 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 ## Testing
 
+### Overview
+
+- Framework: pytest with pytest-asyncio
+- Coverage target: 80%
+- Test count: 901+ passing tests
+- Test files: 90+ files in `fastapi-backend/tests/`
+- Includes: unit tests, integration tests, load tests (Locust)
+
 ### Test Structure
 
 ```
 tests/
-├── conftest.py          # Shared fixtures
-├── test_auth.py         # Authentication tests
-├── test_applications.py # Application CRUD tests
-├── test_projects.py     # Project tests
-├── test_tasks.py        # Task tests
-├── test_websocket.py    # WebSocket tests
-└── test_services/       # Service unit tests
-```
-
-### Test Fixtures
-
-```python
-# tests/conftest.py
-import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
-
-from app.main import app
-from app.config import settings
-from app.database import Base, get_db
-
-# Test database (PostgreSQL)
-TEST_DATABASE_URL = settings.test_database_url
-engine = create_async_engine(TEST_DATABASE_URL)
-TestingSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
-@pytest.fixture(scope="function")
-async def db():
-    """Create a fresh database for each test."""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    async with TestingSessionLocal() as session:
-        try:
-            yield session
-        finally:
-            await session.close()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-
-@pytest.fixture(scope="function")
-def client(db):
-    """Create a test client with database override."""
-    async def override_get_db():
-        yield db
-
-    app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as c:
-        yield c
-    app.dependency_overrides.clear()
-
-@pytest.fixture
-async def test_user(db):
-    """Create a test user."""
-    user = User(
-        email="test@example.com",
-        password_hash=hash_password("testpass"),
-        display_name="Test User"
-    )
-    db.add(user)
-    await db.commit()
-    return user
-
-@pytest.fixture
-def auth_headers(client, test_user):
-    """Get authentication headers for test user."""
-    response = client.post("/auth/login", data={
-        "username": test_user.email,
-        "password": "testpass"
-    })
-    token = response.json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
-```
-
-### Example Tests
-
-```python
-# tests/test_tasks.py
-def test_create_task(client, auth_headers, test_project):
-    """Test creating a new task."""
-    response = client.post(
-        "/tasks/",
-        json={
-            "title": "Test Task",
-            "project_id": str(test_project.id),
-            "task_type": "story"
-        },
-        headers=auth_headers
-    )
-
-    assert response.status_code == 201
-    data = response.json()
-    assert data["title"] == "Test Task"
-    assert data["task_type"] == "story"
-
-def test_get_tasks(client, auth_headers, test_project, test_task):
-    """Test getting tasks for a project."""
-    response = client.get(
-        f"/tasks/{test_project.id}",
-        headers=auth_headers
-    )
-
-    assert response.status_code == 200
-    data = response.json()
-    assert len(data) == 1
-    assert data[0]["id"] == str(test_task.id)
-
-def test_unauthorized_access(client, test_project):
-    """Test that unauthenticated requests are rejected."""
-    response = client.get(f"/tasks/{test_project.id}")
-    assert response.status_code == 401
+├── conftest.py                      # Shared fixtures
+├── load/                            # Load testing (Locust)
+│   ├── locustfile.py
+│   ├── locustfile_api_only.py
+│   └── locustfile_shared_token.py
+├── test_auth.py                     # Authentication
+├── test_login_2fa.py                # 2FA login
+├── test_password_reset.py           # Password reset
+├── test_email_verification.py       # Email verification
+├── test_email_service.py            # SMTP service
+├── test_applications.py             # Application CRUD
+├── test_projects.py                 # Project CRUD
+├── test_tasks.py                    # Task CRUD
+├── test_permissions.py              # RBAC
+├── test_dashboard.py                # Dashboard
+├── test_notifications.py            # Notifications
+├── test_files.py                    # File upload/download
+├── test_minio.py                    # MinIO integration
+├── test_document_routes.py          # Document CRUD
+├── test_document_service.py         # Document service
+├── test_document_lock_service.py    # Document locking
+├── test_folder_files_api.py         # Folder files API
+├── test_folder_file_model.py        # Folder file model
+├── test_file_search.py              # File search
+├── test_status_derivation.py        # Status aggregation
+├── test_content_converter.py        # Content conversion
+├── test_markdown_converter.py       # Markdown conversion
+├── test_user_cache.py               # User cache
+├── test_presence_manager.py         # Presence tracking
+├── test_websocket.py                # WebSocket
+├── test_room_auth.py                # Room authorization
+├── test_refresh_ws_tokens.py        # WS token refresh
+├── test_subscription_token.py       # Subscription tokens
+├── test_redis_health_gate.py        # Redis gate
+├── test_ai_providers.py             # AI provider integration
+├── test_ai_config_router.py         # AI config API
+├── test_ai_config_panel.py          # AI config panel (14 tests)
+├── test_ai_chat_helpers.py          # AI chat helpers
+├── test_ai_query_router.py          # SQL query API
+├── test_health_ai.py                # AI health checks
+├── test_agent_graph.py              # Agent pipeline
+├── test_agent_chat.py               # Agent chat
+├── test_agent_config_service.py     # Agent config service
+├── test_agent_rbac.py               # Agent RBAC
+├── test_agent_tools.py              # Agent tools
+├── test_agent_tools_read.py         # Read tools
+├── test_agent_tools_write.py        # Write tools
+├── test_application_write_tools.py  # Application write tools
+├── test_member_write_tools.py       # Member write tools
+├── test_project_write_tools.py      # Project write tools
+├── test_project_member_write_tools.py # Project member write tools
+├── test_checklist_write_tools.py    # Checklist write tools
+├── test_document_write_tools.py     # Document write tools
+├── test_task_write_tools_expanded.py # Task write tools
+├── test_web_tools.py                # Web search/scrape
+├── test_capabilities_tool.py        # Capabilities listing
+├── test_tools_helpers.py            # Tool helpers
+├── test_intake_node.py              # Intake node
+├── test_understand_node.py          # Understand node
+├── test_clarify_node.py             # Clarify node
+├── test_explore_node.py             # Explore node
+├── test_explore_tools_node.py       # Explore tools
+├── test_synthesize_node.py          # Synthesize node
+├── test_respond_node.py             # Respond node
+├── test_routing.py                  # Intent routing
+├── test_system_prompt.py            # System prompts
+├── test_pipeline_integration.py     # Pipeline integration
+├── test_context_management.py       # Context management
+├── test_context_summarization.py    # Context summarization
+├── test_embedding_service.py        # Embedding generation
+├── test_embedding_normalizer.py     # Embedding normalization
+├── test_retrieval_service.py        # Hybrid search
+├── test_chunking.py                 # Document chunking
+├── test_file_chunking.py            # File chunking
+├── test_file_extraction.py          # File extraction
+├── test_file_extraction_worker.py   # Extraction worker
+├── test_docling_service.py          # Docling
+├── test_image_understanding.py      # Image understanding
+├── test_import_router.py            # Import API
+├── test_process_import.py           # Import processing
+├── test_codex_provider.py           # Codex provider
+├── test_oauth_service.py            # OAuth service
+├── test_schema_context.py           # Schema context
+├── test_sql_generator.py            # SQL generation
+├── test_sql_executor.py             # SQL execution
+├── test_sql_validator.py            # SQL validation
+├── test_rate_limiter.py             # Rate limiting
+├── test_telemetry.py                # Telemetry
+├── test_excel_export.py             # Excel export
+├── test_arq_worker.py               # ARQ worker
+├── test_arq_multiworker.py          # Multi-worker
+├── test_phase9_cost_safety.py       # Cost/safety controls (42 tests)
+└── test_phase9_embedding_quality.py # Embedding quality (34 tests)
 ```
 
 ### Running Tests
 
 ```bash
 # Run all tests
-pytest tests/ -v
+uv run pytest tests/ -v
 
 # Run with coverage
-pytest tests/ --cov=app --cov-report=html
+uv run pytest tests/ --cov=app --cov-report=html
 
 # Run specific test file
-pytest tests/test_tasks.py -v
+uv run pytest tests/test_tasks.py -v
 
 # Run specific test
-pytest tests/test_tasks.py::test_create_task -v
+uv run pytest tests/test_tasks.py::test_create_task -v
 ```
 
 ## Best Practices
@@ -1011,4 +1337,16 @@ try:
 except Exception:
     await db.rollback()
     raise
+```
+
+### 6. Runtime Agent Constants (Blair AI)
+
+```python
+# Good: Runtime getter called at execution time
+from app.ai.agent.constants import get_max_tool_calls
+
+max_calls = get_max_tool_calls()  # Reads from config_service
+
+# Bad: Frozen at import time
+from app.ai.agent.constants import MAX_TOOL_CALLS  # Freezes value at import
 ```

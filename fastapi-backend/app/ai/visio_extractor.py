@@ -73,7 +73,7 @@ class VisioExtractor:
         except ImportError:
             raise ImportError(
                 "vsdx is required for Visio extraction. "
-                "Install with: pip install vsdx"
+                "Install with: uv add vsdx"
             )
 
         warnings: list[str] = []

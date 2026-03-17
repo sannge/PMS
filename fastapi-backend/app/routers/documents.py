@@ -7,15 +7,15 @@ and tag assignment with scope compatibility validation.
 """
 
 import asyncio
+import logging
 from typing import Any, Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select, or_, and_, func
+from sqlalchemy import and_, func, or_, select, union
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import lazyload, noload
 
-from ..utils.timezone import utc_now
 from ..database import get_db
 from ..models.application import Application
 from ..models.application_member import ApplicationMember
@@ -23,9 +23,10 @@ from ..models.attachment import Attachment
 from ..models.document import Document
 from ..models.document_folder import DocumentFolder
 from ..models.document_tag import DocumentTag, DocumentTagAssignment
+from ..models.folder_file import FolderFile
 from ..models.project import Project
-from ..models.user import User
 from ..models.project_member import ProjectMember
+from ..models.user import User
 from ..schemas.document import (
     DocumentContentUpdate,
     DocumentCreate,
@@ -40,7 +41,6 @@ from ..schemas.document import (
 )
 from ..schemas.document_tag import TagAssignment, TagAssignmentResponse
 from ..services.auth_service import get_current_user
-from ..services.permission_service import PermissionService
 from ..services.document_service import (
     check_name_uniqueness,
     cleanup_orphaned_attachments,
@@ -55,9 +55,10 @@ from ..services.document_service import (
     validate_tag_scope,
 )
 from ..services.minio_service import MinIOService, MinIOServiceError, get_minio_service
-from ..websocket.manager import manager, MessageType
+from ..services.permission_service import PermissionService
+from ..utils.timezone import utc_now
+from ..websocket.manager import MessageType, manager
 
-import logging
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
@@ -363,14 +364,14 @@ async def get_projects_with_content(
             detail="You do not have permission to view this application's projects",
         )
 
-    # Projects with documents
+    # Projects with documents (UNION deduplicates, no .distinct() needed)
     projects_with_docs = select(Document.project_id).where(
         Document.project_id.isnot(None),
         Document.deleted_at.is_(None),
         Document.project_id.in_(
             select(Project.id).where(Project.application_id == application_id)
         ),
-    ).distinct()
+    )
 
     # Projects with folders
     projects_with_folders = select(DocumentFolder.project_id).where(
@@ -378,10 +379,18 @@ async def get_projects_with_content(
         DocumentFolder.project_id.in_(
             select(Project.id).where(Project.application_id == application_id)
         ),
-    ).distinct()
+    )
+
+    # Projects with uploaded files
+    projects_with_files = select(FolderFile.project_id).where(
+        FolderFile.project_id.isnot(None),
+        FolderFile.project_id.in_(
+            select(Project.id).where(Project.application_id == application_id)
+        ),
+    )
 
     # Combine with UNION and cap at 500 to prevent unbounded results
-    combined = projects_with_docs.union(projects_with_folders).limit(500)
+    combined = union(projects_with_docs, projects_with_folders, projects_with_files).limit(500)
     result = await db.execute(combined)
     project_ids = [str(row[0]) for row in result.all()]
 

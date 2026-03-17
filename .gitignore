@@ -102,9 +102,12 @@ Desktop.ini
 # Environment Variables
 # --------------------------------
 .env
+.env.dev
 .env.local
 .env.*.local
+.env.prod
 !.env.example
+!.env.prod.example
 
 # --------------------------------
 # Misc

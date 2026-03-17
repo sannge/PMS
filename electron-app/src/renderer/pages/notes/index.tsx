@@ -18,7 +18,7 @@ import { useEffect, useRef, useCallback } from 'react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { KnowledgeBaseProvider, useKnowledgeBase } from '@/contexts/knowledge-base-context'
 import { useAuthUserId } from '@/contexts/auth-context'
-import { useApplicationsWithDocs, useDocument } from '@/hooks/use-documents'
+import { useApplicationsWithDocs, useDocument, useDocuments } from '@/hooks/use-documents'
 import { useKnowledgePermissions } from '@/hooks/use-knowledge-permissions'
 import { useWebSocket, WebSocketClient, MessageType } from '@/hooks/use-websocket'
 import {
@@ -37,9 +37,25 @@ import { useFileDetail } from '@/hooks/use-folder-files'
  * NotesPageContent - Inner component that needs context access.
  */
 function NotesPageContent(): JSX.Element {
-  const { activeTab, setActiveTab, selectedDocumentId, selectedFileId, selectDocument, selectFile, navigateToDocument } = useKnowledgeBase()
+  const { activeTab, setActiveTab, selectedDocumentId, selectedFileId, selectDocument, selectFile, navigateToDocument, scope, scopeId } = useKnowledgeBase()
   const { data: scopesSummary, isLoading: isAppsLoading } = useApplicationsWithDocs()
   const userId = useAuthUserId()
+
+  // Auto-select the first document when entering the Notes page with nothing selected
+  const { data: autoSelectDocs } = useDocuments(scope, scopeId, { includeUnfiled: true })
+  const hasAutoSelected = useRef(false)
+  useEffect(() => {
+    if (hasAutoSelected.current) return
+    if (selectedDocumentId || selectedFileId) {
+      hasAutoSelected.current = true
+      return
+    }
+    const firstDoc = autoSelectDocs?.items?.[0]
+    if (firstDoc) {
+      selectDocument(firstDoc.id)
+      hasAutoSelected.current = true
+    }
+  }, [autoSelectDocs, selectedDocumentId, selectedFileId, selectDocument])
   const { joinRoom, leaveRoom, status: wsStatus, subscribe } = useWebSocket()
 
   // Read selected document metadata to determine its scope (shared cache with EditorPanel)

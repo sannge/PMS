@@ -1,6 +1,6 @@
 # File Attachments
 
-PM Desktop supports file uploads and attachments on comments, allowing teams to share screenshots, documents, and other files.
+PM Desktop supports file uploads and attachments on comments and documents, allowing teams to share screenshots, documents, diagrams, and other files.
 
 ---
 
@@ -9,12 +9,16 @@ PM Desktop supports file uploads and attachments on comments, allowing teams to 
 Files can be attached to:
 - Task comments
 - Note documents (images via editor toolbar)
+- Knowledge base folders
 
 Supported features:
 - Drag and drop upload
 - Click to browse upload
 - Multiple file selection
 - Image previews
+- File previews (PDF, Word, Excel)
+- Draw.io diagram support
+- Batch document import
 - Download links
 - File deletion
 
@@ -58,6 +62,7 @@ PM Desktop accepts most common file types:
 |----------|----------|
 | Images | PNG, JPG, GIF, SVG, WebP |
 | Documents | PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX |
+| Diagrams | VSDX (Visio), Draw.io/diagrams.net files |
 | Text | TXT, MD, CSV, JSON, XML |
 | Archives | ZIP, RAR, 7Z, TAR, GZ |
 | Code | JS, PY, TS, CSS, HTML |
@@ -76,59 +81,99 @@ Some file types may be blocked for security:
 
 ---
 
-## Viewing Attachments
+## File Previews
 
-### In Comments
+PM Desktop provides inline previews for several file types, so you can view content without downloading.
 
-Attachments appear below the comment text:
-
-**Images**:
-- Thumbnail preview displayed inline
-- Click to view full size
-- Supports zoom and pan
-
-**Documents**:
-- File icon with filename
-- File size shown
-- Click to download
-
-### Attachment List
-
-For tasks with many attachments:
-- View all files in a consolidated list
-- Sort by name, date, or size
-- Quick actions available
-
----
-
-## Image Previews
-
-### Inline Thumbnails
+### Image Previews
 
 Images show as thumbnails in comments:
 - Auto-generated preview
-- Click to expand
+- Click to expand to full size
+- Supports zoom and pan
 - Maintains aspect ratio
 
-### Full-Size View
+### PDF Previews
 
-Click any image to open the preview modal:
-- Full resolution display
-- Zoom controls
-- Navigation between multiple images
-- Download button
-- Close with Escape or X
+- First page rendered as a preview
+- Click to view the full document
+- Download button available
 
-### Supported Previews
+### Word and Excel Previews
 
-| Format | Preview Support |
-|--------|----------------|
-| PNG | Full preview |
-| JPG/JPEG | Full preview |
-| GIF | Animated preview |
-| WebP | Full preview |
-| SVG | Full preview |
-| PDF | First page preview |
+- Document content rendered inline when possible
+- Click to download for full editing
+
+### Draw.io Diagrams
+
+- Diagram preview rendered as an image
+- Click to open in the diagram editor (see [Canvas Diagrams](#canvas-diagrams) below)
+
+---
+
+## Canvas Diagrams
+
+PM Desktop integrates with Draw.io for creating and editing diagrams directly within the application.
+
+### Creating a Diagram
+
+1. In the knowledge base, create a new document or open an existing one
+2. Use the diagram/canvas tool to insert a Draw.io diagram
+3. The Draw.io editor opens within PM Desktop
+4. Create your diagram using the full Draw.io toolset (shapes, connectors, text, etc.)
+5. Save to store the diagram within your document
+
+### Editing a Diagram
+
+1. Click on an existing diagram in a document
+2. The Draw.io editor opens
+3. Make your changes
+4. Save to update
+
+### Diagram Previews
+
+- Diagrams are stored with a PNG preview for quick viewing
+- The preview updates when you save changes
+- Other users see the preview without opening the editor
+
+### Use Cases for Diagrams
+
+- Architecture and system design
+- Flowcharts and process diagrams
+- Wireframes and mockups
+- Org charts and relationship maps
+- Network topology diagrams
+
+---
+
+## Batch Document Import
+
+You can import multiple documents into the knowledge base at once. This is useful for migrating existing documentation into PM Desktop.
+
+### Supported Import Formats
+
+| Format | Extension | Notes |
+|--------|-----------|-------|
+| PDF | .pdf | Text extracted and indexed for search |
+| Word | .docx | Content converted and indexed |
+| PowerPoint | .pptx | Slide content extracted |
+| Excel | .xlsx | Spreadsheet content extracted |
+| Visio | .vsdx | Diagram content imported |
+
+### How to Import
+
+1. Navigate to a folder in the knowledge base
+2. Click the **Import** button
+3. Select one or more files from your computer
+4. Files are processed and created as documents in the current folder
+5. Content is extracted, indexed for search, and made available for AI retrieval
+
+### After Import
+
+- Imported documents appear in the folder tree
+- Content is searchable via full-text search
+- Documents are available for the AI assistant to reference
+- You can edit imported content using the rich text editor
 
 ---
 
@@ -146,12 +191,7 @@ Click any image to open the preview modal:
 2. Select "Copy link" or "Open in new tab"
 3. Direct download URL is available
 
-### Batch Download
-
-For multiple files (coming soon):
-- Select multiple attachments
-- Click "Download All"
-- Receives as ZIP archive
+Note: Download links are temporary (expire after 1 hour) and are regenerated on demand for security.
 
 ---
 
@@ -225,6 +265,7 @@ If an upload fails:
 - Use PDF for finalized documents
 - Include version in filename
 - Reference specific sections in comments
+- Consider importing into the knowledge base for searchability
 
 ### Large Files
 
@@ -325,6 +366,7 @@ Uploaded files may be scanned:
 - Network connection
 - Browser popup blocker
 - Try right-click "Save as"
+- Link may have expired -- navigate back and click download again
 
 ---
 
@@ -332,4 +374,4 @@ Uploaded files may be scanned:
 
 - [Comments & Collaboration](./comments-collaboration.md) - Using files in discussions
 - [Tasks & Kanban Board](./tasks.md) - Context for attachments
-- [Notes & Knowledge Base](./notes-knowledge-base.md) - Document images and attachments
+- [Notes & Knowledge Base](./notes-knowledge-base.md) - Document images, diagrams, and imports

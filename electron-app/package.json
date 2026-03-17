@@ -1,7 +1,14 @@
 {
   "name": "pm-desktop-app",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Desktop Project Management Application with Jira-like features and OneNote-style note-taking",
+  "author": "sannge <samngestep2@gmail.com>",
+  "license": "PRIVATE",
+  "homepage": "https://github.com/sannge/PMS",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sannge/PMS.git"
+  },
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -71,6 +78,8 @@
     "docx-preview": "^0.3.7",
     "dompurify": "^3.2.4",
     "dotenv": "^17.2.3",
+    "electron-log": "^5.4.3",
+    "electron-updater": "^6.8.3",
     "idb": "^8.0.1",
     "idb-keyval": "^6.2.2",
     "lowlight": "^3.3.0",
@@ -119,6 +128,12 @@
     "files": [
       "out/**/*"
     ],
+    "publish": {
+      "provider": "github",
+      "owner": "sannge",
+      "repo": "PMS",
+      "releaseType": "release"
+    },
     "win": {
       "target": [
         "nsis"
@@ -128,6 +143,20 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.productivity"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Office"
     }
   }
 }

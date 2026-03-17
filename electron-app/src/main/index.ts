@@ -19,6 +19,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
 import { registerNotificationHandlers } from './notifications'
 import { registerOAuthHandlers } from './oauth-handler'
+import { setupAutoUpdater } from './auto-updater'
 
 // Support custom user data directory via environment variable (must be set before app ready)
 if (process.env.ELECTRON_USER_DATA_DIR) {
@@ -401,6 +402,9 @@ app.whenReady().then(() => {
 
   // Register OAuth IPC handlers for AI provider subscription connections
   registerOAuthHandlers()
+
+  // Setup auto-updater (checks GitHub Releases for OTA updates)
+  setupAutoUpdater()
 
   // Create application menu
   createApplicationMenu()

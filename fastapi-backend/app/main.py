@@ -119,6 +119,8 @@ async def lifespan(app: FastAPI):
             pg_uri,
             min_size=1,
             max_size=10,
+            max_idle=300,  # Close idle connections after 5 minutes
+            check=AsyncConnectionPool.check_connection,  # Validate before reuse
             kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
             open=False,
         )

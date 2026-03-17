@@ -14,13 +14,15 @@ Tasks represent:
 
 Each task contains:
 - Title and description
-- Status (column on Kanban board)
+- Status (column on Kanban board, using the project's custom workflow)
 - Priority level
 - Task type
-- Assignees
+- Assignees and reporter
+- Parent task (for subtask hierarchy)
 - Checklists
-- Comments
+- Comments (with threaded replies)
 - File attachments
+- Presence indicators (who's currently viewing)
 
 ---
 
@@ -28,14 +30,15 @@ Each task contains:
 
 ### Understanding Columns
 
-The Kanban board organizes tasks into status columns:
+The Kanban board organizes tasks into status columns. Each project can define its own custom statuses organized into three categories:
 
-| Column | Purpose |
-|--------|---------|
-| **To Do** | Tasks ready to start but not yet in progress |
-| **In Progress** | Currently being worked on |
-| **In Review** | Completed work awaiting review |
-| **Done** | Finished and approved tasks |
+| Category | Purpose | Default Columns |
+|----------|---------|----------------|
+| **TODO** | Tasks not yet started | To Do |
+| **IN_PROGRESS** | Tasks actively being worked on | In Progress, In Review |
+| **DONE** | Finished tasks | Done |
+
+Your project may have additional or different columns depending on how the workflow has been configured. See [Projects](./projects.md) for details on custom status workflows.
 
 ### Board Navigation
 
@@ -66,6 +69,7 @@ The task appears immediately on the board.
 | Title | Yes | Clear, action-oriented name |
 | Description | No | Detailed requirements and context |
 | Assignees | No | Who will work on this task |
+| Reporter | No | Who reported or requested this task |
 | Priority | No | Low, Medium, High, or Critical |
 | Type | No | Bug, Feature, Task, Epic, Story |
 | Due Date | No | Deadline for completion |
@@ -73,6 +77,10 @@ The task appears immediately on the board.
 | Parent Task | No | Link to parent for subtasks |
 
 3. Click **Create**
+
+### Creating Tasks with the AI Assistant
+
+You can also ask the AI assistant (Blair) to create tasks for you using natural language. For example, say "Create a task called 'Fix login timeout' in project SP1 with high priority." Blair will ask for your confirmation before creating the task.
 
 ### Task Title Best Practices
 
@@ -91,6 +99,7 @@ Click any task card to open the detail panel on the right side.
 - **Task title**: Click to edit inline
 - **Task key**: Auto-generated identifier (e.g., "SP1-15")
 - **Status badge**: Current status with color
+- **Presence indicators**: Avatars of users currently viewing this task
 - **Close button**: Return to board view
 
 ### Description Section
@@ -106,19 +115,21 @@ Quick access to task properties:
 
 | Property | Description |
 |----------|-------------|
-| Status | Current workflow state |
+| Status | Current workflow state (from project's custom statuses) |
 | Assignees | Team members responsible |
+| Reporter | Person who reported or requested the task |
 | Priority | Urgency level |
 | Type | Category of work |
 | Due Date | Target completion date |
 | Estimated Hours | Time budget |
+| Parent Task | Link to parent task (if this is a subtask) |
 
 ### Tabs
 
-- **Comments**: Discussion and updates
+- **Comments**: Discussion, updates, and threaded replies
 - **Checklists**: Sub-task tracking
 - **Attachments**: Related files
-- **Activity**: History log (coming soon)
+- **Activity**: History log
 
 ---
 
@@ -169,21 +180,25 @@ When a task is selected:
 2. Use the rich text editor
 3. Changes save as you type (with debounce)
 
+### Editing with the AI Assistant
+
+You can ask Blair to update tasks for you. For example, "Change the priority of SP1-15 to Critical" or "Assign SP1-15 to John." Blair will confirm before making changes.
+
 ---
 
 ## Task Properties
 
 ### Status
 
-Available statuses (may vary by configuration):
+Tasks use the project's custom status workflow. Statuses are organized into three categories:
 
-| Status | Color | Meaning |
-|--------|-------|---------|
-| To Do | Gray | Not started |
-| In Progress | Blue | Currently working |
-| In Review | Yellow | Awaiting review |
-| Done | Green | Completed |
-| Blocked | Red | Cannot proceed |
+| Category | Color | Meaning |
+|----------|-------|---------|
+| TODO | Gray | Not started |
+| IN_PROGRESS | Blue | Currently working |
+| DONE | Green | Completed |
+
+Individual status names and colors may vary based on project configuration.
 
 ### Priority
 
@@ -211,6 +226,12 @@ Available statuses (may vary by configuration):
 - **Search**: Find team members by name
 - **Unassign**: Click X to remove someone
 
+### Reporter
+
+- The person who reported or requested the task
+- Separate from assignees (who do the work)
+- Helps track accountability and origin of work items
+
 ### Due Date
 
 - Click the date picker to set deadline
@@ -221,17 +242,30 @@ Available statuses (may vary by configuration):
 
 - Enter expected hours to complete
 - Helps with planning and capacity
-- Track against actual time (coming soon)
 
 ---
 
-## Deleting Tasks
+## Archiving and Deleting Tasks
+
+### Archiving Tasks
+
+Tasks can be archived to remove them from active views without permanent deletion:
+
+1. Open the task detail panel
+2. Click the **Archive** button
+3. Task moves to archived state
+
+Archived tasks can be restored later if needed.
+
+### Deleting Tasks
 
 1. Open the task detail panel
 2. Click the **Delete** button (trash icon)
 3. Confirm deletion in the dialog
 
 **Warning**: Deleted tasks cannot be recovered. All comments, checklists, and attachments are also removed.
+
+You can also ask the AI assistant to delete tasks: "Delete task SP1-15." Blair will ask for confirmation before proceeding.
 
 ---
 
@@ -261,6 +295,18 @@ Tasks can be organized hierarchically:
 - Subtasks can have their own status independent of parent
 - Completing all subtasks doesn't auto-complete parent
 - Subtasks appear in their own board columns
+
+---
+
+## Presence Indicators
+
+When viewing a task, you can see who else is currently looking at the same task:
+
+- **Avatar icons**: Appear near the task header showing active viewers
+- **Hover for names**: See who's viewing by hovering over avatars
+- **Real-time updates**: Avatars appear and disappear as users navigate
+
+This helps teams coordinate and avoid conflicting edits.
 
 ---
 
@@ -349,7 +395,7 @@ Click **Clear Filters** to show all tasks again.
 ### Managing Your Board
 
 1. **Limit WIP**: Don't overload "In Progress"
-2. **Regular grooming**: Move done tasks off board
+2. **Regular grooming**: Archive done tasks when no longer needed
 3. **Use priorities**: Help team focus on what matters
 4. **Update daily**: Keep status current
 
@@ -367,7 +413,7 @@ Click **Clear Filters** to show all tasks again.
 ### Task Won't Move
 
 - Check you have edit permissions
-- Verify the target status is valid
+- Verify the target status is valid for the project's workflow
 - Refresh the page if board seems stuck
 
 ### Changes Not Saving
@@ -381,7 +427,7 @@ Click **Clear Filters** to show all tasks again.
 - Check all status columns
 - Clear any active filters
 - Search by task key directly
-- Task may have been deleted
+- Task may have been archived or deleted
 
 ---
 

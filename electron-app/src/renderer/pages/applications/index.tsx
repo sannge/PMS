@@ -77,11 +77,11 @@ function DeleteConfirmDialog({
           </div>
           <div className="flex-1">
             <h3 className="text-lg font-semibold text-foreground">
-              Delete Application
+              Delete Workspace
             </h3>
             <p className="mt-2 text-sm text-muted-foreground">
               Are you sure you want to delete <strong>{application.name}</strong>?
-              This will also delete all projects and tasks within this application.
+              This will also delete all projects and tasks within this workspace.
               This action cannot be undone.
             </p>
           </div>
@@ -298,7 +298,7 @@ export function ApplicationsPage({
       {/* Compact Header */}
       <div className="flex items-center justify-between gap-3 pb-3 border-b border-border">
         <div className="flex items-center gap-3 flex-1">
-          <h1 className="text-sm font-semibold text-foreground">Applications</h1>
+          <h1 className="text-sm font-semibold text-foreground">Workspaces</h1>
           {/* Inline Search */}
           <div className="relative flex-1 max-w-xs">
             <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -367,12 +367,12 @@ export function ApplicationsPage({
             <FolderKanban className="h-5 w-5 text-primary" />
           </div>
           <h3 className="mt-3 text-sm font-medium text-foreground">
-            {searchQuery ? 'No applications found' : 'No applications yet'}
+            {searchQuery ? 'No workspaces found' : 'No workspaces yet'}
           </h3>
           <p className="mt-1 text-xs text-center text-muted-foreground max-w-[200px]">
             {searchQuery
               ? `No matches for "${searchQuery}"`
-              : 'Get started by creating your first application.'}
+              : 'Get started by creating your first workspace.'}
           </p>
           {!searchQuery && (
             <button
@@ -383,7 +383,7 @@ export function ApplicationsPage({
               )}
             >
               <Plus className="h-3.5 w-3.5" />
-              Create Application
+              Create Workspace
             </button>
           )}
         </div>
@@ -417,7 +417,7 @@ export function ApplicationsPage({
             No matches found
           </h3>
           <p className="mt-1 text-xs text-center text-muted-foreground max-w-[200px]">
-            No applications match "{searchQuery}"
+            No workspaces match "{searchQuery}"
           </p>
           <button
             onClick={() => setSearchQuery('')}

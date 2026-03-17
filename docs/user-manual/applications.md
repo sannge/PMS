@@ -10,15 +10,17 @@ Applications are the top-level containers in PM Desktop. They represent major in
 Application
     ├── Projects (unlimited)
     ├── Members (with roles)
-    └── Notes (knowledge base)
+    ├── Knowledge Base (documents, folders, diagrams)
+    └── AI Assistant context
 ```
 
 Each application:
 
 - Contains multiple projects
 - Has its own set of members with specific roles
-- Maintains an independent knowledge base (notes)
+- Maintains an independent knowledge base (notes, documents, and diagrams)
 - Tracks aggregated statistics across all projects
+- Provides context for the AI assistant (Blair can search and manage within application scope)
 
 ---
 
@@ -77,7 +79,7 @@ Click any application card to open its detail view. The detail page shows:
 
 - **Application name** and description
 - **Member avatars**: Quick view of team members
-- **Action buttons**: Edit, Delete, Invite Members
+- **Action buttons**: Edit, Archive, Delete, Invite Members
 
 ### Projects Section
 
@@ -123,6 +125,28 @@ Or from the applications list:
 
 ---
 
+## Archiving and Restoring Applications
+
+Instead of permanently deleting an application, you can archive it to hide it from active views while preserving all data.
+
+### Archiving
+
+1. Open the application or find it in the list
+2. Click the **Archive** button
+3. Confirm the action
+
+Archived applications are hidden from the default applications list but can be restored at any time.
+
+### Restoring
+
+1. Navigate to the archived applications view (filter or toggle in the applications list)
+2. Find the archived application
+3. Click **Restore**
+
+The application and all its projects, tasks, and documents become active again.
+
+---
+
 ## Deleting an Application
 
 **Warning**: Deleting an application permanently removes all contained projects, tasks, comments, files, and notes.
@@ -138,7 +162,7 @@ Or from the applications list:
 - Only **Owners** can delete applications
 - Deletion is immediate and irreversible
 - All members lose access instantly
-- Consider exporting important data first
+- Consider archiving instead of deleting to preserve data
 
 ---
 
@@ -185,14 +209,31 @@ Each application has its own member list with role-based permissions:
 | Role | Capabilities |
 |------|--------------|
 | Owner | Full control, can delete application, manage all members |
-| Editor | Can create/edit projects and tasks, invite viewers |
+| Manager | Can manage projects, members (except Owners), and all content |
+| Member | Can create/edit projects and tasks, contribute to knowledge base |
 | Viewer | Read-only access, can add comments |
 
-See [Members & Permissions](./members-permissions.md) for detailed member management.
+Application membership grants access to all projects within the application. See [Members & Permissions](./members-permissions.md) for detailed member management.
 
 ### Quick Member View
 
 Click the member avatars in the application header to see the full member list.
+
+---
+
+## Knowledge Base
+
+Each application has its own knowledge base where your team can create and organize documents, diagrams, and imported files. Documents scoped to an application are visible to all application members.
+
+See [Notes & Knowledge Base](./notes-knowledge-base.md) for details on creating and managing documents.
+
+---
+
+## AI Assistant
+
+Application members can use the AI assistant (Blair) within the context of an application. Blair respects your role-based permissions -- it can only perform actions that your role allows.
+
+See [AI Assistant (Blair)](./tips-shortcuts.md#ai-assistant-blair) for more details.
 
 ---
 
@@ -214,7 +255,7 @@ Click the member avatars in the application header to see the full member list.
 
 - **Consistent naming**: Use patterns like "Sprint 1", "Sprint 2"
 - **Logical groupings**: Group by feature, team, or time period
-- **Archive completed work**: Move finished projects to archive (coming soon)
+- **Archive completed work**: Use the archive feature for finished projects instead of deleting
 
 ---
 
@@ -228,7 +269,7 @@ Click the member avatars in the application header to see the full member list.
 
 ### Can't Edit an Application
 
-- You need Editor or Owner role to make changes
+- You need Member, Manager, or Owner role to make changes
 - Contact an Owner to upgrade your permissions
 
 ### Can't Delete an Application

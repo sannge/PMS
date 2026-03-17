@@ -75,12 +75,12 @@ const ROLE_OPTIONS: { value: ApplicationRole; label: string; description: string
   {
     value: 'editor',
     label: 'Editor',
-    description: 'Can edit content but cannot delete the application',
+    description: 'Can edit content but cannot delete the workspace',
   },
   {
     value: 'viewer',
     label: 'Viewer',
-    description: 'Read-only access to application content',
+    description: 'Read-only access to workspace content',
   },
   {
     value: 'owner',

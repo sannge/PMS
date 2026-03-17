@@ -1,6 +1,6 @@
 # Members & Permissions
 
-PM Desktop uses role-based access control to manage who can view, edit, and administer applications, projects, and tasks.
+PM Desktop uses role-based access control (RBAC) to manage who can view, edit, and administer applications, projects, and tasks.
 
 ---
 
@@ -9,20 +9,22 @@ PM Desktop uses role-based access control to manage who can view, edit, and admi
 ### Permission Hierarchy
 
 ```
-Organization (future)
-    └── Application (Owner, Editor, Viewer)
-            └── Project (inherited + project-specific)
-                    └── Task (inherited)
+Application (Owner, Manager, Member, Viewer)
+    └── Project (inherited from application + project-specific roles)
+            └── Task (inherited from project)
 ```
 
 Permissions flow downward:
-- Application access grants access to all projects within
+- Application membership grants access to all projects within that application
 - Project access grants access to all tasks within
 - Specific permissions determine what actions are allowed
+- The AI assistant (Blair) respects these permissions -- it can only perform actions allowed by your role
 
 ---
 
 ## Member Roles
+
+PM Desktop uses four roles at both the application and project level:
 
 ### Owner
 
@@ -45,7 +47,27 @@ The highest permission level, typically for application creators and administrat
 - Product managers
 - Trusted administrators
 
-### Editor
+### Manager
+
+Can manage projects, members, and content, but cannot delete the application itself.
+
+| Capability | Allowed |
+|------------|---------|
+| View content | Yes |
+| Create/edit projects | Yes |
+| Create/edit tasks | Yes |
+| Delete projects | Yes |
+| Delete application | No |
+| Manage members (except Owners) | Yes |
+| Invite members | Yes |
+| Override project status | Yes |
+
+**Who should be Manager**:
+- Team leads
+- Scrum masters
+- Senior team members who need to manage others
+
+### Member
 
 Standard working member with full content creation capabilities.
 
@@ -56,11 +78,11 @@ Standard working member with full content creation capabilities.
 | Create/edit tasks | Yes |
 | Delete own content | Yes |
 | Delete application | No |
-| Invite viewers | Yes |
-| Change roles | Limited |
-| Override project status | Yes |
+| Invite members | Limited |
+| Change roles | No |
+| Override project status | No |
 
-**Who should be Editor**:
+**Who should be Member**:
 - Active team members
 - Developers
 - Designers
@@ -86,6 +108,17 @@ Read-only access for stakeholders who need visibility without editing.
 
 ---
 
+## RBAC Hierarchy
+
+Application-level membership automatically grants access to projects within the application. This means:
+
+- If you are a **Member** of an application, you can access all projects in that application
+- You do not need to be separately added to each project
+- Project-level roles can further refine permissions within a specific project
+- The AI assistant checks your role before performing any write actions on your behalf
+
+---
+
 ## Viewing Members
 
 ### Application Members
@@ -98,7 +131,7 @@ The member panel shows:
 - **Avatar**: Profile picture
 - **Name**: Display name
 - **Email**: For identification
-- **Role**: Current permission level
+- **Role**: Current permission level (Owner, Manager, Member, or Viewer)
 
 ### Member Avatar Group
 
@@ -121,7 +154,7 @@ The compact avatar display shows:
 | Field | Description |
 |-------|-------------|
 | Email | Recipient's email address |
-| Role | Owner, Editor, or Viewer |
+| Role | Owner, Manager, Member, or Viewer |
 | Message | Optional personal message |
 
 4. Click **Send Invitation**
@@ -143,7 +176,7 @@ You can invite multiple people:
 
 ### Invitation Restrictions
 
-- Editors cannot invite Owners
+- Members cannot invite Owners or Managers
 - Viewers cannot invite anyone
 - Email must be valid format
 - Cannot invite existing members
@@ -181,7 +214,7 @@ The inviter is notified of your response.
 
 ### Changing Roles
 
-Owners and Editors (with restrictions) can change member roles:
+Owners and Managers (with restrictions) can change member roles:
 
 1. Open the member list
 2. Find the member to update
@@ -194,7 +227,8 @@ Owners and Editors (with restrictions) can change member roles:
 | Your Role | Can Change To |
 |-----------|---------------|
 | Owner | Any role |
-| Editor | Viewer only (not Owner) |
+| Manager | Member or Viewer (not Owner) |
+| Member | Cannot change roles |
 | Viewer | Cannot change roles |
 
 ### Promoting to Owner
@@ -225,8 +259,8 @@ Only Owners can promote others to Owner:
 ### Removal Rules
 
 - Owners can remove anyone except themselves (if sole owner)
-- Editors can remove Viewers
-- Viewers cannot remove anyone
+- Managers can remove Members and Viewers
+- Members and Viewers cannot remove anyone
 - Removed members lose access immediately
 
 ### Self-Removal
@@ -243,34 +277,37 @@ Only Owners can promote others to Owner:
 
 - Browse applications, projects, tasks
 - View all content and attachments
-- Read comments
+- Read comments and knowledge base documents
 - Add their own comments
 - Receive notifications
 - Search content
+- Ask Blair read-only questions about accessible content
 
 ### What Viewers Cannot Do
 
 - Create or edit tasks
 - Create or edit projects
+- Create or edit knowledge base documents
 - Delete any content
 - Invite members
 - Change settings
 
-### What Editors Can Do
+### What Members Can Do
 
 Everything viewers can, plus:
 - Create and edit tasks
 - Create and edit projects
+- Create and edit knowledge base documents
 - Delete their own content
-- Invite new viewers
 - Manage checklists
 - Upload attachments
+- Use Blair to create/update tasks and documents (with confirmation)
 
-### What Editors Cannot Do
+### What Members Cannot Do
 
 - Delete the application
-- Promote to Owner
-- Remove Owners
+- Promote to Owner or Manager
+- Remove Owners or Managers
 
 ---
 
@@ -298,21 +335,14 @@ A designated project leader:
 
 ---
 
-## Auditing Access
+## AI Assistant and Permissions
 
-### Viewing Access History
+The AI assistant (Blair) respects the RBAC system:
 
-Coming soon:
-- See when members were added
-- Track role changes
-- View invitation history
-
-### Current Access Check
-
-1. Open application members
-2. Review current list
-3. Remove unnecessary access
-4. Verify roles are appropriate
+- Blair checks your permissions before performing any write operation
+- If you are a Viewer, Blair cannot create or edit content on your behalf
+- Write operations (create task, update project, etc.) require confirmation from you before Blair executes them
+- Blair can read and search any content you have access to based on your role
 
 ---
 
@@ -321,9 +351,10 @@ Coming soon:
 ### Initial Setup
 
 1. Start with minimal access (Viewer)
-2. Promote to Editor as needed
-3. Reserve Owner for trusted administrators
-4. Document who needs what access
+2. Promote to Member as needed
+3. Use Manager for team leads
+4. Reserve Owner for trusted administrators
+5. Document who needs what access
 
 ### Ongoing Management
 
@@ -344,7 +375,7 @@ Coming soon:
 1. Send invitation with appropriate role
 2. Include welcome message
 3. Point to relevant projects
-4. Assign initial tasks (for editors)
+4. Assign initial tasks (for Members)
 
 ---
 
@@ -376,13 +407,13 @@ Coming soon:
 ### Can't Invite Members
 
 **Causes**:
-- Viewer role
-- Editor trying to invite Owner
+- Viewer or Member role
+- Member trying to invite Owner
 - Technical issue
 
 **Solutions**:
 - Request higher role
-- Ask Owner to send invitation
+- Ask Owner or Manager to send invitation
 - Contact support
 
 ### Can't Remove Member

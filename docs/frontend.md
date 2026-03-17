@@ -8,23 +8,26 @@ The frontend is built with Electron, React, and TypeScript, providing a desktop 
 electron-app/
 ├── src/
 │   ├── main/                    # Electron main process
-│   │   └── index.ts             # Application entry, window management
+│   │   ├── index.ts             # Application entry, window management
+│   │   ├── auto-updater.ts      # OTA auto-update via GitHub Releases
+│   │   ├── notifications.ts     # Desktop notification handlers
+│   │   ├── oauth-handler.ts     # OAuth flow handlers
+│   │   └── ipc/handlers.ts      # IPC request handlers
 │   ├── preload/                 # Secure bridge between processes
 │   │   └── index.ts             # Exposed APIs to renderer
 │   └── renderer/                # React application
-│       ├── main.tsx             # React entry point
-│       ├── App.tsx              # Root component with providers
-│       ├── components/          # React components
-│       ├── pages/               # Page-level components
-│       ├── stores/              # Zustand state stores
-│       ├── hooks/               # Custom React hooks
-│       ├── contexts/            # React context providers
-│       └── lib/                 # Utilities and clients
-├── tests/                       # Test files
+│       ├── main.tsx             # Entry point (React 18 createRoot, StrictMode enabled)
+│       ├── App.tsx              # Root: QueryClient > Auth > Notifications > Theme > ErrorBoundary > Router
+│       ├── components/          # 145+ component files in 20 categories
+│       ├── pages/               # 11 pages
+│       ├── hooks/               # 28 custom hooks
+│       ├── contexts/            # Auth, Knowledge Base, Notification UI
+│       └── lib/                 # Query client, API, WebSocket, cache, utilities
+├── e2e/                         # Playwright E2E tests
 ├── package.json                 # Dependencies
 ├── tailwind.config.js           # Tailwind configuration
 ├── tsconfig.json                # TypeScript configuration
-└── vite.config.ts               # Vite bundler configuration
+└── electron.vite.config.ts      # Electron Vite bundler configuration
 ```
 
 ## Electron Architecture
@@ -104,9 +107,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
-import './index.css';
+import './globals.css';
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
+const rootElement = document.getElementById('root')!;
+const root = ReactDOM.createRoot(rootElement);
+
+root.render(
   <React.StrictMode>
     <App />
   </React.StrictMode>
@@ -115,231 +121,307 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 
 ### Root Component (App.tsx)
 
-The App component sets up all providers and the router:
+The App component sets up all providers and the router. The actual provider nesting order is:
 
 ```typescript
-import { QueryClientProvider } from '@tanstack/react-query';
-import { queryClient } from './lib/query-client';
-import { AuthProvider } from './contexts/auth-context';
-import { NotificationUIProvider } from './contexts/notification-ui-context';
-import { ThemeProvider } from './contexts/theme-context';
-import { Router } from './Router';
-
-export default function App() {
+function App(): JSX.Element {
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider>
-        <AuthProvider>
-          <NotificationUIProvider>
+      <AuthProvider>
+        <NotificationUIProvider>
+          <ThemeProvider>
             <ErrorBoundary>
-              <Router />
+              <QueryClientInitializer>
+                <AuthRouter />
+              </QueryClientInitializer>
+              <FindBar />
+              <Toaster richColors />
             </ErrorBoundary>
-          </NotificationUIProvider>
-        </AuthProvider>
-      </ThemeProvider>
+          </ThemeProvider>
+        </NotificationUIProvider>
+      </AuthProvider>
+      {import.meta.env.DEV && <ReactQueryDevtools initialIsOpen={false} />}
     </QueryClientProvider>
   );
 }
 ```
 
-## State Management
+The `AuthRouter` component uses an `AuthGate` pattern that renders:
+- `LoadingScreen` during auth initialization
+- `AuthPages` (login, register, verify-email, forgot-password, reset-password) when unauthenticated
+- `AuthenticatedApp` (which renders `DashboardPage`) when authenticated
 
-PM Desktop uses a three-layer state management approach.
+## Pages (11)
+
+| Page | Path | Description |
+|------|------|-------------|
+| `dashboard.tsx` | Main UI | Sidebar, applications, projects, tasks, notes, AI sidebar |
+| `applications/index.tsx` | Applications list | All applications view |
+| `applications/[id].tsx` | Application detail | Single application with projects |
+| `projects/index.tsx` | Projects list | All projects view |
+| `projects/[id].tsx` | Project detail | Project with Kanban board, tasks |
+| `notes/index.tsx` | Notes | Knowledge base unified view |
+| `login.tsx` | Login | Email/password authentication |
+| `register.tsx` | Register | New account creation |
+| `verify-email.tsx` | Email verification | Post-registration verification |
+| `forgot-password.tsx` | Forgot password | Password reset request |
+| `reset-password.tsx` | Reset password | Password reset form |
+
+## Components by Category (145+ files, 20 categories)
+
+### Knowledge Base (40 files)
+
+Core tree and navigation:
+- `knowledge-tree.tsx`, `knowledge-sidebar.tsx`, `knowledge-panel.tsx`, `knowledge-tab-bar.tsx`
+- `folder-tree-item.tsx`, `folder-documents.tsx`, `folder-context-menu.tsx`
+- `root-drop-zone.tsx`, `tree-skeletons.tsx`, `tree-utils.ts`, `dnd-utils.ts`
+
+Document editing:
+- `document-editor.tsx`, `document-header.tsx`, `document-action-bar.tsx`, `document-status-badge.tsx`
+- `editor-panel.tsx`, `editor-toolbar.tsx`, `editor-extensions.tsx`, `editor-types.ts`
+
+Canvas (visual whiteboard):
+- `canvas-editor.tsx`, `canvas-viewport.tsx`, `canvas-toolbar.tsx`, `canvas-container.tsx`
+- `canvas-types.ts`, `canvas-utils.ts`, `use-canvas-state.ts`
+
+File handling:
+- `file-upload-zone.tsx`, `file-viewer-panel.tsx`, `file-conflict-dialog.tsx`
+- `container-editor.tsx`, `content-utils.ts`, `use-image-upload.ts`
+
+Dialogs and search:
+- `create-dialog.tsx`, `delete-dialog.tsx`, `tag-filter-list.tsx`
+- `search-bar.tsx`, `search-results-panel.tsx`, `search-highlight-extension.ts`
+
+Draw.io integration:
+- `drawio-modal.tsx`, `drawio-node.tsx`
+
+### AI Agent / Blair Copilot (30 files)
+
+Chat interface:
+- `ai-sidebar.tsx`, `chat-input.tsx`, `chat-session-list.tsx`, `chat-skeleton.tsx`
+- `ai-toggle-button.tsx`, `ai-context.tsx`, `copilot-provider.tsx`
+
+Message rendering:
+- `ai-message-renderer.tsx`, `markdown-renderer.tsx`, `source-citation.tsx`, `citation-highlight.ts`
+
+Tool interaction:
+- `tool-execution-card.tsx`, `tool-confirmation.tsx` (HITL approval)
+- `activity-timeline.tsx`, `clarification-card.tsx`, `search-selection-card.tsx`
+
+State management:
+- `use-ai-chat.ts`, `use-ai-sidebar.ts` (useSyncExternalStore, no Zustand), `use-ai-sidebar-width.ts`
+- `types.ts`, `interrupt-handler.tsx`, `rewind-ui.tsx` (time-travel)
+- `context-summary-divider.tsx`, `user-chat-override.tsx`
+
+Settings and configuration:
+- `ai-settings-panel.tsx`, `personality-tab.tsx`, `providers-models-tab.tsx`, `indexing-tab.tsx`
+
+Import:
+- `import-dialog.tsx`
+
+Metrics:
+- `token-usage-bar.tsx`
+
+### Dashboard (9 files)
+
+- `DashboardTasksList.tsx`, `MyProjectsPanel.tsx`, `OverdueTasksList.tsx`
+- `RecentlyCompletedList.tsx`, `SortFilterControls.tsx`, `DashboardSkeleton.tsx`
+- `TaskDistributionChart.tsx` (Recharts), `CompletionTrendChart.tsx` (Recharts), `ProjectHealthChart.tsx` (Recharts)
+
+### Tasks (9 files)
+
+- `TaskList.tsx`, `task-card.tsx`, `task-detail.tsx`, `task-form.tsx`
+- `task-kanban-board.tsx`, `kanban-column.tsx`, `task-status-badge.tsx`
+- `TaskViewerDots.tsx`, `MyTasksPanel.tsx`
+
+### Projects (7 files)
+
+- `project-card.tsx`, `project-form.tsx`, `project-board.tsx`, `project-kanban-board.tsx`
+- `ProjectMemberPanel.tsx`, `ProjectStatusOverride.tsx`, `MemberRoleBadge.tsx`
+
+### Layout (5 files)
+
+- `sidebar.tsx`, `header.tsx`, `window-title-bar.tsx`, `notification-panel.tsx`, `find-bar.tsx`
+
+### Members (4 files)
+
+- `member-list.tsx`, `member-management-modal.tsx`, `member-avatar-group.tsx`, `member-role-select.tsx`
+
+### Kanban (3 files)
+
+- `KanbanBoard.tsx`, `DraggableTaskCard.tsx`, `DroppableColumn.tsx`
+
+### Comments (3 files)
+
+- `CommentThread.tsx`, `CommentItem.tsx`, `CommentInput.tsx`
+
+### Checklists (3 files)
+
+- `ChecklistPanel.tsx`, `ChecklistCard.tsx`, `ChecklistItem.tsx`
+
+### Files / Attachments (3 files)
+
+- `attachment-list.tsx`, `file-upload.tsx`, `file-preview.tsx`
+
+### Notifications (3 files)
+
+- `notification-bell.tsx`, `notification-list.tsx`, `notification-item.tsx`
+
+### Presence (2 files)
+
+- `PresenceAvatars.tsx`, `TypingIndicator.tsx`
+
+### Applications (2 files)
+
+- `application-card.tsx`, `application-form.tsx`
+
+### Invitations (2 files)
+
+- `invitation-modal.tsx`, `invitation-response.tsx`
+
+### Archive (2 files)
+
+- `ArchivedProjectsList.tsx`, `ArchivedTasksList.tsx`
+
+### Editor (1 file)
+
+- `RichTextEditor.tsx` - Shared TipTap editor used outside the knowledge base
+
+### Auth (1 file)
+
+- `animated-background.tsx` - Animated background for login/register pages
+
+### Protected Route (1 file)
+
+- `protected-route.tsx` - `AuthGate` component for auth-based rendering
+
+### UI / shadcn (15 files)
+
+- `button.tsx`, `dialog.tsx`, `dropdown-menu.tsx`, `input.tsx`, `label.tsx`
+- `popover.tsx`, `scroll-area.tsx`, `select.tsx`, `separator.tsx`, `skeleton.tsx`
+- `tabs.tsx`, `tooltip.tsx`, `confirm-dialog.tsx`, `draggable-modal.tsx`, `image-viewer.tsx`
+
+## Hooks (28 files)
+
+### Data Fetching
+
+| Hook | Description |
+|------|-------------|
+| `use-queries.ts` | Shared query hooks for applications, projects, tasks, statuses |
+| `use-documents.ts` | Document CRUD queries and mutations |
+| `use-document-folders.ts` | Folder tree queries and mutations |
+| `use-document-search.ts` | Full-text search via Meilisearch backend |
+| `use-document-tags.ts` | Document tag queries and mutations |
+| `use-document-lock.ts` | Document lock acquisition, release, and real-time status |
+| `use-document-import.ts` | Document import from external files |
+| `use-folder-files.ts` | File listing within folders |
+| `use-comments.ts` | Task comment queries and mutations |
+| `use-checklists.ts` | Checklist queries and mutations |
+| `use-attachments.ts` | File attachment queries and mutations |
+| `use-members.ts` | Application and project member queries |
+| `use-notifications.ts` | Notification queries and mutations |
+| `use-chat-sessions.ts` | AI chat session queries and mutations |
+| `use-ai-config.ts` | AI configuration queries (useAvailableModels) |
+| `use-invitations.ts` | Invitation queries and mutations |
+
+### Real-Time
+
+| Hook | Description |
+|------|-------------|
+| `use-websocket.ts` | WebSocket client connection and room management |
+| `use-websocket-cache.ts` | WebSocket-driven TanStack Query cache invalidation |
+| `use-presence.ts` | User presence tracking in rooms |
+| `use-dashboard-websocket.ts` | Dashboard-specific WebSocket events |
+
+### UI State
+
+| Hook | Description |
+|------|-------------|
+| `use-edit-mode.ts` | Edit mode toggling for documents |
+| `use-draft.ts` | Draft persistence via IndexedDB |
+| `use-file-search-highlight.ts` | In-page search highlighting |
+| `use-task-viewers.ts` | Tracks who is viewing a task |
+| `use-knowledge-permissions.ts` | Role-based permission checks for documents |
+| `use-drag-and-drop.ts` | Shared drag-and-drop utilities |
+
+### Auth
+
+| Hook | Description |
+|------|-------------|
+| `use-auth.ts` | Authentication state and actions |
+| `use-oauth-connect.ts` | OAuth provider connection |
+
+## Libraries and Utilities
+
+### lib/ Directory (15 files)
+
+| File | Description |
+|------|-------------|
+| `query-client.ts` | TanStack Query client (staleTime: 30s, gcTime: 24h) + Electron focus manager + IndexedDB persistence init |
+| `cache-config.ts` | IndexedDB persistence configuration with progressive hydration |
+| `cache-migration.ts` | Cache migration between persistence versions |
+| `per-query-persister.ts` | Per-query IndexedDB persistence with LZ-String compression (~80% reduction) |
+| `query-cache-db.ts` | IndexedDB database wrapper for query cache |
+| `api-client.ts` | HTTP client with auth headers and error handling |
+| `websocket.ts` | WebSocket client with automatic reconnection |
+| `ai-navigation.ts` | AI sidebar to screen navigation bridge (module-level, not React state) |
+| `draft-db.ts` | Draft persistence via IndexedDB |
+| `screen-navigation-guard.ts` | Unsaved changes guard for screen switches |
+| `validation.ts` | Form validation utilities |
+| `file-utils.ts` | File handling utilities |
+| `file-icon.ts` | File type to icon mapping |
+| `time-utils.ts` | Date/time formatting utilities |
+| `notifications.ts` | Notification helper utilities |
+| `utils.ts` | General utilities (cn class merge helper, etc.) |
+
+## State Management (3 layers)
+
+PM Desktop uses a three-layer state management approach. Notably, there is no Zustand despite it being listed as a project dependency -- the AI sidebar store uses `useSyncExternalStore` directly, and auth state lives in React Context.
 
 ### Layer 1: TanStack Query (Server State)
 
-For data that comes from the server (tasks, projects, users, etc.):
+For all data that comes from the server (tasks, projects, documents, etc.):
 
 ```typescript
 // lib/query-client.ts
-import { QueryClient } from '@tanstack/react-query';
-import { createQueryPersister } from './per-query-persister';
-
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 30 * 1000,              // 30 seconds
-      gcTime: 24 * 60 * 60 * 1000,   // 24 hours (garbage collection)
+      staleTime: 30 * 1000,           // 30 seconds
+      gcTime: 24 * 60 * 60 * 1000,    // 24 hours (garbage collection)
       refetchOnWindowFocus: true,
       retry: 3,
     },
   },
 });
-
-// Enable IndexedDB persistence
-const persister = createQueryPersister();
-persister.restoreQueries(queryClient);
 ```
 
-#### Query Hooks
+Key patterns:
+- `refetchOnMount: 'always'` for queries where WebSocket subscriptions are lost on unmount
+- `refetchOnWindowFocus: false` for queries with WebSocket real-time sync
+- IndexedDB persistence with LZ-String compression (50MB quota, 1000 entry cap)
+- Electron focus manager overrides `refetchOnWindowFocus` behavior for app switching
+
+### Layer 2: useSyncExternalStore (Client State)
+
+The AI sidebar uses a lightweight external store pattern without any library dependency:
 
 ```typescript
-// hooks/use-tasks.ts
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '../lib/api';
-import { queryKeys } from '../lib/query-keys';
-
-export function useTasks(projectId: string) {
-  return useQuery({
-    queryKey: queryKeys.tasks(projectId),
-    queryFn: () => api.getTasks(projectId),
-    enabled: !!projectId,
-  });
-}
-
-export function useCreateTask() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: api.createTask,
-    onSuccess: (newTask) => {
-      // Invalidate tasks list to refetch
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.tasks(newTask.project_id),
-      });
-    },
-    // Optimistic update
-    onMutate: async (newTaskData) => {
-      await queryClient.cancelQueries({
-        queryKey: queryKeys.tasks(newTaskData.project_id),
-      });
-
-      const previousTasks = queryClient.getQueryData(
-        queryKeys.tasks(newTaskData.project_id)
-      );
-
-      queryClient.setQueryData(
-        queryKeys.tasks(newTaskData.project_id),
-        (old: Task[]) => [...old, { ...newTaskData, id: 'temp-id' }]
-      );
-
-      return { previousTasks };
-    },
-    onError: (err, newTask, context) => {
-      // Rollback on error
-      queryClient.setQueryData(
-        queryKeys.tasks(newTask.project_id),
-        context?.previousTasks
-      );
-    },
-  });
-}
+// components/ai/use-ai-sidebar.ts
+// Manages sidebar open/close state (persisted to localStorage),
+// chat messages, thread tracking, streaming status, and rewind mode.
+// Uses React's useSyncExternalStore for subscription.
 ```
 
-#### Query Keys
+### Layer 3: React Context (Cross-Cutting Concerns)
 
-Centralized query key management:
+Three contexts provide app-wide functionality:
 
-```typescript
-// lib/query-keys.ts
-export const queryKeys = {
-  // Applications
-  applications: ['applications'] as const,
-  application: (id: string) => ['application', id] as const,
-
-  // Projects
-  projects: (appId: string) => ['projects', appId] as const,
-  project: (id: string) => ['project', id] as const,
-
-  // Tasks
-  tasks: (projectId: string) => ['tasks', projectId] as const,
-  task: (id: string) => ['task', id] as const,
-
-  // Comments
-  comments: (taskId: string) => ['comments', taskId] as const,
-
-  // Checklists
-  checklists: (taskId: string) => ['checklists', taskId] as const,
-
-  // Members
-  appMembers: (appId: string) => ['appMembers', appId] as const,
-  projectMembers: (projectId: string) => ['projectMembers', projectId] as const,
-
-  // Notifications
-  notifications: ['notifications'] as const,
-
-  // Attachments
-  attachments: (taskId: string) => ['attachments', taskId] as const,
-
-  // Invitations
-  invitations: ['invitations'] as const,
-
-  // Statuses
-  statuses: (projectId: string) => ['statuses', projectId] as const,
-
-  // Knowledge Base
-  folders: (appId: string) => ['folders', appId] as const,
-  documents: (folderId: string) => ['documents', folderId] as const,
-  document: (id: string) => ['document', id] as const,
-  documentSearch: (appId: string, query: string) => ['documentSearch', appId, query] as const,
-  activeLocks: (appId: string) => ['activeLocks', appId] as const,
-};
-```
-
-### Layer 2: Zustand (Client State)
-
-For UI state that doesn't need server persistence:
-
-```typescript
-// stores/auth-store.ts
-import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-
-interface AuthState {
-  user: User | null;
-  token: string | null;
-  setUser: (user: User | null) => void;
-  setToken: (token: string | null) => void;
-  logout: () => void;
-}
-
-export const useAuthStore = create<AuthState>()(
-  persist(
-    (set) => ({
-      user: null,
-      token: null,
-      setUser: (user) => set({ user }),
-      setToken: (token) => set({ token }),
-      logout: () => set({ user: null, token: null }),
-    }),
-    {
-      name: 'auth-storage',
-      partialize: (state) => ({ token: state.token }),
-    }
-  )
-);
-```
-
-```typescript
-// stores/notes-store.ts
-import { create } from 'zustand';
-
-interface NotesState {
-  activeNoteId: string | null;
-  openTabs: string[];
-  setActiveNote: (id: string | null) => void;
-  openTab: (id: string) => void;
-  closeTab: (id: string) => void;
-}
-
-export const useNotesStore = create<NotesState>((set) => ({
-  activeNoteId: null,
-  openTabs: [],
-  setActiveNote: (id) => set({ activeNoteId: id }),
-  openTab: (id) => set((state) => ({
-    openTabs: state.openTabs.includes(id)
-      ? state.openTabs
-      : [...state.openTabs, id],
-    activeNoteId: id,
-  })),
-  closeTab: (id) => set((state) => ({
-    openTabs: state.openTabs.filter((tabId) => tabId !== id),
-    activeNoteId: state.activeNoteId === id
-      ? state.openTabs[0] || null
-      : state.activeNoteId,
-  })),
-}));
-```
+| Context | File | Purpose |
+|---------|------|---------|
+| `AuthProvider` | `contexts/auth-context.tsx` | Authentication state, login/register/logout, token management. Exports `useAuthStore` (compatibility alias), `useAuthState`, `useAuthActions`, `useAuthToken`, `useAuthUserId`, `useAuthUser`. |
+| `KnowledgeBaseProvider` | `contexts/knowledge-base-context.tsx` | UI-only state for Notes screen: scope selection, sidebar collapse, folder expansion, document selection, search query, active tab, tag filters. Data fetching is NOT here -- it lives in TanStack Query hooks. Uses `useReducer` + localStorage persistence. |
+| `NotificationUIProvider` | `contexts/notification-ui-context.tsx` | Notification panel open/close state. Exports `useNotificationUIStore`. |
 
 ### Knowledge Base Context
 
@@ -347,94 +429,18 @@ The knowledge base uses a dedicated React context (`KnowledgeBaseContext`) that 
 - Active document selection and tab state
 - Document tree expansion state
 - Folder/document CRUD operations
-- Integration with TipTap editor and Yjs collaboration
+- Scope selection (Application, Project, etc.)
+- Search query and tag filter state
+- Integration with TipTap editor and document locking
 
 See `contexts/knowledge-base-context.tsx` for the full implementation.
 
-### Layer 3: React Context (Cross-Cutting Concerns)
-
-For app-wide functionality that needs to be accessible everywhere:
-
-```typescript
-// contexts/auth-context.tsx
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { useAuthStore } from '../stores/auth-store';
-import { api } from '../lib/api';
-
-interface AuthContextValue {
-  user: User | null;
-  isLoading: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  register: (data: RegisterData) => Promise<void>;
-  logout: () => void;
-}
-
-const AuthContext = createContext<AuthContextValue | null>(null);
-
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const { user, token, setUser, setToken, logout: storeLogout } = useAuthStore();
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    // Fetch user on mount if token exists
-    if (token && !user) {
-      api.getCurrentUser()
-        .then(setUser)
-        .catch(() => storeLogout())
-        .finally(() => setIsLoading(false));
-    } else {
-      setIsLoading(false);
-    }
-  }, []);
-
-  const login = async (email: string, password: string) => {
-    const { access_token } = await api.login(email, password);
-    setToken(access_token);
-    const user = await api.getCurrentUser();
-    setUser(user);
-  };
-
-  const register = async (data: RegisterData) => {
-    await api.register(data);
-    await login(data.email, data.password);
-  };
-
-  const logout = () => {
-    storeLogout();
-    // Clear all caches
-    queryClient.clear();
-    clearIndexedDB();
-  };
-
-  return (
-    <AuthContext.Provider value={{ user, isLoading, login, register, logout }}>
-      {children}
-    </AuthContext.Provider>
-  );
-}
-
-export function useAuth() {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within AuthProvider');
-  }
-  return context;
-}
-```
-
 ## Routing (State-Based)
 
-PM Desktop uses state-based routing instead of react-router:
+PM Desktop uses state-based routing instead of react-router. Navigation is managed via callbacks and `useState` in the `DashboardPage` component. Components fully unmount on screen switch -- design for mount/unmount lifecycle.
 
 ```typescript
 // pages/dashboard.tsx
-import { useState } from 'react';
-import { Sidebar } from '../components/layout/sidebar';
-import { Header } from '../components/layout/header';
-import { ApplicationPage } from './applications/[id]';
-import { ProjectPage } from './projects/[id]';
-import { NotesPage } from './notes';
-
 type View =
   | { type: 'home' }
   | { type: 'application'; id: string }
@@ -444,58 +450,38 @@ type View =
 export function DashboardPage() {
   const [currentView, setCurrentView] = useState<View>({ type: 'home' });
 
-  const navigateToApplication = (id: string) => {
-    setCurrentView({ type: 'application', id });
-  };
-
-  const navigateToProject = (id: string) => {
-    setCurrentView({ type: 'project', id });
-  };
-
-  const navigateToNotes = () => {
-    setCurrentView({ type: 'notes' });
-  };
-
   const renderContent = () => {
     switch (currentView.type) {
       case 'application':
-        return (
-          <ApplicationPage
-            id={currentView.id}
-            onNavigateToProject={navigateToProject}
-          />
-        );
+        return <ApplicationPage id={currentView.id} onNavigateToProject={...} />;
       case 'project':
         return <ProjectPage id={currentView.id} />;
       case 'notes':
         return <NotesPage />;
       default:
-        return <HomePage onNavigateToApplication={navigateToApplication} />;
+        return <HomePage onNavigateToApplication={...} />;
     }
   };
 
   return (
     <div className="flex h-screen">
-      <Sidebar
-        onNavigateToApplication={navigateToApplication}
-        onNavigateToNotes={navigateToNotes}
-      />
+      <Sidebar onNavigateToApplication={...} onNavigateToNotes={...} />
       <div className="flex-1 flex flex-col">
         <Header />
-        <main className="flex-1 overflow-auto">
-          {renderContent()}
-        </main>
+        <main className="flex-1 overflow-auto">{renderContent()}</main>
       </div>
     </div>
   );
 }
 ```
 
+The AI sidebar uses a separate navigation bridge (`lib/ai-navigation.ts`) to request screen switches from the sidebar context, since it cannot directly access the DashboardPage state.
+
 ## Component Patterns
 
 ### UI Components (shadcn/ui + Radix)
 
-Base UI components are built on Radix UI primitives:
+Base UI components are built on Radix UI primitives using the shadcn/ui pattern with `class-variance-authority` for variant styling and `tailwind-merge` for class composition:
 
 ```typescript
 // components/ui/button.tsx
@@ -505,7 +491,7 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '../../lib/utils';
 
 const buttonVariants = cva(
-  'inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50',
+  'inline-flex items-center justify-center rounded-md text-sm font-medium ...',
   {
     variants: {
       variant: {
@@ -523,114 +509,9 @@ const buttonVariants = cva(
         icon: 'h-10 w-10',
       },
     },
-    defaultVariants: {
-      variant: 'default',
-      size: 'default',
-    },
+    defaultVariants: { variant: 'default', size: 'default' },
   }
 );
-
-export interface ButtonProps
-  extends React.ButtonHTMLAttributes<HTMLButtonElement>,
-    VariantProps<typeof buttonVariants> {
-  asChild?: boolean;
-}
-
-export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, asChild = false, ...props }, ref) => {
-    const Comp = asChild ? Slot : 'button';
-    return (
-      <Comp
-        className={cn(buttonVariants({ variant, size, className }))}
-        ref={ref}
-        {...props}
-      />
-    );
-  }
-);
-```
-
-### Feature Components
-
-Feature components combine UI primitives with business logic:
-
-```typescript
-// components/tasks/TaskCard.tsx
-import { useSortable } from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
-import { Card } from '../ui/card';
-import { Badge } from '../ui/badge';
-import { Avatar } from '../ui/avatar';
-import { ChecklistProgress } from '../checklists/ChecklistProgress';
-
-interface TaskCardProps {
-  task: Task;
-  onClick: () => void;
-}
-
-export function TaskCard({ task, onClick }: TaskCardProps) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: task.id });
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.5 : 1,
-  };
-
-  return (
-    <Card
-      ref={setNodeRef}
-      style={style}
-      className="p-3 cursor-pointer hover:shadow-md transition-shadow"
-      onClick={onClick}
-      {...attributes}
-      {...listeners}
-    >
-      <div className="space-y-2">
-        {/* Task type badge */}
-        <div className="flex items-center gap-2">
-          <Badge variant={getTaskTypeVariant(task.task_type)}>
-            {task.task_type}
-          </Badge>
-          <Badge variant={getPriorityVariant(task.priority)}>
-            {task.priority}
-          </Badge>
-        </div>
-
-        {/* Title */}
-        <h4 className="font-medium text-sm line-clamp-2">
-          {task.title}
-        </h4>
-
-        {/* Checklist progress */}
-        {task.checklist_total > 0 && (
-          <ChecklistProgress
-            done={task.checklist_done}
-            total={task.checklist_total}
-          />
-        )}
-
-        {/* Assignee */}
-        {task.assignee && (
-          <div className="flex justify-end">
-            <Avatar
-              src={task.assignee.avatar_url}
-              alt={task.assignee.display_name}
-              size="sm"
-            />
-          </div>
-        )}
-      </div>
-    </Card>
-  );
-}
 ```
 
 ### Kanban Board
@@ -640,84 +521,30 @@ The Kanban board uses @dnd-kit for drag-and-drop:
 ```typescript
 // components/kanban/KanbanBoard.tsx
 import {
-  DndContext,
-  DragOverlay,
-  closestCorners,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
+  DndContext, DragOverlay, closestCorners,
+  KeyboardSensor, PointerSensor, useSensor, useSensors,
 } from '@dnd-kit/core';
-import {
-  SortableContext,
-  verticalListSortingStrategy,
-} from '@dnd-kit/sortable';
-import { useTasks, useMoveTask } from '../../hooks/use-tasks';
-import { useStatuses } from '../../hooks/use-statuses';
-import { StatusColumn } from './StatusColumn';
-import { TaskCard } from '../tasks/TaskCard';
+import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 
-interface KanbanBoardProps {
-  projectId: string;
-}
-
-export function KanbanBoard({ projectId }: KanbanBoardProps) {
+export function KanbanBoard({ projectId }: { projectId: string }) {
   const { data: tasks } = useTasks(projectId);
   const { data: statuses } = useStatuses(projectId);
   const moveTask = useMoveTask();
-  const [activeTask, setActiveTask] = useState<Task | null>(null);
 
   const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 8 },
-    }),
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
     useSensor(KeyboardSensor)
   );
 
-  const handleDragStart = (event: DragStartEvent) => {
-    const task = tasks?.find((t) => t.id === event.active.id);
-    setActiveTask(task || null);
-  };
-
-  const handleDragEnd = (event: DragEndEvent) => {
-    const { active, over } = event;
-    setActiveTask(null);
-
-    if (!over) return;
-
-    const taskId = active.id as string;
-    const newStatusId = over.id as string;
-
-    // Calculate new rank based on position
-    const newRank = calculateLexorank(tasks, newStatusId, over.data.current?.sortable?.index);
-
-    moveTask.mutate({
-      taskId,
-      newStatusId,
-      newRank,
-    });
-  };
-
+  // DnD handlers calculate new LexoRank position and call moveTask.mutate()
   return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={closestCorners}
-      onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
-    >
+    <DndContext sensors={sensors} collisionDetection={closestCorners} ...>
       <div className="flex gap-4 overflow-x-auto p-4">
         {statuses?.map((status) => (
-          <StatusColumn
-            key={status.id}
-            status={status}
-            tasks={tasks?.filter((t) => t.task_status_id === status.id) || []}
-          />
+          <StatusColumn key={status.id} status={status} tasks={...} />
         ))}
       </div>
-
-      <DragOverlay>
-        {activeTask && <TaskCard task={activeTask} onClick={() => {}} />}
-      </DragOverlay>
+      <DragOverlay>{activeTask && <TaskCard task={activeTask} />}</DragOverlay>
     </DndContext>
   );
 }
@@ -725,158 +552,60 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
 
 ## Custom Hooks
 
-### useWebSocket Hook
+### useWebSocket
+
+Manages WebSocket client lifecycle tied to auth token:
 
 ```typescript
 // hooks/use-websocket.ts
-import { useEffect, useRef, useCallback } from 'react';
-import { WebSocketClient, MessageType } from '../lib/websocket';
-import { useAuthStore } from '../stores/auth-store';
-
 export function useWebSocket() {
-  const { token } = useAuthStore();
-  const clientRef = useRef<WebSocketClient | null>(null);
-
-  useEffect(() => {
-    if (!token) return;
-
-    const client = new WebSocketClient(token);
-    client.connect();
-    clientRef.current = client;
-
-    return () => {
-      client.disconnect();
-    };
-  }, [token]);
-
-  const joinRoom = useCallback((room: string) => {
-    clientRef.current?.joinRoom(room);
-  }, []);
-
-  const leaveRoom = useCallback((room: string) => {
-    clientRef.current?.leaveRoom(room);
-  }, []);
-
-  const on = useCallback((type: MessageType, callback: (data: any) => void) => {
-    return clientRef.current?.on(type, callback);
-  }, []);
-
-  return { joinRoom, leaveRoom, on };
+  // Connects on mount when token exists, disconnects on unmount
+  // Returns: { joinRoom, leaveRoom, on }
 }
 ```
 
-### useWebSocketCacheInvalidation Hook
+### useWebSocketCacheInvalidation
+
+Invalidates TanStack Query caches in response to WebSocket events:
 
 ```typescript
 // hooks/use-websocket-cache.ts
-import { useEffect } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import { useWebSocket } from './use-websocket';
-import { MessageType } from '../lib/websocket';
-import { queryKeys } from '../lib/query-keys';
-
 export function useWebSocketCacheInvalidation() {
-  const queryClient = useQueryClient();
-  const { on } = useWebSocket();
-
-  useEffect(() => {
-    // Task events
-    const unsubTask = on(MessageType.TASK_UPDATED, (data) => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.task(data.task_id),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.tasks(data.project_id),
-      });
-    });
-
-    // Comment events
-    const unsubComment = on(MessageType.COMMENT_ADDED, (data) => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.comments(data.task_id),
-      });
-    });
-
-    // Checklist events
-    const unsubChecklist = on(MessageType.CHECKLIST_UPDATED, (data) => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.checklists(data.task_id),
-      });
-      // Also update task for denormalized counts
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.task(data.task_id),
-      });
-    });
-
-    return () => {
-      unsubTask?.();
-      unsubComment?.();
-      unsubChecklist?.();
-    };
-  }, [queryClient, on]);
+  // Listens for: TASK_UPDATED, COMMENT_ADDED, CHECKLIST_UPDATED,
+  // DOCUMENT_LOCKED, DOCUMENT_UNLOCKED, DOCUMENT_FORCE_TAKEN, etc.
+  // Invalidates corresponding query keys on each event.
 }
 ```
 
-### usePresence Hook
+### usePresence
+
+Tracks online users in a room via WebSocket presence events:
 
 ```typescript
 // hooks/use-presence.ts
-import { useEffect, useState } from 'react';
-import { useWebSocket } from './use-websocket';
-import { MessageType } from '../lib/websocket';
-
-interface UserPresence {
-  user_id: string;
-  display_name: string;
-  avatar_url?: string;
-  status: 'online' | 'away' | 'offline';
-  last_seen: string;
-}
-
 export function usePresence(roomId: string) {
-  const [users, setUsers] = useState<Map<string, UserPresence>>(new Map());
-  const { joinRoom, leaveRoom, on } = useWebSocket();
-
-  useEffect(() => {
-    joinRoom(roomId);
-
-    const unsub = on(MessageType.USER_PRESENCE, (data) => {
-      setUsers((prev) => {
-        const next = new Map(prev);
-        if (data.status === 'offline') {
-          next.delete(data.user_id);
-        } else {
-          next.set(data.user_id, data);
-        }
-        return next;
-      });
-    });
-
-    return () => {
-      leaveRoom(roomId);
-      unsub?.();
-    };
-  }, [roomId, joinRoom, leaveRoom, on]);
-
-  return Array.from(users.values());
+  // Joins room on mount, leaves on unmount
+  // Maintains Map<userId, UserPresence> from WebSocket events
+  // Returns: UserPresence[]
 }
 ```
 
-### useDocumentLock Hook
+### useDocumentLock
+
+Manages document locking for edit coordination:
 
 ```typescript
 // hooks/use-document-lock.ts
-// Manages document locking for edit coordination
 // - Acquires/releases locks when entering/exiting edit mode
 // - WebSocket events push lock status changes in real-time
 // - Prevents conflicts when multiple users try to edit
 ```
 
-### useDocumentSearch Hook
+### useDocumentSearch
 
 ```typescript
 // hooks/use-document-search.ts
-// Full-text search across knowledge base documents
+// - Full-text search across knowledge base documents
 // - Powered by Meilisearch backend
 // - Debounced search input
 // - Highlighted result snippets
@@ -886,151 +615,20 @@ export function usePresence(roomId: string) {
 
 ### Per-Query Persister
 
+Queries are persisted individually to IndexedDB with LZ-String compression for approximately 80% size reduction:
+
 ```typescript
 // lib/per-query-persister.ts
-import { QueryClient } from '@tanstack/react-query';
-import LZString from 'lz-string';
-import { openDB, IDBPDatabase } from 'idb';
-
 const DB_NAME = 'pm-desktop-cache';
-const STORE_NAME = 'queries';
 const MAX_ENTRIES = 1000;
 const MAX_SIZE_BYTES = 50 * 1024 * 1024; // 50MB
 
-interface CacheEntry {
-  queryKeyHash: string;
-  queryKey: unknown[];
-  data: string;
-  timestamp: number;
-  size: number;
-  compressed: boolean;
-}
-
-export function createQueryPersister() {
-  let db: IDBPDatabase | null = null;
-
-  const initDB = async () => {
-    if (db) return db;
-
-    db = await openDB(DB_NAME, 1, {
-      upgrade(database) {
-        const store = database.createObjectStore(STORE_NAME, {
-          keyPath: 'queryKeyHash',
-        });
-        store.createIndex('lastAccessed', 'timestamp');
-      },
-    });
-
-    return db;
-  };
-
-  const hashQueryKey = (queryKey: unknown[]): string => {
-    const str = JSON.stringify(queryKey);
-    // Simple hash function
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      hash = ((hash << 5) - hash) + str.charCodeAt(i);
-      hash |= 0;
-    }
-    return hash.toString(36);
-  };
-
-  const persistQuery = async (queryKey: unknown[], data: unknown) => {
-    const database = await initDB();
-
-    const serialized = JSON.stringify(data);
-    const compressed = LZString.compressToUTF16(serialized);
-
-    const entry: CacheEntry = {
-      queryKeyHash: hashQueryKey(queryKey),
-      queryKey,
-      data: compressed,
-      timestamp: Date.now(),
-      size: compressed.length * 2, // UTF-16 = 2 bytes per char
-      compressed: true,
-    };
-
-    await database.put(STORE_NAME, entry);
-    await enforceQuota(database);
-  };
-
-  const restoreQuery = async (queryKey: unknown[]): Promise<unknown | null> => {
-    const database = await initDB();
-    const hash = hashQueryKey(queryKey);
-
-    const entry = await database.get(STORE_NAME, hash);
-    if (!entry) return null;
-
-    // Update access time
-    entry.timestamp = Date.now();
-    await database.put(STORE_NAME, entry);
-
-    // Decompress and parse
-    const decompressed = LZString.decompressFromUTF16(entry.data);
-    return decompressed ? JSON.parse(decompressed) : null;
-  };
-
-  const enforceQuota = async (database: IDBPDatabase) => {
-    const tx = database.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(tx.objectStoreNames[0]);
-    const index = store.index('lastAccessed');
-
-    let cursor = await index.openCursor();
-    let totalSize = 0;
-    let count = 0;
-    const toDelete: string[] = [];
-
-    while (cursor) {
-      count++;
-      totalSize += cursor.value.size;
-
-      // Mark for deletion if over quota
-      if (count > MAX_ENTRIES || totalSize > MAX_SIZE_BYTES) {
-        toDelete.push(cursor.value.queryKeyHash);
-      }
-
-      cursor = await cursor.continue();
-    }
-
-    // Delete oldest entries
-    for (const key of toDelete) {
-      await store.delete(key);
-    }
-
-    await tx.done;
-  };
-
-  const clearAll = async () => {
-    const database = await initDB();
-    await database.clear(STORE_NAME);
-  };
-
-  const restoreQueries = async (queryClient: QueryClient) => {
-    const database = await initDB();
-    const entries = await database.getAll(STORE_NAME);
-
-    for (const entry of entries) {
-      try {
-        const decompressed = LZString.decompressFromUTF16(entry.data);
-        if (decompressed) {
-          const data = JSON.parse(decompressed);
-          queryClient.setQueryData(entry.queryKey, data);
-        }
-      } catch (e) {
-        // Skip corrupted entries
-        console.warn('Failed to restore query:', entry.queryKey);
-      }
-    }
-  };
-
-  return {
-    persistQuery,
-    restoreQuery,
-    restoreQueries,
-    clearAll,
-  };
-}
+// Each query is stored as a compressed entry with a hash key.
+// LRU eviction removes oldest entries when quota is exceeded.
+// Provides: persistQuery, restoreQuery, restoreQueries, clearAll
 ```
+
+The `QueryClientInitializer` component in `App.tsx` initializes persistence on mount and shows a loading spinner until ready, preventing flash of stale UI on refresh. Cache is cleared on logout via the `useCacheClearOnLogout` hook.
 
 ## Styling with Tailwind
 
@@ -1084,7 +682,7 @@ module.exports = {
 ### CSS Variables
 
 ```css
-/* src/renderer/index.css */
+/* src/renderer/globals.css */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -1129,135 +727,213 @@ module.exports = {
 }
 ```
 
+## Key Dependencies
+
+### UI and Framework
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `react` | 18.3.1 | UI framework |
+| `react-dom` | 18.3.1 | DOM rendering |
+| `electron` | 30.1.2 | Desktop runtime |
+| `@radix-ui/*` | Various | 14 primitive packages (dialog, dropdown-menu, popover, etc.) |
+| `tailwindcss` | 3.4.6 | Utility-first CSS |
+| `tailwindcss-animate` | 1.0.7 | Animation utilities |
+| `lucide-react` | 0.400.0 | Icon library |
+| `class-variance-authority` | 0.7.0 | Component variant styling |
+| `tailwind-merge` | 2.4.0 | Tailwind class merging |
+| `clsx` | 2.1.1 | Conditional class names |
+| `sonner` | 2.0.7 | Toast notifications |
+| `recharts` | 3.7.0 | Dashboard charts |
+| `react-virtuoso` | 4.10.0 | Virtualized lists |
+
+### State and Data
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `@tanstack/react-query` | 5.90.20 | Server state management |
+| `@tanstack/react-query-persist-client` | 5.90.22 | Query persistence plugin |
+| `@tanstack/query-async-storage-persister` | 5.90.22 | Async storage adapter |
+| `@tanstack/react-query-devtools` | 5.91.2 | Dev tools (dev only) |
+| `idb` | 8.0.1 | IndexedDB wrapper |
+| `idb-keyval` | 6.2.2 | Simple IndexedDB key-value |
+| `lz-string` | 1.5.0 | Query cache compression |
+
+### Rich Text Editor
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `@tiptap/react` | 2.6.0 | TipTap React integration |
+| `@tiptap/starter-kit` | 2.6.0 | Base editor extensions |
+| `@tiptap/html` | 2.27.2 | HTML serialization |
+| `@tiptap/extension-*` | 2.6.0-2.27.2 | 18 extensions (tables, tasks, code blocks, mentions, etc.) |
+| `lowlight` | 3.3.0 | Code syntax highlighting |
+
+### Drag and Drop
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `@dnd-kit/core` | 6.1.0 | DnD framework |
+| `@dnd-kit/sortable` | 8.0.0 | Sortable preset |
+| `@dnd-kit/utilities` | 3.2.0 | DnD utilities |
+
+### Document Handling
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `react-pdf` | 9.2.1 | PDF rendering |
+| `docx-preview` | 0.3.7 | DOCX preview |
+| `mammoth` | 1.12.0 | DOCX to HTML conversion |
+| `react-drawio` | 1.0.7 | Draw.io diagram integration |
+| `xlsx` | 0.18.5 | Excel file handling |
+| `dompurify` | 3.2.4 | HTML sanitization |
+
+### Desktop & Distribution
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `electron-updater` | latest | OTA auto-updates via GitHub Releases |
+| `electron-log` | latest | Structured logging for main process |
+| `electron-builder` | 24.13.3 | Packaging and publishing (devDependency) |
+
+### Build and Testing (devDependencies)
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `vite` | 5.3.4 | Build tool |
+| `electron-vite` | 2.3.0 | Electron + Vite integration |
+| `typescript` | 5.5.3 | Type checking (strict mode) |
+| `vitest` | 1.3.1 | Unit testing |
+| `@playwright/test` | 1.58.2 | E2E testing |
+| `@testing-library/react` | 14.2.1 | React component testing |
+| `@testing-library/jest-dom` | 6.4.2 | DOM assertion matchers |
+
 ## Testing
 
 ### Test Setup
 
 ```typescript
-// vitest.config.ts
-import { defineConfig } from 'vitest/config';
-import react from '@vitejs/plugin-react';
-import path from 'path';
-
-export default defineConfig({
-  plugins: [react()],
+// vitest.config.ts (conceptual - actual config in electron.vite.config.ts)
+{
   test: {
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/renderer/__tests__/setup.ts'],
   },
   resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src/renderer'),
-    },
+    alias: { '@': './src/renderer' },
   },
-});
-```
-
-```typescript
-// src/renderer/__tests__/setup.ts
-import '@testing-library/jest-dom';
-import { vi } from 'vitest';
-
-// Mock window.matchMedia
-Object.defineProperty(window, 'matchMedia', {
-  writable: true,
-  value: vi.fn().mockImplementation((query) => ({
-    matches: false,
-    media: query,
-    onchange: null,
-    addListener: vi.fn(),
-    removeListener: vi.fn(),
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-    dispatchEvent: vi.fn(),
-  })),
-});
-```
-
-### Example Tests
-
-```typescript
-// src/renderer/__tests__/auth-context.test.tsx
-import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { AuthProvider, useAuth } from '../contexts/auth-context';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: { retry: false },
-  },
-});
-
-function TestComponent() {
-  const { user, login, logout } = useAuth();
-  return (
-    <div>
-      {user ? (
-        <>
-          <span>Logged in as {user.display_name}</span>
-          <button onClick={logout}>Logout</button>
-        </>
-      ) : (
-        <button onClick={() => login('test@example.com', 'password')}>
-          Login
-        </button>
-      )}
-    </div>
-  );
 }
-
-describe('AuthContext', () => {
-  it('shows login button when not authenticated', () => {
-    render(
-      <QueryClientProvider client={queryClient}>
-        <AuthProvider>
-          <TestComponent />
-        </AuthProvider>
-      </QueryClientProvider>
-    );
-
-    expect(screen.getByText('Login')).toBeInTheDocument();
-  });
-
-  it('shows user name after login', async () => {
-    // Mock API responses
-    vi.spyOn(api, 'login').mockResolvedValue({ access_token: 'token' });
-    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({
-      id: '1',
-      display_name: 'Test User',
-    });
-
-    render(
-      <QueryClientProvider client={queryClient}>
-        <AuthProvider>
-          <TestComponent />
-        </AuthProvider>
-      </QueryClientProvider>
-    );
-
-    await userEvent.click(screen.getByText('Login'));
-
-    await waitFor(() => {
-      expect(screen.getByText('Logged in as Test User')).toBeInTheDocument();
-    });
-  });
-});
 ```
 
-### Running Tests
+### Test Scripts
 
 ```bash
-# Run all tests
-npm test
+# Unit tests
+npm run test              # Vitest run (single pass)
+npm run test:watch        # Vitest watch mode
+npm run test:coverage     # Vitest with coverage
 
-# Run tests in watch mode
-npm test -- --watch
+# E2E tests
+npm run e2e               # All Playwright tests
+npm run e2e:smoke         # Quick smoke tests
+npm run e2e:two-client    # Multi-client collaboration tests
+npm run e2e:knowledge     # Knowledge base tests
 
-# Run tests with coverage
-npm test -- --coverage
-
-# Run specific test file
-npm test -- src/renderer/__tests__/auth-context.test.tsx
+# Type checking and linting
+npm run typecheck         # Strict TypeScript (node + web configs)
+npm run lint              # ESLint with zero warnings policy
 ```
+
+### Multi-Client Development
+
+For testing multi-user collaboration scenarios:
+
+```bash
+npm run dev               # Primary client
+npm run dev:client2       # Second client (separate user data)
+npm run dev:client3       # Third client (separate user data)
+```
+
+## Auto-Updates (OTA via GitHub Releases)
+
+PM Desktop uses `electron-updater` to deliver over-the-air updates via GitHub Releases.
+
+### How It Works
+
+1. **Main process** (`auto-updater.ts`) checks for updates on startup (5-second delay) and exposes IPC handlers
+2. **Preload script** bridges the updater API to the renderer via `electronAPI`
+3. **electron-builder** publishes installers + `latest.yml` manifest to GitHub Releases
+4. On launch, the app compares its version against `latest.yml` and notifies the user if an update is available
+
+### Architecture
+
+```
+GitHub Releases (latest.yml + installer)
+         ↑ publish                    ↓ check
+   electron-builder            electron-updater (main process)
+                                      ↓ IPC
+                               preload bridge
+                                      ↓
+                               renderer (UI)
+```
+
+### Renderer API
+
+The preload script exposes these methods on `window.electronAPI`:
+
+```typescript
+// Check for updates
+checkForUpdates(): Promise<{ success: boolean; version?: string; error?: string }>
+
+// Download the update (manual trigger — not auto-downloaded)
+downloadUpdate(): Promise<{ success: boolean; error?: string }>
+
+// Quit and install the downloaded update
+installUpdate(): void
+
+// Subscribe to update status events
+onUpdateStatus(callback: (status: UpdateStatus) => void): () => void
+```
+
+Update status events include: `checking`, `available`, `not-available`, `downloading` (with progress), `downloaded`, `error`.
+
+### Publishing a Release
+
+```bash
+cd electron-app
+
+# 1. Bump version
+npm version patch   # or minor/major
+
+# 2. Build
+npx electron-vite build
+
+# 3. Publish to GitHub Releases (requires GH_TOKEN env var)
+npx electron-builder --publish always
+```
+
+### Configuration
+
+The `publish` config in `package.json` points to GitHub:
+
+```json
+"publish": {
+  "provider": "github",
+  "owner": "sannge",
+  "repo": "PMS"
+}
+```
+
+See [Desktop Releases & OTA Updates](./desktop-releases.md) for the full release guide.
+
+## Important Patterns and Gotchas
+
+- **State-based routing (NOT react-router)**: Components fully unmount on screen switch. Design for mount/unmount lifecycle. Navigation via callbacks in `DashboardPage`.
+- **React.StrictMode enabled** (main.tsx line 25): Causes double effects in development. Do not rely on effects running exactly once.
+- **Electron focus manager**: The custom focus manager in `query-client.ts` fires window focus events on app switch, which can trigger unexpected refetches.
+- **WebSocket cache invalidation**: Handled at the `DashboardPage` level (not in `App.tsx`) so it has access to navigation state for member removal redirect.
+- **IndexedDB hydrates stale data**: Use `refetchOnMount: 'always'` for queries where WebSocket subscriptions are lost on unmount. Use `refetchOnWindowFocus: false` for queries with WebSocket real-time sync.
+- **No Zustand stores**: Despite the dependency being referenced in project documentation, the codebase uses `useSyncExternalStore` for the AI sidebar and React Context for auth/notifications/knowledge base. The `useAuthStore` export is a compatibility alias for the auth context.
+- **KnowledgeSidebar vs KnowledgePanel**: `KnowledgeSidebar` renders `KnowledgeTree` on the Notes page. `KnowledgePanel` renders `ApplicationTree` or `FolderTree` in embedded panels (e.g., within Application or Project views).
+- **AI navigation bridge**: Since the AI sidebar cannot directly access DashboardPage routing state, `lib/ai-navigation.ts` provides a module-level bridge to store pending navigation targets and request screen switches.

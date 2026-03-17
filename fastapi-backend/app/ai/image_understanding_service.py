@@ -46,11 +46,26 @@ _VISION_PROMPT = (
     "Do not add commentary, suggestions, or offers to help."
 )
 
-# Processing limits
+# Processing limits — runtime getters, NOT frozen module-level constants
 from .config_service import get_agent_config as _get_agent_config
-_MAX_IMAGES_PER_DOCUMENT = _get_agent_config().get_int("embedding.max_images_per_document", 10)
-_MIN_IMAGE_SIZE_BYTES = 10 * 1024  # 10KB
-_VISION_TIMEOUT_S = 30  # Per-image vision API timeout
+
+def _get_max_images() -> int:
+    return _get_agent_config().get_int("embedding.max_images_per_document", 10)
+
+
+def _get_min_image_bytes() -> int:
+    return _get_agent_config().get_int("embedding.min_image_size_bytes", 10 * 1024)
+
+
+def _get_vision_timeout() -> float:
+    return float(_get_agent_config().get_int("embedding.vision_timeout_seconds", 30))
+
+
+# Backward-compatible aliases for test imports (WARNING: frozen at import time;
+# internal code uses the getter functions above for runtime resolution)
+_MAX_IMAGES_PER_DOCUMENT = 10
+_MIN_IMAGE_SIZE_BYTES = 10 * 1024
+_VISION_TIMEOUT_S = 30
 
 
 @dataclass
@@ -166,14 +181,14 @@ class ImageUnderstandingService:
             return []
 
         # Enforce max images limit
-        if total_found > _MAX_IMAGES_PER_DOCUMENT:
+        if total_found > _get_max_images():
             logger.warning(
                 "Document %s has %d images, processing only first %d",
                 document_id,
                 total_found,
-                _MAX_IMAGES_PER_DOCUMENT,
+                _get_max_images(),
             )
-            image_nodes = image_nodes[:_MAX_IMAGES_PER_DOCUMENT]
+            image_nodes = image_nodes[:_get_max_images()]
 
         # Resolve vision provider (early exit if unavailable)
         vision_provider, vision_model = await self._get_vision_provider()
@@ -215,12 +230,12 @@ class ImageUnderstandingService:
                     continue
 
                 # 3c: Skip small images
-                if len(image_bytes) < _MIN_IMAGE_SIZE_BYTES:
+                if len(image_bytes) < _get_min_image_bytes():
                     logger.debug(
                         "Skipping image %s (%d bytes < %d threshold)",
                         attachment_id,
                         len(image_bytes),
-                        _MIN_IMAGE_SIZE_BYTES,
+                        _get_min_image_bytes(),
                     )
                     skipped_small += 1
                     continue
@@ -232,7 +247,7 @@ class ImageUnderstandingService:
                         self._describe_image(
                             vision_provider, vision_model, image_bytes
                         ),
-                        timeout=_VISION_TIMEOUT_S,
+                        timeout=_get_vision_timeout(),
                     )
                 except asyncio.TimeoutError:
                     logger.warning(
@@ -331,14 +346,14 @@ class ImageUnderstandingService:
         total_found = len(images)
 
         # Enforce max images limit
-        if total_found > _MAX_IMAGES_PER_DOCUMENT:
+        if total_found > _get_max_images():
             logger.warning(
                 "Imported document %s has %d images, processing only first %d",
                 document_id,
                 total_found,
-                _MAX_IMAGES_PER_DOCUMENT,
+                _get_max_images(),
             )
-            images = images[:_MAX_IMAGES_PER_DOCUMENT]
+            images = images[:_get_max_images()]
 
         # Resolve vision provider
         vision_provider, vision_model = await self._get_vision_provider()
@@ -353,12 +368,12 @@ class ImageUnderstandingService:
         for idx, image in enumerate(images):
             try:
                 # Skip small images
-                if len(image.data) < _MIN_IMAGE_SIZE_BYTES:
+                if len(image.data) < _get_min_image_bytes():
                     logger.debug(
                         "Skipping imported image %d (%d bytes < %d threshold)",
                         idx,
                         len(image.data),
-                        _MIN_IMAGE_SIZE_BYTES,
+                        _get_min_image_bytes(),
                     )
                     skipped_small += 1
                     continue
@@ -377,7 +392,7 @@ class ImageUnderstandingService:
                         self._describe_image(
                             vision_provider, vision_model, image.data
                         ),
-                        timeout=_VISION_TIMEOUT_S,
+                        timeout=_get_vision_timeout(),
                     )
                 except asyncio.TimeoutError:
                     logger.warning(
@@ -462,6 +477,113 @@ class ImageUnderstandingService:
 
         return descriptions
 
+    async def process_file_images(
+        self,
+        images: list[ExtractedImage],
+        file_id: UUID,
+        scope_ids: dict[str, Any],
+    ) -> list[ImageDescription]:
+        """Process images extracted from uploaded folder files (PDF/PPTX/DOCX).
+
+        Same pipeline as process_imported_images but stores chunks with
+        file_id instead of document_id, and creates Attachments with
+        entity_type='file'.
+
+        Args:
+            images: List of ExtractedImage from Docling extraction.
+            file_id: UUID of the parent FolderFile.
+            scope_ids: Dict with application_id, project_id, user_id.
+
+        Returns:
+            List of successfully processed ImageDescription instances.
+        """
+        if not images:
+            return []
+
+        if len(images) > _get_max_images():
+            logger.warning(
+                "File %s has %d images, capping at %d",
+                file_id, len(images), _get_max_images(),
+            )
+            images = images[:_get_max_images()]
+
+        vision_provider, vision_model = await self._get_vision_provider()
+        if vision_provider is None:
+            logger.info("No vision provider configured, skipping file image processing")
+            return []
+
+        descriptions: list[ImageDescription] = []
+        image_nodes_for_chunks: list[dict[str, Any]] = []
+        failed = 0
+
+        for idx, img in enumerate(images):
+            if len(img.data) < _get_min_image_bytes():
+                continue  # Skip tiny images
+
+            # Upload to MinIO as Attachment with entity_type='file'
+            try:
+                attachment = await self._upload_imported_image(
+                    image=img,
+                    entity_type="file",
+                    entity_id=file_id,
+                    uploaded_by=scope_ids.get("user_id"),
+                )
+            except Exception as upload_err:
+                logger.warning("Failed to upload file image %d: %s", idx, upload_err)
+                failed += 1
+                continue
+
+            # Describe via vision LLM (with timeout)
+            try:
+                description_text = await asyncio.wait_for(
+                    self._describe_image(vision_provider, vision_model, img.data),
+                    timeout=_get_vision_timeout(),
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Vision LLM timeout for file %s image %d", file_id, idx)
+                failed += 1
+                continue
+            except Exception as desc_err:
+                logger.warning("Vision LLM failed for file %s image %d: %s", file_id, idx, desc_err)
+                failed += 1
+                continue
+
+            if not description_text or not description_text.strip():
+                failed += 1
+                continue
+
+            caption = img.caption or ""
+            chunk_text = self._build_chunk_text(caption, description_text)
+            token_count = self._count_tokens(chunk_text)
+
+            descriptions.append(ImageDescription(
+                attachment_id=attachment.id,
+                image_index=idx,
+                description=description_text,
+                token_count=token_count,
+            ))
+            image_nodes_for_chunks.append({
+                "heading_context": f"Image from page {img.page_number}" if img.page_number else None,
+                "alt": caption,
+                "title": "",
+            })
+
+        if descriptions:
+            await self._store_image_chunks(
+                file_id=file_id,
+                descriptions=descriptions,
+                image_nodes=image_nodes_for_chunks,
+                scope_ids=scope_ids,
+            )
+
+        logger.info(
+            "process_file_images: file %s — %d described, %d failed, %d skipped",
+            file_id, len(descriptions), failed,
+            len(images) - len(descriptions) - failed,
+        )
+
+        return descriptions
+
     # ------------------------------------------------------------------
     # TipTap tree walking
     # ------------------------------------------------------------------
@@ -493,6 +615,7 @@ class ImageUnderstandingService:
         nodes: list[dict[str, Any]],
         current_heading: str | None,
         results: list[dict[str, Any]],
+        _depth: int = 0,
     ) -> str | None:
         """Recursively walk TipTap nodes to find image nodes.
 
@@ -503,10 +626,13 @@ class ImageUnderstandingService:
             nodes: List of TipTap child nodes.
             current_heading: Current heading context from ancestors.
             results: Accumulator list (mutated in place).
+            _depth: Recursion depth guard (max 20).
 
         Returns:
             Updated heading context string.
         """
+        if _depth > 20:
+            return current_heading
         for node in nodes:
             node_type = node.get("type", "")
 
@@ -538,7 +664,7 @@ class ImageUnderstandingService:
             children = node.get("content", [])
             if children:
                 current_heading = self._walk_tiptap_nodes(
-                    children, current_heading, results
+                    children, current_heading, results, _depth + 1
                 )
 
         return current_heading
@@ -642,43 +768,64 @@ class ImageUnderstandingService:
 
     async def _store_image_chunks(
         self,
-        document_id: UUID,
         descriptions: list[ImageDescription],
         image_nodes: list[dict[str, Any]],
         scope_ids: dict[str, Any] | None = None,
+        document_id: UUID | None = None,
+        file_id: UUID | None = None,
     ) -> None:
         """Store image descriptions as supplementary DocumentChunks.
 
         Image chunks are appended after existing text chunks. The chunk_index
-        is offset by the current maximum chunk_index for the document + 1,
+        is offset by the current maximum chunk_index for the parent + 1,
         so image chunks never collide with text chunks.
 
-        Also generates embeddings for the new chunks via the EmbeddingService's
-        provider.
+        Exactly one of ``document_id`` or ``file_id`` must be provided.
 
         Args:
-            document_id: Parent document UUID.
             descriptions: Successfully processed ImageDescription list.
             image_nodes: Parallel list of node info dicts (for heading_context).
             scope_ids: Optional scope dict. If None, scope is read from the
-                first existing chunk for the document (for TipTap flow where
-                the document already has text chunks).
+                first existing chunk for the parent.
+            document_id: Parent document UUID (for TipTap/import documents).
+            file_id: Parent folder file UUID (for uploaded files).
         """
         if not descriptions:
             return
+        if not document_id and not file_id:
+            logger.error("_store_image_chunks: neither document_id nor file_id provided")
+            return
 
         # Determine chunk_index offset (append after existing text chunks)
+        if file_id:
+            fk_filter = DocumentChunk.file_id == file_id
+        else:
+            fk_filter = DocumentChunk.document_id == document_id
         max_index_result = await self.db.execute(
-            select(func.max(DocumentChunk.chunk_index)).where(
-                DocumentChunk.document_id == document_id
-            )
+            select(func.max(DocumentChunk.chunk_index)).where(fk_filter)
         )
         current_max = max_index_result.scalar()
         offset = (current_max + 1) if current_max is not None else 0
 
         # Resolve scope from existing chunks if not provided
         if scope_ids is None:
-            scope_ids = await self._resolve_scope_from_chunks(document_id)
+            if file_id:
+                # Query scope from existing file chunks
+                result = await self.db.execute(
+                    select(
+                        DocumentChunk.application_id,
+                        DocumentChunk.project_id,
+                        DocumentChunk.user_id,
+                    ).where(DocumentChunk.file_id == file_id).limit(1)
+                )
+                row = result.first()
+                scope_ids = {
+                    "application_id": row[0] if row else None,
+                    "project_id": row[1] if row else None,
+                    "user_id": row[2] if row else None,
+                }
+            else:
+                scope_ids = await self._resolve_scope_from_chunks(document_id)
 
         # Generate embeddings for all description chunk texts
         chunk_texts = []
@@ -702,6 +849,8 @@ class ImageUnderstandingService:
 
             chunk = DocumentChunk(
                 document_id=document_id,
+                file_id=file_id,
+                source_type="file" if file_id else "document",
                 chunk_index=offset + idx,
                 chunk_text=chunk_text,
                 chunk_type="image",
@@ -717,10 +866,11 @@ class ImageUnderstandingService:
         self.db.add_all(new_chunks)
         await self.db.flush()
 
+        parent_label = f"file {file_id}" if file_id else f"document {document_id}"
         logger.info(
-            "Stored %d image description chunks for document %s (chunk_index %d-%d)",
+            "Stored %d image description chunks for %s (chunk_index %d-%d)",
             len(new_chunks),
-            document_id,
+            parent_label,
             offset,
             offset + len(new_chunks) - 1,
         )
@@ -785,28 +935,40 @@ class ImageUnderstandingService:
     async def _upload_imported_image(
         self,
         image: ExtractedImage,
-        document_id: UUID,
-        uploaded_by: UUID | None,
+        entity_type: str = "document",
+        entity_id: UUID | None = None,
+        scope_ids: dict[str, Any] | None = None,
+        uploaded_by: UUID | None = None,
+        # Legacy positional args (for existing callers)
+        document_id: UUID | None = None,
     ) -> Attachment:
         """Upload an imported image to MinIO and create an Attachment record.
 
         Args:
             image: ExtractedImage with raw data and metadata.
-            document_id: Parent document UUID (used as entity_id).
+            entity_type: Type of parent entity ('document' or 'file').
+            entity_id: UUID of the parent entity.
+            scope_ids: Optional scope dict (unused, for future extension).
             uploaded_by: UUID of the user who triggered the import.
+            document_id: Legacy alias for entity_id when entity_type='document'.
 
         Returns:
             Created Attachment ORM instance (flushed, has id).
         """
         import asyncio
 
+        # Legacy compat: if document_id passed but not entity_id, use it
+        if entity_id is None and document_id is not None:
+            entity_id = document_id
+            entity_type = "document"
+
         bucket = await asyncio.to_thread(
             self.minio_service.get_bucket_for_content_type, image.content_type
         )
         object_name = await asyncio.to_thread(
             self.minio_service.generate_object_name,
-            "document",
-            str(document_id),
+            entity_type,
+            str(entity_id),
             image.filename,
         )
 
@@ -824,8 +986,8 @@ class ImageUnderstandingService:
             file_size=len(image.data),
             minio_bucket=bucket,
             minio_key=object_name,
-            entity_type="document",
-            entity_id=document_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
             uploaded_by=uploaded_by,
         )
         self.db.add(attachment)

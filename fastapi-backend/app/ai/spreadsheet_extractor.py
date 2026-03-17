@@ -147,7 +147,7 @@ class SpreadsheetExtractor:
         except ImportError:
             raise ImportError(
                 "python-calamine is required for Excel extraction. "
-                "Install with: pip install python-calamine"
+                "Install with: uv add python-calamine"
             )
 
         warnings: list[str] = []

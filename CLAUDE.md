@@ -1,125 +1,89 @@
-# PM Desktop - Claude Code Context
+# PM Desktop
 
-**Last updated**: 2026-01-24
+**Last updated**: 2026-03-15
 
-## Project Overview
+PM Desktop is a project management app (Jira-like + OneNote-style notes), built with Electron (React/TypeScript frontend) and FastAPI (Python backend).
 
-PM Desktop is a project management application with Jira-like features and OneNote-style note-taking, built with Electron (React/TypeScript frontend) and FastAPI (Python backend).
-
-## Active Technologies
-
-- Python 3.12 + FastAPI, SQLAlchemy, Pydantic, Alembic
-- TypeScript 5.5 + React 18, Electron 30, Zustand, Radix UI, TailwindCSS, TipTap
-- Postgres SQL
-- Redis 7+ (WebSocket pub/sub and caching)
-- @dnd-kit (drag-and-drop)
-- pycrdt (Python CRDT for Yjs compatibility)
-- Meilisearch (full-text search engine)
-- @tiptap/extension-collaboration + y-websocket (real-time collaborative editing)
-
-## Project Structure
-
-```
-fastapi-backend/
-├── app/
-│   ├── models/       # SQLAlchemy models
-│   ├── schemas/      # Pydantic schemas
-│   ├── routers/      # FastAPI endpoints
-│   ├── services/     # Business logic
-│   └── websocket/    # WebSocket handlers
-├── alembic/          # Database migrations
-└── tests/            # pytest unit/integration tests
-
-electron-app/
-├── src/
-│   └── renderer/
-│       ├── components/  # React components
-│       ├── pages/       # Page components
-│       ├── stores/      # Zustand stores
-│       └── hooks/       # Custom hooks
-└── tests/               # E2E tests
-```
-
-## Common Commands
+## Commands
 
 ```bash
-# Backend
-cd fastapi-backend
-uvicorn app.main:app --reload --port 8001
-pytest tests/ -v
-ruff check .
+# Backend (APP_ENV selects .env.dev or .env.prod; defaults to "prod")
+cd fastapi-backend && APP_ENV=dev uv run uvicorn app.main:app --reload --port 8001
+cd fastapi-backend && APP_ENV=dev uv run arq app.worker.WorkerSettings
+cd fastapi-backend && uv run pytest tests/ -v
+cd fastapi-backend && uv run ruff check .
 
 # Frontend
-cd electron-app
-npm run dev
-npm run typecheck
-npm run lint
+cd electron-app && npm run dev
+cd electron-app && npm run typecheck
+cd electron-app && npm run lint
 ```
 
-## Coding Conventions
+## Environment Separation
 
-### Python (Backend)
+Dev and prod share the same VMs but use separate namespaces. `APP_ENV` controls which `.env.*` file is loaded:
 
-- Type hints required for all functions
-- Pydantic models for request/response schemas
-- SQLAlchemy async patterns with selectinload
-- pytest for testing (80% coverage target)
-- Ruff for linting
+- `APP_ENV=dev` → `.env.dev` (pmsdb_test, Redis DB 1, `*-dev` buckets/indexes)
+- `APP_ENV=prod` (default) → `.env.prod` (pmsdb, Redis DB 0, standard buckets/indexes)
 
-### TypeScript (Frontend)
+Both env files are gitignored. See `fastapi-backend/.env.prod.example` for the template.
 
-- Strict mode enabled
-- Radix UI + TailwindCSS for components (shadcn/ui pattern)
-- Zustand for state management
-- TipTap for rich text editing
-- State-based routing (NOT react-router) - navigation via callbacks and state in DashboardPage
-- ESLint with zero warnings policy
+## Architecture Decisions
 
-## Current Feature: 019-knowledge-base
+- **IMPORTANT**: State-based routing, NOT react-router — navigation via callbacks and state in DashboardPage. Components fully unmount on screen switch.
+- WebSocket-driven cache invalidation at app level (`use-websocket-cache.ts`)
+- IndexedDB persistence with progressive hydration (`cache-config.ts`)
+- Document locking + WebSocket sync for collaborative editing (TipTap rich text)
+- Blair AI Copilot: LangGraph agent with 51 tools (25 read + 26 write), runtime-configurable via `config_service.py`
+- Runtime constants via getter functions (`get_max_tool_calls()` etc.), NOT module-level frozen values
 
-### Scope
+## Coding Standards
 
-Real-time collaborative knowledge system with:
+File-scoped rules are in `.claude/rules/`:
+- @.claude/rules/backend.md — Python/FastAPI conventions
+- @.claude/rules/frontend.md — TypeScript/React conventions
 
-- Google Docs-like collaborative rich-text editing
-- Hierarchical folder/document structure for Applications, Projects, Tasks
-- Real-time cursor sharing and co-editing using Yjs CRDT
-- Full-text search via Meilisearch
-- Unified "Notes" screen showing all knowledge organized by Application → Projects
-- Role-based permissions (Owner/Editor can edit, Viewers read-only)
+## External API Documentation (Context Hub)
 
-### Scale Target
+**IMPORTANT**: When writing code that uses any external API, SDK, or third-party library, use `chub` to fetch current documentation BEFORE writing code. Do NOT rely on training data for API shapes — APIs change frequently.
 
-5,000 concurrent users per server instance
+### When to use Context Hub
 
-### Key Files
+- Integrating or modifying code that calls a third-party API or SDK
+- Unsure about current method signatures, parameters, or return types
+- Adding a new dependency to the project
+- Debugging API errors that might stem from version mismatches
 
-- Spec: `specs/019-knowledge-base/spec.md`
-- Plan: `specs/019-knowledge-base/plan.md`
-- Research: `specs/019-knowledge-base/research.md`
-- Data Model: `specs/019-knowledge-base/data-model.md`
-- API Contracts: `specs/019-knowledge-base/contracts/`
+### Quick reference
 
-### Skills to Use
+```bash
+chub search "<library>"             # Find available docs
+chub get <id> --lang py             # Fetch Python-specific docs
+chub get <id> --lang js             # Fetch JS/TS-specific docs
+chub annotate <id> "<note>"         # Save a gotcha for future sessions
+chub feedback <id> up               # Rate docs quality (ask user first)
+```
 
-- **frontend-design**: For UI component implementation
-- **agent-browser**: For E2E testing after each feature
+### Key APIs in this project
 
-## Recent Changes
+Look these up with `chub` when modifying their integrations:
+- **Backend**: `fastapi`, `sqlalchemy`, `pydantic`, `alembic`, `meilisearch`, `redis`
+- **Frontend**: `electron`, `react`, `tiptap`, `zustand`, `radix-ui`, `tailwindcss`
+- **AI/Agent**: `langchain`, `langgraph`, `openai` (LLM provider APIs)
+- **Infrastructure**: `arq` (task queue), `fpdf2` (PDF export)
 
-- 019-knowledge-base (in progress):
-  - Backend: Document, DocumentFolder, DocumentSnapshot models with Alembic migration
-  - Backend: Document/folder CRUD routers, Yjs WebSocket handler, search service (Meilisearch)
-  - Frontend: Knowledge tree components (FolderNode, DocumentNode, KnowledgeTree)
-  - Frontend: Collaborative editor with TipTap + Yjs integration
-  - Frontend: Full-text search UI (KnowledgeSearch component)
-  - Frontend: shadcn/ui components (dialog, input, label, popover, dropdown-menu, scroll-area)
-- 017-project-task-management-and-permissions: Comments, Checklists, DnD, Presence features
-- Backend: TaskStatus, ProjectMember, ProjectTaskStatusAgg models
+## Performance Targets
 
-## Constitution Principles
+- UI interactions: <100ms
+- API reads: <200ms
+- Scale: 5,000 concurrent users per server instance
 
-1. **Code Quality**: Type safety, linting compliance, code review
-2. **Testing Standards**: pytest backend (80%), agent-browser E2E frontend
-3. **UX Consistency**: Radix UI design system, WCAG 2.1 AA
-4. **Performance**: <100ms UI, <200ms API reads, 5000 concurrent users
+## Testing
+
+- Backend: pytest with 80% coverage target — prefer single test files over full suite
+- Frontend: ESLint zero warnings, `npm run typecheck` must pass
+- Run relevant tests after making changes
+
+## Specs & Plans
+
+Feature specs and implementation plans: `specs/<number>-<name>/`

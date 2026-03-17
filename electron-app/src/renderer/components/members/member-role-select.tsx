@@ -107,14 +107,14 @@ export const ROLE_OPTIONS: RoleOption[] = [
   {
     value: 'editor',
     label: 'Editor',
-    description: 'Can edit content but cannot delete the application',
+    description: 'Can edit content but cannot delete the workspace',
     icon: <Edit2 className="h-3.5 w-3.5" />,
     colorClass: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
   },
   {
     value: 'viewer',
     label: 'Viewer',
-    description: 'Read-only access to application content',
+    description: 'Read-only access to workspace content',
     icon: <Eye className="h-3.5 w-3.5" />,
     colorClass: 'bg-slate-100 text-slate-700 dark:bg-slate-900/30 dark:text-slate-400',
   },

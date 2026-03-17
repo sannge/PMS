@@ -169,6 +169,17 @@ export interface ElectronAPI {
   onBeforeQuit: (callback: () => void) => () => void
   confirmQuitSave: () => void
   cancelQuit: () => void
+
+  // Auto-updater
+  checkForUpdates: () => Promise<{ success: boolean; version?: string; error?: string }>
+  downloadUpdate: () => Promise<{ success: boolean; error?: string }>
+  installUpdate: () => void
+  onUpdateStatus: (callback: (status: {
+    status: 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
+    info?: { version?: string; releaseDate?: string; releaseNotes?: string }
+    progress?: { percent: number; bytesPerSecond: number; transferred: number; total: number }
+    error?: string
+  }) => void) => () => void
 }
 
 // Store for notification callbacks
@@ -176,6 +187,8 @@ const notificationCallbacks = new Set<(notification: NotificationPayload) => voi
 const webSocketCallbacks = new Set<(message: { type: string; payload: unknown }) => void>()
 const maximizedCallbacks = new Set<(isMaximized: boolean) => void>()
 const beforeQuitCallbacks = new Set<() => void>()
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const updateStatusCallbacks = new Set<(status: any) => void>()
 
 // Setup IPC listeners
 ipcRenderer.on('notification', (_event: IpcRendererEvent, notification: NotificationPayload) => {
@@ -188,6 +201,10 @@ ipcRenderer.on('websocket-message', (_event: IpcRendererEvent, message: { type: 
 
 ipcRenderer.on('window-maximized-change', (_event: IpcRendererEvent, isMaximized: boolean) => {
   maximizedCallbacks.forEach((callback) => callback(isMaximized))
+})
+
+ipcRenderer.on('update-status', (_event: IpcRendererEvent, status: unknown) => {
+  updateStatusCallbacks.forEach((callback) => callback(status))
 })
 
 ipcRenderer.on('before-quit-save', () => {
@@ -375,5 +392,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   cancelQuit: () => {
     ipcRenderer.send('quit-cancelled')
+  },
+
+  // Auto-updater
+  checkForUpdates: () =>
+    ipcRenderer.invoke('updater:check') as Promise<{ success: boolean; version?: string; error?: string }>,
+  downloadUpdate: () =>
+    ipcRenderer.invoke('updater:download') as Promise<{ success: boolean; error?: string }>,
+  installUpdate: () => {
+    ipcRenderer.invoke('updater:install')
+  },
+  onUpdateStatus: (callback: (status: any) => void) => {
+    updateStatusCallbacks.add(callback)
+    return () => {
+      updateStatusCallbacks.delete(callback)
+    }
   }
 } satisfies ElectronAPI)

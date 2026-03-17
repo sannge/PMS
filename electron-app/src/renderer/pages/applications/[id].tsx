@@ -297,11 +297,11 @@ function DeleteConfirmDialog({
           </div>
           <div className="flex-1">
             <h3 className="text-lg font-semibold text-foreground">
-              Delete Application
+              Delete Workspace
             </h3>
             <p className="mt-2 text-sm text-muted-foreground">
               Are you sure you want to delete <strong>{application.name}</strong>?
-              This will also delete all projects and tasks within this application.
+              This will also delete all projects and tasks within this workspace.
               This action cannot be undone.
             </p>
           </div>
@@ -720,7 +720,7 @@ export function ApplicationDetailPage({
     return (
       <div className="flex flex-col items-center justify-center py-12">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        <p className="mt-4 text-muted-foreground">Loading application...</p>
+        <p className="mt-4 text-muted-foreground">Loading workspace...</p>
       </div>
     )
   }
@@ -733,7 +733,7 @@ export function ApplicationDetailPage({
           <AlertCircle className="h-8 w-8 text-destructive" />
         </div>
         <h3 className="mt-4 text-lg font-semibold text-foreground">
-          Failed to load application
+          Failed to load workspace
         </h3>
         <p className="mt-2 text-muted-foreground">{queryError.message}</p>
         {onBack && (
@@ -745,7 +745,7 @@ export function ApplicationDetailPage({
             )}
           >
             <ArrowLeft className="h-4 w-4" />
-            Back to Applications
+            Back to Workspaces
           </button>
         )}
       </div>
@@ -760,10 +760,10 @@ export function ApplicationDetailPage({
           <FolderKanban className="h-8 w-8 text-muted-foreground" />
         </div>
         <h3 className="mt-4 text-lg font-semibold text-foreground">
-          Application not found
+          Workspace not found
         </h3>
         <p className="mt-2 text-muted-foreground">
-          The application you're looking for doesn't exist or has been deleted.
+          The workspace you're looking for doesn't exist or has been deleted.
         </p>
         {onBack && (
           <button
@@ -774,7 +774,7 @@ export function ApplicationDetailPage({
             )}
           >
             <ArrowLeft className="h-4 w-4" />
-            Back to Applications
+            Back to Workspaces
           </button>
         )}
       </div>
@@ -799,7 +799,7 @@ export function ApplicationDetailPage({
                   'transition-colors flex-shrink-0'
                 )}
               >
-                Applications
+                Workspaces
               </button>
               <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50 flex-shrink-0" />
             </>
@@ -1279,7 +1279,7 @@ export function ApplicationDetailPage({
               <div className="flex-1">
                 <h3 className="text-lg font-semibold text-foreground">Remove Member</h3>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  Are you sure you want to remove <strong>{removingMember.user_display_name || removingMember.user_email}</strong> from this application?
+                  Are you sure you want to remove <strong>{removingMember.user_display_name || removingMember.user_email}</strong> from this workspace?
                   They will lose access to all projects and tasks.
                 </p>
               </div>

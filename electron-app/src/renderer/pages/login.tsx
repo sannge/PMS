@@ -11,6 +11,7 @@
 
 import { useState, useCallback, FormEvent, ChangeEvent } from 'react'
 import { cn } from '@/lib/utils'
+import appIcon from '@/icon.png'
 import { validateEmail, validatePassword } from '@/lib/validation'
 import { useAuth, type LoginCredentials } from '@/hooks/use-auth'
 import { WindowTitleBar } from '@/components/layout/window-title-bar'
@@ -113,34 +114,7 @@ export function LoginPage({ onNavigateToRegister, onNavigateToForgotPassword }: 
         <div className="mb-8 text-center">
           {/* PMS Logo */}
           <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center">
-            <svg viewBox="0 0 64 64" fill="none" className="w-full h-full drop-shadow-2xl">
-              <defs>
-                <linearGradient id="login-pms-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stopColor="#FBBF24" />
-                  <stop offset="50%" stopColor="#EA580C" />
-                  <stop offset="100%" stopColor="#F59E0B" />
-                </linearGradient>
-                <linearGradient id="login-pms-shine" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stopColor="#FDE68A" stopOpacity="0.6" />
-                  <stop offset="100%" stopColor="#F59E0B" stopOpacity="0" />
-                </linearGradient>
-                <filter id="login-glow" x="-50%" y="-50%" width="200%" height="200%">
-                  <feGaussianBlur stdDeviation="3" result="blur" />
-                  <feComposite in="SourceGraphic" in2="blur" operator="over" />
-                </filter>
-              </defs>
-              <rect x="4" y="4" width="56" height="56" rx="16" fill="url(#login-pms-gradient)" filter="url(#login-glow)" />
-              <rect x="4" y="4" width="56" height="28" rx="16" fill="url(#login-pms-shine)" />
-              <path
-                d="M20 16H36C41.5228 16 46 20.4772 46 26C46 31.5228 41.5228 36 36 36H28V48H20V16Z"
-                fill="white"
-                fillOpacity="0.95"
-              />
-              <path
-                d="M28 22V30H35C37.2091 30 39 28.2091 39 26C39 23.7909 37.2091 22 35 22H28Z"
-                fill="url(#login-pms-gradient)"
-              />
-            </svg>
+            <img src={appIcon} alt="PMS" className="w-full h-full rounded-2xl drop-shadow-2xl object-contain" />
           </div>
 
           <h1 className="text-3xl font-bold tracking-tight text-white">

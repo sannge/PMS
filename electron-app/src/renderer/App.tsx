@@ -10,8 +10,9 @@
  * - TanStack Query client provider with IndexedDB persistence
  * - WebSocket cache invalidation
  */
-import { Component, createContext, useContext, useEffect, useState, useCallback, useRef, ReactNode } from 'react'
+import { Component, useEffect, useState, useCallback, useRef, ReactNode } from 'react'
 import { QueryClientProvider } from '@tanstack/react-query'
+import appIcon from '@/icon.png'
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
 import { LoginPage } from '@/pages/login'
 import { RegisterPage } from '@/pages/register'
@@ -30,14 +31,7 @@ import { FindBar } from '@/components/layout/find-bar'
 // Types
 // ============================================================================
 
-type Theme = 'light' | 'dark' | 'system'
 type AuthView = 'login' | 'register' | 'verify-email' | 'forgot-password' | 'reset-password'
-
-interface ThemeContextValue {
-  theme: Theme
-  setTheme: (theme: Theme) => void
-  resolvedTheme: 'light' | 'dark'
-}
 
 interface ErrorBoundaryProps {
   children: ReactNode
@@ -47,75 +41,6 @@ interface ErrorBoundaryProps {
 interface ErrorBoundaryState {
   hasError: boolean
   error?: Error
-}
-
-// ============================================================================
-// Theme Context
-// ============================================================================
-
-const ThemeContext = createContext<ThemeContextValue | undefined>(undefined)
-
-/**
- * Hook to access theme context
- */
-export function useTheme(): ThemeContextValue {
-  const context = useContext(ThemeContext)
-  if (!context) {
-    throw new Error('useTheme must be used within a ThemeProvider')
-  }
-  return context
-}
-
-/**
- * Theme provider component that manages dark/light mode
- */
-function ThemeProvider({ children }: { children: ReactNode }): JSX.Element {
-  const [theme, setTheme] = useState<Theme>(() => {
-    // Try to get saved theme from localStorage
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('pm-desktop-theme') as Theme | null
-      if (saved && ['light', 'dark', 'system'].includes(saved)) {
-        return saved
-      }
-    }
-    return 'system'
-  })
-
-  const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('light')
-
-  useEffect(() => {
-    // Save theme preference
-    localStorage.setItem('pm-desktop-theme', theme)
-
-    // Helper to apply resolved theme to DOM and state
-    const applyResolved = (resolved: 'light' | 'dark') => {
-      setResolvedTheme(resolved)
-      const root = document.documentElement
-      root.classList.remove('light', 'dark')
-      root.classList.add(resolved)
-    }
-
-    // Determine and apply resolved theme
-    if (theme === 'system') {
-      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
-      applyResolved(mediaQuery.matches ? 'dark' : 'light')
-
-      // Listen for system theme changes
-      const handleChange = (e: MediaQueryListEvent): void => {
-        applyResolved(e.matches ? 'dark' : 'light')
-      }
-      mediaQuery.addEventListener('change', handleChange)
-      return () => mediaQuery.removeEventListener('change', handleChange)
-    } else {
-      applyResolved(theme)
-    }
-  }, [theme])
-
-  return (
-    <ThemeContext.Provider value={{ theme, setTheme, resolvedTheme }}>
-      {children}
-    </ThemeContext.Provider>
-  )
 }
 
 // ============================================================================
@@ -180,9 +105,7 @@ function LoadingScreen(): JSX.Element {
   return (
     <div className="flex h-full items-center justify-center bg-background">
       <div className="text-center">
-        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-xl">
-          PM
-        </div>
+        <img src={appIcon} alt="PMS" className="mx-auto mb-4 h-12 w-12 rounded-lg object-contain" />
         <div className="mb-4 h-8 w-8 mx-auto animate-spin rounded-full border-4 border-primary border-t-transparent" />
         <p className="text-muted-foreground">Loading...</p>
       </div>
@@ -299,9 +222,7 @@ function useCacheClearOnLogout(): void {
  * so it has access to navigation state for member removal redirect.
  */
 function AuthenticatedApp(): JSX.Element {
-  const { theme, setTheme } = useTheme()
-
-  return <DashboardPage theme={theme} onThemeChange={setTheme} />
+  return <DashboardPage />
 }
 
 // ============================================================================
@@ -372,7 +293,6 @@ function QueryClientInitializer({ children }: { children: ReactNode }): JSX.Elem
  *
  * This component wraps the entire application with necessary providers:
  * - QueryClientProvider: TanStack Query client with IndexedDB persistence
- * - ThemeProvider: Manages dark/light mode
  * - ErrorBoundary: Catches and displays rendering errors
  * - AuthRouter: Handles authentication-based routing
  */
@@ -381,15 +301,13 @@ function App(): JSX.Element {
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <NotificationUIProvider>
-          <ThemeProvider>
-            <ErrorBoundary>
-              <QueryClientInitializer>
-                <AuthRouter />
-              </QueryClientInitializer>
-              <FindBar />
-              <Toaster richColors />
-            </ErrorBoundary>
-          </ThemeProvider>
+          <ErrorBoundary>
+            <QueryClientInitializer>
+              <AuthRouter />
+            </QueryClientInitializer>
+            <FindBar />
+            <Toaster richColors />
+          </ErrorBoundary>
         </NotificationUIProvider>
       </AuthProvider>
       {/* React Query Devtools - only shown in development */}
