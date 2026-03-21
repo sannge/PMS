@@ -199,16 +199,30 @@ function HardRefreshButton(): JSX.Element {
       const activeRooms = wsClient.getRooms()
       wsClient.disconnect()
       clearEventDedup()
+
+      // Race clearQueryCache against a timeout so a stuck IndexedDB
+      // transaction can't leave the button spinning forever.
+      let timeoutId: ReturnType<typeof setTimeout>
       try {
-        await clearQueryCache()
+        await Promise.race([
+          clearQueryCache(),
+          new Promise<void>((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error('Cache clear timed out')), 5000)
+          }),
+        ])
+      } catch {
+        // Timed out or failed — still reconnect below
       } finally {
-        // Always reconnect — rooms are restored so rejoinRooms()
-        // in handleOpen() sends JOIN_ROOM for each (no duplicates)
-        for (const room of activeRooms) {
-          wsClient.joinRoom(room)
-        }
-        wsClient.connect()
+        clearTimeout(timeoutId!)
       }
+
+      // Always reconnect — rooms are restored so rejoinRooms()
+      // in handleOpen() sends JOIN_ROOM for each (no duplicates)
+      for (const room of activeRooms) {
+        wsClient.joinRoom(room)
+      }
+      wsClient.connect()
+
       if (mountedRef.current) toast.success('Reconnected', { duration: 2000 })
     } catch {
       if (mountedRef.current) toast.error('Refresh failed', { duration: 3000 })

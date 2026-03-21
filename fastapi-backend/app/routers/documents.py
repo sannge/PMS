@@ -41,6 +41,7 @@ from ..schemas.document import (
 )
 from ..schemas.document_tag import TagAssignment, TagAssignmentResponse
 from ..services.auth_service import get_current_user
+from ..services.document_lock_service import DocumentLockService, get_lock_service
 from ..services.document_service import (
     check_name_uniqueness,
     cleanup_orphaned_attachments,
@@ -692,6 +693,7 @@ async def update_document(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     minio: MinIOService = Depends(get_minio_service),
+    lock_service: DocumentLockService = Depends(get_lock_service),
 ) -> DocumentResponse:
     """
     Update a document with optimistic concurrency control.
@@ -743,6 +745,24 @@ async def update_document(
             db, new_title, scope_type, UUID(scope_id_str),
             new_folder_id, exclude_document_id=document.id,
         )
+
+    # Lock ownership check when content is being written — same as save_content.
+    # Prevents bypassing the lock system via the generic update endpoint.
+    if "content_json" in update_data:
+        try:
+            lock_holder = await lock_service.get_lock_holder(str(document_id))
+            if lock_holder and lock_holder["user_id"] != str(current_user.id):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Document is locked by another user",
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            logger.warning(
+                "Redis unavailable during lock check for document %s — proceeding with row_version check only",
+                document_id,
+            )
 
     # Apply updates (only allowed fields)
     UPDATABLE_FIELDS = {"title", "folder_id", "content_json"}
@@ -820,6 +840,7 @@ async def save_content(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     minio: MinIOService = Depends(get_minio_service),
+    lock_service: DocumentLockService = Depends(get_lock_service),
 ) -> DocumentResponse:
     """
     Auto-save document content with optimistic concurrency control.
@@ -829,6 +850,25 @@ async def save_content(
     was modified by another user/session. On success, content is updated
     and row_version is incremented.
     """
+    # Lock ownership check — best-effort via Redis.
+    # If Redis is unreachable, we degrade gracefully and rely on row_version
+    # optimistic concurrency as the safety net. We do NOT block saves when
+    # Redis is down — that would make the entire system unavailable.
+    try:
+        lock_holder = await lock_service.get_lock_holder(str(document_id))
+        if lock_holder and lock_holder["user_id"] != str(current_user.id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Document is locked by another user",
+            )
+    except HTTPException:
+        raise  # re-raise our own 409
+    except Exception:
+        logger.warning(
+            "Redis unavailable during lock check for document %s — proceeding with row_version check only",
+            document_id,
+        )
+
     # Permission check + save in one pass (avoids loading document twice)
     document, search_doc_data = await save_document_content(
         document_id=document_id,

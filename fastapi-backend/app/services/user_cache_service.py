@@ -12,19 +12,27 @@ Invalidation:
 - User cache: On profile update, password change
 - App role cache: On role change, member removal
 - Project role cache: On role change, member removal
+- Cross-worker: Redis pub/sub on ws:user_cache_invalidate channel
 """
 
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Optional, Tuple
 from uuid import UUID
 
-
-# Cache configuration
+# Cache configuration — runtime getter functions (never freeze at import time)
 from ..ai.config_service import get_agent_config
-_cfg = get_agent_config()
-_CACHE_TTL = _cfg.get_int("cache.user_cache_ttl", 300)
-_MAX_SIZE = _cfg.get_int("cache.user_cache_max_size", 10000)
+
+
+def _get_cache_ttl() -> int:
+    """Return cache TTL at call time from runtime config."""
+    return max(1, get_agent_config().get_int("cache.user_cache_ttl", 300))
+
+
+def _get_max_size() -> int:
+    """Return max cache size at call time from runtime config."""
+    return max(1, get_agent_config().get_int("cache.user_cache_max_size", 10000))
 
 
 # === User Profile Cache ===
@@ -42,8 +50,9 @@ class CachedUser:
     is_developer: bool = False
 
 
-# Cache storage: user_id -> (CachedUser, expiry_timestamp)
-_user_cache: Dict[str, Tuple[CachedUser, float]] = {}
+# Cache storage: user_id -> (CachedUser, expiry_timestamp, last_accessed)
+# OrderedDict tracks insertion/move order for O(1) LRU eviction.
+_user_cache: OrderedDict[str, Tuple[CachedUser, float, float]] = OrderedDict()
 
 
 def get_cached_user(user_id: UUID) -> Optional[CachedUser]:
@@ -56,12 +65,14 @@ def get_cached_user(user_id: UUID) -> Optional[CachedUser]:
     Returns:
         CachedUser if found and valid, None otherwise
     """
-    cached = _user_cache.get(str(user_id))
+    key = str(user_id)
+    cached = _user_cache.get(key)
     if cached and cached[1] > time.time():
+        _user_cache.move_to_end(key)  # O(1) LRU promotion
         return cached[0]
     # Remove expired entry
     if cached:
-        _user_cache.pop(str(user_id), None)
+        _user_cache.pop(key, None)
     return None
 
 
@@ -72,9 +83,10 @@ def set_cached_user(user) -> None:
     Args:
         user: User model instance with id, email, display_name, avatar_url
     """
-    if len(_user_cache) >= _MAX_SIZE:
+    if len(_user_cache) >= _get_max_size():
         _evict_oldest(_user_cache)
 
+    now = time.time()
     _user_cache[str(user.id)] = (
         CachedUser(
             id=user.id,
@@ -84,7 +96,8 @@ def set_cached_user(user) -> None:
             email_verified=getattr(user, "email_verified", True),
             is_developer=getattr(user, "is_developer", False),
         ),
-        time.time() + _CACHE_TTL,
+        now + _get_cache_ttl(),
+        now,
     )
 
 
@@ -106,8 +119,9 @@ def clear_user_cache() -> None:
 # === Application Role Cache ===
 
 
-# Cache storage: "user_id:app_id" -> (role, expiry_timestamp)
-_app_role_cache: Dict[str, Tuple[str, float]] = {}
+# Cache storage: "user_id:app_id" -> (role or None, expiry_timestamp, last_accessed)
+# OrderedDict tracks insertion/move order for O(1) LRU eviction.
+_app_role_cache: OrderedDict[str, Tuple[Optional[str], float, float]] = OrderedDict()
 
 
 def get_cached_app_role(user_id: UUID, app_id: UUID) -> Optional[str]:
@@ -119,11 +133,14 @@ def get_cached_app_role(user_id: UUID, app_id: UUID) -> Optional[str]:
         app_id: The application's UUID
 
     Returns:
-        Role string if found and valid, None otherwise
+        Role string if found and valid, None otherwise.
+        Note: Returns None both for "not in cache" and "cached as no-role".
+        Use has_cached_app_role() to distinguish.
     """
     key = f"{user_id}:{app_id}"
     cached = _app_role_cache.get(key)
     if cached and cached[1] > time.time():
+        _app_role_cache.move_to_end(key)  # O(1) LRU promotion
         return cached[0]
     # Remove expired entry
     if cached:
@@ -131,20 +148,45 @@ def get_cached_app_role(user_id: UUID, app_id: UUID) -> Optional[str]:
     return None
 
 
-def set_cached_app_role(user_id: UUID, app_id: UUID, role: str) -> None:
+def has_cached_app_role(user_id: UUID, app_id: UUID) -> bool:
+    """
+    Check if application role is in cache (regardless of value).
+
+    Args:
+        user_id: The user's UUID
+        app_id: The application's UUID
+
+    Returns:
+        True if in cache and not expired, False otherwise
+    """
+    key = f"{user_id}:{app_id}"
+    cached = _app_role_cache.get(key)
+    if cached and cached[1] > time.time():
+        _app_role_cache.move_to_end(key)  # O(1) LRU promotion
+        return True
+    if cached:
+        _app_role_cache.pop(key, None)  # Evict expired entry
+    return False
+
+
+def set_cached_app_role(
+    user_id: UUID, app_id: UUID, role: Optional[str]
+) -> None:
     """
     Store application role in cache.
 
     Args:
         user_id: The user's UUID
         app_id: The application's UUID
-        role: The role string (e.g., "owner", "admin", "editor", "viewer")
+        role: The role string (e.g., "owner", "admin", "editor", "viewer"),
+              or None if user has no role in application
     """
-    if len(_app_role_cache) >= _MAX_SIZE:
+    if len(_app_role_cache) >= _get_max_size():
         _evict_oldest(_app_role_cache)
 
+    now = time.time()
     key = f"{user_id}:{app_id}"
-    _app_role_cache[key] = (role, time.time() + _CACHE_TTL)
+    _app_role_cache[key] = (role, now + _get_cache_ttl(), now)
 
 
 def invalidate_app_role(user_id: UUID, app_id: UUID) -> None:
@@ -193,8 +235,9 @@ def clear_app_role_cache() -> None:
 # === Project Role Cache ===
 
 
-# Cache storage: "user_id:project_id" -> (role or None, expiry_timestamp)
-_project_role_cache: Dict[str, Tuple[Optional[str], float]] = {}
+# Cache storage: "user_id:project_id" -> (role or None, expiry_timestamp, last_accessed)
+# OrderedDict tracks insertion/move order for O(1) LRU eviction.
+_project_role_cache: OrderedDict[str, Tuple[Optional[str], float, float]] = OrderedDict()
 
 
 def get_cached_project_role(user_id: UUID, project_id: UUID) -> Optional[str]:
@@ -213,6 +256,7 @@ def get_cached_project_role(user_id: UUID, project_id: UUID) -> Optional[str]:
     key = f"{user_id}:{project_id}"
     cached = _project_role_cache.get(key)
     if cached and cached[1] > time.time():
+        _project_role_cache.move_to_end(key)  # O(1) LRU promotion
         return cached[0]
     # Remove expired entry
     if cached:
@@ -234,7 +278,10 @@ def has_cached_project_role(user_id: UUID, project_id: UUID) -> bool:
     key = f"{user_id}:{project_id}"
     cached = _project_role_cache.get(key)
     if cached and cached[1] > time.time():
+        _project_role_cache.move_to_end(key)  # O(1) LRU promotion
         return True
+    if cached:
+        _project_role_cache.pop(key, None)  # Evict expired entry
     return False
 
 
@@ -249,11 +296,12 @@ def set_cached_project_role(
         project_id: The project's UUID
         role: The role string, or None if user has no role in project
     """
-    if len(_project_role_cache) >= _MAX_SIZE:
+    if len(_project_role_cache) >= _get_max_size():
         _evict_oldest(_project_role_cache)
 
+    now = time.time()
     key = f"{user_id}:{project_id}"
-    _project_role_cache[key] = (role, time.time() + _CACHE_TTL)
+    _project_role_cache[key] = (role, now + _get_cache_ttl(), now)
 
 
 def invalidate_project_role(user_id: UUID, project_id: UUID) -> None:
@@ -302,23 +350,23 @@ def clear_project_role_cache() -> None:
 # === Helper Functions ===
 
 
-def _evict_oldest(cache: dict) -> None:
+def _evict_oldest(cache: OrderedDict) -> None:
     """
-    Remove oldest 10% of entries from cache.
+    Remove least recently used 10% of entries from cache.
 
-    Takes advantage of dict insertion order (Python 3.7+) — entries are
-    iterated in FIFO order, so the first entries are the oldest.
+    Uses OrderedDict.popitem(last=False) for O(1) eviction of the oldest
+    (least recently used) entries.
 
     Args:
-        cache: The cache dictionary to evict from
+        cache: The OrderedDict cache to evict from
     """
     if not cache:
         return
 
     evict_count = max(1, len(cache) // 10)
-    keys_to_remove = list(cache.keys())[:evict_count]
-    for key in keys_to_remove:
-        del cache[key]
+    for _ in range(evict_count):
+        if cache:
+            cache.popitem(last=False)  # O(1) — removes oldest (least recently used)
 
 
 def clear_all_caches() -> None:
@@ -339,9 +387,83 @@ def clear_all_caches() -> None:
     from ..main import _ai_health_cache
     _ai_health_cache.clear()
 
-    # Clear auto-archive throttle (keyed by application_id)
-    from ..routers.projects import _auto_archive_last_run
-    _auto_archive_last_run.clear()
+    # Note: auto-archive throttle is now Redis-based (no in-memory dict to clear)
+
+
+# === Cross-Worker Cache Invalidation via Redis pub/sub ===
+
+_USER_CACHE_INVALIDATE_CHANNEL = "ws:user_cache_invalidate"
+
+
+async def publish_user_cache_invalidation(
+    *,
+    user_id: str | None = None,
+    app_id: str | None = None,
+    project_id: str | None = None,
+) -> None:
+    """Publish a user cache invalidation event to all workers.
+
+    Best-effort: silently ignores errors (same pattern as room_auth.py).
+    """
+    from ..services.redis_service import redis_service
+    if redis_service.is_connected:
+        try:
+            payload = {k: v for k, v in {
+                "user_id": user_id, "app_id": app_id, "project_id": project_id,
+            }.items() if v is not None}
+            await redis_service.publish(
+                _USER_CACHE_INVALIDATE_CHANNEL,
+                payload,
+            )
+        except Exception:
+            pass  # Best-effort
+
+
+async def _handle_user_cache_invalidation(data: dict) -> None:
+    """Handle cross-worker user cache invalidation."""
+    uid = data.get("user_id")
+    aid = data.get("app_id")
+    pid = data.get("project_id")
+
+    if uid:
+        try:
+            _uid = UUID(uid)
+        except (ValueError, AttributeError):
+            return
+        if aid:
+            try:
+                invalidate_app_role(_uid, UUID(aid))
+            except (ValueError, AttributeError):
+                pass
+        elif pid:
+            try:
+                invalidate_project_role(_uid, UUID(pid))
+            except (ValueError, AttributeError):
+                pass
+        else:
+            # User-level invalidation: clear user + all roles
+            invalidate_user(_uid)
+            invalidate_all_app_roles_for_user(_uid)
+            invalidate_all_project_roles_for_user(_uid)
+    elif aid:
+        try:
+            invalidate_all_app_roles_for_app(UUID(aid))
+        except (ValueError, AttributeError):
+            pass
+    elif pid:
+        try:
+            invalidate_all_project_roles_for_project(UUID(pid))
+        except (ValueError, AttributeError):
+            pass
+
+
+async def setup_user_cache_pubsub() -> None:
+    """Subscribe to user cache invalidation channel (call at startup)."""
+    from ..services.redis_service import redis_service
+    if redis_service.is_connected:
+        await redis_service.subscribe(
+            _USER_CACHE_INVALIDATE_CHANNEL, _handle_user_cache_invalidation
+        )
 
 
 def get_cache_stats() -> dict:
@@ -354,23 +476,23 @@ def get_cache_stats() -> dict:
     now = time.time()
 
     def count_valid(cache: dict) -> int:
-        return sum(1 for _, (_, expiry) in cache.items() if expiry > now)
+        return sum(1 for _, v in cache.items() if v[1] > now)
 
     return {
         "user_cache": {
             "total": len(_user_cache),
             "valid": count_valid(_user_cache),
-            "max_size": _MAX_SIZE,
+            "max_size": _get_max_size(),
         },
         "app_role_cache": {
             "total": len(_app_role_cache),
             "valid": count_valid(_app_role_cache),
-            "max_size": _MAX_SIZE,
+            "max_size": _get_max_size(),
         },
         "project_role_cache": {
             "total": len(_project_role_cache),
             "valid": count_valid(_project_role_cache),
-            "max_size": _MAX_SIZE,
+            "max_size": _get_max_size(),
         },
-        "ttl_seconds": _CACHE_TTL,
+        "ttl_seconds": _get_cache_ttl(),
     }

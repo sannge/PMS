@@ -184,9 +184,10 @@
     background: hsl(var(--muted-foreground) / 0.3);
   }
 
-  /* Focus visible styles */
+  /* Remove default browser focus outline — individual components
+     (buttons, cards, inputs) define their own focus-visible rings. */
   *:focus-visible {
-    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+    @apply outline-none;
   }
 
   /* Selection */

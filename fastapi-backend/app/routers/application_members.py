@@ -18,25 +18,24 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from ..utils.timezone import utc_now
-
 from ..database import get_db
 from ..models.application import Application
 from ..models.application_member import ApplicationMember
 from ..models.project import Project
 from ..models.task import Task
-from ..models.task_status import TaskStatus, StatusCategory
+from ..models.task_status import StatusCategory, TaskStatus
 from ..models.user import User
 from ..schemas.application_member import (
     MemberUpdate,
     MemberWithUser,
 )
 from ..schemas.invitation import ApplicationRole
-from ..schemas.notification import EntityType, NotificationType
+from ..schemas.notification import EntityType, NotificationCreate, NotificationType
 from ..services.auth_service import get_current_user
 from ..services.notification_service import NotificationService
-from ..services.user_cache_service import invalidate_app_role
-from ..schemas.notification import NotificationCreate
+from ..services.user_cache_service import invalidate_app_role, publish_user_cache_invalidation
+from ..utils.tasks import fire_and_forget
+from ..utils.timezone import utc_now
 from ..websocket.handlers import (
     handle_member_removed,
     handle_role_updated,
@@ -537,8 +536,14 @@ async def update_member_role(
     await db.commit()
     await db.refresh(member)
 
-    # Invalidate role cache for affected user
+    # Invalidate role cache for affected user (local + cross-worker)
     invalidate_app_role(user_id, application_id)
+    fire_and_forget(
+        publish_user_cache_invalidation(
+            user_id=str(user_id), app_id=str(application_id),
+        ),
+        name="change-app-member-role-user-cache-invalidation",
+    )
 
     # Create notification for affected user (with WebSocket broadcast)
     if old_role != member.role:
@@ -570,8 +575,11 @@ async def update_member_role(
         )
 
         # Invalidate room auth cache so WS room access reflects new role
-        invalidate_user_cache(user_id)
-        await publish_room_auth_invalidation(user_id=str(user_id))
+        await invalidate_user_cache(user_id)
+        fire_and_forget(
+            publish_room_auth_invalidation(user_id=str(user_id)),
+            name="change-app-member-role-room-auth-invalidation",
+        )
 
         # R2-6: Invalidate RBAC scope cache so AI retrieval reflects new role
         try:
@@ -716,8 +724,14 @@ async def remove_member(
     await db.delete(member)
     await db.commit()
 
-    # Invalidate role cache for removed user
+    # Invalidate role cache for removed user (local + cross-worker)
     invalidate_app_role(user_id, application_id)
+    fire_and_forget(
+        publish_user_cache_invalidation(
+            user_id=str(user_id), app_id=str(application_id),
+        ),
+        name="remove-app-member-user-cache-invalidation",
+    )
 
     # Create notification for removed user (commit then deliver via WS, unless self-removal)
     if not is_self_removal:
@@ -750,8 +764,11 @@ async def remove_member(
     )
 
     # Invalidate room auth cache so removed user can no longer join rooms
-    invalidate_user_cache(user_id)
-    await publish_room_auth_invalidation(user_id=str(user_id))
+    await invalidate_user_cache(user_id)
+    fire_and_forget(
+        publish_room_auth_invalidation(user_id=str(user_id)),
+        name="remove-app-member-room-auth-invalidation",
+    )
 
     # Invalidate search scope cache so removed user can no longer see docs in search
     try:

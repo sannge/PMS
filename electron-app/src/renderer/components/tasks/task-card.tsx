@@ -452,7 +452,7 @@ export function TaskCard({
         }
       }}
       className={cn(
-        'group relative flex h-11 items-center gap-2.5 rounded-lg border border-border/60 bg-card px-3',
+        'group relative flex flex-col gap-1.5 rounded-lg border border-border/60 bg-card px-3 py-2.5',
         'transition-all duration-150 ease-out',
         onClick && !disabled && [
           'cursor-pointer',
@@ -464,160 +464,169 @@ export function TaskCard({
         className
       )}
     >
-      {/* Task Type Icon */}
-      <div className="flex-shrink-0" title={getTaskTypeLabel(task.task_type)}>
-        {getTaskTypeIcon(task.task_type)}
+      {/* Row 1: Type icon + Title + Actions */}
+      <div className="flex items-start gap-2">
+        {/* Task Type Icon */}
+        <div className="flex-shrink-0 mt-0.5" title={getTaskTypeLabel(task.task_type)}>
+          {getTaskTypeIcon(task.task_type)}
+        </div>
+
+        {/* Viewer indicators */}
+        {viewers.length > 0 && (
+          <TaskViewerDots viewers={viewers} maxDots={3} className="flex-shrink-0 mt-0.5" />
+        )}
+
+        {/* Title — wraps up to 2 lines */}
+        <span className="flex-1 min-w-0 text-sm font-medium text-foreground line-clamp-2 group-hover:text-primary transition-colors">
+          {task.title}
+        </span>
+
+        {/* Actions (hover-reveal) */}
+        <div
+          className={cn(
+            'flex-shrink-0 opacity-0 transition-opacity duration-100',
+            'group-hover:opacity-100'
+          )}
+        >
+          {(onEdit || onDelete) && (
+            <ActionsDropdown
+              onEdit={onEdit ? () => onEdit(task) : undefined}
+              onDelete={onDelete ? () => onDelete(task) : undefined}
+              disabled={disabled}
+            />
+          )}
+        </div>
       </div>
 
-      {/* Viewer indicators */}
-      {viewers.length > 0 && (
-        <TaskViewerDots viewers={viewers} maxDots={3} className="flex-shrink-0" />
-      )}
-
-      {/* Title */}
-      <span className="flex-1 min-w-0 text-sm font-medium text-foreground truncate group-hover:text-primary transition-colors">
-        {task.title}
-      </span>
-
-      {/* Priority */}
-      <span className={cn('flex-shrink-0', priorityConfig.color)} title={priorityConfig.label}>
-        {priorityConfig.icon}
-      </span>
-
-      {/* Story Points */}
-      {task.story_points != null && (
-        <span className="flex-shrink-0 flex h-5 min-w-5 items-center justify-center rounded bg-muted px-1 text-[10px] font-medium text-muted-foreground">
-          {task.story_points}
+      {/* Row 2: Metadata — priority, points, due date, checklist, time, assignee */}
+      <div className="flex items-center gap-2 ml-5">
+        {/* Priority */}
+        <span className={cn('flex-shrink-0', priorityConfig.color)} title={priorityConfig.label}>
+          {priorityConfig.icon}
         </span>
-      )}
 
-      {/* Due Date (only for non-done tasks) */}
-      {dueInfo && (
-        <span
-          className={cn(
-            'flex-shrink-0 flex items-center gap-0.5 text-[10px]',
-            dueInfo.isOverdue
-              ? 'text-red-500 font-medium'
-              : dueInfo.isSoon
-                ? 'text-yellow-600 dark:text-yellow-500'
-                : 'text-muted-foreground'
-          )}
-          title={new Date(task.due_date! + 'T00:00:00').toLocaleDateString('en-US')}
-        >
-          <Clock className="h-2.5 w-2.5" />
-          {dueInfo.text}
-        </span>
-      )}
-
-      {/* Completed Date (only for done tasks) */}
-      {completedInfo && (
-        <span
-          className="flex-shrink-0 flex items-center gap-0.5 text-[10px] text-green-600 dark:text-green-500"
-          title={`Completed: ${parseBackendDate(task.completed_at!).toLocaleString('en-US')}`}
-        >
-          <CheckCircle2 className="h-2.5 w-2.5" />
-          {completedInfo}
-        </span>
-      )}
-
-      {/* Subtasks indicator */}
-      {task.subtasks_count != null && task.subtasks_count > 0 && (
-        <span className="flex-shrink-0 flex items-center gap-0.5 text-[10px] text-muted-foreground">
-          <Layers className="h-2.5 w-2.5" />
-          {task.subtasks_count}
-        </span>
-      )}
-
-      {/* Checklist progress indicator */}
-      {task.checklist_total != null && task.checklist_total > 0 && (
-        <span
-          className={cn(
-            'flex-shrink-0 flex items-center gap-1 text-[10px]',
-            task.checklist_done === task.checklist_total
-              ? 'text-green-600 dark:text-green-500'
-              : 'text-muted-foreground'
-          )}
-          title={`${task.checklist_done}/${task.checklist_total} checklist items done`}
-        >
-          <CheckSquare className="h-2.5 w-2.5" />
-          <span className="tabular-nums">
-            {task.checklist_done}/{task.checklist_total}
+        {/* Story Points */}
+        {task.story_points != null && (
+          <span className="flex-shrink-0 flex h-5 min-w-5 items-center justify-center rounded bg-muted px-1 text-[10px] font-medium text-muted-foreground">
+            {task.story_points}
           </span>
-        </span>
-      )}
-
-      {/* Last updated indicator - always visible */}
-      {task.updated_at && (
-        <span
-          className="flex-shrink-0 flex items-center gap-0.5 text-[9px] text-muted-foreground/70"
-          title={`Updated ${parseBackendDate(task.updated_at).toLocaleString('en-US')}`}
-        >
-          <History className="h-2.5 w-2.5" />
-          {formatRelativeTime(task.updated_at)}
-        </span>
-      )}
-
-      {/* Assignee */}
-      {task.assignee ? (
-        <div className="flex-shrink-0 relative group/assignee">
-          <div
-            className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary text-[10px] font-semibold"
-          >
-            {getInitials(task.assignee.display_name, task.assignee.email)}
-          </div>
-          {/* Hover tooltip */}
-          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 rounded bg-popover border border-border shadow-md text-xs whitespace-nowrap opacity-0 invisible group-hover/assignee:opacity-100 group-hover/assignee:visible transition-opacity z-50">
-            <div className="font-medium text-foreground">{getAssigneeDisplayName(task.assignee)}</div>
-            <div className="text-muted-foreground text-[10px]">{task.assignee.email}</div>
-            {/* Arrow */}
-            <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-border" />
-            <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-popover -mt-[1px]" />
-          </div>
-        </div>
-      ) : (
-        <div className="flex-shrink-0 relative group/assignee">
-          <div
-            className="flex h-6 w-6 items-center justify-center rounded-full bg-muted/50 border border-dashed border-muted-foreground/30"
-          >
-            <User className="h-3 w-3 text-muted-foreground/50" />
-          </div>
-          {/* Hover tooltip */}
-          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 rounded bg-popover border border-border shadow-md text-xs whitespace-nowrap opacity-0 invisible group-hover/assignee:opacity-100 group-hover/assignee:visible transition-opacity z-50">
-            <div className="text-muted-foreground">Unassigned</div>
-            {/* Arrow */}
-            <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-border" />
-            <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-popover -mt-[1px]" />
-          </div>
-        </div>
-      )}
-
-      {/* Actions */}
-      <div
-        className={cn(
-          'flex-shrink-0 opacity-0 transition-opacity duration-100',
-          'group-hover:opacity-100'
         )}
-      >
-        {(onEdit || onDelete) && (
-          <ActionsDropdown
-            onEdit={onEdit ? () => onEdit(task) : undefined}
-            onDelete={onDelete ? () => onDelete(task) : undefined}
-            disabled={disabled}
+
+        {/* Due Date (only for non-done tasks) */}
+        {dueInfo && (
+          <span
+            className={cn(
+              'flex-shrink-0 flex items-center gap-0.5 text-[10px]',
+              dueInfo.isOverdue
+                ? 'text-red-500 font-medium'
+                : dueInfo.isSoon
+                  ? 'text-yellow-600 dark:text-yellow-500'
+                  : 'text-muted-foreground'
+            )}
+            title={new Date(task.due_date! + 'T00:00:00').toLocaleDateString('en-US')}
+          >
+            <Clock className="h-2.5 w-2.5" />
+            {dueInfo.text}
+          </span>
+        )}
+
+        {/* Completed Date (only for done tasks) */}
+        {completedInfo && (
+          <span
+            className="flex-shrink-0 flex items-center gap-0.5 text-[10px] text-green-600 dark:text-green-500"
+            title={`Completed: ${parseBackendDate(task.completed_at!).toLocaleString('en-US')}`}
+          >
+            <CheckCircle2 className="h-2.5 w-2.5" />
+            {completedInfo}
+          </span>
+        )}
+
+        {/* Subtasks indicator */}
+        {task.subtasks_count != null && task.subtasks_count > 0 && (
+          <span className="flex-shrink-0 flex items-center gap-0.5 text-[10px] text-muted-foreground">
+            <Layers className="h-2.5 w-2.5" />
+            {task.subtasks_count}
+          </span>
+        )}
+
+        {/* Checklist progress indicator */}
+        {task.checklist_total != null && task.checklist_total > 0 && (
+          <span
+            className={cn(
+              'flex-shrink-0 flex items-center gap-1 text-[10px]',
+              task.checklist_done === task.checklist_total
+                ? 'text-green-600 dark:text-green-500'
+                : 'text-muted-foreground'
+            )}
+            title={`${task.checklist_done}/${task.checklist_total} checklist items done`}
+          >
+            <CheckSquare className="h-2.5 w-2.5" />
+            <span className="tabular-nums">
+              {task.checklist_done}/{task.checklist_total}
+            </span>
+          </span>
+        )}
+
+        {/* Last updated indicator */}
+        {task.updated_at && (
+          <span
+            className="flex-shrink-0 flex items-center gap-0.5 text-[9px] text-muted-foreground/70"
+            title={`Updated ${parseBackendDate(task.updated_at).toLocaleString('en-US')}`}
+          >
+            <History className="h-2.5 w-2.5" />
+            {formatRelativeTime(task.updated_at)}
+          </span>
+        )}
+
+        {/* Spacer pushes assignee to right */}
+        <div className="flex-1" />
+
+        {/* Assignee */}
+        {task.assignee ? (
+          <div className="flex-shrink-0 relative group/assignee">
+            <div
+              className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary text-[10px] font-semibold"
+            >
+              {getInitials(task.assignee.display_name, task.assignee.email)}
+            </div>
+            {/* Hover tooltip */}
+            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 rounded bg-popover border border-border shadow-md text-xs whitespace-nowrap opacity-0 invisible group-hover/assignee:opacity-100 group-hover/assignee:visible transition-opacity z-50">
+              <div className="font-medium text-foreground">{getAssigneeDisplayName(task.assignee)}</div>
+              <div className="text-muted-foreground text-[10px]">{task.assignee.email}</div>
+              {/* Arrow */}
+              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-border" />
+              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-popover -mt-[1px]" />
+            </div>
+          </div>
+        ) : (
+          <div className="flex-shrink-0 relative group/assignee">
+            <div
+              className="flex h-6 w-6 items-center justify-center rounded-full bg-muted/50 border border-dashed border-muted-foreground/30"
+            >
+              <User className="h-3 w-3 text-muted-foreground/50" />
+            </div>
+            {/* Hover tooltip */}
+            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 rounded bg-popover border border-border shadow-md text-xs whitespace-nowrap opacity-0 invisible group-hover/assignee:opacity-100 group-hover/assignee:visible transition-opacity z-50">
+              <div className="text-muted-foreground">Unassigned</div>
+              {/* Arrow */}
+              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-border" />
+              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-popover -mt-[1px]" />
+            </div>
+          </div>
+        )}
+
+        {/* Arrow indicator */}
+        {onClick && !disabled && (
+          <ArrowRight
+            className={cn(
+              'h-3.5 w-3.5 flex-shrink-0 text-muted-foreground/50',
+              'opacity-0 -translate-x-1 transition-all duration-150',
+              'group-hover:opacity-100 group-hover:translate-x-0',
+              'group-hover:text-primary'
+            )}
           />
         )}
       </div>
-
-      {/* Arrow indicator */}
-      {onClick && !disabled && (
-        <ArrowRight
-          className={cn(
-            'h-3.5 w-3.5 flex-shrink-0 text-muted-foreground/50',
-            'opacity-0 -translate-x-1 transition-all duration-150',
-            'group-hover:opacity-100 group-hover:translate-x-0',
-            'group-hover:text-primary'
-          )}
-        />
-      )}
     </div>
   )
 }

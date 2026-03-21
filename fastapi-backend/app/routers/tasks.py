@@ -1118,6 +1118,9 @@ async def create_task(
     # Set reporter to current user if not provided
     reporter_id = task_data.reporter_id or current_user.id
 
+    # Set completed_at if task is created directly in Done status
+    is_done_on_create = resolved_status_name == "Done"
+
     # Create new task instance
     task = Task(
         project_id=project_id,
@@ -1133,6 +1136,7 @@ async def create_task(
         parent_id=task_data.parent_id,
         sprint_id=task_data.sprint_id,
         task_status_id=resolved_task_status_id,
+        completed_at=utc_now() if is_done_on_create else None,
     )
 
     # Save to database

@@ -15,13 +15,10 @@ import logging
 import time
 from typing import Optional
 
+from ..ai.config_service import get_agent_config
 from .redis_service import redis_service
 
-from ..ai.config_service import get_agent_config
-
 logger = logging.getLogger(__name__)
-
-_cfg = get_agent_config()
 
 # Lock configuration
 LOCK_KEY_PREFIX = "doc_lock:"

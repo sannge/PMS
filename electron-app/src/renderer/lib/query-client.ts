@@ -17,7 +17,6 @@ import {
   initializeHydration,
   subscribeToQueryCache,
   clearPersistedCache,
-  forceFlush,
   getPersistedCacheStats,
   isHydrationComplete,
 } from './per-query-persister'
@@ -310,13 +309,10 @@ export async function clearQueryCache(): Promise<void> {
     cacheUnsubscribe = null
   }
 
-  // Flush any pending writes
-  await forceFlush()
-
-  // Clear in-memory cache
+  // Clear in-memory cache (do this before IndexedDB so UI updates immediately)
   queryClient.clear()
 
-  // Clear IndexedDB cache
+  // Clear IndexedDB cache (skips forceFlush — no point writing data we're about to delete)
   await clearPersistedCache()
 
   console.log('[QueryClient] Cache cleared')

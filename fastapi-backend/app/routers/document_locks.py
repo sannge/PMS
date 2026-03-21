@@ -5,6 +5,7 @@ force-taking document locks. All endpoints require authentication.
 Lock state changes are broadcast via WebSocket to document room subscribers.
 """
 
+import time
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -458,7 +459,12 @@ async def force_take_lock(
         new_user_name=current_user.display_name or current_user.email,
     )
 
-    new_holder = await lock_service.get_lock_holder(str(document_id))
+    # Construct new holder from known values instead of reading back from Redis
+    new_holder = {
+        "user_id": str(current_user.id),
+        "user_name": current_user.display_name or current_user.email,
+        "acquired_at": time.time(),
+    }
 
     # Resolve scope IDs for WebSocket broadcast
     app_id, proj_id = await _resolve_lock_broadcast_ids(

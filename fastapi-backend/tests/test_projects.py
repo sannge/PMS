@@ -1,9 +1,8 @@
 """Unit tests for Projects CRUD API endpoints."""
 
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
-
-from app.utils.timezone import utc_now
 
 import pytest
 from httpx import AsyncClient
@@ -13,7 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.application import Application
 from app.models.project import Project
 from app.models.task import Task
-from app.models.user import User
+from app.routers.projects import _should_run_auto_archive
+from app.utils.timezone import utc_now
 
 
 @pytest.mark.asyncio
@@ -516,3 +516,81 @@ class TestArchivedProjectGuard:
         )
         assert response.status_code == 200
         assert response.json()["name"] == "Restored Project"
+
+
+# ============================================================================
+# T4: Tests for _should_run_auto_archive
+# ============================================================================
+
+
+class TestShouldRunAutoArchive:
+    """Tests for the Redis-based auto-archive throttle."""
+
+    @pytest.mark.asyncio
+    async def test_returns_true_when_redis_disconnected(self):
+        """Fail-open: returns True when Redis is unavailable."""
+        mock_redis = MagicMock()
+        mock_redis.is_connected = False
+
+        with patch(
+            "app.services.redis_service.redis_service", mock_redis
+        ):
+            result = await _should_run_auto_archive("some-app-id")
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_returns_true_when_key_not_exists(self):
+        """Returns True when SET NX succeeds (first call within 60s window)."""
+        mock_client = AsyncMock()
+        mock_client.set = AsyncMock(return_value=True)  # NX succeeded
+
+        mock_redis = MagicMock()
+        mock_redis.is_connected = True
+        mock_redis.client = mock_client
+
+        with patch(
+            "app.services.redis_service.redis_service", mock_redis
+        ):
+            result = await _should_run_auto_archive("app-123")
+
+        assert result is True
+        mock_client.set.assert_awaited_once_with(
+            "auto_archive_throttle:app-123", "1", nx=True, ex=60
+        )
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_key_exists(self):
+        """Returns False when SET NX fails (throttle active)."""
+        mock_client = AsyncMock()
+        mock_client.set = AsyncMock(return_value=None)  # NX failed — key exists
+
+        mock_redis = MagicMock()
+        mock_redis.is_connected = True
+        mock_redis.client = mock_client
+
+        with patch(
+            "app.services.redis_service.redis_service", mock_redis
+        ):
+            result = await _should_run_auto_archive("app-456")
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_returns_true_on_redis_exception(self):
+        """Fail-open: returns True when Redis raises on SET (caught by try/except)."""
+        mock_redis = MagicMock()
+        mock_redis.is_connected = True
+        mock_redis.client = MagicMock()
+        mock_redis.client.set = AsyncMock(
+            side_effect=ConnectionError("Redis connection lost")
+        )
+
+        with patch(
+            "app.services.redis_service.redis_service", mock_redis
+        ):
+            # The function wraps the SET call in try/except Exception
+            # and returns True on failure (fail-open for non-critical op).
+            result = await _should_run_auto_archive("app-789")
+
+        assert result is True

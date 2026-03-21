@@ -30,7 +30,13 @@ from .email_service import (
     send_password_reset_email,
     send_verification_email,
 )
-from .user_cache_service import CachedUser, get_cached_user, invalidate_user, set_cached_user
+from .user_cache_service import (
+    CachedUser,
+    get_cached_user,
+    invalidate_user,
+    publish_user_cache_invalidation,
+    set_cached_user,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -500,6 +506,10 @@ async def verify_email_code(db: AsyncSession, email: str, code: str) -> User:
     await db.refresh(user)
 
     invalidate_user(user.id)
+    fire_and_forget(
+        publish_user_cache_invalidation(user_id=str(user.id)),
+        name="verify-email-user-cache-invalidation",
+    )
 
     return user
 
@@ -744,6 +754,10 @@ async def reset_password(
     await db.commit()
 
     invalidate_user(user.id)
+    fire_and_forget(
+        publish_user_cache_invalidation(user_id=str(user.id)),
+        name="password-reset-user-cache-invalidation",
+    )
 
 
 def _user_from_cache(cached: CachedUser) -> User:

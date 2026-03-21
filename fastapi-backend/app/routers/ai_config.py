@@ -185,13 +185,18 @@ async def require_developer(
     if current_user.is_developer is None:
         # Stale cache entry from before the is_developer field was added.
         # Invalidate the cache so the next request re-fetches from DB.
-        from ..services.user_cache_service import invalidate_user
+        from ..services.user_cache_service import invalidate_user, publish_user_cache_invalidation
+        from ..utils.tasks import fire_and_forget
 
         logger.warning(
             "User %s has is_developer=None (stale cache); invalidating",
             current_user.id,
         )
         invalidate_user(current_user.id)
+        fire_and_forget(
+            publish_user_cache_invalidation(user_id=str(current_user.id)),
+            name="ai-config-stale-cache-invalidation",
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Developer access required for AI configuration",

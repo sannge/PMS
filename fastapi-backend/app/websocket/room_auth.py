@@ -11,83 +11,101 @@ Features:
 import asyncio
 import logging
 import time
-from typing import Optional, Dict, Tuple
+from collections import OrderedDict
+from typing import Optional, Tuple
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..ai.config_service import get_agent_config
 from ..database import async_session_maker
 from ..models.application import Application
 from ..models.application_member import ApplicationMember
+from ..models.document import Document
 from ..models.project import Project
 from ..models.project_member import ProjectMember
-from ..models.document import Document
 from ..models.task import Task
-
-from ..ai.config_service import get_agent_config
 
 logger = logging.getLogger(__name__)
 
-_cfg = get_agent_config()
+
+def _get_auth_cache_ttl() -> int:
+    """Return room auth cache TTL at call time from runtime config."""
+    return max(1, get_agent_config().get_int("cache.room_auth_ttl", 300))
+
+
+def _get_auth_cache_max_size() -> int:
+    """Return max room auth cache size at call time from runtime config."""
+    return max(1, get_agent_config().get_int("cache.room_auth_max_size", 50000))
+
 
 # ============================================================================
 # Auth Result Caching
 # ============================================================================
 # Cache (user_id, room_id) -> (result: bool, expires_at: float)
 # This prevents DB overload during reconnection storms (5000 users × 5 rooms each)
+# OrderedDict tracks insertion/move order for O(1) LRU eviction.
 
-_auth_cache: Dict[Tuple[str, str], Tuple[bool, float]] = {}
-_AUTH_CACHE_TTL = _cfg.get_int("cache.room_auth_ttl", 300)
-_AUTH_CACHE_MAX_SIZE = _cfg.get_int("cache.room_auth_max_size", 50000)
+_auth_cache: OrderedDict[Tuple[str, str], Tuple[bool, float]] = OrderedDict()
 _cache_lock = asyncio.Lock()
 
 
 async def _get_cached_auth(user_id: UUID, room_id: str) -> Optional[bool]:
-    """Get cached auth result if valid, None if not cached or expired."""
+    """Get cached auth result if valid, None if not cached or expired.
+
+    No lock needed: all operations between entry and return are synchronous
+    (no ``await``), so asyncio's cooperative scheduler cannot interleave another
+    coroutine during this function. If an ``await`` is ever added between the
+    dict read and the move_to_end/pop, a lock MUST be added.
+    """
     cache_key = (str(user_id), room_id)
     cached = _auth_cache.get(cache_key)
     if cached is None:
         return None
     result, expires_at = cached
     if time.time() > expires_at:
-        # Expired - remove from cache
-        _auth_cache.pop(cache_key, None)
+        _auth_cache.pop(cache_key, None)  # Safe: pop with default
         return None
+    _auth_cache.move_to_end(cache_key)  # O(1) LRU promotion
     return result
 
 
 async def _set_cached_auth(user_id: UUID, room_id: str, result: bool) -> None:
     """Cache an auth result with TTL."""
     cache_key = (str(user_id), room_id)
-    expires_at = time.time() + _AUTH_CACHE_TTL
+    expires_at = time.time() + _get_auth_cache_ttl()
 
     # R2-16: All cache mutations under lock to prevent concurrent races
     async with _cache_lock:
-        # Enforce max cache size (simple eviction: clear half when full)
-        if len(_auth_cache) >= _AUTH_CACHE_MAX_SIZE:
-            # Clear oldest half of entries
-            sorted_entries = sorted(_auth_cache.items(), key=lambda x: x[1][1])
-            entries_to_remove = len(sorted_entries) // 2
-            for key, _ in sorted_entries[:entries_to_remove]:
-                _auth_cache.pop(key, None)
+        # Enforce max cache size — O(1) LRU eviction via popitem(last=False)
+        if len(_auth_cache) >= _get_auth_cache_max_size():
+            evict_count = max(1, len(_auth_cache) // 10)
+            for _ in range(evict_count):
+                if _auth_cache:
+                    _auth_cache.popitem(last=False)  # O(1) — removes oldest
 
         _auth_cache[cache_key] = (result, expires_at)
+        # move_to_end is needed for existing-key updates (OrderedDict preserves
+        # insertion position on __setitem__); a no-op for new keys.
+        _auth_cache.move_to_end(cache_key)
 
 
-def invalidate_user_cache(user_id: UUID) -> None:
+async def invalidate_user_cache(user_id: UUID) -> None:
     """Invalidate all cached auth results for a user (call on membership changes)."""
-    user_id_str = str(user_id)
-    keys_to_remove = [k for k in _auth_cache.keys() if k[0] == user_id_str]
-    for key in keys_to_remove:
-        _auth_cache.pop(key, None)
+    async with _cache_lock:
+        user_id_str = str(user_id)
+        keys_to_remove = [k for k in _auth_cache if k[0] == user_id_str]
+        for key in keys_to_remove:
+            _auth_cache.pop(key, None)
 
 
-def invalidate_room_cache(room_id: str) -> None:
+async def invalidate_room_cache(room_id: str) -> None:
     """Invalidate all cached auth results for a room (call on room permission changes)."""
-    keys_to_remove = [k for k in _auth_cache.keys() if k[1] == room_id]
-    for key in keys_to_remove:
-        _auth_cache.pop(key, None)
+    async with _cache_lock:
+        keys_to_remove = [k for k in _auth_cache if k[1] == room_id]
+        for key in keys_to_remove:
+            _auth_cache.pop(key, None)
 
 
 # L10: Cross-worker cache invalidation via Redis pub/sub
@@ -101,9 +119,10 @@ async def publish_room_auth_invalidation(
     from ..services.redis_service import redis_service
     if redis_service.is_connected:
         try:
+            payload = {k: v for k, v in {"user_id": user_id, "room_id": room_id}.items() if v is not None}
             await redis_service.publish(
                 _ROOM_AUTH_INVALIDATE_CHANNEL,
-                {"user_id": user_id, "room_id": room_id},
+                payload,
             )
         except Exception:
             pass  # Best-effort
@@ -116,11 +135,11 @@ async def _handle_room_auth_invalidation(data: dict) -> None:
     if uid:
         from uuid import UUID as _UUID
         try:
-            invalidate_user_cache(_UUID(uid))
+            await invalidate_user_cache(_UUID(uid))
         except (ValueError, AttributeError):
             pass
     if rid:
-        invalidate_room_cache(rid)
+        await invalidate_room_cache(rid)
 
 
 async def setup_room_auth_pubsub() -> None:

@@ -55,6 +55,13 @@ async def lifespan(app: FastAPI):
         await redis_service.start_listening()
         logger.info("Redis pub/sub listener started")
 
+        # Subscribe cross-worker cache invalidation channels
+        from .websocket.room_auth import setup_room_auth_pubsub
+        from .services.user_cache_service import setup_user_cache_pubsub
+        await setup_room_auth_pubsub()
+        await setup_user_cache_pubsub()
+        logger.info("Cache invalidation pub/sub channels subscribed")
+
         # Start background health monitor with state-change callback
         async def _on_redis_state_change(connected: bool) -> None:
             """Handle Redis connected ↔ disconnected transitions."""
@@ -65,6 +72,14 @@ async def lifespan(app: FastAPI):
                     await manager.initialize_redis()
                 except Exception as exc:
                     logger.error("Failed to re-initialize after Redis recovery: %s", exc)
+
+                # Flush stale in-memory caches accumulated during the outage
+                try:
+                    from .services.user_cache_service import clear_all_caches
+                    clear_all_caches()
+                    logger.info("Flushed stale in-memory caches after Redis recovery")
+                except Exception as exc:
+                    logger.error("Failed to flush caches after Redis recovery: %s", exc)
             else:
                 logger.warning("Redis health monitor detected outage — gate is active")
 

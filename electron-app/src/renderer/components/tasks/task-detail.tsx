@@ -63,6 +63,7 @@ import {
   WebSocketClient,
   type TaskUpdateEventData,
 } from '@/hooks/use-websocket'
+import { useAuthUserId } from '@/contexts/auth-context'
 
 // ============================================================================
 // Types
@@ -449,6 +450,7 @@ export function TaskDetail({
   projectName,
   onRevertTaskSelection,
 }: TaskDetailProps): JSX.Element | null {
+  const currentUserId = useAuthUserId()
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [assigneeError, setAssigneeError] = useState<string | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
@@ -569,39 +571,42 @@ export function TaskDetail({
     const roomId = WebSocketClient.getProjectRoom(task.project_id)
     joinRoom(roomId)
 
-    // Subscribe to task updates
+    // Subscribe to task updates (skip self-initiated changes)
     const unsubscribeUpdated = subscribe<TaskUpdateEventData>(
       MessageType.TASK_UPDATED,
       (data) => {
         if (data.task_id === task.id) {
-          setExternalUpdateNotice('Task was updated by another user')
-          setTimeout(() => setExternalUpdateNotice(null), 3000)
           if (callbackRefs.current.onExternalUpdate && data.task) {
             callbackRefs.current.onExternalUpdate(data.task as unknown as Task)
           }
+          if (data.changed_by && data.changed_by === currentUserId) return
+          setExternalUpdateNotice('Task was updated by another user')
+          setTimeout(() => setExternalUpdateNotice(null), 3000)
         }
       }
     )
 
-    // Subscribe to task status changes
+    // Subscribe to task status changes (skip self-initiated changes)
     const unsubscribeStatus = subscribe<TaskUpdateEventData>(
       MessageType.TASK_STATUS_CHANGED,
       (data) => {
         if (data.task_id === task.id) {
-          setExternalUpdateNotice('Task status was changed by another user')
-          setTimeout(() => setExternalUpdateNotice(null), 3000)
           if (callbackRefs.current.onExternalUpdate && data.task) {
             callbackRefs.current.onExternalUpdate(data.task as unknown as Task)
           }
+          if (data.changed_by && data.changed_by === currentUserId) return
+          setExternalUpdateNotice('Task status was changed by another user')
+          setTimeout(() => setExternalUpdateNotice(null), 3000)
         }
       }
     )
 
-    // Subscribe to task deletions
+    // Subscribe to task deletions (skip self-initiated changes)
     const unsubscribeDeleted = subscribe<TaskUpdateEventData>(
       MessageType.TASK_DELETED,
       (data) => {
         if (data.task_id === task.id) {
+          if (data.changed_by && data.changed_by === currentUserId) return
           setExternalUpdateNotice('Task was deleted by another user')
           if (callbackRefs.current.onExternalDelete) {
             callbackRefs.current.onExternalDelete()
@@ -616,7 +621,7 @@ export function TaskDetail({
       unsubscribeDeleted()
       leaveRoom(roomId)
     }
-  }, [isOpen, enableRealtime, status.isConnected, task.id, task.project_id, subscribe, joinRoom, leaveRoom])
+  }, [isOpen, enableRealtime, status.isConnected, task.id, task.project_id, subscribe, joinRoom, leaveRoom, currentUserId])
 
   // Close on escape key
   useEffect(() => {

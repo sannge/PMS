@@ -109,7 +109,7 @@ export function useDocumentLock({
   useEffect(() => {
     documentIdRef.current = documentId;
     userIdRef.current = userId;
-  });
+  }, [documentId, userId]);
 
   // Reset lockReleasedRef when switching documents
   useEffect(() => {
@@ -142,7 +142,7 @@ export function useDocumentLock({
     // staleTime + refetchOnMount ensures fresh data on component mount
     // (catches changes missed while unmounted), while WS handles real-time.
     staleTime: 30_000,
-    refetchOnMount: true,
+    refetchOnMount: 'always',
     gcTime: 60_000,
   });
 
@@ -186,13 +186,6 @@ export function useDocumentLock({
 
       throw new Error("Failed to acquire lock");
     },
-    onSuccess: (acquired) => {
-      if (acquired && documentId) {
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.documentLock(documentId),
-        });
-      }
-    },
   });
 
   // ============================================================================
@@ -203,19 +196,16 @@ export function useDocumentLock({
     mutationFn: async (docId: string): Promise<void> => {
       if (lockReleasedRef.current) return;
 
-      lockReleasedRef.current = true;
-
       try {
         const response = await authDelete<void>(
           `/api/documents/${docId}/lock`,
         );
 
-        if (response.status !== 200 && response.status !== 204) {
-          lockReleasedRef.current = false;
+        if (response.status === 200 || response.status === 204) {
+          lockReleasedRef.current = true;
         }
       } catch {
-        // Network error — reset flag so release can be retried
-        lockReleasedRef.current = false;
+        // Network error — leave lockReleasedRef false so unmount can retry
       }
     },
     onSuccess: (_data, docId) => {
@@ -264,7 +254,7 @@ export function useDocumentLock({
     } catch {
       return false;
     }
-  }, [acquireMutation]);
+  }, [acquireMutation.mutateAsync]);
 
   const releaseLock = useCallback(async (): Promise<void> => {
     const docId = documentIdRef.current;
@@ -274,7 +264,7 @@ export function useDocumentLock({
     } catch {
       // Best effort release
     }
-  }, [releaseMutation]);
+  }, [releaseMutation.mutateAsync]);
 
   const forceTakeLock = useCallback(async (): Promise<boolean> => {
     try {
@@ -282,7 +272,7 @@ export function useDocumentLock({
     } catch {
       return false;
     }
-  }, [forceTakeMutation]);
+  }, [forceTakeMutation.mutateAsync]);
 
   // ============================================================================
   // Heartbeat
@@ -411,13 +401,26 @@ export function useDocumentLock({
     };
   }, [documentId, wsStatus.isConnected, subscribe, queryClient]);
 
+  // Invalidate lock query on WS reconnect to catch events missed during disconnect
+  const wasConnectedLockRef = useRef(wsStatus.isConnected);
+  useEffect(() => {
+    const wasConnected = wasConnectedLockRef.current;
+    wasConnectedLockRef.current = wsStatus.isConnected;
+    if (wsStatus.isConnected && !wasConnected && documentId) {
+      queryClient.invalidateQueries({ queryKey: queryKeys.documentLock(documentId) });
+    }
+  }, [wsStatus.isConnected, queryClient, documentId]);
+
   // ============================================================================
   // Cleanup on Unmount
   // ============================================================================
 
   useEffect(() => {
     return () => {
-      // Fire-and-forget release if we hold the lock
+      // Fire-and-forget release if we hold the lock.
+      // Set lockReleasedRef = true BEFORE the call to prevent double-fire
+      // if the component remounts quickly (React StrictMode). If the DELETE
+      // fails, the server TTL (default 300s) is the backstop.
       if (
         isLockedByMeRef.current &&
         !lockReleasedRef.current &&

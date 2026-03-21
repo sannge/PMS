@@ -13,7 +13,7 @@ Access Control:
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Annotated, Dict, List, Optional
+from typing import Annotated, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -26,10 +26,22 @@ from sqlalchemy.orm import lazyload, selectinload
 from ..database import get_db
 from ..utils.tasks import fire_and_forget
 
-# Module-level cache for auto-archive throttling (per-application)
-# Key: application_id (str), Value: last_run timestamp
-_auto_archive_last_run: Dict[str, datetime] = {}
-_AUTO_ARCHIVE_THROTTLE_SECONDS = 60  # Only run auto-archive once per minute per app
+
+
+async def _should_run_auto_archive(app_id: str) -> bool:
+    """Check if auto-archive should run (Redis-based cross-worker throttle)."""
+    from ..services.redis_service import redis_service
+    if not redis_service.is_connected:
+        return True  # Allow if Redis down (fail open for non-critical operation)
+    try:
+        key = f"auto_archive_throttle:{app_id}"
+        # SET NX with 60s TTL — returns True only if key didn't exist
+        was_set = await redis_service.client.set(key, "1", nx=True, ex=60)
+        return was_set is not None
+    except Exception:
+        return True  # Fail open for non-critical operation
+
+
 from ..models.application import Application
 from ..models.application_member import ApplicationMember
 from ..models.project import Project
@@ -1325,16 +1337,12 @@ async def auto_archive_eligible_projects(
     Uses throttling to avoid running on every request (once per minute per app).
     Returns the count of archived projects.
     """
-    # Throttle: only run if not run recently for this application
+    # Throttle: only run if not run recently for this application (cross-worker via Redis)
     app_id_str = str(application_id)
-    now = utc_now()
-    last_run = _auto_archive_last_run.get(app_id_str)
-
-    if last_run and (now - last_run).total_seconds() < _AUTO_ARCHIVE_THROTTLE_SECONDS:
+    if not await _should_run_auto_archive(app_id_str):
         return 0  # Skip - ran too recently
 
-    # Update last run timestamp
-    _auto_archive_last_run[app_id_str] = now
+    now = utc_now()
 
     # Subquery: projects that have at least one task
     has_tasks = (

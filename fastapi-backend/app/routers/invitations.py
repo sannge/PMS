@@ -14,11 +14,9 @@ from typing import Annotated, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import lazyload
-
-from ..utils.timezone import utc_now
 
 from ..database import get_db
 from ..models.application import Application
@@ -31,15 +29,21 @@ from ..schemas.invitation import (
     InvitationResponse,
     InvitationStatus,
     InvitationWithDetails,
-    InvitationList,
 )
-from ..schemas.notification import EntityType, NotificationType, NotificationCreate
+from ..schemas.notification import EntityType, NotificationCreate, NotificationType
 from ..services.auth_service import get_current_user
 from ..services.notification_service import NotificationService
+from ..services.user_cache_service import invalidate_app_role, publish_user_cache_invalidation
+from ..utils.tasks import fire_and_forget
+from ..utils.timezone import utc_now
 from ..websocket.handlers import (
     handle_invitation_notification,
     handle_invitation_response,
     handle_member_added,
+)
+from ..websocket.room_auth import (
+    invalidate_user_cache,
+    publish_room_auth_invalidation,
 )
 
 router = APIRouter(prefix="/api/invitations", tags=["Invitations"])
@@ -429,6 +433,20 @@ async def accept_invitation(
     db.add(member)
     await db.commit()
     await db.refresh(invitation)
+
+    # Invalidate caches so new membership is immediately visible
+    invalidate_app_role(current_user.id, invitation.application_id)
+    fire_and_forget(
+        publish_user_cache_invalidation(
+            user_id=str(current_user.id), app_id=str(invitation.application_id),
+        ),
+        name="invite-accept-user-cache-invalidation",
+    )
+    await invalidate_user_cache(current_user.id)
+    fire_and_forget(
+        publish_room_auth_invalidation(user_id=str(current_user.id)),
+        name="invite-accept-room-auth-invalidation",
+    )
 
     # Create notification for inviter (with WebSocket broadcast)
     notification_data = NotificationCreate(

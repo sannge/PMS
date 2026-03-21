@@ -11,22 +11,20 @@ Tests cover:
 from __future__ import annotations
 
 import time
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
 
 from app.websocket.room_auth import (
-    _AUTH_CACHE_MAX_SIZE,
-    _AUTH_CACHE_TTL,
     _auth_cache,
+    _get_auth_cache_ttl,
     _get_cached_auth,
     _set_cached_auth,
     check_room_access,
     invalidate_room_cache,
     invalidate_user_cache,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -75,20 +73,21 @@ class TestAuthCache:
 
     @pytest.mark.asyncio
     async def test_cache_eviction_when_max_size_exceeded(self):
-        """When cache hits max size, half of entries should be evicted."""
-        # Fill cache to max size
-        for i in range(_AUTH_CACHE_MAX_SIZE):
-            key = (f"user-{i}", f"room-{i}")
-            _auth_cache[key] = (True, time.time() + _AUTH_CACHE_TTL)
+        """When cache hits max size, 10% of entries should be evicted."""
+        with patch("app.websocket.room_auth._get_auth_cache_max_size", return_value=10):
+            # Fill cache to max size
+            for i in range(10):
+                key = (f"user-{i}", f"room-{i}")
+                _auth_cache[key] = (True, time.time() + _get_auth_cache_ttl())
 
-        assert len(_auth_cache) >= _AUTH_CACHE_MAX_SIZE
+            assert len(_auth_cache) == 10
 
-        # Setting one more should trigger eviction
-        uid = uuid4()
-        await _set_cached_auth(uid, "new-room", True)
+            # Setting one more should trigger eviction (10% = 1 entry evicted)
+            uid = uuid4()
+            await _set_cached_auth(uid, "new-room", True)
 
-        # Cache should have been trimmed (roughly half + 1 new entry)
-        assert len(_auth_cache) < _AUTH_CACHE_MAX_SIZE
+            # 10 - 1 evicted + 1 new = 10
+            assert len(_auth_cache) <= 10
 
 
 class TestInvalidateCache:
@@ -100,7 +99,7 @@ class TestInvalidateCache:
         other_uid = uuid4()
         await _set_cached_auth(other_uid, "room-1", True)
 
-        invalidate_user_cache(uid)
+        await invalidate_user_cache(uid)
 
         # User's entries should be gone
         assert await _get_cached_auth(uid, "room-1") is None
@@ -117,7 +116,7 @@ class TestInvalidateCache:
         await _set_cached_auth(uid_b, room, False)
         await _set_cached_auth(uid_a, "other-room", True)
 
-        invalidate_room_cache(room)
+        await invalidate_room_cache(room)
 
         assert await _get_cached_auth(uid_a, room) is None
         assert await _get_cached_auth(uid_b, room) is None

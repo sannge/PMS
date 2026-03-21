@@ -22,7 +22,6 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from ..utils.timezone import utc_now
 from ..database import get_db
 from ..models.application import Application
 from ..models.application_member import ApplicationMember
@@ -31,18 +30,22 @@ from ..models.project_member import ProjectMember
 from ..models.task import Task
 from ..models.task_status import StatusCategory, TaskStatus
 from ..models.user import User
+from ..schemas.notification import EntityType, NotificationCreate, NotificationType
 from ..schemas.project_member import (
     ProjectMemberBase,
     ProjectMemberUpdate,
     ProjectMemberWithUser,
-    ProjectMemberRole as ProjectMemberRoleSchema,
     UserSummary,
 )
-from ..schemas.notification import NotificationType, EntityType, NotificationCreate
+from ..schemas.project_member import (
+    ProjectMemberRole as ProjectMemberRoleSchema,
+)
 from ..services.auth_service import get_current_user
-from ..services.permission_service import get_permission_service
 from ..services.notification_service import NotificationService
-from ..services.user_cache_service import invalidate_project_role
+from ..services.permission_service import get_permission_service
+from ..services.user_cache_service import invalidate_project_role, publish_user_cache_invalidation
+from ..utils.tasks import fire_and_forget
+from ..utils.timezone import utc_now
 from ..websocket.handlers import (
     handle_project_member_added,
     handle_project_member_removed,
@@ -478,9 +481,21 @@ async def add_project_member(
         },
     )
 
+    # Invalidate project role cache for the newly added user (local + cross-worker)
+    invalidate_project_role(new_member.user_id, project_id)
+    fire_and_forget(
+        publish_user_cache_invalidation(
+            user_id=str(new_member.user_id), project_id=str(project_id),
+        ),
+        name="add-project-member-user-cache-invalidation",
+    )
+
     # Invalidate room auth cache for the newly added user
-    invalidate_user_cache(new_member.user_id)
-    await publish_room_auth_invalidation(user_id=str(new_member.user_id))
+    await invalidate_user_cache(new_member.user_id)
+    fire_and_forget(
+        publish_room_auth_invalidation(user_id=str(new_member.user_id)),
+        name="add-project-member-room-auth-invalidation",
+    )
 
     # R2-6: Invalidate RBAC scope cache so AI retrieval reflects new membership
     try:
@@ -612,8 +627,14 @@ async def remove_project_member(
     await db.delete(member)
     await db.commit()
 
-    # Invalidate project role cache for removed user
+    # Invalidate project role cache for removed user (local + cross-worker)
     invalidate_project_role(user_id, project_id)
+    fire_and_forget(
+        publish_user_cache_invalidation(
+            user_id=str(user_id), project_id=str(project_id),
+        ),
+        name="remove-project-member-user-cache-invalidation",
+    )
 
     # Create notifications
     # Notify the removed user
@@ -640,8 +661,11 @@ async def remove_project_member(
     )
 
     # Invalidate room auth cache for the removed user
-    invalidate_user_cache(user_id)
-    await publish_room_auth_invalidation(user_id=str(user_id))
+    await invalidate_user_cache(user_id)
+    fire_and_forget(
+        publish_room_auth_invalidation(user_id=str(user_id)),
+        name="remove-project-member-room-auth-invalidation",
+    )
 
     # Invalidate search scope cache so removed user can no longer see docs in search
     try:
@@ -761,8 +785,14 @@ async def change_project_member_role(
     await db.commit()
     await db.refresh(member)
 
-    # Invalidate project role cache for affected user
+    # Invalidate project role cache for affected user (local + cross-worker)
     invalidate_project_role(user_id, project_id)
+    fire_and_forget(
+        publish_user_cache_invalidation(
+            user_id=str(user_id), project_id=str(project_id),
+        ),
+        name="change-project-member-role-user-cache-invalidation",
+    )
 
     # Create notification for the affected user
     role_notification = NotificationCreate(
@@ -790,8 +820,11 @@ async def change_project_member_role(
     )
 
     # Invalidate room auth cache for the affected user
-    invalidate_user_cache(user_id)
-    await publish_room_auth_invalidation(user_id=str(user_id))
+    await invalidate_user_cache(user_id)
+    fire_and_forget(
+        publish_room_auth_invalidation(user_id=str(user_id)),
+        name="change-project-member-role-room-auth-invalidation",
+    )
 
     # R2-6: Invalidate RBAC scope cache so AI retrieval reflects role change
     try:

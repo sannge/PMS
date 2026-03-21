@@ -466,7 +466,12 @@ async def update_task_status(
             if not task_obj:
                 return f"Error: Task '{task}' no longer exists."
 
-            # Re-resolve target status post-interrupt
+            # Re-resolve current and target status post-interrupt (TOCTOU mitigation)
+            current_status_result_fresh = await db.execute(
+                select(TaskStatus).where(TaskStatus.id == task_obj.task_status_id)
+            )
+            current_status_fresh = current_status_result_fresh.scalar_one_or_none()
+
             target_status_result = await db.execute(
                 select(TaskStatus).where(
                     TaskStatus.project_id == task_obj.project_id,
@@ -478,6 +483,16 @@ async def update_task_status(
                 return f"Error: Status '{target_status_name}' no longer exists for this project."
 
             task_obj.task_status_id = target_status.id
+
+            # Update completed_at based on status change (mirrors tasks.py logic)
+            from ....utils.timezone import utc_now as _utc_now
+            new_is_done = target_status.category == "Done"
+            old_was_done = current_status_fresh.category == "Done" if current_status_fresh else False
+            if new_is_done and not old_was_done:
+                task_obj.completed_at = _utc_now()
+            elif old_was_done and not new_is_done:
+                task_obj.completed_at = None
+
             await db.flush()
 
             _broadcast_data = {

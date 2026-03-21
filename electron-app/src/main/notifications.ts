@@ -73,8 +73,11 @@ function generateNotificationId(): string {
  */
 function getNotificationIcon(): Electron.NativeImage | undefined {
   try {
-    // Try to load app icon from resources
-    const iconPath = join(__dirname, '../../resources/icon.png')
+    // In production, extraResources copies icon.png to process.resourcesPath
+    // In dev, it lives at <project>/resources/icon.png
+    const iconPath = app.isPackaged
+      ? join(process.resourcesPath, 'icon.png')
+      : join(__dirname, '../../resources/icon.png')
     const icon = nativeImage.createFromPath(iconPath)
     if (!icon.isEmpty()) {
       return icon
