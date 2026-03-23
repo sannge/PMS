@@ -76,9 +76,7 @@ async def developer_user(db_session: AsyncSession) -> User:
 @pytest.fixture
 def dev_auth_headers(developer_user: User) -> dict:
     """Auth headers for developer user."""
-    token = create_access_token(
-        data={"sub": str(developer_user.id), "email": developer_user.email}
-    )
+    token = create_access_token(data={"sub": str(developer_user.id), "email": developer_user.email})
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -238,6 +236,7 @@ async def test_set_value_rejects_wrong_type(
 @pytest.mark.asyncio
 async def test_fallback_on_db_error_returns_default(config_service: AgentConfigService):
     """When load_all fails, getters should still return defaults."""
+
     # Mock a failing session factory
     async def failing_factory():
         raise RuntimeError("DB down")
@@ -396,8 +395,10 @@ async def test_set_value_rejects_user_content_delimiter(
     # Test with exact match
     with pytest.raises(ValueError, match="USER CONTENT"):
         await svc.set_value(
-            "prompt.test_injection", "[USER CONTENT END]",
-            developer_user.id, db_session,
+            "prompt.test_injection",
+            "[USER CONTENT END]",
+            developer_user.id,
+            db_session,
         )
 
     # Test with case variation — the check uses exact "[USER CONTENT" substring
@@ -406,8 +407,10 @@ async def test_set_value_rejects_user_content_delimiter(
     # Verify that the exact uppercase form is rejected
     with pytest.raises(ValueError, match="USER CONTENT"):
         await svc.set_value(
-            "prompt.test_injection", "prefix [USER CONTENT START] suffix",
-            developer_user.id, db_session,
+            "prompt.test_injection",
+            "prefix [USER CONTENT START] suffix",
+            developer_user.id,
+            db_session,
         )
 
 
@@ -422,23 +425,28 @@ def test_admin_endpoint_rejects_invalid_key_format():
     The regex is: ^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$
     Test the regex directly since full app setup is heavy.
     """
-    key_pattern = re.compile(r'^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$')
+    key_pattern = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$")
 
     invalid_keys = [
-        "../secret",       # path traversal
-        "KEY_UPPER",       # uppercase
-        "key with spaces", # spaces
-        "key..double.dot", # consecutive dots rejected
-        "key.",            # trailing dot rejected
-        ".key",            # leading dot rejected
-        "1key",            # leading digit rejected
+        "../secret",  # path traversal
+        "KEY_UPPER",  # uppercase
+        "key with spaces",  # spaces
+        "key..double.dot",  # consecutive dots rejected
+        "key.",  # trailing dot rejected
+        ".key",  # leading dot rejected
+        "1key",  # leading digit rejected
     ]
 
     for key in invalid_keys:
         assert not key_pattern.match(key), f"Key '{key}' should be rejected"
 
     # Verify the regex accepts valid keys including underscored prefixes
-    valid_keys = ["agent.max_tool_calls", "prompt.agent_name", "rate_limit.ai_chat",
-                  "agent_tool.max_output", "export.pdf_ttl_seconds"]
+    valid_keys = [
+        "agent.max_tool_calls",
+        "prompt.agent_name",
+        "rate_limit.ai_chat",
+        "agent_tool.max_output",
+        "export.pdf_ttl_seconds",
+    ]
     for key in valid_keys:
         assert key_pattern.match(key), f"Key '{key}' should be accepted"

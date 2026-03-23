@@ -33,7 +33,6 @@ from app.ai.agent.routing import (
 
 
 class TestRouteAfterUnderstand:
-
     def test_greeting_high_confidence_fast_paths(self):
         state = {
             "messages": [],
@@ -155,7 +154,6 @@ class TestRouteAfterUnderstand:
 
 
 class TestRouteAfterExplore:
-
     def test_tool_calls_routes_to_explore_tools(self):
         ai_msg = AIMessage(
             content="",
@@ -266,7 +264,6 @@ class TestRouteAfterExplore:
 
 
 class TestRouteAfterRespond:
-
     def test_text_only_routes_to_end(self):
         state = {"messages": [AIMessage(content="Hello!")]}
         assert route_after_respond(state) == "end"
@@ -294,7 +291,6 @@ class TestRouteAfterRespond:
 
 
 class TestRouteAfterSynthesize:
-
     def test_ai_message_routes_to_respond(self):
         state = {"messages": [AIMessage(content="Synthesized results.")], "current_phase": "synthesize"}
         assert route_after_synthesize(state) == "respond"

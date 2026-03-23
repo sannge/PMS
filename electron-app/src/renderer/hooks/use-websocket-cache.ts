@@ -249,10 +249,9 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
           queryClient.invalidateQueries({ queryKey: queryKeys.projects(data.application_id) })
           queryClient.invalidateQueries({ queryKey: queryKeys.myProjects(data.application_id) })
           queryClient.invalidateQueries({ queryKey: queryKeys.myProjectsCrossApp })
-          // Invalidate application cache to update projects_count
-          // (archivedProjects not needed — archive/restore triggers PROJECT_STATUS_CHANGED)
-          queryClient.invalidateQueries({ queryKey: queryKeys.application(data.application_id) })
-          queryClient.invalidateQueries({ queryKey: queryKeys.applications })
+          // Note: applications/application invalidation removed — project count only
+          // changes on create/delete, not on field edits. PROJECT_CREATED and
+          // PROJECT_DELETED handlers still invalidate the applications list.
         }
       })
     )
@@ -593,7 +592,6 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
 
     unsubscribers.push(
       wsClient.on<NotificationEventData>(MessageType.NOTIFICATION, (data) => {
-        queryClient.invalidateQueries({ queryKey: queryKeys.notifications })
         queryClient.invalidateQueries({ queryKey: queryKeys.unreadCount })
 
         // Handle member_removed notification as fallback (in case MEMBER_REMOVED event missed)
@@ -626,7 +624,6 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
 
     unsubscribers.push(
       wsClient.on<NotificationEventData>(MessageType.NOTIFICATION_READ, () => {
-        queryClient.invalidateQueries({ queryKey: queryKeys.notifications })
         queryClient.invalidateQueries({ queryKey: queryKeys.unreadCount })
       })
     )

@@ -1,10 +1,8 @@
 """Dashboard aggregation service."""
 
-import asyncio
+import logging
 from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
-
-from ..utils.timezone import CENTRAL_TZ, central_now, central_today, utc_now
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,16 +21,18 @@ from ..schemas.dashboard import (
     TrendData,
     UpcomingTaskItem,
 )
+from ..utils.timezone import CENTRAL_TZ, central_now, utc_now
+
+logger = logging.getLogger(__name__)
+
+# Redis cache TTL for dashboard data (seconds)
+_DASHBOARD_CACHE_TTL = 60
 
 
 def _build_accessible_app_ids(user_id: UUID):
     """Build subquery for application IDs the user can access."""
-    owned_apps = select(Application.id.label("app_id")).where(
-        Application.owner_id == user_id
-    )
-    member_apps = select(ApplicationMember.application_id.label("app_id")).where(
-        ApplicationMember.user_id == user_id
-    )
+    owned_apps = select(Application.id.label("app_id")).where(Application.owner_id == user_id)
+    member_apps = select(ApplicationMember.application_id.label("app_id")).where(ApplicationMember.user_id == user_id)
     return owned_apps.union(member_apps).subquery()
 
 
@@ -108,11 +108,11 @@ async def _query_stats(
 
     # Completion trend: last 14 days grouped by date
     # Convert Central Time boundary to UTC for DB comparison
-    fourteen_days_ago = datetime.combine(
-        today - timedelta(days=13), datetime.min.time(), tzinfo=CENTRAL_TZ
-    ).astimezone(timezone.utc)
+    fourteen_days_ago = datetime.combine(today - timedelta(days=13), datetime.min.time(), tzinfo=CENTRAL_TZ).astimezone(
+        timezone.utc
+    )
     # Group by Central Time date (not UTC) so day boundaries match user expectations
-    central_date_expr = func.date(func.timezone('America/Chicago', Task.completed_at))
+    central_date_expr = func.date(func.timezone("America/Chicago", Task.completed_at))
     completion_trend_result = await db.execute(
         select(
             central_date_expr.label("completion_date"),
@@ -130,7 +130,11 @@ async def _query_stats(
     completion_data: dict[date, int] = {}
     for crow in completion_trend_result.all():
         # Fix 4: func.date() may return str from PostgreSQL, parse to date object
-        key = crow.completion_date if isinstance(crow.completion_date, date) else date.fromisoformat(str(crow.completion_date))
+        key = (
+            crow.completion_date
+            if isinstance(crow.completion_date, date)
+            else date.fromisoformat(str(crow.completion_date))
+        )
         completion_data[key] = crow.cnt
 
     return (
@@ -399,10 +403,43 @@ def _build_completion_trend(
     return points
 
 
-async def get_dashboard_data(
-    db: AsyncSession, user_id: UUID
-) -> DashboardResponse:
-    """Aggregate all dashboard data using sequential queries on a single session."""
+async def get_dashboard_data(db: AsyncSession, user_id: UUID) -> DashboardResponse:
+    """Aggregate all dashboard data using sequential queries on a single session.
+
+    Results are cached in Redis for 60 seconds per user to reduce DB load.
+    """
+    from ..config import _app_env
+    from .redis_service import redis_service
+
+    cache_key = f"dashboard:{_app_env}:{user_id}"
+
+    # Check Redis cache first
+    if redis_service.is_connected:
+        try:
+            cached = await redis_service.get(cache_key)
+            if cached:
+                return DashboardResponse.model_validate_json(cached)
+        except Exception:
+            logger.debug("Dashboard cache miss or error for user %s", user_id)
+
+    result = await _compute_dashboard_data(db, user_id)
+
+    # Store in Redis cache (best-effort, don't fail the request)
+    if redis_service.is_connected:
+        try:
+            await redis_service.set(
+                cache_key,
+                result.model_dump_json(),
+                ttl=_DASHBOARD_CACHE_TTL,
+            )
+        except Exception:
+            logger.debug("Failed to cache dashboard for user %s", user_id)
+
+    return result
+
+
+async def _compute_dashboard_data(db: AsyncSession, user_id: UUID) -> DashboardResponse:
+    """Run all dashboard queries and build the response."""
     # Build accessible app IDs subquery
     all_app_ids = _build_accessible_app_ids(user_id)
 
@@ -471,25 +508,13 @@ async def get_dashboard_data(
     app_count = len(app_id_list)
     project_count = len(project_id_list)
 
-    # Run queries in 2 parallel groups (2 sessions max instead of 4)
-    # to reduce connection pool pressure.
-    from ..database import async_session_maker
-
-    async def _stats_and_health():
-        async with async_session_maker() as s:
-            stats = await _query_stats(s, project_id_list, user_id, today, week_start)
-            health = await _query_project_health(s, app_id_list)
-            return stats, health
-
-    async def _tasks_and_trends():
-        async with async_session_maker() as s:
-            tasks = await _query_task_lists(s, project_id_list, today, seven_days_ago)
-            trends = await _query_trends(s, project_id_list, now, thirty_days_ago, sixty_days_ago)
-            return tasks, trends
-
-    (stats_result, health_result), (tasks_result, trend_result) = await asyncio.gather(
-        _stats_and_health(), _tasks_and_trends()
-    )
+    # Run all queries sequentially on the single injected session to avoid
+    # opening extra pool connections.  11 queries at ~5ms each = ~55ms total,
+    # well within the 200ms API read target.
+    stats_result = await _query_stats(db, project_id_list, user_id, today, week_start)
+    health_result = await _query_project_health(db, app_id_list)
+    tasks_result = await _query_task_lists(db, project_id_list, today, seven_days_ago)
+    trend_result = await _query_trends(db, project_id_list, now, thirty_days_ago, sixty_days_ago)
 
     # Unpack stats
     (
@@ -501,9 +526,7 @@ async def get_dashboard_data(
     ) = stats_result
 
     # Build completion trend (fill gaps)
-    completion_trend = _build_completion_trend(
-        completion_trend_data, today
-    )
+    completion_trend = _build_completion_trend(completion_trend_data, today)
 
     # Unpack trends
     completed_trend, active_trend = trend_result

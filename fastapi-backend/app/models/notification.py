@@ -99,7 +99,7 @@ class Notification(Base):
     user = relationship(
         "User",
         back_populates="notifications",
-        lazy="joined",
+        lazy="select",
     )
 
     def __repr__(self) -> str:

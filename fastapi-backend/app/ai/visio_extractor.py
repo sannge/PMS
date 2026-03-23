@@ -71,10 +71,7 @@ class VisioExtractor:
         try:
             import vsdx as vsdx_lib
         except ImportError:
-            raise ImportError(
-                "vsdx is required for Visio extraction. "
-                "Install with: uv add vsdx"
-            )
+            raise ImportError("vsdx is required for Visio extraction. Install with: uv add vsdx")
 
         warnings: list[str] = []
         path = Path(file_path)
@@ -87,7 +84,7 @@ class VisioExtractor:
 
         # HIGH-9: Zip bomb protection — scan member sizes before opening
         try:
-            with zipfile.ZipFile(str(path), 'r') as zf:
+            with zipfile.ZipFile(str(path), "r") as zf:
                 total_uncompressed = sum(info.file_size for info in zf.infolist())
                 if total_uncompressed > MAX_UNCOMPRESSED_SIZE:
                     raise ValueError(
@@ -138,10 +135,7 @@ class VisioExtractor:
 
             # MED-18: Cap total shapes to prevent excessive processing
             if len(flat_shapes) > MAX_SHAPES:
-                warnings.append(
-                    f"Page '{page_name}' has {len(flat_shapes)} shapes; "
-                    f"truncated to {MAX_SHAPES}."
-                )
+                warnings.append(f"Page '{page_name}' has {len(flat_shapes)} shapes; truncated to {MAX_SHAPES}.")
                 flat_shapes = flat_shapes[:MAX_SHAPES]
 
             for shape in flat_shapes:

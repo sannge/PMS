@@ -35,6 +35,7 @@ from app.ai.agent.tools.context import clear_tool_context, set_tool_context
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _setup_context(**overrides):
     """Populate tool context with sensible defaults + overrides."""
     ctx = {
@@ -45,10 +46,18 @@ def _setup_context(**overrides):
         "provider_registry": MagicMock(),
     }
     ctx.update(overrides)
-    set_tool_context(**{k: ctx[k] for k in (
-        "user_id", "accessible_app_ids", "accessible_project_ids",
-        "db_session_factory", "provider_registry",
-    )})
+    set_tool_context(
+        **{
+            k: ctx[k]
+            for k in (
+                "user_id",
+                "accessible_app_ids",
+                "accessible_project_ids",
+                "db_session_factory",
+                "provider_registry",
+            )
+        }
+    )
     return ctx
 
 
@@ -71,8 +80,8 @@ def _mock_db_session():
 # _parse_uuid
 # ---------------------------------------------------------------------------
 
-class TestParseUuid:
 
+class TestParseUuid:
     def test_valid_uuid(self):
         uid = uuid4()
         result = _parse_uuid(str(uid), "test_field")
@@ -91,8 +100,8 @@ class TestParseUuid:
 # _strip_markdown
 # ---------------------------------------------------------------------------
 
-class TestStripMarkdown:
 
+class TestStripMarkdown:
     def test_removes_headings(self):
         text = "# Heading\n## Sub\nBody text"
         result = _strip_markdown(text)
@@ -125,8 +134,8 @@ class TestStripMarkdown:
 # _STATUS_NAME_MAP
 # ---------------------------------------------------------------------------
 
-class TestStatusNameMap:
 
+class TestStatusNameMap:
     def test_has_5_entries(self):
         assert len(_STATUS_NAME_MAP) == 5
 
@@ -144,8 +153,8 @@ class TestStatusNameMap:
 # WRITE_TOOLS registry
 # ---------------------------------------------------------------------------
 
-class TestWriteToolsRegistry:
 
+class TestWriteToolsRegistry:
     def test_has_11_tools(self):
         assert len(WRITE_TOOLS) == 11
 
@@ -170,17 +179,19 @@ class TestWriteToolsRegistry:
 # create_task tool
 # ---------------------------------------------------------------------------
 
-class TestCreateTask:
 
+class TestCreateTask:
     async def test_rbac_denied(self):
         """create_task returns not-found when project is not accessible."""
         proj_id = str(uuid4())
         _setup_context(accessible_project_ids=[])
 
-        result = await create_task.ainvoke({
-            "project": proj_id,
-            "title": "New Task",
-        })
+        result = await create_task.ainvoke(
+            {
+                "project": proj_id,
+                "title": "New Task",
+            }
+        )
         assert "No project found" in result
         _clear()
 
@@ -238,10 +249,12 @@ class TestCreateTask:
         mock_tool_session.side_effect = [pre_ctx, post_ctx]
         mock_interrupt.return_value = {"approved": True}
 
-        result = await create_task.ainvoke({
-            "project": proj_id,
-            "title": "New Task",
-        })
+        result = await create_task.ainvoke(
+            {
+                "project": proj_id,
+                "title": "New Task",
+            }
+        )
 
         assert "created" in result.lower()
         assert "MP-42" in result
@@ -269,10 +282,12 @@ class TestCreateTask:
         mock_tool_session.return_value = pre_ctx
         mock_interrupt.return_value = {"approved": False}
 
-        result = await create_task.ainvoke({
-            "project": proj_id,
-            "title": "Should Be Cancelled",
-        })
+        result = await create_task.ainvoke(
+            {
+                "project": proj_id,
+                "title": "Should Be Cancelled",
+            }
+        )
 
         assert "cancelled" in result.lower()
         _clear()
@@ -282,15 +297,17 @@ class TestCreateTask:
 # update_task_status tool
 # ---------------------------------------------------------------------------
 
-class TestUpdateTaskStatus:
 
+class TestUpdateTaskStatus:
     async def test_invalid_status(self):
         """update_task_status rejects invalid status names."""
         _setup_context()
-        result = await update_task_status.ainvoke({
-            "task": str(uuid4()),
-            "new_status": "invalid_status",
-        })
+        result = await update_task_status.ainvoke(
+            {
+                "task": str(uuid4()),
+                "new_status": "invalid_status",
+            }
+        )
         assert "Invalid status" in result
         _clear()
 
@@ -331,22 +348,26 @@ class TestUpdateTaskStatus:
         target_status_result = MagicMock()
         target_status_result.scalar_one_or_none.return_value = mock_target_status
 
-        mock_session.execute = AsyncMock(side_effect=[
-            resolve_result,
-            task_result,
-            current_status_result,
-            target_status_result,
-        ])
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                resolve_result,
+                task_result,
+                current_status_result,
+                target_status_result,
+            ]
+        )
 
         ctx = AsyncMock()
         ctx.__aenter__ = AsyncMock(return_value=mock_session)
         ctx.__aexit__ = AsyncMock(return_value=None)
         mock_tool_session.return_value = ctx
 
-        result = await update_task_status.ainvoke({
-            "task": task_id,
-            "new_status": "todo",
-        })
+        result = await update_task_status.ainvoke(
+            {
+                "task": task_id,
+                "new_status": "todo",
+            }
+        )
         assert "already" in result.lower()
         _clear()
 
@@ -355,8 +376,8 @@ class TestUpdateTaskStatus:
 # assign_task tool
 # ---------------------------------------------------------------------------
 
-class TestAssignTask:
 
+class TestAssignTask:
     @patch("app.ai.agent.tools.write_tools._get_tool_session")
     async def test_assignee_not_found(self, mock_tool_session):
         """assign_task returns error when assignee user is not in project scope."""
@@ -385,19 +406,25 @@ class TestAssignTask:
         user_result = MagicMock()
         user_result.scalar_one_or_none.return_value = None  # UUID not in scope
 
-        mock_session.execute = AsyncMock(side_effect=[
-            resolve_result, task_result, user_result,
-        ])
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                resolve_result,
+                task_result,
+                user_result,
+            ]
+        )
 
         ctx = AsyncMock()
         ctx.__aenter__ = AsyncMock(return_value=mock_session)
         ctx.__aexit__ = AsyncMock(return_value=None)
         mock_tool_session.return_value = ctx
 
-        result = await assign_task.ainvoke({
-            "task": task_id,
-            "user": assignee_id,
-        })
+        result = await assign_task.ainvoke(
+            {
+                "task": task_id,
+                "user": assignee_id,
+            }
+        )
         assert "not found" in result.lower() or "no user found" in result.lower()
         _clear()
 
@@ -445,20 +472,28 @@ class TestAssignTask:
         proj_name_result = MagicMock()
         proj_name_result.scalar_one_or_none.return_value = "My Project"
 
-        mock_session.execute = AsyncMock(side_effect=[
-            resolve_result, task_result, scope_result,
-            user_result, member_result, proj_name_result,
-        ])
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                resolve_result,
+                task_result,
+                scope_result,
+                user_result,
+                member_result,
+                proj_name_result,
+            ]
+        )
 
         ctx = AsyncMock()
         ctx.__aenter__ = AsyncMock(return_value=mock_session)
         ctx.__aexit__ = AsyncMock(return_value=None)
         mock_tool_session.return_value = ctx
 
-        result = await assign_task.ainvoke({
-            "task": task_id,
-            "user": assignee_id,
-        })
+        result = await assign_task.ainvoke(
+            {
+                "task": task_id,
+                "user": assignee_id,
+            }
+        )
         assert "not a member" in result.lower()
         _clear()
 
@@ -467,17 +502,19 @@ class TestAssignTask:
 # create_document tool
 # ---------------------------------------------------------------------------
 
-class TestCreateDocument:
 
+class TestCreateDocument:
     async def test_invalid_scope(self):
         """create_document rejects invalid scope values."""
         _setup_context()
-        result = await create_document.ainvoke({
-            "title": "Doc",
-            "content": "Body",
-            "scope": "global",
-            "scope_id": str(uuid4()),
-        })
+        result = await create_document.ainvoke(
+            {
+                "title": "Doc",
+                "content": "Body",
+                "scope": "global",
+                "scope_id": str(uuid4()),
+            }
+        )
         assert "Scope must be" in result
         _clear()
 
@@ -491,12 +528,14 @@ class TestCreateDocument:
         ctx.__aexit__ = AsyncMock(return_value=None)
         mock_tool_session.return_value = ctx
 
-        result = await create_document.ainvoke({
-            "title": "Doc",
-            "content": "Body",
-            "scope": "application",
-            "scope_id": app_id,
-        })
+        result = await create_document.ainvoke(
+            {
+                "title": "Doc",
+                "content": "Body",
+                "scope": "application",
+                "scope_id": app_id,
+            }
+        )
         assert "No application found" in result
         _clear()
 
@@ -510,12 +549,14 @@ class TestCreateDocument:
         ctx.__aexit__ = AsyncMock(return_value=None)
         mock_tool_session.return_value = ctx
 
-        result = await create_document.ainvoke({
-            "title": "Doc",
-            "content": "Body",
-            "scope": "project",
-            "scope_id": proj_id,
-        })
+        result = await create_document.ainvoke(
+            {
+                "title": "Doc",
+                "content": "Body",
+                "scope": "project",
+                "scope_id": proj_id,
+            }
+        )
         assert "No project found" in result
         _clear()
 
@@ -525,48 +566,56 @@ class TestCreateDocument:
         other_user_id = str(uuid4())
         _setup_context(user_id=user_id)
 
-        result = await create_document.ainvoke({
-            "title": "Doc",
-            "content": "Body",
-            "scope": "personal",
-            "scope_id": other_user_id,
-        })
+        result = await create_document.ainvoke(
+            {
+                "title": "Doc",
+                "content": "Body",
+                "scope": "personal",
+                "scope_id": other_user_id,
+            }
+        )
         assert "Access denied" in result
         _clear()
 
     async def test_empty_title_rejected(self):
         """create_document rejects empty title."""
         _setup_context()
-        result = await create_document.ainvoke({
-            "title": "",
-            "content": "Body",
-            "scope": "personal",
-            "scope_id": str(uuid4()),
-        })
+        result = await create_document.ainvoke(
+            {
+                "title": "",
+                "content": "Body",
+                "scope": "personal",
+                "scope_id": str(uuid4()),
+            }
+        )
         assert "title is required" in result.lower()
         _clear()
 
     async def test_empty_content_rejected(self):
         """create_document rejects empty content."""
         _setup_context()
-        result = await create_document.ainvoke({
-            "title": "Valid Title",
-            "content": "",
-            "scope": "personal",
-            "scope_id": str(uuid4()),
-        })
+        result = await create_document.ainvoke(
+            {
+                "title": "Valid Title",
+                "content": "",
+                "scope": "personal",
+                "scope_id": str(uuid4()),
+            }
+        )
         assert "content is required" in result.lower()
         _clear()
 
     async def test_title_too_long_rejected(self):
         """create_document rejects title longer than 255 chars."""
         _setup_context()
-        result = await create_document.ainvoke({
-            "title": "X" * 256,
-            "content": "Body",
-            "scope": "personal",
-            "scope_id": str(uuid4()),
-        })
+        result = await create_document.ainvoke(
+            {
+                "title": "X" * 256,
+                "content": "Body",
+                "scope": "personal",
+                "scope_id": str(uuid4()),
+            }
+        )
         assert "255" in result
         _clear()
 
@@ -575,17 +624,19 @@ class TestCreateDocument:
 # create_task — additional validation tests
 # ---------------------------------------------------------------------------
 
-class TestCreateTaskValidation:
 
+class TestCreateTaskValidation:
     async def test_empty_title_rejected(self):
         """create_task rejects empty title."""
         proj_id = str(uuid4())
         _setup_context(accessible_project_ids=[proj_id])
 
-        result = await create_task.ainvoke({
-            "project": proj_id,
-            "title": "",
-        })
+        result = await create_task.ainvoke(
+            {
+                "project": proj_id,
+                "title": "",
+            }
+        )
         assert "title is required" in result.lower()
         _clear()
 
@@ -594,10 +645,12 @@ class TestCreateTaskValidation:
         proj_id = str(uuid4())
         _setup_context(accessible_project_ids=[proj_id])
 
-        result = await create_task.ainvoke({
-            "project": proj_id,
-            "title": "T" * 501,
-        })
+        result = await create_task.ainvoke(
+            {
+                "project": proj_id,
+                "title": "T" * 501,
+            }
+        )
         assert "500" in result
         _clear()
 
@@ -606,11 +659,13 @@ class TestCreateTaskValidation:
         proj_id = str(uuid4())
         _setup_context(accessible_project_ids=[proj_id])
 
-        result = await create_task.ainvoke({
-            "project": proj_id,
-            "title": "Valid Task",
-            "priority": "critical",
-        })
+        result = await create_task.ainvoke(
+            {
+                "project": proj_id,
+                "title": "Valid Task",
+                "priority": "critical",
+            }
+        )
         assert "Invalid priority" in result
         _clear()
 
@@ -618,10 +673,12 @@ class TestCreateTaskValidation:
         """create_task rejects non-UUID non-name project_id (no match found)."""
         _setup_context(accessible_project_ids=[])
 
-        result = await create_task.ainvoke({
-            "project": "not-a-uuid",
-            "title": "Some Task",
-        })
+        result = await create_task.ainvoke(
+            {
+                "project": "not-a-uuid",
+                "title": "Some Task",
+            }
+        )
         # Resolver returns "No project found" (no accessible projects)
         assert "No project found" in result or "Access denied" in result
         _clear()
@@ -631,17 +688,19 @@ class TestCreateTaskValidation:
 # update_task_status — additional tests
 # ---------------------------------------------------------------------------
 
-class TestUpdateTaskStatusAdditional:
 
+class TestUpdateTaskStatusAdditional:
     async def test_rbac_denied(self):
         """update_task_status returns not-found when no projects accessible."""
         task_id = str(uuid4())
         _setup_context(accessible_project_ids=[])
 
-        result = await update_task_status.ainvoke({
-            "task": task_id,
-            "new_status": "done",
-        })
+        result = await update_task_status.ainvoke(
+            {
+                "task": task_id,
+                "new_status": "done",
+            }
+        )
         # _resolve_task returns early when no accessible projects
         assert "no task found" in result.lower()
         _clear()
@@ -664,10 +723,12 @@ class TestUpdateTaskStatusAdditional:
         ctx.__aexit__ = AsyncMock(return_value=None)
         mock_tool_session.return_value = ctx
 
-        result = await update_task_status.ainvoke({
-            "task": task_id,
-            "new_status": "done",
-        })
+        result = await update_task_status.ainvoke(
+            {
+                "task": task_id,
+                "new_status": "done",
+            }
+        )
         assert "no task found" in result.lower()
         _clear()
 
@@ -676,18 +737,20 @@ class TestUpdateTaskStatusAdditional:
 # assign_task — additional tests
 # ---------------------------------------------------------------------------
 
-class TestAssignTaskAdditional:
 
+class TestAssignTaskAdditional:
     async def test_rbac_denied(self):
         """assign_task returns not-found when no projects accessible."""
         task_id = str(uuid4())
         assignee_id = str(uuid4())
         _setup_context(accessible_project_ids=[])
 
-        result = await assign_task.ainvoke({
-            "task": task_id,
-            "user": assignee_id,
-        })
+        result = await assign_task.ainvoke(
+            {
+                "task": task_id,
+                "user": assignee_id,
+            }
+        )
         # _resolve_task returns early when no accessible projects
         assert "no task found" in result.lower()
         _clear()
@@ -740,20 +803,28 @@ class TestAssignTaskAdditional:
         current_assignee_result = MagicMock()
         current_assignee_result.scalar_one_or_none.return_value = current_assignee_user
 
-        mock_session.execute = AsyncMock(side_effect=[
-            resolve_result, task_result, scope_result,
-            user_result, member_result, current_assignee_result,
-        ])
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                resolve_result,
+                task_result,
+                scope_result,
+                user_result,
+                member_result,
+                current_assignee_result,
+            ]
+        )
 
         ctx = AsyncMock()
         ctx.__aenter__ = AsyncMock(return_value=mock_session)
         ctx.__aexit__ = AsyncMock(return_value=None)
         mock_tool_session.return_value = ctx
 
-        result = await assign_task.ainvoke({
-            "task": task_id,
-            "user": assignee_id,
-        })
+        result = await assign_task.ainvoke(
+            {
+                "task": task_id,
+                "user": assignee_id,
+            }
+        )
         assert "already assigned" in result.lower()
         _clear()
 
@@ -761,6 +832,7 @@ class TestAssignTaskAdditional:
 # ---------------------------------------------------------------------------
 # update_task_status — approval flow (happy path)
 # ---------------------------------------------------------------------------
+
 
 class TestUpdateTaskStatusApproval:
     """Test the approval flow for update_task_status when user approves."""
@@ -804,12 +876,14 @@ class TestUpdateTaskStatusApproval:
         target_status_result_pre = MagicMock()
         target_status_result_pre.scalar_one_or_none.return_value = mock_target_status_pre
 
-        pre_session.execute = AsyncMock(side_effect=[
-            resolve_result,
-            task_result,
-            current_status_result,
-            target_status_result_pre,
-        ])
+        pre_session.execute = AsyncMock(
+            side_effect=[
+                resolve_result,
+                task_result,
+                current_status_result,
+                target_status_result_pre,
+            ]
+        )
 
         # Post-approval combined session: RBAC re-check + re-loads task + re-resolves target status
         post_session = _mock_db_session()
@@ -848,10 +922,12 @@ class TestUpdateTaskStatusApproval:
         mock_tool_session.side_effect = [pre_ctx, post_ctx]
         mock_interrupt.return_value = {"approved": True}
 
-        result = await update_task_status.ainvoke({
-            "task": task_id,
-            "new_status": "done",
-        })
+        result = await update_task_status.ainvoke(
+            {
+                "task": task_id,
+                "new_status": "done",
+            }
+        )
 
         assert "updated" in result.lower()
         assert "Done" in result
@@ -863,6 +939,7 @@ class TestUpdateTaskStatusApproval:
 # ---------------------------------------------------------------------------
 # assign_task — approval flow (happy path)
 # ---------------------------------------------------------------------------
+
 
 class TestAssignTaskApproval:
     """Test the approval flow for assign_task when user approves."""
@@ -911,10 +988,15 @@ class TestAssignTaskApproval:
         member_result = MagicMock()
         member_result.scalar_one_or_none.return_value = mock_member
 
-        pre_session.execute = AsyncMock(side_effect=[
-            resolve_task_result, task_result, scope_result,
-            user_result, member_result,
-        ])
+        pre_session.execute = AsyncMock(
+            side_effect=[
+                resolve_task_result,
+                task_result,
+                scope_result,
+                user_result,
+                member_result,
+            ]
+        )
 
         # Post-approval combined session: RBAC re-check + re-loads task
         post_session = _mock_db_session()
@@ -943,10 +1025,12 @@ class TestAssignTaskApproval:
         mock_tool_session.side_effect = [pre_ctx, post_ctx]
         mock_interrupt.return_value = {"approved": True}
 
-        result = await assign_task.ainvoke({
-            "task": task_id,
-            "user": assignee_id,
-        })
+        result = await assign_task.ainvoke(
+            {
+                "task": task_id,
+                "user": assignee_id,
+            }
+        )
 
         assert "assigned" in result.lower()
         assert "Jane Smith" in result
@@ -959,14 +1043,13 @@ class TestAssignTaskApproval:
 # create_document — approval flow (happy path)
 # ---------------------------------------------------------------------------
 
+
 class TestCreateDocumentApproval:
     """Test the approval flow for create_document when user approves."""
 
     @patch("app.ai.agent.tools.write_tools.interrupt")
     @patch("app.ai.agent.tools.write_tools._get_tool_session")
-    async def test_approval_creates_document_personal_scope(
-        self, mock_tool_session, mock_interrupt
-    ):
+    async def test_approval_creates_document_personal_scope(self, mock_tool_session, mock_interrupt):
         """create_document creates the document with correct scope when user approves."""
         user_id = str(uuid4())
         _setup_context(user_id=user_id)
@@ -1007,17 +1090,18 @@ class TestCreateDocumentApproval:
             mock_doc_instance.id = doc_id
             MockDocument.return_value = mock_doc_instance
 
-            result = await create_document.ainvoke({
-                "title": "Meeting Notes",
-                "content": "# Sprint Retro\n\nGood sprint overall.",
-                "scope": "personal",
-                "scope_id": user_id,
-            })
+            result = await create_document.ainvoke(
+                {
+                    "title": "Meeting Notes",
+                    "content": "# Sprint Retro\n\nGood sprint overall.",
+                    "scope": "personal",
+                    "scope_id": user_id,
+                }
+            )
 
         assert "created" in result.lower()
         assert "Meeting Notes" in result
         mock_interrupt.assert_called_once()
-
 
         # Verify Document constructor received correct scope fields
         call_kwargs = MockDocument.call_args[1]
@@ -1029,9 +1113,7 @@ class TestCreateDocumentApproval:
 
     @patch("app.ai.agent.tools.write_tools.interrupt")
     @patch("app.ai.agent.tools.write_tools._get_tool_session")
-    async def test_approval_creates_document_application_scope(
-        self, mock_tool_session, mock_interrupt
-    ):
+    async def test_approval_creates_document_application_scope(self, mock_tool_session, mock_interrupt):
         """create_document creates the document scoped to an application."""
         app_id = str(uuid4())
         user_id = str(uuid4())
@@ -1078,15 +1160,16 @@ class TestCreateDocumentApproval:
             mock_doc_instance.id = doc_id
             MockDocument.return_value = mock_doc_instance
 
-            result = await create_document.ainvoke({
-                "title": "API Spec",
-                "content": "Endpoint definitions...",
-                "scope": "application",
-                "scope_id": app_id,
-            })
+            result = await create_document.ainvoke(
+                {
+                    "title": "API Spec",
+                    "content": "Endpoint definitions...",
+                    "scope": "application",
+                    "scope_id": app_id,
+                }
+            )
 
         assert "created" in result.lower()
-
 
         # Verify Document constructor received correct scope fields
         call_kwargs = MockDocument.call_args[1]
@@ -1100,8 +1183,8 @@ class TestCreateDocumentApproval:
 # create_task — name resolution tests
 # ---------------------------------------------------------------------------
 
-class TestCreateTaskNameResolution:
 
+class TestCreateTaskNameResolution:
     @patch("app.ai.agent.tools.write_tools.interrupt")
     @patch("app.ai.agent.tools.write_tools._get_tool_session")
     async def test_resolves_project_by_name(self, mock_tool_session, mock_interrupt):
@@ -1130,10 +1213,12 @@ class TestCreateTaskNameResolution:
         project_result = MagicMock()
         project_result.scalar_one_or_none.return_value = mock_project
 
-        pre_session.execute = AsyncMock(side_effect=[
-            resolver_result,
-            project_result,
-        ])
+        pre_session.execute = AsyncMock(
+            side_effect=[
+                resolver_result,
+                project_result,
+            ]
+        )
 
         # Post-approval session: task creation
         post_session = _mock_db_session()
@@ -1164,10 +1249,12 @@ class TestCreateTaskNameResolution:
         mock_tool_session.side_effect = [pre_ctx, post_ctx]
         mock_interrupt.return_value = {"approved": True}
 
-        result = await create_task.ainvoke({
-            "project": "Backend",
-            "title": "New Feature",
-        })
+        result = await create_task.ainvoke(
+            {
+                "project": "Backend",
+                "title": "New Feature",
+            }
+        )
 
         assert "created" in result.lower()
         assert "BE-7" in result
@@ -1179,13 +1266,11 @@ class TestCreateTaskNameResolution:
 # create_document — name resolution tests
 # ---------------------------------------------------------------------------
 
-class TestCreateDocumentNameResolution:
 
+class TestCreateDocumentNameResolution:
     @patch("app.ai.agent.tools.write_tools.interrupt")
     @patch("app.ai.agent.tools.write_tools._get_tool_session")
-    async def test_resolves_app_name_for_scope(
-        self, mock_tool_session, mock_interrupt
-    ):
+    async def test_resolves_app_name_for_scope(self, mock_tool_session, mock_interrupt):
         """create_document resolves application name for scope_id."""
         app_id = uuid4()
         user_id = str(uuid4())
@@ -1207,10 +1292,12 @@ class TestCreateDocumentNameResolution:
         app_result = MagicMock()
         app_result.scalar_one_or_none.return_value = mock_app
 
-        pre_session.execute = AsyncMock(side_effect=[
-            resolver_result,
-            app_result,
-        ])
+        pre_session.execute = AsyncMock(
+            side_effect=[
+                resolver_result,
+                app_result,
+            ]
+        )
 
         # Post-approval session
         post_session = _mock_db_session()
@@ -1242,12 +1329,14 @@ class TestCreateDocumentNameResolution:
             mock_doc_instance.id = doc_id
             MockDocument.return_value = mock_doc_instance
 
-            result = await create_document.ainvoke({
-                "title": "Test Doc",
-                "content": "Some content here.",
-                "scope": "application",
-                "scope_id": "PMS",
-            })
+            result = await create_document.ainvoke(
+                {
+                    "title": "Test Doc",
+                    "content": "Some content here.",
+                    "scope": "application",
+                    "scope_id": "PMS",
+                }
+            )
 
         assert "created" in result.lower()
         assert "PMS Application" in result
@@ -1259,8 +1348,8 @@ class TestCreateDocumentNameResolution:
 # create_task — name resolution error cases
 # ---------------------------------------------------------------------------
 
-class TestCreateTaskNameResolutionErrors:
 
+class TestCreateTaskNameResolutionErrors:
     @patch("app.ai.agent.tools.write_tools._get_tool_session")
     async def test_name_no_match(self, mock_tool_session):
         """create_task returns error when project name has no match."""
@@ -1277,10 +1366,12 @@ class TestCreateTaskNameResolutionErrors:
         ctx.__aexit__ = AsyncMock(return_value=None)
         mock_tool_session.return_value = ctx
 
-        result = await create_task.ainvoke({
-            "project": "NonExistentProject",
-            "title": "New Task",
-        })
+        result = await create_task.ainvoke(
+            {
+                "project": "NonExistentProject",
+                "title": "New Task",
+            }
+        )
         assert "No project found" in result
         _clear()
 
@@ -1307,10 +1398,12 @@ class TestCreateTaskNameResolutionErrors:
         ctx.__aexit__ = AsyncMock(return_value=None)
         mock_tool_session.return_value = ctx
 
-        result = await create_task.ainvoke({
-            "project": "API",
-            "title": "New Task",
-        })
+        result = await create_task.ainvoke(
+            {
+                "project": "API",
+                "title": "New Task",
+            }
+        )
         assert "Multiple projects" in result
         assert "API v1" in result
         assert "API v2" in result
@@ -1321,8 +1414,8 @@ class TestCreateTaskNameResolutionErrors:
 # create_document — folder scope validation
 # ---------------------------------------------------------------------------
 
-class TestCreateDocumentFolderScopeValidation:
 
+class TestCreateDocumentFolderScopeValidation:
     @patch("app.ai.agent.tools.write_tools._get_tool_session")
     async def test_folder_wrong_scope_rejected(self, mock_tool_session):
         """create_document rejects folder_id from a different scope."""
@@ -1350,13 +1443,15 @@ class TestCreateDocumentFolderScopeValidation:
         pre_ctx.__aexit__ = AsyncMock(return_value=None)
         mock_tool_session.return_value = pre_ctx
 
-        result = await create_document.ainvoke({
-            "title": "Doc",
-            "content": "Body",
-            "scope": "application",
-            "scope_id": app_id,
-            "folder_id": folder_id,
-        })
+        result = await create_document.ainvoke(
+            {
+                "title": "Doc",
+                "content": "Body",
+                "scope": "application",
+                "scope_id": app_id,
+                "folder_id": folder_id,
+            }
+        )
         assert "not found in this scope" in result.lower()
         _clear()
 
@@ -1365,8 +1460,8 @@ class TestCreateDocumentFolderScopeValidation:
 # assign_task — task not found (TE R2 gap 3)
 # ---------------------------------------------------------------------------
 
-class TestAssignTaskTaskNotFound:
 
+class TestAssignTaskTaskNotFound:
     @patch("app.ai.agent.tools.write_tools._get_tool_session")
     async def test_task_not_found(self, mock_tool_session):
         """assign_task returns not-found when task doesn't exist."""
@@ -1384,10 +1479,12 @@ class TestAssignTaskTaskNotFound:
         pre_ctx.__aexit__ = AsyncMock(return_value=None)
         mock_tool_session.return_value = pre_ctx
 
-        result = await assign_task.ainvoke({
-            "task": task_id,
-            "user": assignee_id,
-        })
+        result = await assign_task.ainvoke(
+            {
+                "task": task_id,
+                "user": assignee_id,
+            }
+        )
         assert "no task found" in result.lower()
         _clear()
 
@@ -1396,8 +1493,8 @@ class TestAssignTaskTaskNotFound:
 # create_task — no Todo status configured (TE R2 gap 4)
 # ---------------------------------------------------------------------------
 
-class TestCreateTaskNoTodoStatus:
 
+class TestCreateTaskNoTodoStatus:
     @patch("app.ai.agent.tools.write_tools.interrupt")
     @patch("app.ai.agent.tools.write_tools._get_tool_session")
     async def test_no_todo_status(self, mock_tool_session, mock_interrupt):
@@ -1436,10 +1533,12 @@ class TestCreateTaskNoTodoStatus:
         mock_tool_session.side_effect = [pre_ctx, post_ctx]
         mock_interrupt.return_value = {"approved": True}
 
-        result = await create_task.ainvoke({
-            "project": proj_id,
-            "title": "New Task",
-        })
+        result = await create_task.ainvoke(
+            {
+                "project": proj_id,
+                "title": "New Task",
+            }
+        )
         assert "no default" in result.lower() or "Todo" in result
         _clear()
 
@@ -1448,13 +1547,11 @@ class TestCreateTaskNoTodoStatus:
 # create_document — project scope approval (TE R2 gap 5)
 # ---------------------------------------------------------------------------
 
-class TestCreateDocumentProjectScopeApproval:
 
+class TestCreateDocumentProjectScopeApproval:
     @patch("app.ai.agent.tools.write_tools.interrupt")
     @patch("app.ai.agent.tools.write_tools._get_tool_session")
-    async def test_approval_creates_document_project_scope(
-        self, mock_tool_session, mock_interrupt
-    ):
+    async def test_approval_creates_document_project_scope(self, mock_tool_session, mock_interrupt):
         """create_document creates the document scoped to a project."""
         proj_id = str(uuid4())
         user_id = str(uuid4())
@@ -1498,15 +1595,16 @@ class TestCreateDocumentProjectScopeApproval:
             mock_doc_instance.id = doc_id
             MockDocument.return_value = mock_doc_instance
 
-            result = await create_document.ainvoke({
-                "title": "API Spec",
-                "content": "Endpoints...",
-                "scope": "project",
-                "scope_id": proj_id,
-            })
+            result = await create_document.ainvoke(
+                {
+                    "title": "API Spec",
+                    "content": "Endpoints...",
+                    "scope": "project",
+                    "scope_id": proj_id,
+                }
+            )
 
         assert "created" in result.lower()
-
 
         # Verify Document constructor received correct scope fields
         call_kwargs = MockDocument.call_args[1]
@@ -1517,18 +1615,19 @@ class TestCreateDocumentProjectScopeApproval:
 
 
 class TestCreateDocumentContentSizeCap:
-
     async def test_oversized_content_rejected(self):
         """create_document rejects content exceeding 100,000 characters."""
         app_id = str(uuid4())
         _setup_context(accessible_app_ids=[app_id])
 
-        result = await create_document.ainvoke({
-            "title": "Big Doc",
-            "content": "x" * 100_001,
-            "scope": "application",
-            "scope_id": app_id,
-        })
+        result = await create_document.ainvoke(
+            {
+                "title": "Big Doc",
+                "content": "x" * 100_001,
+                "scope": "application",
+                "scope_id": app_id,
+            }
+        )
 
         assert "too large" in result.lower()
         assert "100,000" in result
@@ -1536,17 +1635,18 @@ class TestCreateDocumentContentSizeCap:
 
 
 class TestCreateTaskDescriptionSizeCap:
-
     async def test_oversized_description_rejected(self):
         """create_task rejects description exceeding 50,000 characters."""
         proj_id = str(uuid4())
         _setup_context(accessible_project_ids=[proj_id])
 
-        result = await create_task.ainvoke({
-            "project": proj_id,
-            "title": "Normal title",
-            "description": "d" * 50_001,
-        })
+        result = await create_task.ainvoke(
+            {
+                "project": proj_id,
+                "title": "Normal title",
+                "description": "d" * 50_001,
+            }
+        )
 
         assert "too large" in result.lower()
         assert "50,000" in result
@@ -1557,16 +1657,18 @@ class TestCreateTaskDescriptionSizeCap:
 # export_to_excel — validation + approval/rejection
 # ---------------------------------------------------------------------------
 
-class TestExportToExcel:
 
+class TestExportToExcel:
     async def test_invalid_data_type_returns_error(self):
         """export_to_excel rejects invalid data_type before interrupt."""
         _setup_context()
 
-        result = await export_to_excel.ainvoke({
-            "data_type": "invalid_type",
-            "scope": "some app",
-        })
+        result = await export_to_excel.ainvoke(
+            {
+                "data_type": "invalid_type",
+                "scope": "some app",
+            }
+        )
 
         assert "error" in result.lower()
         assert "tasks" in result or "projects" in result or "members" in result
@@ -1592,10 +1694,12 @@ class TestExportToExcel:
 
         mock_interrupt.return_value = {"approved": False}
 
-        result = await export_to_excel.ainvoke({
-            "data_type": "tasks",
-            "scope": proj_id,
-        })
+        result = await export_to_excel.ainvoke(
+            {
+                "data_type": "tasks",
+                "scope": proj_id,
+            }
+        )
 
         assert "cancelled" in result.lower()
         mock_interrupt.assert_called_once()
@@ -1606,8 +1710,8 @@ class TestExportToExcel:
 # update_task_status — task deleted between interrupt and resume
 # ---------------------------------------------------------------------------
 
-class TestUpdateTaskStatusPostApprovalEdgeCases:
 
+class TestUpdateTaskStatusPostApprovalEdgeCases:
     @patch("app.ai.agent.tools.write_tools.interrupt")
     @patch("app.ai.agent.tools.write_tools._get_tool_session")
     async def test_task_deleted_after_approval(self, mock_tool_session, mock_interrupt):
@@ -1647,12 +1751,14 @@ class TestUpdateTaskStatusPostApprovalEdgeCases:
         target_status_result = MagicMock()
         target_status_result.scalar_one_or_none.return_value = target_status
 
-        pre_session.execute = AsyncMock(side_effect=[
-            resolve_result,          # _resolve_task UUID check
-            task_result,             # task object lookup
-            current_status_result,   # current status
-            target_status_result,    # target status
-        ])
+        pre_session.execute = AsyncMock(
+            side_effect=[
+                resolve_result,  # _resolve_task UUID check
+                task_result,  # task object lookup
+                current_status_result,  # current status
+                target_status_result,  # target status
+            ]
+        )
 
         # Post-approval combined session: RBAC re-check + task no longer exists
         post_session = _mock_db_session()
@@ -1673,10 +1779,12 @@ class TestUpdateTaskStatusPostApprovalEdgeCases:
         mock_tool_session.side_effect = [pre_ctx, post_ctx]
         mock_interrupt.return_value = {"approved": True}
 
-        result = await update_task_status.ainvoke({
-            "task": task_id,
-            "new_status": "in_progress",
-        })
+        result = await update_task_status.ainvoke(
+            {
+                "task": task_id,
+                "new_status": "in_progress",
+            }
+        )
 
         assert "no longer exists" in result.lower()
         _clear()
@@ -1686,8 +1794,8 @@ class TestUpdateTaskStatusPostApprovalEdgeCases:
 # assign_task — task deleted between interrupt and resume
 # ---------------------------------------------------------------------------
 
-class TestAssignTaskPostApprovalEdgeCases:
 
+class TestAssignTaskPostApprovalEdgeCases:
     @patch("app.ai.agent.tools.write_tools.interrupt")
     @patch("app.ai.agent.tools.write_tools._get_tool_session")
     async def test_task_deleted_after_approval(self, mock_tool_session, mock_interrupt):
@@ -1731,13 +1839,15 @@ class TestAssignTaskPostApprovalEdgeCases:
         member_result = MagicMock()
         member_result.scalar_one_or_none.return_value = MagicMock()
 
-        pre_session.execute = AsyncMock(side_effect=[
-            resolve_result,   # _resolve_task UUID check
-            task_obj_result,  # task object lookup
-            scope_result,     # scope members
-            assignee_result,  # user lookup
-            member_result,    # member check
-        ])
+        pre_session.execute = AsyncMock(
+            side_effect=[
+                resolve_result,  # _resolve_task UUID check
+                task_obj_result,  # task object lookup
+                scope_result,  # scope members
+                assignee_result,  # user lookup
+                member_result,  # member check
+            ]
+        )
 
         # Post-approval combined session: RBAC re-check + task deleted
         post_session = _mock_db_session()
@@ -1758,10 +1868,12 @@ class TestAssignTaskPostApprovalEdgeCases:
         mock_tool_session.side_effect = [pre_ctx, post_ctx]
         mock_interrupt.return_value = {"approved": True}
 
-        result = await assign_task.ainvoke({
-            "task": task_id,
-            "user": assignee_id,
-        })
+        result = await assign_task.ainvoke(
+            {
+                "task": task_id,
+                "user": assignee_id,
+            }
+        )
 
         assert "no longer exists" in result.lower()
         _clear()

@@ -145,9 +145,7 @@ async def execute(
         # SET LOCAL doesn't support parameter bindings ($1) in PostgreSQL,
         # so we interpolate the value directly. This is safe because user_id
         # is a validated Python UUID object (cannot contain SQL injection).
-        await db.execute(
-            text(f"SET LOCAL app.current_user_id = '{user_id}'")
-        )
+        await db.execute(text(f"SET LOCAL app.current_user_id = '{user_id}'"))
 
         # M13: Use getter functions so admin config changes take effect at runtime.
         _stmt_timeout = _get_statement_timeout_ms()
@@ -155,9 +153,7 @@ async def execute(
         _max_rows = _get_max_rows()
 
         # Set transaction-local statement timeout for safety.
-        await db.execute(
-            text(f"SET LOCAL statement_timeout = '{_stmt_timeout}'")
-        )
+        await db.execute(text(f"SET LOCAL statement_timeout = '{_stmt_timeout}'"))
 
         # Execute the query (with application-level timeout as safety net)
         try:
@@ -178,9 +174,7 @@ async def execute(
                 await db.rollback()
             except Exception:
                 pass
-            raise ValueError(
-                "Query execution timeout exceeded (application-level)"
-            ) from exc
+            raise ValueError("Query execution timeout exceeded (application-level)") from exc
 
         # Get column names from result cursor
         columns = list(result.keys())
@@ -215,12 +209,9 @@ async def execute(
 
         # Check for statement timeout
         if "canceling statement due to statement timeout" in error_msg:
-            logger.warning(
-                "Query timed out after %dms: %.100s", execution_ms, sql
-            )
+            logger.warning("Query timed out after %dms: %.100s", execution_ms, sql)
             raise ValueError(
-                f"Query timed out after {_get_statement_timeout_ms()}ms. "
-                f"Try a simpler query or add more filters."
+                f"Query timed out after {_get_statement_timeout_ms()}ms. Try a simpler query or add more filters."
             ) from exc
 
         # SA-003: Log the raw error details server-side but return a
@@ -231,6 +222,4 @@ async def execute(
             error_msg,
             sql,
         )
-        raise ValueError(
-            "Query execution error. Please check your query syntax and try again."
-        ) from exc
+        raise ValueError("Query execution error. Please check your query syntax and try again.") from exc

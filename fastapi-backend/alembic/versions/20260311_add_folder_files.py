@@ -9,6 +9,7 @@ Revision ID: 20260311_add_folder_files
 Revises: 20260310_fix_seed_drift
 Create Date: 2026-03-11
 """
+
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -69,13 +70,9 @@ def upgrade() -> None:
             nullable=True,
         ),
         sa.Column("sha256_hash", sa.String(64), nullable=True),
-        sa.Column(
-            "sort_order", sa.Integer(), nullable=False, server_default="0"
-        ),
+        sa.Column("sort_order", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("created_by", UUID(as_uuid=True), nullable=True),
-        sa.Column(
-            "row_version", sa.Integer(), nullable=False, server_default="1"
-        ),
+        sa.Column("row_version", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
             "created_at",
@@ -92,21 +89,11 @@ def upgrade() -> None:
         # Primary key
         sa.PrimaryKeyConstraint("id"),
         # Foreign keys
-        sa.ForeignKeyConstraint(
-            ["folder_id"], ["DocumentFolders.id"], ondelete="CASCADE"
-        ),
-        sa.ForeignKeyConstraint(
-            ["application_id"], ["Applications.id"], ondelete="CASCADE"
-        ),
-        sa.ForeignKeyConstraint(
-            ["project_id"], ["Projects.id"], ondelete="CASCADE"
-        ),
-        sa.ForeignKeyConstraint(
-            ["user_id"], ["Users.id"], ondelete="CASCADE"
-        ),
-        sa.ForeignKeyConstraint(
-            ["created_by"], ["Users.id"], ondelete="SET NULL"
-        ),
+        sa.ForeignKeyConstraint(["folder_id"], ["DocumentFolders.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["application_id"], ["Applications.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["project_id"], ["Projects.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["user_id"], ["Users.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["created_by"], ["Users.id"], ondelete="SET NULL"),
         # Constraints
         sa.CheckConstraint(
             "(CASE WHEN application_id IS NOT NULL THEN 1 ELSE 0 END"
@@ -115,13 +102,11 @@ def upgrade() -> None:
             name="ck_folder_files_exactly_one_scope",
         ),
         sa.CheckConstraint(
-            "extraction_status IN ('pending', 'processing', 'completed',"
-            " 'failed', 'unsupported')",
+            "extraction_status IN ('pending', 'processing', 'completed', 'failed', 'unsupported')",
             name="ck_folder_files_extraction_status",
         ),
         sa.CheckConstraint(
-            "embedding_status IN ('none', 'stale', 'syncing', 'synced',"
-            " 'failed')",
+            "embedding_status IN ('none', 'stale', 'syncing', 'synced', 'failed')",
             name="ck_folder_files_embedding_status",
         ),
     )
@@ -132,24 +117,16 @@ def upgrade() -> None:
 
     # Unique display_name per folder (case-insensitive, excludes soft-deleted)
     op.execute(
-        'CREATE UNIQUE INDEX uq_folder_files_name '
+        "CREATE UNIQUE INDEX uq_folder_files_name "
         'ON "FolderFiles" (folder_id, LOWER(display_name)) '
-        'WHERE deleted_at IS NULL'
+        "WHERE deleted_at IS NULL"
     )
 
     # FK lookup indexes
-    op.create_index(
-        "ix_folder_files_folder_id", "FolderFiles", ["folder_id"]
-    )
-    op.create_index(
-        "ix_folder_files_application_id", "FolderFiles", ["application_id"]
-    )
-    op.create_index(
-        "ix_folder_files_project_id", "FolderFiles", ["project_id"]
-    )
-    op.create_index(
-        "ix_folder_files_user_id", "FolderFiles", ["user_id"]
-    )
+    op.create_index("ix_folder_files_folder_id", "FolderFiles", ["folder_id"])
+    op.create_index("ix_folder_files_application_id", "FolderFiles", ["application_id"])
+    op.create_index("ix_folder_files_project_id", "FolderFiles", ["project_id"])
+    op.create_index("ix_folder_files_user_id", "FolderFiles", ["user_id"])
 
     # Status and soft-delete indexes for background jobs and queries
     op.create_index(
@@ -157,9 +134,7 @@ def upgrade() -> None:
         "FolderFiles",
         ["extraction_status"],
     )
-    op.create_index(
-        "ix_folder_files_deleted_at", "FolderFiles", ["deleted_at"]
-    )
+    op.create_index("ix_folder_files_deleted_at", "FolderFiles", ["deleted_at"])
 
     # ========================================================================
     # 3. Extend DocumentChunks for file-sourced chunks
@@ -177,9 +152,7 @@ def upgrade() -> None:
     )
 
     # Backfill existing rows (all current chunks are document-sourced)
-    op.execute(
-        """UPDATE "DocumentChunks" SET source_type = 'document' WHERE source_type IS NULL"""
-    )
+    op.execute("""UPDATE "DocumentChunks" SET source_type = 'document' WHERE source_type IS NULL""")
 
     # Add file_id FK column (nullable — only set for file-sourced chunks)
     op.add_column(
@@ -207,15 +180,14 @@ def upgrade() -> None:
     op.create_check_constraint(
         "ck_chunks_exactly_one_source",
         "DocumentChunks",
-        "(document_id IS NOT NULL AND file_id IS NULL)"
-        " OR (document_id IS NULL AND file_id IS NOT NULL)",
+        "(document_id IS NOT NULL AND file_id IS NULL) OR (document_id IS NULL AND file_id IS NOT NULL)",
     )
 
     # Partial unique index for file-sourced chunks (mirrors idx_document_chunks_doc_idx)
     op.execute(
-        'CREATE UNIQUE INDEX idx_document_chunks_file_idx '
+        "CREATE UNIQUE INDEX idx_document_chunks_file_idx "
         'ON "DocumentChunks" (file_id, chunk_index) '
-        'WHERE file_id IS NOT NULL'
+        "WHERE file_id IS NOT NULL"
     )
 
 
@@ -225,17 +197,13 @@ def downgrade() -> None:
     # ========================================================================
 
     # Drop the file chunk unique index
-    op.execute('DROP INDEX IF EXISTS idx_document_chunks_file_idx')
+    op.execute("DROP INDEX IF EXISTS idx_document_chunks_file_idx")
 
     # Drop the exactly-one-source check constraint
-    op.drop_constraint(
-        "ck_chunks_exactly_one_source", "DocumentChunks", type_="check"
-    )
+    op.drop_constraint("ck_chunks_exactly_one_source", "DocumentChunks", type_="check")
 
     # Delete file-sourced chunks (document_id IS NULL) so ALTER NOT NULL succeeds
-    op.execute(
-        'DELETE FROM "DocumentChunks" WHERE document_id IS NULL'
-    )
+    op.execute('DELETE FROM "DocumentChunks" WHERE document_id IS NULL')
 
     # Make document_id NOT NULL again
     op.alter_column(
@@ -246,9 +214,7 @@ def downgrade() -> None:
     )
 
     # Drop file_id FK and column
-    op.drop_constraint(
-        "fk_document_chunks_file_id", "DocumentChunks", type_="foreignkey"
-    )
+    op.drop_constraint("fk_document_chunks_file_id", "DocumentChunks", type_="foreignkey")
     op.drop_column("DocumentChunks", "file_id")
 
     # Drop source_type column
@@ -257,5 +223,5 @@ def downgrade() -> None:
     # ========================================================================
     # 2. Drop FolderFiles table (indexes are dropped implicitly via CASCADE)
     # ========================================================================
-    op.execute('DROP INDEX IF EXISTS uq_folder_files_name')
+    op.execute("DROP INDEX IF EXISTS uq_folder_files_name")
     op.drop_table("FolderFiles")

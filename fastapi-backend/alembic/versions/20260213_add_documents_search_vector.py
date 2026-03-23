@@ -5,6 +5,7 @@ Revises: c2d3e4f5g6h7
 Create Date: 2026-02-13 10:00:00.000000
 
 """
+
 from typing import Sequence, Union
 
 from alembic import op
@@ -34,5 +35,5 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Remove search_vector column and GIN index."""
-    op.execute('DROP INDEX IF EXISTS idx_documents_search_vector')
+    op.execute("DROP INDEX IF EXISTS idx_documents_search_vector")
     op.execute('ALTER TABLE "Documents" DROP COLUMN IF EXISTS search_vector')

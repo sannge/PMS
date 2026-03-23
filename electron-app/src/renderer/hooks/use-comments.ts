@@ -166,6 +166,8 @@ export function useComments(
     staleTime: 30 * 1000, // 30 seconds - comments change frequently
     gcTime: CONTENT_GC_TIME,
     refetchOnWindowFocus: false, // WS real-time invalidation handles freshness
+    // refetchOnMount: default 'true' — serves from cache if fresh.
+    // App-level WS handler invalidates on COMMENT_ADDED/UPDATED/DELETED.
   })
 }
 

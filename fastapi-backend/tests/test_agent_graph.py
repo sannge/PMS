@@ -55,9 +55,7 @@ def _make_model_orm(model_id: str = "gpt-4o") -> MagicMock:
     return orm
 
 
-def _make_registry(
-    provider_type: str, model_id: str = "gpt-4o", base_url: str | None = None
-) -> MagicMock:
+def _make_registry(provider_type: str, model_id: str = "gpt-4o", base_url: str | None = None) -> MagicMock:
     """Build a mock ProviderRegistry that resolves to a given provider."""
     provider_orm = _make_provider_orm(provider_type, base_url)
     model_orm = _make_model_orm(model_id)
@@ -74,7 +72,6 @@ def _make_registry(
 
 
 class TestConstants:
-
     def test_max_iterations_is_25(self):
         assert MAX_ITERATIONS == 25
 
@@ -101,7 +98,6 @@ class TestConstants:
 
 
 class TestAgentState:
-
     def test_agent_state_has_messages_field(self):
         annotations = AgentState.__annotations__
         assert "messages" in annotations
@@ -144,7 +140,6 @@ class TestAgentState:
 
 
 class TestCheckpointerAccessors:
-
     def test_get_checkpointer_returns_none_initially(self):
         import app.ai.agent.graph as graph_mod
 
@@ -173,7 +168,6 @@ class TestCheckpointerAccessors:
 
 
 class TestGetLangchainChatModel:
-
     @patch("app.ai.agent.graph.ChatOpenAI", create=True)
     async def test_openai_provider_returns_chat_openai(self, mock_cls):
         mock_cls.return_value = MagicMock()
@@ -182,9 +176,7 @@ class TestGetLangchainChatModel:
 
         from app.ai.agent.graph import _get_langchain_chat_model
 
-        with patch.dict(
-            "sys.modules", {"langchain_openai": MagicMock(ChatOpenAI=mock_cls)}
-        ):
+        with patch.dict("sys.modules", {"langchain_openai": MagicMock(ChatOpenAI=mock_cls)}):
             result = await _get_langchain_chat_model(registry, db, None)
 
         mock_cls.assert_called_once_with(
@@ -271,7 +263,6 @@ def _dummy_tool(query: str) -> str:
 
 
 class TestBuildAgentGraph:
-
     def test_returns_compiled_graph(self):
         compiled = build_agent_graph(tools=[_dummy_tool])
         assert compiled is not None
@@ -282,8 +273,13 @@ class TestBuildAgentGraph:
         graph_repr = compiled.get_graph()
         node_ids = set(graph_repr.nodes)
         for node_name in [
-            "intake", "understand", "clarify", "explore",
-            "explore_tools", "synthesize", "respond",
+            "intake",
+            "understand",
+            "clarify",
+            "explore",
+            "explore_tools",
+            "synthesize",
+            "respond",
         ]:
             assert node_name in node_ids, f"Missing node: {node_name}"
 
@@ -409,7 +405,9 @@ class TestAgentNode:
             "total_llm_calls": MAX_LLM_CALLS,
             "iteration_count": 0,
         }
-        result = await _agent_node(state, bound_model_cache=[MagicMock()], chat_model_cache=[], system_prompt_cache=[""])
+        result = await _agent_node(
+            state, bound_model_cache=[MagicMock()], chat_model_cache=[], system_prompt_cache=[""]
+        )
         assert "processing limit" in result["messages"][0].content
         # Should NOT increment counters
         assert "total_llm_calls" not in result
@@ -421,7 +419,9 @@ class TestAgentNode:
             "total_llm_calls": 0,
             "iteration_count": MAX_ITERATIONS,
         }
-        result = await _agent_node(state, bound_model_cache=[MagicMock()], chat_model_cache=[], system_prompt_cache=[""])
+        result = await _agent_node(
+            state, bound_model_cache=[MagicMock()], chat_model_cache=[], system_prompt_cache=[""]
+        )
         assert "processing limit" in result["messages"][0].content
 
     async def test_empty_cache_returns_error(self):
@@ -462,9 +462,7 @@ class TestAgentNode:
             "total_llm_calls": 0,
             "iteration_count": 0,
         }
-        result = await _agent_node(
-            state, bound_model_cache=[mock_model], chat_model_cache=[], system_prompt_cache=[""]
-        )
+        result = await _agent_node(state, bound_model_cache=[mock_model], chat_model_cache=[], system_prompt_cache=[""])
         assert "error" in result["messages"][0].content.lower()
         assert result["total_llm_calls"] == 1
         assert result["iteration_count"] == 1
@@ -482,15 +480,13 @@ class TestAgentNode:
             "total_llm_calls": 5,
             "iteration_count": 3,
         }
-        result = await _agent_node(
-            state, bound_model_cache=[mock_model], chat_model_cache=[], system_prompt_cache=[""]
-        )
+        result = await _agent_node(state, bound_model_cache=[mock_model], chat_model_cache=[], system_prompt_cache=[""])
 
         # Error message returned
         assert "error" in result["messages"][0].content.lower()
         # Counters STILL incremented — the LLM call was attempted
-        assert result["total_llm_calls"] == 6   # 5 + 1
-        assert result["iteration_count"] == 4    # 3 + 1
+        assert result["total_llm_calls"] == 6  # 5 + 1
+        assert result["iteration_count"] == 4  # 3 + 1
 
     async def test_completed_tool_turns_stripped(self):
         """Two-stage context: completed tool turns are stripped before LLM call."""
@@ -510,9 +506,7 @@ class TestAgentNode:
             "total_llm_calls": 0,
             "iteration_count": 0,
         }
-        await _agent_node(
-            state, bound_model_cache=[mock_model], chat_model_cache=[], system_prompt_cache=["system"]
-        )
+        await _agent_node(state, bound_model_cache=[mock_model], chat_model_cache=[], system_prompt_cache=["system"])
 
         call_args = mock_model.ainvoke.call_args[0][0]
         # First element is SystemMessage, then stripped messages
@@ -542,9 +536,7 @@ class TestAgentNode:
             "total_llm_calls": 0,
             "iteration_count": 0,
         }
-        await _agent_node(
-            state, bound_model_cache=[mock_model], chat_model_cache=[], system_prompt_cache=["system"]
-        )
+        await _agent_node(state, bound_model_cache=[mock_model], chat_model_cache=[], system_prompt_cache=["system"])
 
         call_args = mock_model.ainvoke.call_args[0][0]
         passed_messages = call_args[1:]
@@ -657,12 +649,15 @@ class TestExecuteTools:
         )
         mock_tool_node = AsyncMock()
         mock_tool_node.ainvoke = AsyncMock(
-            side_effect=GraphInterrupt(interrupts=(Interrupt(value={"type": "clarification"}, resumable=True, ns=(), when="during"),))
+            side_effect=GraphInterrupt(
+                interrupts=(Interrupt(value={"type": "clarification"}, resumable=True, ns=(), when="during"),)
+            )
         )
 
         state = {"messages": [ai_msg], "total_tool_calls": 0}
 
         import pytest as _pytest
+
         with _pytest.raises(GraphInterrupt):
             await _execute_tools(state, tool_node=mock_tool_node)
 
@@ -685,18 +680,18 @@ class TestExecuteTools:
         assert result["total_tool_calls"] == 1
 
     # TE-R2-004: boundary tests for MAX_TOOL_CALLS pre-check
-    @pytest.mark.parametrize("current_total,new_calls,should_reject", [
-        (49, 1, False),   # Exactly at limit (50) — should ALLOW
-        (50, 1, True),    # Over limit (51) — should REJECT
-        (48, 3, True),    # Over limit (51) — should REJECT
-        (50, 0, False),   # At limit with 0 new — edge case, no tool_calls so returns {}
-    ])
+    @pytest.mark.parametrize(
+        "current_total,new_calls,should_reject",
+        [
+            (49, 1, False),  # Exactly at limit (50) — should ALLOW
+            (50, 1, True),  # Over limit (51) — should REJECT
+            (48, 3, True),  # Over limit (51) — should REJECT
+            (50, 0, False),  # At limit with 0 new — edge case, no tool_calls so returns {}
+        ],
+    )
     async def test_tool_call_limit_boundary(self, current_total, new_calls, should_reject):
         """Boundary conditions for MAX_TOOL_CALLS limit pre-check."""
-        tool_calls = [
-            {"name": f"t{i}", "args": {}, "id": f"tc{i}"}
-            for i in range(new_calls)
-        ]
+        tool_calls = [{"name": f"t{i}", "args": {}, "id": f"tc{i}"} for i in range(new_calls)]
         # When new_calls=0, AIMessage has no tool_calls → early return {}
         ai_msg = AIMessage(content="", tool_calls=tool_calls) if tool_calls else AIMessage(content="done")
         mock_tool_node = AsyncMock()
@@ -773,7 +768,6 @@ class TestTextRequestsUserInput:
 
 
 class TestExtractClarification:
-
     def test_extracts_options_from_bullets(self):
         text = "What would you like to do?\n- Show tasks\n- Export data\n- Search docs"
         question, options = _extract_clarification(text)
@@ -809,14 +803,11 @@ class TestExtractClarification:
 
 
 class TestAgentNodeAutoConvertQuestion:
-
     async def test_text_question_converted_to_tool_call(self):
         """When LLM responds with a text question, it's auto-converted to
         request_clarification tool call."""
         mock_model = AsyncMock()
-        mock_model.ainvoke = AsyncMock(
-            return_value=AIMessage(content="Which project would you like?")
-        )
+        mock_model.ainvoke = AsyncMock(return_value=AIMessage(content="Which project would you like?"))
 
         state = {
             "messages": [HumanMessage(content="do something")],
@@ -841,9 +832,7 @@ class TestAgentNodeAutoConvertQuestion:
         """Bullet-list options in the text are extracted into the tool call args."""
         mock_model = AsyncMock()
         mock_model.ainvoke = AsyncMock(
-            return_value=AIMessage(
-                content="What would you like?\n- Show tasks\n- Export data"
-            )
+            return_value=AIMessage(content="What would you like?\n- Show tasks\n- Export data")
         )
 
         state = {
@@ -867,9 +856,7 @@ class TestAgentNodeAutoConvertQuestion:
     async def test_normal_response_not_converted(self):
         """A normal text response without questions is left as-is."""
         mock_model = AsyncMock()
-        mock_model.ainvoke = AsyncMock(
-            return_value=AIMessage(content="Here are your 3 tasks in the project.")
-        )
+        mock_model.ainvoke = AsyncMock(return_value=AIMessage(content="Here are your 3 tasks in the project."))
 
         state = {
             "messages": [HumanMessage(content="show tasks")],

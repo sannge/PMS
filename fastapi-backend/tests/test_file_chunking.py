@@ -104,11 +104,7 @@ class TestChunkMarkdown:
 
     def test_heading_context_propagation(self):
         """Heading context propagates to subsequent text."""
-        md = (
-            "# Chapter 1\n\n"
-            "Paragraph under chapter 1.\n\n"
-            "More text under chapter 1.\n"
-        )
+        md = "# Chapter 1\n\nParagraph under chapter 1.\n\nMore text under chapter 1.\n"
         chunks = self.chunker.chunk_markdown(md, "Book")
         for chunk in chunks:
             # All chunks should have a heading context
@@ -168,12 +164,8 @@ class TestEmbedFile:
 
         # Mock provider
         mock_provider = AsyncMock()
-        mock_provider.generate_embeddings_batch = AsyncMock(
-            return_value=[[0.1] * 1536, [0.2] * 1536]
-        )
-        mock_registry.get_embedding_provider = AsyncMock(
-            return_value=(mock_provider, "text-embedding-3-small")
-        )
+        mock_provider.generate_embeddings_batch = AsyncMock(return_value=[[0.1] * 1536, [0.2] * 1536])
+        mock_registry.get_embedding_provider = AsyncMock(return_value=(mock_provider, "text-embedding-3-small"))
 
         mock_chunker = MagicMock()
         mock_chunker.chunk_markdown.return_value = [

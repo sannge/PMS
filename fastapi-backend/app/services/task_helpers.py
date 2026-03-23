@@ -1,4 +1,5 @@
 """Shared helper functions for task operations."""
+
 from typing import Optional
 from ..schemas.task import TaskStatusInfo
 

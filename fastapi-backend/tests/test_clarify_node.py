@@ -23,7 +23,6 @@ from app.ai.agent.nodes.clarify import _build_clarification_payload, clarify_nod
 
 
 class TestBuildClarificationPayload:
-
     def test_builds_payload_from_classification_questions(self):
         state = {
             "messages": [],
@@ -110,7 +109,6 @@ class TestBuildClarificationPayload:
 
 
 class TestClarifyNode:
-
     async def test_clarify_node_calls_interrupt(self):
         """clarify_node should call interrupt() which raises in LangGraph runtime.
 

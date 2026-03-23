@@ -10,6 +10,14 @@ import logging
 from typing import Any
 from uuid import UUID
 
+from ..graph_context import (
+    bound_model_var,
+    chat_model_var,
+    db_session_factory_var,
+    provider_registry_var,
+    system_prompt_var,
+    tools_var,
+)
 from ..prompts import load_system_prompt
 from ..state import AgentState
 
@@ -19,12 +27,12 @@ logger = logging.getLogger(__name__)
 async def intake_node(
     state: AgentState,
     *,
-    tools: list,
-    provider_registry: Any,
-    db_session_factory: Any,
-    chat_model_cache: list[Any],
-    system_prompt_cache: list[str],
-    bound_model_cache: list[Any],
+    tools: list[Any] | None = None,
+    provider_registry: Any | None = None,
+    db_session_factory: Any | None = None,
+    chat_model_cache: list[Any] | None = None,
+    system_prompt_cache: list[str] | None = None,
+    bound_model_cache: list[Any] | None = None,
 ) -> dict:
     """Initialise counters, cache chat model, and load custom system prompt.
 
@@ -34,15 +42,22 @@ async def intake_node(
 
     Args:
         state: Current pipeline state.
-        tools: All available LangChain tool objects.
-        provider_registry: ProviderRegistry instance.
-        db_session_factory: Async session factory.
+        tools: All available LangChain tool objects.  Falls back to
+            ``tools_var`` ContextVar when ``None``.
+        provider_registry: ProviderRegistry instance.  Falls back to
+            ``provider_registry_var`` ContextVar when ``None``.
+        db_session_factory: Async session factory.  Falls back to
+            ``db_session_factory_var`` ContextVar when ``None``.
         chat_model_cache: Mutable list used as a single-element cache
-            for the resolved LangChain chat model.
+            for the resolved LangChain chat model.  Falls back to
+            ``chat_model_var`` ContextVar when ``None``.
         system_prompt_cache: Mutable list used as a single-element cache
-            for the effective system prompt string.
+            for the effective system prompt string.  Falls back to
+            ``system_prompt_var`` ContextVar when ``None``.
         bound_model_cache: Mutable list used as a single-element cache
-            for the model with tools pre-bound (avoids re-binding per iteration).
+            for the model with tools pre-bound (avoids re-binding per
+            iteration).  Falls back to ``bound_model_var`` ContextVar
+            when ``None``.
 
     Returns:
         State update dict with initialised counters.
@@ -51,6 +66,26 @@ async def intake_node(
     # module level would create a circular dependency.
     from ..graph import _get_langchain_chat_model
 
+    # Resolve from ContextVars when kwargs are None (production path).
+    # Tests pass explicit lists; production sets ContextVars in ai_chat.py.
+    # ContextVars default to None, so use `or` fallback to empty list/None.
+    chat_model_cache = chat_model_cache or chat_model_var.get()
+    if chat_model_cache is None:
+        chat_model_cache = []
+    system_prompt_cache = system_prompt_cache or system_prompt_var.get()
+    if system_prompt_cache is None:
+        system_prompt_cache = []
+    bound_model_cache = bound_model_cache or bound_model_var.get()
+    if bound_model_cache is None:
+        bound_model_cache = []
+    if provider_registry is None:
+        provider_registry = provider_registry_var.get()
+    if db_session_factory is None:
+        db_session_factory = db_session_factory_var.get()
+    tools = tools or tools_var.get()
+    if tools is None:
+        tools = []
+
     # Resolve chat model once per graph invocation
     if not chat_model_cache:
         try:
@@ -58,9 +93,7 @@ async def intake_node(
                 user_id_val = state.get("user_id")
                 user_uuid = UUID(user_id_val) if user_id_val else None
 
-                chat_model = await _get_langchain_chat_model(
-                    provider_registry, db, user_uuid
-                )
+                chat_model = await _get_langchain_chat_model(provider_registry, db, user_uuid)
 
                 # Load system prompt (base + optional custom addendum)
                 system_prompt_cache.append(await load_system_prompt(db))

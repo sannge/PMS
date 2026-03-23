@@ -43,17 +43,11 @@ async def broadcast_to_target_users(
     users_in_room = set(mgr.get_room_users(room_id))
 
     # Find target users NOT already in room
-    users_needing_direct = [
-        uid for uid in target_user_ids
-        if uid not in users_in_room
-    ]
+    users_needing_direct = [uid for uid in target_user_ids if uid not in users_in_room]
 
     # Run room broadcast and direct sends in parallel
     tasks = [mgr.broadcast_to_room(room_id, message)]
-    tasks.extend(
-        mgr.broadcast_to_user(uid, message)
-        for uid in users_needing_direct
-    )
+    tasks.extend(mgr.broadcast_to_user(uid, message) for uid in users_needing_direct)
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -201,13 +195,13 @@ async def handle_document_lock_change(
 
     if project_id:
         room = get_project_room(project_id)
-        if room not in rooms_sent:
+        if room not in rooms_sent and mgr.get_room_count(room) > 0:
             scope_recipients += await mgr.broadcast_to_room(room, message)
             rooms_sent.add(room)
 
     if application_id:
         room = get_application_room(application_id)
-        if room not in rooms_sent:
+        if room not in rooms_sent and mgr.get_room_count(room) > 0:
             scope_recipients += await mgr.broadcast_to_room(room, message)
             rooms_sent.add(room)
 
@@ -290,12 +284,10 @@ async def handle_task_update(
 
     # Also broadcast to task-specific room for detailed view subscribers
     task_room_id = get_task_room(task_id)
-    await mgr.broadcast_to_room(task_room_id, message)
+    if mgr.get_room_count(task_room_id) > 0:
+        await mgr.broadcast_to_room(task_room_id, message)
 
-    logger.info(
-        f"Task {action.value}: task_id={task_id}, "
-        f"project_room={room_id}, recipients={recipients}"
-    )
+    logger.info(f"Task {action.value}: task_id={task_id}, project_room={room_id}, recipients={recipients}")
 
     return BroadcastResult(
         room_id=room_id,
@@ -359,12 +351,10 @@ async def handle_project_update(
 
     # Also broadcast to the project room for users viewing the project
     project_room_id = get_project_room(project_id)
-    await mgr.broadcast_to_room(project_room_id, message)
+    if mgr.get_room_count(project_room_id) > 0:
+        await mgr.broadcast_to_room(project_room_id, message)
 
-    logger.info(
-        f"Project {action.value}: project_id={project_id}, "
-        f"application_room={room_id}, recipients={recipients}"
-    )
+    logger.info(f"Project {action.value}: project_id={project_id}, application_room={room_id}, recipients={recipients}")
 
     return BroadcastResult(
         room_id=room_id,
@@ -427,7 +417,8 @@ async def handle_project_status_changed(
 
     # Also broadcast to the project room for users viewing the project
     project_room_id = get_project_room(project_id)
-    await mgr.broadcast_to_room(project_room_id, message)
+    if mgr.get_room_count(project_room_id) > 0:
+        await mgr.broadcast_to_room(project_room_id, message)
 
     logger.info(
         f"Project status changed: project_id={project_id}, "
@@ -558,10 +549,7 @@ async def handle_user_presence(
 
     recipients = await mgr.broadcast_to_room(room_id, message)
 
-    logger.debug(
-        f"User presence: user_id={user_id}, room={room_id}, "
-        f"action={action}, recipients={recipients}"
-    )
+    logger.debug(f"User presence: user_id={user_id}, room={room_id}, action={action}, recipients={recipients}")
 
     return BroadcastResult(
         room_id=room_id,
@@ -637,10 +625,7 @@ async def handle_notification_read(
 
     recipients = await mgr.broadcast_to_user(user_id, message)
 
-    logger.debug(
-        f"Notification read: user_id={user_id}, "
-        f"notification_id={notification_id}, recipients={recipients}"
-    )
+    logger.debug(f"Notification read: user_id={user_id}, notification_id={notification_id}, recipients={recipients}")
 
     return recipients
 
@@ -711,7 +696,6 @@ async def route_incoming_message(
                 )
             except ValueError:
                 logger.warning(f"Invalid action: {action_str}")
-
 
 
 async def handle_invitation_notification(
@@ -860,9 +844,7 @@ async def handle_member_added(
     new_user_id = member_data.get("user_id")
     if new_user_id:
         try:
-            target_users.append(
-                UUID(new_user_id) if isinstance(new_user_id, str) else new_user_id
-            )
+            target_users.append(UUID(new_user_id) if isinstance(new_user_id, str) else new_user_id)
         except (ValueError, TypeError):
             pass
 
@@ -877,9 +859,7 @@ async def handle_member_added(
 
     recipients = await broadcast_to_target_users(mgr, room_id, message, target_users)
 
-    logger.debug(
-        f"member_added: app={application_id}, user={new_user_id}, recipients={recipients}"
-    )
+    logger.debug(f"member_added: app={application_id}, user={new_user_id}, recipients={recipients}")
 
     return BroadcastResult(
         room_id=room_id,
@@ -1004,9 +984,7 @@ async def handle_role_updated(
 
     recipients = await broadcast_to_target_users(mgr, room_id, message, target_users)
 
-    logger.debug(
-        f"role_updated: app={application_id}, user={user_id}, recipients={recipients}"
-    )
+    logger.debug(f"role_updated: app={application_id}, user={user_id}, recipients={recipients}")
 
     return BroadcastResult(
         room_id=room_id,
@@ -1062,9 +1040,7 @@ async def handle_project_member_added(
     new_user_id = member_data.get("user_id")
     if new_user_id:
         try:
-            target_users.append(
-                UUID(new_user_id) if isinstance(new_user_id, str) else new_user_id
-            )
+            target_users.append(UUID(new_user_id) if isinstance(new_user_id, str) else new_user_id)
         except (ValueError, TypeError):
             pass
 
@@ -1079,9 +1055,7 @@ async def handle_project_member_added(
 
     recipients = await broadcast_to_target_users(mgr, room_id, message, target_users)
 
-    logger.debug(
-        f"project_member_added: project={project_id}, user={new_user_id}, recipients={recipients}"
-    )
+    logger.debug(f"project_member_added: project={project_id}, user={new_user_id}, recipients={recipients}")
 
     return BroadcastResult(
         room_id=room_id,
@@ -1141,9 +1115,7 @@ async def handle_project_member_removed(
 
     recipients = await broadcast_to_target_users(mgr, room_id, message, target_users)
 
-    logger.debug(
-        f"project_member_removed: project={project_id}, user={removed_user_id}, recipients={recipients}"
-    )
+    logger.debug(f"project_member_removed: project={project_id}, user={removed_user_id}, recipients={recipients}")
 
     return BroadcastResult(
         room_id=room_id,
@@ -1204,9 +1176,7 @@ async def handle_project_member_role_changed(
 
     recipients = await broadcast_to_target_users(mgr, room_id, message, target_users)
 
-    logger.debug(
-        f"project_member_role_changed: project={project_id}, user={user_id}, recipients={recipients}"
-    )
+    logger.debug(f"project_member_role_changed: project={project_id}, user={user_id}, recipients={recipients}")
 
     return BroadcastResult(
         room_id=room_id,
@@ -1353,7 +1323,9 @@ async def handle_comment_deleted(
 
     recipients = await mgr.broadcast_to_room(room_id, message)
 
-    logger.debug(f"Comment deleted: task_id={task_id}, comment_id={comment_id}, attachments={len(attachment_ids or [])}")
+    logger.debug(
+        f"Comment deleted: task_id={task_id}, comment_id={comment_id}, attachments={len(attachment_ids or [])}"
+    )
 
     return BroadcastResult(
         room_id=room_id,
@@ -1571,9 +1543,7 @@ async def handle_checklist_item_toggled(
         project_room = get_project_room(project_id)
         await mgr.broadcast_to_room(project_room, message)
 
-    logger.debug(
-        f"Checklist item toggled: task_id={task_id}, item_id={item_id}, done={is_done}"
-    )
+    logger.debug(f"Checklist item toggled: task_id={task_id}, item_id={item_id}, done={is_done}")
 
     return BroadcastResult(
         room_id=room_id,
@@ -2009,10 +1979,7 @@ async def handle_task_moved(
 
     recipients = await mgr.broadcast_to_room(room_id, message)
 
-    logger.info(
-        f"Task moved broadcast complete: task_id={task_id}, "
-        f"project_room={room_id}, recipients={recipients}"
-    )
+    logger.info(f"Task moved broadcast complete: task_id={task_id}, project_room={room_id}, recipients={recipients}")
 
     return BroadcastResult(
         room_id=room_id,
@@ -2069,8 +2036,7 @@ async def handle_attachment_uploaded(
     recipients = await mgr.broadcast_to_room(room_id, message)
 
     logger.debug(
-        f"Attachment uploaded: task_id={task_id}, "
-        f"attachment_id={attachment_data.get('id')}, recipients={recipients}"
+        f"Attachment uploaded: task_id={task_id}, attachment_id={attachment_data.get('id')}, recipients={recipients}"
     )
 
     return BroadcastResult(
@@ -2117,10 +2083,7 @@ async def handle_attachment_deleted(
 
     recipients = await mgr.broadcast_to_room(room_id, message)
 
-    logger.debug(
-        f"Attachment deleted: task_id={task_id}, "
-        f"attachment_id={attachment_id}, recipients={recipients}"
-    )
+    logger.debug(f"Attachment deleted: task_id={task_id}, attachment_id={attachment_id}, recipients={recipients}")
 
     return BroadcastResult(
         room_id=room_id,
@@ -2170,10 +2133,7 @@ async def handle_embedding_updated(
 
     recipients = await mgr.broadcast_to_room(room_id, message)
 
-    logger.info(
-        f"Embedding updated: document_id={document_id}, "
-        f"chunk_count={chunk_count}, recipients={recipients}"
-    )
+    logger.info(f"Embedding updated: document_id={document_id}, chunk_count={chunk_count}, recipients={recipients}")
 
     return BroadcastResult(
         room_id=room_id,
@@ -2276,8 +2236,7 @@ async def handle_import_completed(
     recipients = await mgr.broadcast_to_user(user_id, message)
 
     logger.info(
-        f"Import completed: job_id={job_id}, document_id={document_id}, "
-        f"user_id={user_id}, recipients={recipients}"
+        f"Import completed: job_id={job_id}, document_id={document_id}, user_id={user_id}, recipients={recipients}"
     )
 
     return recipients
@@ -2319,10 +2278,7 @@ async def handle_import_failed(
 
     recipients = await mgr.broadcast_to_user(user_id, message)
 
-    logger.info(
-        f"Import failed: job_id={job_id}, file_name={file_name}, "
-        f"user_id={user_id}, recipients={recipients}"
-    )
+    logger.info(f"Import failed: job_id={job_id}, file_name={file_name}, user_id={user_id}, recipients={recipients}")
 
     return recipients
 

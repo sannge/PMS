@@ -57,11 +57,7 @@ def _escape_ilike(value: str) -> str:
 
     Must be used with ``.ilike(..., escape="\\\\")``.
     """
-    return (
-        value.replace("\\", "\\\\")
-        .replace("%", "\\%")
-        .replace("_", "\\_")
-    )
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 # ---------------------------------------------------------------------------
@@ -198,12 +194,15 @@ async def _resolve_entity(
     escaped = _escape_ilike(identifier)
 
     from app.ai.config_service import get_agent_config
+
     _MATCH_LIMIT = get_agent_config().get_int("agent_tool.match_limit", 20)
     result = await db.execute(
-        select(model_class.id, name_column).where(
+        select(model_class.id, name_column)
+        .where(
             model_class.id.in_(entity_uuids),
             name_column.ilike(f"%{escaped}%", escape="\\"),
-        ).limit(_MATCH_LIMIT)
+        )
+        .limit(_MATCH_LIMIT)
     )
     matches = result.all()
 
@@ -212,10 +211,7 @@ async def _resolve_entity(
     elif len(matches) == 0:
         # List available entities so the LLM can retry with the right name
         all_result = await db.execute(
-            select(name_column)
-            .where(model_class.id.in_(entity_uuids))
-            .order_by(name_column)
-            .limit(10)
+            select(name_column).where(model_class.id.in_(entity_uuids)).order_by(name_column).limit(10)
         )
         available_names = [r[0] for r in all_result.all()]
         if available_names:
@@ -227,22 +223,18 @@ async def _resolve_entity(
             )
         return (
             None,
-            f"No {entity_name} found matching '{identifier}'. "
-            f"Try searching without the {entity_name} filter.",
+            f"No {entity_name} found matching '{identifier}'. Try searching without the {entity_name} filter.",
         )
     else:
         names = ", ".join(f"'{m.name}'" for m in matches[:5])
         extra = " (and more)" if len(matches) > 5 else ""
         return (
             None,
-            f"Multiple {entity_name}s match '{identifier}': {names}{extra}. "
-            "Please be more specific.",
+            f"Multiple {entity_name}s match '{identifier}': {names}{extra}. Please be more specific.",
         )
 
 
-async def _resolve_application(
-    identifier: str, db: AsyncSession
-) -> tuple[str | None, str | None]:
+async def _resolve_application(identifier: str, db: AsyncSession) -> tuple[str | None, str | None]:
     """Resolve an application by UUID or partial name.
 
     Args:
@@ -262,9 +254,7 @@ async def _resolve_application(
     )
 
 
-async def _resolve_project(
-    identifier: str, db: AsyncSession
-) -> tuple[str | None, str | None]:
+async def _resolve_project(identifier: str, db: AsyncSession) -> tuple[str | None, str | None]:
     """Resolve a project by UUID or partial name.
 
     Args:
@@ -284,9 +274,7 @@ async def _resolve_project(
     )
 
 
-async def _resolve_task(
-    identifier: str, db: AsyncSession
-) -> tuple[str | None, str | None]:
+async def _resolve_task(identifier: str, db: AsyncSession) -> tuple[str | None, str | None]:
     """Resolve a task by UUID, task_key, or partial title.
 
     Resolution order:
@@ -345,10 +333,12 @@ async def _resolve_task(
     # 3. Title ILIKE search (limit to 10 to prevent unbounded results)
     escaped = _escape_ilike(identifier)
     result = await db.execute(
-        select(Task.id, Task.title).where(
+        select(Task.id, Task.title)
+        .where(
             Task.project_id.in_(proj_uuids),
             Task.title.ilike(f"%{escaped}%", escape="\\"),
-        ).limit(10)
+        )
+        .limit(10)
     )
     matches = result.all()
 
@@ -399,15 +389,9 @@ async def _resolve_user(
     # Build scope subquery for user IDs — used as a subquery to reduce
     # round trips (DB-007: combine user resolution into fewer queries).
     if scope_project_id:
-        scope_subquery = (
-            select(ProjectMember.user_id)
-            .where(ProjectMember.project_id == UUID(scope_project_id))
-        )
+        scope_subquery = select(ProjectMember.user_id).where(ProjectMember.project_id == UUID(scope_project_id))
     elif scope_app_id:
-        scope_subquery = (
-            select(ApplicationMember.user_id)
-            .where(ApplicationMember.application_id == UUID(scope_app_id))
-        )
+        scope_subquery = select(ApplicationMember.user_id).where(ApplicationMember.application_id == UUID(scope_app_id))
     else:
         # All accessible apps
         accessible_app_ids = _get_ctx().get("accessible_app_ids", [])
@@ -415,9 +399,7 @@ async def _resolve_user(
             return (None, f"No user found matching '{identifier}'.")
         app_uuids = [UUID(aid) for aid in accessible_app_ids]
         scope_subquery = (
-            select(ApplicationMember.user_id)
-            .where(ApplicationMember.application_id.in_(app_uuids))
-            .distinct()
+            select(ApplicationMember.user_id).where(ApplicationMember.application_id.in_(app_uuids)).distinct()
         )
 
     # 1. UUID direct lookup — single query with scope check
@@ -455,20 +437,15 @@ async def _resolve_user(
     elif len(matches) == 0:
         return (None, f"No user found matching '{identifier}'.")
     else:
-        names = ", ".join(
-            f"'{m.display_name or m.email}'" for m in matches[:5]
-        )
+        names = ", ".join(f"'{m.display_name or m.email}'" for m in matches[:5])
         extra = f" (and {len(matches) - 5} more)" if len(matches) > 5 else ""
         return (
             None,
-            f"Multiple users match '{identifier}': {names}{extra}. "
-            "Please be more specific.",
+            f"Multiple users match '{identifier}': {names}{extra}. Please be more specific.",
         )
 
 
-async def _resolve_document(
-    identifier: str, db: AsyncSession
-) -> tuple[str | None, str | None]:
+async def _resolve_document(identifier: str, db: AsyncSession) -> tuple[str | None, str | None]:
     """Resolve a document by UUID or partial title.
 
     Results are scoped to documents in the user's accessible applications,
@@ -528,11 +505,13 @@ async def _resolve_document(
     # 2. Title ILIKE search
     escaped = _escape_ilike(identifier)
     result = await db.execute(
-        select(Document.id, Document.title).where(
+        select(Document.id, Document.title)
+        .where(
             scope_clause,
             active_clause,
             Document.title.ilike(f"%{escaped}%", escape="\\"),
-        ).limit(20)
+        )
+        .limit(20)
     )
     matches = result.all()
 
@@ -659,10 +638,12 @@ async def _recheck_project_access(
     """
     async with _get_tool_session() as db:
         result = await db.execute(
-            select(ProjectMember.id).where(
+            select(ProjectMember.id)
+            .where(
                 ProjectMember.project_id == project_id,
                 ProjectMember.user_id == _get_user_id(),
-            ).limit(1)
+            )
+            .limit(1)
         )
         if result.scalar_one_or_none() is None:
             return "Access denied: you no longer have access to this project."

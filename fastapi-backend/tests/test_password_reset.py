@@ -21,6 +21,7 @@ def _hash_code(code: str) -> str:
 def _check_bcrypt_available():
     try:
         from app.utils.security import get_password_hash
+
         get_password_hash("test")
         return True
     except Exception:
@@ -206,15 +207,25 @@ class TestPasswordReset:
         await db_session.commit()
 
         # First use - should succeed
-        r1 = await client.post("/auth/reset-password", json={
-            "email": "reset_reuse@example.com", "code": code, "new_password": "NewPass123!",
-        })
+        r1 = await client.post(
+            "/auth/reset-password",
+            json={
+                "email": "reset_reuse@example.com",
+                "code": code,
+                "new_password": "NewPass123!",
+            },
+        )
         assert r1.status_code == 200
 
         # Second use - should fail (code cleared after first use)
-        r2 = await client.post("/auth/reset-password", json={
-            "email": "reset_reuse@example.com", "code": code, "new_password": "AnotherPass123!",
-        })
+        r2 = await client.post(
+            "/auth/reset-password",
+            json={
+                "email": "reset_reuse@example.com",
+                "code": code,
+                "new_password": "AnotherPass123!",
+            },
+        )
         assert r2.status_code == 400
 
     @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
@@ -232,9 +243,14 @@ class TestPasswordReset:
         db_session.add(user)
         await db_session.commit()
 
-        response = await client.post("/auth/reset-password", json={
-            "email": "reset_nocode@example.com", "code": "654321", "new_password": "NewPass123!",
-        })
+        response = await client.post(
+            "/auth/reset-password",
+            json={
+                "email": "reset_nocode@example.com",
+                "code": "654321",
+                "new_password": "NewPass123!",
+            },
+        )
         assert response.status_code == 400
         assert "request a new one" in response.json()["detail"].lower()
 
@@ -254,9 +270,14 @@ class TestPasswordReset:
         db_session.add(user)
         await db_session.commit()
 
-        response = await client.post("/auth/reset-password", json={
-            "email": "reset_dbstate@example.com", "code": code, "new_password": "NewPassword123!",
-        })
+        response = await client.post(
+            "/auth/reset-password",
+            json={
+                "email": "reset_dbstate@example.com",
+                "code": code,
+                "new_password": "NewPassword123!",
+            },
+        )
         assert response.status_code == 200
 
         await db_session.refresh(user)

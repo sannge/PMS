@@ -41,9 +41,7 @@ def _build_clarification_payload(state: AgentState) -> dict[str, Any]:
 
     # Fallback if no questions were generated
     if not question_list:
-        question_list.append({
-            "text": "Could you provide more details about what you're looking for?"
-        })
+        question_list.append({"text": "Could you provide more details about what you're looking for?"})
 
     return {
         "type": "clarification",

@@ -28,6 +28,7 @@ from app.ai.agent.tools.context import clear_tool_context, set_tool_context
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _setup_context(**overrides):
     """Populate tool context with sensible defaults + overrides."""
     ctx = {
@@ -38,10 +39,18 @@ def _setup_context(**overrides):
         "provider_registry": MagicMock(),
     }
     ctx.update(overrides)
-    set_tool_context(**{k: ctx[k] for k in (
-        "user_id", "accessible_app_ids", "accessible_project_ids",
-        "db_session_factory", "provider_registry",
-    )})
+    set_tool_context(
+        **{
+            k: ctx[k]
+            for k in (
+                "user_id",
+                "accessible_app_ids",
+                "accessible_project_ids",
+                "db_session_factory",
+                "provider_registry",
+            )
+        }
+    )
     return ctx
 
 
@@ -65,8 +74,8 @@ def _mock_db_session():
 # PROJECT_MEMBER_WRITE_TOOLS registry
 # ---------------------------------------------------------------------------
 
-class TestProjectMemberWriteToolsRegistry:
 
+class TestProjectMemberWriteToolsRegistry:
     def test_has_3_tools(self):
         assert len(PROJECT_MEMBER_WRITE_TOOLS) == 3
 
@@ -83,8 +92,8 @@ class TestProjectMemberWriteToolsRegistry:
 # add_project_member tool
 # ---------------------------------------------------------------------------
 
-class TestAddProjectMember:
 
+class TestAddProjectMember:
     @pytest.fixture(autouse=True)
     def _teardown(self):
         yield
@@ -92,9 +101,13 @@ class TestAddProjectMember:
 
     async def test_invalid_role_rejected(self):
         _setup_context()
-        result = await add_project_member.ainvoke({
-            "project": "Sprint 1", "user": "alice@test.com", "role": "superadmin",
-        })
+        result = await add_project_member.ainvoke(
+            {
+                "project": "Sprint 1",
+                "user": "alice@test.com",
+                "role": "superadmin",
+            }
+        )
         assert "Error" in result
         assert "Invalid role" in result
 
@@ -102,9 +115,12 @@ class TestAddProjectMember:
         """add_project_member returns not-found when project is not accessible."""
         proj_id = str(uuid4())
         _setup_context(accessible_project_ids=[])
-        result = await add_project_member.ainvoke({
-            "project": proj_id, "user": "alice@test.com",
-        })
+        result = await add_project_member.ainvoke(
+            {
+                "project": proj_id,
+                "user": "alice@test.com",
+            }
+        )
         assert "No project found" in result
 
     @patch("app.ai.agent.tools.project_member_write_tools.interrupt")
@@ -148,9 +164,12 @@ class TestAddProjectMember:
         mock_tool_session.return_value.__aenter__ = AsyncMock(return_value=session)
         mock_tool_session.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        result = await add_project_member.ainvoke({
-            "project": proj_id, "user": "alice@test.com",
-        })
+        result = await add_project_member.ainvoke(
+            {
+                "project": proj_id,
+                "user": "alice@test.com",
+            }
+        )
         assert "Access denied" in result
         mock_interrupt.assert_not_called()
 
@@ -223,9 +242,12 @@ class TestAddProjectMember:
 
         mock_interrupt.return_value = {"approved": False}
 
-        result = await add_project_member.ainvoke({
-            "project": proj_id, "user": target_user_id,
-        })
+        result = await add_project_member.ainvoke(
+            {
+                "project": proj_id,
+                "user": target_user_id,
+            }
+        )
         assert "cancelled" in result.lower()
 
 
@@ -233,8 +255,8 @@ class TestAddProjectMember:
 # update_project_member_role tool
 # ---------------------------------------------------------------------------
 
-class TestUpdateProjectMemberRole:
 
+class TestUpdateProjectMemberRole:
     @pytest.fixture(autouse=True)
     def _teardown(self):
         yield
@@ -242,9 +264,13 @@ class TestUpdateProjectMemberRole:
 
     async def test_invalid_role_rejected(self):
         _setup_context()
-        result = await update_project_member_role.ainvoke({
-            "project": "Sprint 1", "user": "alice@test.com", "new_role": "superadmin",
-        })
+        result = await update_project_member_role.ainvoke(
+            {
+                "project": "Sprint 1",
+                "user": "alice@test.com",
+                "new_role": "superadmin",
+            }
+        )
         assert "Error" in result
         assert "Invalid role" in result
 
@@ -252,9 +278,13 @@ class TestUpdateProjectMemberRole:
         """update_project_member_role returns not-found when project is not accessible."""
         proj_id = str(uuid4())
         _setup_context(accessible_project_ids=[])
-        result = await update_project_member_role.ainvoke({
-            "project": proj_id, "user": "alice@test.com", "new_role": "admin",
-        })
+        result = await update_project_member_role.ainvoke(
+            {
+                "project": proj_id,
+                "user": "alice@test.com",
+                "new_role": "admin",
+            }
+        )
         assert "No project found" in result
 
 
@@ -262,8 +292,8 @@ class TestUpdateProjectMemberRole:
 # remove_project_member tool
 # ---------------------------------------------------------------------------
 
-class TestRemoveProjectMember:
 
+class TestRemoveProjectMember:
     @pytest.fixture(autouse=True)
     def _teardown(self):
         yield
@@ -273,9 +303,12 @@ class TestRemoveProjectMember:
         """remove_project_member returns not-found when project is not accessible."""
         proj_id = str(uuid4())
         _setup_context(accessible_project_ids=[])
-        result = await remove_project_member.ainvoke({
-            "project": proj_id, "user": "alice@test.com",
-        })
+        result = await remove_project_member.ainvoke(
+            {
+                "project": proj_id,
+                "user": "alice@test.com",
+            }
+        )
         assert "No project found" in result
 
     @patch("app.ai.agent.tools.project_member_write_tools.interrupt")
@@ -346,9 +379,12 @@ class TestRemoveProjectMember:
         mock_tool_session.return_value.__aenter__ = AsyncMock(return_value=session)
         mock_tool_session.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        result = await remove_project_member.ainvoke({
-            "project": proj_id, "user": target_user_id,
-        })
+        result = await remove_project_member.ainvoke(
+            {
+                "project": proj_id,
+                "user": target_user_id,
+            }
+        )
         assert "Cannot remove" in result
         assert "3 active task" in result
         mock_interrupt.assert_not_called()
@@ -416,7 +452,10 @@ class TestRemoveProjectMember:
 
         mock_interrupt.return_value = {"approved": False}
 
-        result = await remove_project_member.ainvoke({
-            "project": proj_id, "user": target_user_id,
-        })
+        result = await remove_project_member.ainvoke(
+            {
+                "project": proj_id,
+                "user": target_user_id,
+            }
+        )
         assert "cancelled" in result.lower()

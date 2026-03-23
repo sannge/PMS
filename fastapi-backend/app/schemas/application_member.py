@@ -138,5 +138,3 @@ class MemberList(BaseModel):
         ge=1,
         description="Maximum items per page",
     )
-
-

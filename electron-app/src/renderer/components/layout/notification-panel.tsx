@@ -528,6 +528,10 @@ export function NotificationPanel({ sidebarCollapsed = false }: NotificationPane
   const isOpen = useNotificationUIStore((state) => state.isOpen)
   const setOpen = useNotificationUIStore((state) => state.setOpen)
 
+  // Only fetch notifications once the panel has been opened at least once
+  const hasEverOpened = useRef(false)
+  if (isOpen) hasEverOpened.current = true
+
   // TanStack Query hooks for data (with infinite scroll)
   const {
     data: notificationData,
@@ -535,7 +539,7 @@ export function NotificationPanel({ sidebarCollapsed = false }: NotificationPane
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
-  } = useNotifications()
+  } = useNotifications({ enabled: isOpen || hasEverOpened.current })
   const markAsRead = useMarkAsRead()
   const markAllAsRead = useMarkAllAsRead()
   const deleteNotification = useDeleteNotification()

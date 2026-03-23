@@ -14,6 +14,7 @@ Revision ID: 20260226_scoped_views
 Revises: 20260225_doc_chunks
 Create Date: 2026-02-26
 """
+
 from typing import Sequence, Union
 
 from alembic import op

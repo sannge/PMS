@@ -3,10 +3,15 @@
 This service provides file upload, download, and management capabilities
 using MinIO object storage. It handles bucket creation, presigned URLs,
 and file metadata operations.
+
+All synchronous MinIO SDK calls are wrapped in run_in_executor to avoid
+blocking the asyncio event loop.
 """
 
+import asyncio
 import io
 from datetime import timedelta
+from functools import partial
 from typing import BinaryIO, Optional
 from uuid import uuid4
 
@@ -42,7 +47,7 @@ class MinIOService:
     DEFAULT_URL_EXPIRY = timedelta(hours=1)
     UPLOAD_URL_EXPIRY = timedelta(hours=2)
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize MinIO client with settings from configuration."""
         self._client: Optional[Minio] = None
         self._initialized = False
@@ -70,7 +75,18 @@ class MinIOService:
                 raise MinIOServiceError(f"Failed to create MinIO client: {str(e)}")
         return self._client
 
-    def ensure_buckets_exist(self) -> None:
+    async def _run_sync(self, func: object, *args: object, **kwargs: object) -> object:
+        """Run a synchronous MinIO SDK call in a thread executor.
+
+        Uses functools.partial for calls with keyword arguments to avoid
+        blocking the asyncio event loop.
+        """
+        loop = asyncio.get_event_loop()
+        if kwargs:
+            return await loop.run_in_executor(None, partial(func, *args, **kwargs))  # type: ignore[arg-type]
+        return await loop.run_in_executor(None, func, *args)  # type: ignore[arg-type]
+
+    async def ensure_buckets_exist(self) -> None:
         """
         Ensure all required buckets exist, creating them if necessary.
 
@@ -88,16 +104,15 @@ class MinIOService:
 
         for bucket in buckets:
             try:
-                if not self.client.bucket_exists(bucket):
-                    self.client.make_bucket(bucket)
+                exists = await self._run_sync(self.client.bucket_exists, bucket)
+                if not exists:
+                    await self._run_sync(self.client.make_bucket, bucket)
             except S3Error as e:
-                raise MinIOServiceError(
-                    f"Failed to create bucket '{bucket}': {str(e)}"
-                )
+                raise MinIOServiceError(f"Failed to create bucket '{bucket}': {str(e)}")
 
         self._initialized = True
 
-    def upload_file(
+    async def upload_file(
         self,
         bucket: str,
         object_name: str,
@@ -121,10 +136,11 @@ class MinIOService:
         Raises:
             MinIOServiceError: If upload fails
         """
-        self.ensure_buckets_exist()
+        await self.ensure_buckets_exist()
 
         try:
-            self.client.put_object(
+            await self._run_sync(
+                self.client.put_object,
                 bucket_name=bucket,
                 object_name=object_name,
                 data=data,
@@ -135,7 +151,7 @@ class MinIOService:
         except S3Error as e:
             raise MinIOServiceError(f"Failed to upload file: {str(e)}")
 
-    def upload_bytes(
+    async def upload_bytes(
         self,
         bucket: str,
         object_name: str,
@@ -157,7 +173,7 @@ class MinIOService:
         Raises:
             MinIOServiceError: If upload fails
         """
-        return self.upload_file(
+        return await self.upload_file(
             bucket=bucket,
             object_name=object_name,
             data=io.BytesIO(data),
@@ -165,7 +181,7 @@ class MinIOService:
             content_type=content_type,
         )
 
-    def download_file(self, bucket: str, object_name: str) -> bytes:
+    async def download_file(self, bucket: str, object_name: str) -> bytes:
         """
         Download a file from MinIO.
 
@@ -180,15 +196,19 @@ class MinIOService:
             MinIOServiceError: If download fails
         """
         try:
-            response = self.client.get_object(bucket, object_name)
-            data = response.read()
-            response.close()
-            response.release_conn()
-            return data
+            def _download() -> bytes:
+                response = self.client.get_object(bucket, object_name)
+                try:
+                    return response.read()
+                finally:
+                    response.close()
+                    response.release_conn()
+
+            return await self._run_sync(_download)
         except S3Error as e:
             raise MinIOServiceError(f"Failed to download file: {str(e)}")
 
-    def download_to_file(self, bucket: str, object_name: str, file_path: str) -> None:
+    async def download_to_file(self, bucket: str, object_name: str, file_path: str) -> None:
         """
         Download a file from MinIO directly to a local file path (streaming).
 
@@ -204,11 +224,11 @@ class MinIOService:
             MinIOServiceError: If download fails
         """
         try:
-            self.client.fget_object(bucket, object_name, file_path)
+            await self._run_sync(self.client.fget_object, bucket, object_name, file_path)
         except S3Error as e:
             raise MinIOServiceError(f"Failed to download file to {file_path}: {str(e)}")
 
-    def delete_file(self, bucket: str, object_name: str) -> bool:
+    async def delete_file(self, bucket: str, object_name: str) -> bool:
         """
         Delete a file from MinIO.
 
@@ -223,12 +243,12 @@ class MinIOService:
             MinIOServiceError: If deletion fails
         """
         try:
-            self.client.remove_object(bucket, object_name)
+            await self._run_sync(self.client.remove_object, bucket, object_name)
             return True
         except S3Error as e:
             raise MinIOServiceError(f"Failed to delete file: {str(e)}")
 
-    def get_presigned_download_url(
+    async def get_presigned_download_url(
         self,
         bucket: str,
         object_name: str,
@@ -252,7 +272,8 @@ class MinIOService:
             expiry = self.DEFAULT_URL_EXPIRY
 
         try:
-            url = self.client.presigned_get_object(
+            url = await self._run_sync(
+                self.client.presigned_get_object,
                 bucket_name=bucket,
                 object_name=object_name,
                 expires=expiry,
@@ -261,7 +282,7 @@ class MinIOService:
         except S3Error as e:
             raise MinIOServiceError(f"Failed to generate download URL: {str(e)}")
 
-    def get_presigned_upload_url(
+    async def get_presigned_upload_url(
         self,
         bucket: str,
         object_name: str,
@@ -285,7 +306,8 @@ class MinIOService:
             expiry = self.UPLOAD_URL_EXPIRY
 
         try:
-            url = self.client.presigned_put_object(
+            url = await self._run_sync(
+                self.client.presigned_put_object,
                 bucket_name=bucket,
                 object_name=object_name,
                 expires=expiry,
@@ -294,7 +316,7 @@ class MinIOService:
         except S3Error as e:
             raise MinIOServiceError(f"Failed to generate upload URL: {str(e)}")
 
-    def file_exists(self, bucket: str, object_name: str) -> bool:
+    async def file_exists(self, bucket: str, object_name: str) -> bool:
         """
         Check if a file exists in MinIO.
 
@@ -306,12 +328,12 @@ class MinIOService:
             True if file exists, False otherwise
         """
         try:
-            self.client.stat_object(bucket, object_name)
+            await self._run_sync(self.client.stat_object, bucket, object_name)
             return True
         except S3Error:
             return False
 
-    def get_file_info(self, bucket: str, object_name: str) -> dict:
+    async def get_file_info(self, bucket: str, object_name: str) -> dict:
         """
         Get metadata information about a file.
 
@@ -330,7 +352,7 @@ class MinIOService:
             MinIOServiceError: If file doesn't exist or operation fails
         """
         try:
-            stat = self.client.stat_object(bucket, object_name)
+            stat = await self._run_sync(self.client.stat_object, bucket, object_name)
             return {
                 "size": stat.size,
                 "content_type": stat.content_type,
@@ -378,7 +400,7 @@ class MinIOService:
             return self.IMAGES_BUCKET
         return self.ATTACHMENTS_BUCKET
 
-    def list_objects(
+    async def list_objects(
         self,
         bucket: str,
         prefix: Optional[str] = None,
@@ -399,25 +421,30 @@ class MinIOService:
             MinIOServiceError: If listing fails
         """
         try:
-            objects = self.client.list_objects(
-                bucket_name=bucket,
-                prefix=prefix,
-                recursive=recursive,
-            )
-            return [
-                {
-                    "name": obj.object_name,
-                    "size": obj.size,
-                    "last_modified": obj.last_modified,
-                    "etag": obj.etag,
-                    "is_dir": obj.is_dir,
-                }
-                for obj in objects
-            ]
+            # list_objects returns an iterator; collect results in executor
+            def _list() -> list:
+                objects = self.client.list_objects(
+                    bucket_name=bucket,
+                    prefix=prefix,
+                    recursive=recursive,
+                )
+                return [
+                    {
+                        "name": obj.object_name,
+                        "size": obj.size,
+                        "last_modified": obj.last_modified,
+                        "etag": obj.etag,
+                        "is_dir": obj.is_dir,
+                    }
+                    for obj in objects
+                ]
+
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(None, _list)
         except S3Error as e:
             raise MinIOServiceError(f"Failed to list objects: {str(e)}")
 
-    def copy_object(
+    async def copy_object(
         self,
         source_bucket: str,
         source_object: str,
@@ -442,7 +469,8 @@ class MinIOService:
         from minio.commonconfig import CopySource
 
         try:
-            self.client.copy_object(
+            await self._run_sync(
+                self.client.copy_object,
                 bucket_name=dest_bucket,
                 object_name=dest_object,
                 source=CopySource(source_bucket, source_object),
@@ -450,6 +478,44 @@ class MinIOService:
             return dest_object
         except S3Error as e:
             raise MinIOServiceError(f"Failed to copy object: {str(e)}")
+
+    async def upload_file_from_path(
+        self,
+        bucket: str,
+        object_name: str,
+        file_path: str,
+        content_type: str = "application/octet-stream",
+    ) -> str:
+        """
+        Upload a file from a local path to MinIO (streaming).
+
+        Uses minio-py fput_object which streams from disk.
+
+        Args:
+            bucket: Name of the bucket to upload to
+            object_name: Object key (path) in the bucket
+            file_path: Local source file path
+            content_type: MIME type of the file
+
+        Returns:
+            The object name (key) of the uploaded file
+
+        Raises:
+            MinIOServiceError: If upload fails
+        """
+        await self.ensure_buckets_exist()
+
+        try:
+            await self._run_sync(
+                self.client.fput_object,
+                bucket_name=bucket,
+                object_name=object_name,
+                file_path=file_path,
+                content_type=content_type,
+            )
+            return object_name
+        except S3Error as e:
+            raise MinIOServiceError(f"Failed to upload file from path: {str(e)}")
 
 
 # Global service instance

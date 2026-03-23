@@ -130,28 +130,32 @@ async def search_knowledge(
         _SELECTION_MIN_RESULTS = 2
         if len(docs_meta) >= max(_SELECTION_MIN_RESULTS, get_selection_threshold()):
             # Build selection items (cap at get_selection_max_items())
-            capped_meta = docs_meta[:get_selection_max_items()]
+            capped_meta = docs_meta[: get_selection_max_items()]
             items = []
             for i, d in enumerate(capped_meta, start=1):  # 1-based indices
                 if not d.get("document_id"):
                     continue  # Skip chunks without document_id
                 chunk_text = d.get("chunk_text", "")
                 snippet = chunk_text[:120] + ("..." if len(chunk_text) > 120 else "")
-                items.append({
-                    "index": i,
-                    "title": d.get("title", "Untitled"),
-                    "heading": d.get("heading_context", "") or None,
-                    "snippet": snippet,
-                    "score": round(d.get("score", 0.0), 4),
-                    "document_id": d.get("document_id", ""),
-                })
+                items.append(
+                    {
+                        "index": i,
+                        "title": d.get("title", "Untitled"),
+                        "heading": d.get("heading_context", "") or None,
+                        "snippet": snippet,
+                        "score": round(d.get("score", 0.0), 4),
+                        "document_id": d.get("document_id", ""),
+                    }
+                )
 
             display_query = _escape_md(query[:100] + "..." if len(query) > 100 else query)
-            response = interrupt({
-                "type": "selection",
-                "prompt": f"I found {len(items)} results for '{display_query}'. Uncheck any irrelevant ones:",
-                "items": items,
-            })
+            response = interrupt(
+                {
+                    "type": "selection",
+                    "prompt": f"I found {len(items)} results for '{display_query}'. Uncheck any irrelevant ones:",
+                    "items": items,
+                }
+            )
 
             # Type guard: interrupt response must be a dict
             if not isinstance(response, dict):
@@ -168,7 +172,7 @@ async def search_knowledge(
                 raw = response["selected_indices"]
                 if not isinstance(raw, list):
                     raw = []
-                raw = raw[:get_selection_max_items()]
+                raw = raw[: get_selection_max_items()]
                 valid_range = range(1, len(capped_meta) + 1)
                 for idx in raw:
                     # bool is a subclass of int in Python; exclude it explicitly
@@ -183,10 +187,7 @@ async def search_knowledge(
             if not selected:
                 return "User deselected all results. Ask if they want to refine their search query."
 
-            filtered_meta = [
-                d for i, d in enumerate(capped_meta, start=1)
-                if i in selected
-            ]
+            filtered_meta = [d for i, d in enumerate(capped_meta, start=1) if i in selected]
             sources = _build_sources(filtered_meta)
             lines: list[str] = []
             for idx, d in enumerate(filtered_meta, start=1):
@@ -203,18 +204,14 @@ async def search_knowledge(
                 lines.append(_wrap_user_content(chunk))
                 lines.append("")
             filtered_text = "\n".join(lines)
-            tool_result = ToolResultWithSources(
-                text=filtered_text, sources=sources
-            )
+            tool_result = ToolResultWithSources(text=filtered_text, sources=sources)
             push_sources(sources)
             # H4: Use 16K cap to match RAG output budget (avoid double truncation)
             return _truncate(tool_result.format_for_llm(), max_len=16000)
 
         elif docs_meta:
             sources = _build_sources(docs_meta)
-            tool_result = ToolResultWithSources(
-                text=formatted_text, sources=sources
-            )
+            tool_result = ToolResultWithSources(text=formatted_text, sources=sources)
             push_sources(sources)
             # H4: Use 16K cap to match RAG output budget (avoid double truncation)
             return _truncate(tool_result.format_for_llm(), max_len=16000)
@@ -290,9 +287,7 @@ async def read_document(document_id: str) -> str:
             if scope_type == "personal" and scope_id is None:
                 return "Access denied: you do not have permission to read this document."
 
-            if not await perm_service.check_can_view_knowledge(
-                user_id, scope_type, scope_id
-            ):
+            if not await perm_service.check_can_view_knowledge(user_id, scope_type, scope_id):
                 return "Access denied: you do not have permission to read this document."
 
             content = row.content_plain or ""
@@ -311,9 +306,7 @@ async def read_document(document_id: str) -> str:
 
         if isinstance(exc, GraphBubbleUp):
             raise
-        logger.warning(
-            "read_document failed: %s: %s", type(exc).__name__, exc
-        )
+        logger.warning("read_document failed: %s: %s", type(exc).__name__, exc)
         return "Error reading document. Please try again."
 
 
@@ -354,9 +347,7 @@ async def browse_folders(
                 if error:
                     return error
                 scope_uuid = UUID(resolved_id)  # type: ignore[arg-type]
-                app_result = await db.execute(
-                    select(Application.name).where(Application.id == scope_uuid)
-                )
+                app_result = await db.execute(select(Application.name).where(Application.id == scope_uuid))
                 scope_display = app_result.scalar_one_or_none() or "Application"
 
             elif scope_lower == "project":
@@ -366,9 +357,7 @@ async def browse_folders(
                 if error:
                     return error
                 scope_uuid = UUID(resolved_id)  # type: ignore[arg-type]
-                proj_result = await db.execute(
-                    select(Project.name).where(Project.id == scope_uuid)
-                )
+                proj_result = await db.execute(select(Project.name).where(Project.id == scope_uuid))
                 scope_display = proj_result.scalar_one_or_none() or "Project"
 
             elif scope_lower == "personal":
@@ -418,13 +407,9 @@ async def browse_folders(
                 .limit(50)
             )
             if folder_uuid:
-                folder_query = folder_query.where(
-                    DocumentFolder.parent_id == folder_uuid
-                )
+                folder_query = folder_query.where(DocumentFolder.parent_id == folder_uuid)
             else:
-                folder_query = folder_query.where(
-                    DocumentFolder.parent_id.is_(None)
-                )
+                folder_query = folder_query.where(DocumentFolder.parent_id.is_(None))
 
             folder_result = await db.execute(folder_query)
             folders = folder_result.all()
@@ -472,16 +457,12 @@ async def browse_folders(
 
             # Total counts
             total_docs_result = await db.execute(
-                select(func.count())
-                .select_from(Document)
-                .where(doc_scope, Document.deleted_at.is_(None))
+                select(func.count()).select_from(Document).where(doc_scope, Document.deleted_at.is_(None))
             )
             total_docs = total_docs_result.scalar() or 0
 
             total_folders_result = await db.execute(
-                select(func.count())
-                .select_from(DocumentFolder)
-                .where(folder_scope)
+                select(func.count()).select_from(DocumentFolder).where(folder_scope)
             )
             total_folders = total_folders_result.scalar() or 0
 
@@ -495,9 +476,7 @@ async def browse_folders(
             parts.append("### Folders")
             for f in folders:
                 count = doc_counts.get(f.id, 0)
-                parts.append(
-                    f"- \U0001f4c1 {_escape_md(f.name)} ({count} docs) \u2014 id: {f.id}"
-                )
+                parts.append(f"- \U0001f4c1 {_escape_md(f.name)} ({count} docs) \u2014 id: {f.id}")
             parts.append("")
 
         doc_label = "Documents" if not folder_uuid else "Documents in folder"
@@ -505,9 +484,7 @@ async def browse_folders(
             parts.append(f"### {doc_label}")
             for d in documents:
                 updated = _relative_time(d.updated_at)
-                parts.append(
-                    f"- {_escape_md(d.title)} (updated {updated}) \u2014 id: {d.id}"
-                )
+                parts.append(f"- {_escape_md(d.title)} (updated {updated}) \u2014 id: {d.id}")
             parts.append("")
 
         if not folders and not documents:
@@ -515,15 +492,12 @@ async def browse_folders(
             parts.append("")
 
         total_shown = len(folders) + len(documents)
-        parts.append(
-            f"**Total**: {total_docs} document(s), {total_folders} folder(s)"
-        )
+        parts.append(f"**Total**: {total_docs} document(s), {total_folders} folder(s)")
         folder_limit_hit = len(folders) >= 50
         doc_limit_hit = len(documents) >= remaining
         if folder_limit_hit or doc_limit_hit:
             parts.append(
-                f"*(Showing {total_shown} items at this level; more may exist. "
-                "Use folder_id to drill into folders.)*"
+                f"*(Showing {total_shown} items at this level; more may exist. Use folder_id to drill into folders.)*"
             )
 
         return _truncate("\n".join(parts))
@@ -533,9 +507,7 @@ async def browse_folders(
 
         if isinstance(exc, GraphBubbleUp):
             raise
-        logger.warning(
-            "browse_folders failed: %s: %s", type(exc).__name__, exc
-        )
+        logger.warning("browse_folders failed: %s: %s", type(exc).__name__, exc)
         return "Error browsing knowledge base. Please try again."
 
 
@@ -622,9 +594,7 @@ async def get_document_details(doc: str) -> str:
 
         if isinstance(exc, GraphBubbleUp):
             raise
-        logger.warning(
-            "get_document_details failed: %s: %s", type(exc).__name__, exc
-        )
+        logger.warning("get_document_details failed: %s: %s", type(exc).__name__, exc)
         return "Error retrieving document details. Please try again."
 
 
@@ -713,10 +683,7 @@ async def list_recent_documents(scope: str = "", limit: int = 10) -> str:
                 scope_label = "Personal"
 
             word_count = _estimate_words(d.char_count)
-            lines.append(
-                f"| {_escape_md(d.title)} | {scope_label} | "
-                f"{_relative_time(d.updated_at)} | {word_count:,} |"
-            )
+            lines.append(f"| {_escape_md(d.title)} | {scope_label} | {_relative_time(d.updated_at)} | {word_count:,} |")
 
         lines.append(f"\n*{len(documents)} document(s) shown.*")
         return _truncate("\n".join(lines))
@@ -726,9 +693,7 @@ async def list_recent_documents(scope: str = "", limit: int = 10) -> str:
 
         if isinstance(exc, GraphBubbleUp):
             raise
-        logger.warning(
-            "list_recent_documents failed: %s: %s", type(exc).__name__, exc
-        )
+        logger.warning("list_recent_documents failed: %s: %s", type(exc).__name__, exc)
         return "Error retrieving recent documents. Please try again."
 
 

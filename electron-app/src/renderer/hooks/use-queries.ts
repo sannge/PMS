@@ -611,6 +611,11 @@ export function useTasks(projectId: string | undefined): UseQueryResult<Task[], 
     enabled: !!token && !!projectId,
     staleTime: 30 * 1000, // 30 seconds - tasks change frequently
     gcTime: 24 * 60 * 60 * 1000,
+    refetchOnWindowFocus: false, // WS real-time invalidation handles freshness
+    // refetchOnMount: default 'true' — serves from cache if fresh (within 30s staleTime).
+    // App-level WS handler (use-websocket-cache.ts) invalidates this cache on
+    // TASK_CREATED/UPDATED/DELETED even while this component is unmounted,
+    // so remount will refetch only if data actually changed on the server.
   })
 }
 

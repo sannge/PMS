@@ -25,8 +25,8 @@ from app.ai.sql_executor import (
 # _serialize_value
 # ---------------------------------------------------------------------------
 
-class TestSerializeValue:
 
+class TestSerializeValue:
     def test_uuid_serialized_as_string(self):
         uid = uuid4()
         assert _serialize_value(uid) == str(uid)
@@ -77,8 +77,8 @@ class TestSerializeValue:
 # QueryResult.to_text
 # ---------------------------------------------------------------------------
 
-class TestQueryResultToText:
 
+class TestQueryResultToText:
     def test_to_text_returns_markdown_table(self):
         qr = QueryResult(
             columns=["id", "name"],
@@ -161,6 +161,7 @@ class TestQueryResultToText:
 # execute — happy path
 # ---------------------------------------------------------------------------
 
+
 def _make_mock_db(
     columns: list[str],
     raw_rows: list[tuple],
@@ -186,7 +187,6 @@ def _make_mock_db(
 
 
 class TestExecuteHappyPath:
-
     async def test_simple_query_returns_results(self):
         uid1, uid2 = uuid4(), uuid4()
         mock_db = _make_mock_db(
@@ -229,19 +229,19 @@ class TestExecuteHappyPath:
         calls = mock_db.execute.call_args_list
 
         # First call: SET TRANSACTION READ ONLY (must be first for security)
-        first_sql = str(calls[0].args[0].text if hasattr(calls[0].args[0], 'text') else calls[0].args[0])
+        first_sql = str(calls[0].args[0].text if hasattr(calls[0].args[0], "text") else calls[0].args[0])
         assert "READ ONLY" in first_sql
 
         # Second call: SET LOCAL app.current_user_id
-        second_sql = str(calls[1].args[0].text if hasattr(calls[1].args[0], 'text') else calls[1].args[0])
+        second_sql = str(calls[1].args[0].text if hasattr(calls[1].args[0], "text") else calls[1].args[0])
         assert "app.current_user_id" in second_sql
 
         # Third call: SET LOCAL statement_timeout
-        third_sql = str(calls[2].args[0].text if hasattr(calls[2].args[0], 'text') else calls[2].args[0])
+        third_sql = str(calls[2].args[0].text if hasattr(calls[2].args[0], "text") else calls[2].args[0])
         assert "statement_timeout" in third_sql
 
         # Fourth call: the actual query
-        fourth_sql = str(calls[3].args[0].text if hasattr(calls[3].args[0], 'text') else calls[3].args[0])
+        fourth_sql = str(calls[3].args[0].text if hasattr(calls[3].args[0], "text") else calls[3].args[0])
         assert "v_tasks" in fourth_sql
 
     async def test_statement_timeout_set_to_5000ms(self):
@@ -257,7 +257,7 @@ class TestExecuteHappyPath:
 
         calls = mock_db.execute.call_args_list
         # Statement timeout is call index 2 (after READ ONLY and SET LOCAL user_id)
-        timeout_sql = str(calls[2].args[0].text if hasattr(calls[2].args[0], 'text') else calls[2].args[0])
+        timeout_sql = str(calls[2].args[0].text if hasattr(calls[2].args[0], "text") else calls[2].args[0])
         assert "statement_timeout" in timeout_sql
         # Value is interpolated as a literal in the SQL text
         assert str(STATEMENT_TIMEOUT_MS) in timeout_sql
@@ -322,7 +322,7 @@ class TestExecuteHappyPath:
 
         # Second call (index 1) is SET LOCAL app.current_user_id
         second_call = mock_db.execute.call_args_list[1]
-        sql_text = str(second_call.args[0].text if hasattr(second_call.args[0], 'text') else second_call.args[0])
+        sql_text = str(second_call.args[0].text if hasattr(second_call.args[0], "text") else second_call.args[0])
         assert str(user_id) in sql_text
         assert "app.current_user_id" in sql_text
 
@@ -331,8 +331,8 @@ class TestExecuteHappyPath:
 # execute — error handling
 # ---------------------------------------------------------------------------
 
-class TestExecuteErrors:
 
+class TestExecuteErrors:
     async def test_timeout_raises_value_error(self):
         """DBAPIError with timeout message -> ValueError about timeout."""
         mock_db = AsyncMock(spec=AsyncSession)
@@ -357,7 +357,7 @@ class TestExecuteErrors:
     async def test_other_dbapi_error_raises_value_error(self):
         """DBAPIError with non-timeout message -> ValueError with error detail."""
         mock_db = AsyncMock(spec=AsyncSession)
-        orig_error = Exception("relation \"v_tasks\" does not exist")
+        orig_error = Exception('relation "v_tasks" does not exist')
         dbapi_error = DBAPIError(
             statement="SELECT ...",
             params={},

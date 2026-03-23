@@ -17,7 +17,6 @@ from app.ai.sql_validator import (
 
 
 class TestValidSelects:
-
     def test_simple_select_star(self):
         result = validate("SELECT * FROM v_tasks")
         assert result.is_valid is True
@@ -30,10 +29,7 @@ class TestValidSelects:
         assert result.error is None
 
     def test_select_with_join(self):
-        sql = (
-            "SELECT t.*, ts.name FROM v_tasks t "
-            "JOIN v_task_statuses ts ON t.task_status_id = ts.id"
-        )
+        sql = "SELECT t.*, ts.name FROM v_tasks t JOIN v_task_statuses ts ON t.task_status_id = ts.id"
         result = validate(sql)
         assert result.is_valid is True
         assert "v_tasks" in result.tables_used
@@ -44,10 +40,7 @@ class TestValidSelects:
         assert result.is_valid is True
 
     def test_select_with_cte(self):
-        sql = (
-            "WITH active AS (SELECT * FROM v_tasks WHERE task_status_id IS NOT NULL) "
-            "SELECT * FROM active"
-        )
+        sql = "WITH active AS (SELECT * FROM v_tasks WHERE task_status_id IS NOT NULL) SELECT * FROM active"
         result = validate(sql)
         assert result.is_valid is True
         # CTE alias 'active' should NOT appear in tables_used
@@ -66,7 +59,6 @@ class TestValidSelects:
 
 
 class TestMutationRejected:
-
     def test_insert_rejected(self):
         result = validate("INSERT INTO v_tasks (title) VALUES ('test')")
         assert result.is_valid is False
@@ -99,7 +91,6 @@ class TestMutationRejected:
 
 
 class TestInjectionRejected:
-
     def test_multi_statement_rejected(self):
         result = validate("SELECT 1; DROP TABLE Users")
         assert result.is_valid is False
@@ -128,7 +119,6 @@ class TestInjectionRejected:
 
 
 class TestViewAllowlist:
-
     def test_base_table_rejected(self):
         """Direct table references (not v_* views) must be rejected."""
         result = validate("SELECT * FROM Tasks")
@@ -148,7 +138,6 @@ class TestViewAllowlist:
 
 
 class TestLimitEnforcement:
-
     def test_limit_added_when_missing(self):
         result = validate("SELECT * FROM v_tasks")
         assert result.is_valid is True
@@ -179,7 +168,6 @@ class TestLimitEnforcement:
 
 
 class TestEdgeCases:
-
     def test_syntactically_invalid_sql_rejected(self):
         result = validate("SLECT * FORM v_tasks")
         assert result.is_valid is False
@@ -207,26 +195,19 @@ class TestEdgeCases:
 
 
 class TestTablesUsed:
-
     def test_single_table(self):
         result = validate("SELECT * FROM v_tasks")
         assert result.is_valid is True
         assert result.tables_used == ["v_tasks"]
 
     def test_multiple_tables_sorted(self):
-        sql = (
-            "SELECT t.title, u.display_name FROM v_tasks t "
-            "JOIN v_users u ON t.assignee_id = u.id"
-        )
+        sql = "SELECT t.title, u.display_name FROM v_tasks t JOIN v_users u ON t.assignee_id = u.id"
         result = validate(sql)
         assert result.is_valid is True
         assert result.tables_used == ["v_tasks", "v_users"]
 
     def test_duplicate_table_deduplicated(self):
-        sql = (
-            "SELECT * FROM v_tasks t1 "
-            "JOIN v_tasks t2 ON t1.parent_id = t2.id"
-        )
+        sql = "SELECT * FROM v_tasks t1 JOIN v_tasks t2 ON t1.parent_id = t2.id"
         result = validate(sql)
         assert result.is_valid is True
         assert result.tables_used == ["v_tasks"]
@@ -238,7 +219,6 @@ class TestTablesUsed:
 
 
 class TestConstants:
-
     def test_max_limit_is_100(self):
         assert MAX_LIMIT == 100
 

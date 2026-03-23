@@ -1,9 +1,9 @@
 {
   "name": "pm-desktop-app",
   "version": "1.0.2",
-  "description": "Desktop Project Management Application with Jira-like features and OneNote-style note-taking",
+  "description": "AI Assisted Project and Knowledge Management System",
   "author": "sannge <samngestep2@gmail.com>",
-  "license": "PRIVATE",
+  "license": "MIT",
   "homepage": "https://github.com/sannge/PMS",
   "repository": {
     "type": "git",

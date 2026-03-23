@@ -6,6 +6,7 @@
  */
 
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
+import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { useAuthToken, getAuthHeaders } from '@/contexts/auth-context'
 import { useMoveTask, useTaskStatuses, type Task } from '@/hooks/use-queries'
@@ -274,7 +275,6 @@ export function TaskKanbanBoard({
   const [tasks, setTasks] = useState<Task[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [realtimeNotice, setRealtimeNotice] = useState<string | null>(null)
   const [activeTask, setActiveTask] = useState<Task | null>(null)
 
   // Auth
@@ -324,16 +324,14 @@ export function TaskKanbanBoard({
         if (data.action === 'created' && data.task) {
           const exists = currentTasks.some((t) => t.id === data.task_id)
           if (!exists) {
-            setRealtimeNotice('New task added')
-            setTimeout(() => setRealtimeNotice(null), 3000)
+            toast.info('New task added', { duration: 3000 })
             return [...currentTasks, data.task as unknown as Task]
           }
           return currentTasks
         } else if (data.action === 'updated' && data.task) {
           const index = currentTasks.findIndex((t) => t.id === data.task_id)
           if (index !== -1) {
-            setRealtimeNotice('Task updated')
-            setTimeout(() => setRealtimeNotice(null), 3000)
+            toast.info('Task updated', { duration: 3000 })
             const newTasks = [...currentTasks]
             newTasks[index] = data.task as unknown as Task
             return newTasks
@@ -342,16 +340,14 @@ export function TaskKanbanBoard({
         } else if (data.action === 'deleted') {
           const index = currentTasks.findIndex((t) => t.id === data.task_id)
           if (index !== -1) {
-            setRealtimeNotice('Task removed')
-            setTimeout(() => setRealtimeNotice(null), 3000)
+            toast.info('Task removed', { duration: 3000 })
             return currentTasks.filter((t) => t.id !== data.task_id)
           }
           return currentTasks
         } else if (data.action === 'status_changed' && data.task) {
           const index = currentTasks.findIndex((t) => t.id === data.task_id)
           if (index !== -1) {
-            setRealtimeNotice('Task status changed')
-            setTimeout(() => setRealtimeNotice(null), 3000)
+            toast.info('Task status changed', { duration: 3000 })
             const newTasks = [...currentTasks]
             newTasks[index] = data.task as unknown as Task
             return newTasks
@@ -389,7 +385,9 @@ export function TaskKanbanBoard({
 
         setTasks(response.data || [])
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to fetch tasks')
+        const msg = err instanceof Error ? err.message : 'Failed to fetch tasks'
+        setError(msg)
+        toast.error(msg)
       } finally {
         setIsLoading(false)
       }
@@ -475,13 +473,14 @@ export function TaskKanbanBoard({
           targetStatusCategory: targetInfo.category,
           targetStatusRank: targetInfo.rank,
         })
-      } catch {
-        // Revert on failure
+      } catch (err) {
+        // Revert on failure and notify user
         setTasks((currentTasks) =>
           currentTasks.map((t) =>
             t.id === taskId ? originalTask : t
           )
         )
+        toast.error(err instanceof Error ? err.message : 'Failed to move task')
       }
     },
     [tasks, moveTaskMutation, onTaskStatusChange, statusNameToInfo]
@@ -522,13 +521,6 @@ export function TaskKanbanBoard({
               <span className="hidden sm:inline">
                 {status.isConnected ? 'Live' : 'Offline'}
               </span>
-            </div>
-          )}
-
-          {realtimeNotice && (
-            <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-400 text-xs animate-in fade-in slide-in-from-left-2 duration-200">
-              <Wifi className="h-3.5 w-3.5" />
-              <span>{realtimeNotice}</span>
             </div>
           )}
 

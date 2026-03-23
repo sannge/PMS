@@ -419,9 +419,7 @@ class TestCascadeDelete:
 
         # Verify chunks exist
         result = await db_session.execute(
-            text(
-                'SELECT COUNT(*) FROM "DocumentChunks" WHERE file_id = :fid'
-            ),
+            text('SELECT COUNT(*) FROM "DocumentChunks" WHERE file_id = :fid'),
             {"fid": ff.id},
         )
         assert result.scalar() == 2
@@ -432,9 +430,7 @@ class TestCascadeDelete:
 
         # Verify chunks are gone
         result = await db_session.execute(
-            text(
-                'SELECT COUNT(*) FROM "DocumentChunks" WHERE file_id = :fid'
-            ),
+            text('SELECT COUNT(*) FROM "DocumentChunks" WHERE file_id = :fid'),
             {"fid": ff.id},
         )
         assert result.scalar() == 0

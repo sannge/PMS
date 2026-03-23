@@ -593,9 +593,19 @@ class TestStreamAgent:
 
         async def fake_events(*args, **kwargs):
             yield {"event": "on_chain_start", "name": "intake", "data": {}, "metadata": {"langgraph_node": "intake"}}
-            yield {"event": "on_chain_end", "name": "intake", "data": {"output": {}}, "metadata": {"langgraph_node": "intake"}}
+            yield {
+                "event": "on_chain_end",
+                "name": "intake",
+                "data": {"output": {}},
+                "metadata": {"langgraph_node": "intake"},
+            }
             yield {"event": "on_chain_start", "name": "explore", "data": {}, "metadata": {"langgraph_node": "explore"}}
-            yield {"event": "on_chain_end", "name": "explore", "data": {"output": {}}, "metadata": {"langgraph_node": "explore"}}
+            yield {
+                "event": "on_chain_end",
+                "name": "explore",
+                "data": {"output": {}},
+                "metadata": {"langgraph_node": "explore"},
+            }
 
         mock_graph.astream_events = fake_events
 
@@ -621,8 +631,18 @@ class TestStreamAgent:
         mock_graph.aget_state = AsyncMock(return_value=None)
 
         async def fake_events(*args, **kwargs):
-            yield {"event": "on_chain_start", "name": "some_unknown_node", "data": {}, "metadata": {"langgraph_node": "some_unknown_node"}}
-            yield {"event": "on_chain_end", "name": "some_unknown_node", "data": {"output": {}}, "metadata": {"langgraph_node": "some_unknown_node"}}
+            yield {
+                "event": "on_chain_start",
+                "name": "some_unknown_node",
+                "data": {},
+                "metadata": {"langgraph_node": "some_unknown_node"},
+            }
+            yield {
+                "event": "on_chain_end",
+                "name": "some_unknown_node",
+                "data": {"output": {}},
+                "metadata": {"langgraph_node": "some_unknown_node"},
+            }
 
         mock_graph.astream_events = fake_events
 
@@ -770,6 +790,7 @@ class TestThreadOwnership:
             mock_rs.is_connected = False
 
             import app.routers.ai_chat as chat_mod
+
             original_max = chat_mod._FALLBACK_MAX_SIZE
             try:
                 chat_mod._FALLBACK_MAX_SIZE = 3
@@ -929,9 +950,11 @@ class TestExtractNodeDetails:
 
     def test_exception_in_extraction(self):
         """exception during extraction returns None, does not raise."""
+
         class BadEvent:
             def get(self, *args, **kwargs):
                 raise TypeError("boom")
+
         assert _extract_node_details("explore", BadEvent()) is None
 
 
@@ -983,7 +1006,12 @@ class TestOnChainEndDetails:
         mock_graph.aget_state = AsyncMock(return_value=None)
 
         async def fake_events(*args, **kwargs):
-            yield {"event": "on_chain_start", "name": "explore_tools", "data": {}, "metadata": {"langgraph_node": "explore_tools"}}
+            yield {
+                "event": "on_chain_start",
+                "name": "explore_tools",
+                "data": {},
+                "metadata": {"langgraph_node": "explore_tools"},
+            }
             yield {
                 "event": "on_chain_end",
                 "name": "explore_tools",
@@ -1047,7 +1075,12 @@ class TestHITLSpinnerFix:
 
         async def fake_events(*args, **kwargs):
             # Simulate explore_tools node starting (on_chain_start fires)
-            yield {"event": "on_chain_start", "name": "explore_tools", "data": {}, "metadata": {"langgraph_node": "explore_tools"}}
+            yield {
+                "event": "on_chain_start",
+                "name": "explore_tools",
+                "data": {},
+                "metadata": {"langgraph_node": "explore_tools"},
+            }
             # on_chain_end never fires because interrupt() is called inside execute_tools
 
         mock_graph.astream_events = fake_events
@@ -1063,6 +1096,7 @@ class TestHITLSpinnerFix:
         mock_state.config = {"configurable": {"checkpoint_id": "cp-123"}}
         mock_state.values = {"messages": [], "context_summary": None}
         from unittest.mock import AsyncMock
+
         mock_graph.aget_state = AsyncMock(return_value=mock_state)
 
         events = []
@@ -1078,7 +1112,8 @@ class TestHITLSpinnerFix:
         # Find the thinking_step complete for explore_tools
         thinking_events = [e for e in events if e["event"] == "thinking_step"]
         complete_events = [
-            e for e in thinking_events
+            e
+            for e in thinking_events
             if json.loads(e["data"]).get("status") == "complete"
             and json.loads(e["data"]).get("node") == "explore_tools"
         ]
@@ -1113,7 +1148,6 @@ _REDIS_PATCH = "app.services.redis_service.redis_service"
 
 
 class TestRegisterThread:
-
     async def test_redis_available_stores_in_redis(self):
         """When Redis is available, thread ownership is stored there."""
         mock_redis = _mock_redis_service(connected=True)
@@ -1150,10 +1184,10 @@ class TestRegisterThread:
 
 
 class TestValidateThreadOwner:
-
     async def test_redis_available_correct_owner_passes(self):
         """Redis available + correct owner -> no exception."""
         import app.routers.ai_chat as _chat_mod
+
         _chat_mod._redis_circuit_open_until = 0.0  # Reset circuit breaker
         mock_redis = _mock_redis_service(connected=True, get_return="user-A")
         with patch(_REDIS_PATCH, mock_redis):
@@ -1198,9 +1232,7 @@ class TestValidateThreadOwner:
 
         with patch(_REDIS_PATCH, mock_redis):
             with pytest.raises(HTTPException) as exc_info:
-                await _validate_thread_owner(
-                    "thread-new", "user-Y", require_existing=True
-                )
+                await _validate_thread_owner("thread-new", "user-Y", require_existing=True)
             assert exc_info.value.status_code == 404
 
         _thread_owners_fallback.clear()

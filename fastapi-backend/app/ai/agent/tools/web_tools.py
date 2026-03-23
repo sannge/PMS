@@ -30,9 +30,9 @@ _BLOCKED_NETWORKS = [
     ipaddress.ip_network("::1/128"),
     ipaddress.ip_network("fe80::/10"),
     ipaddress.ip_network("fc00::/7"),
-    ipaddress.ip_network("100.64.0.0/10"),   # IANA Shared Address Space
-    ipaddress.ip_network("0.0.0.0/8"),        # This host
-    ipaddress.ip_network("240.0.0.0/4"),      # Reserved
+    ipaddress.ip_network("100.64.0.0/10"),  # IANA Shared Address Space
+    ipaddress.ip_network("0.0.0.0/8"),  # This host
+    ipaddress.ip_network("240.0.0.0/4"),  # Reserved
 ]
 
 
@@ -42,18 +42,14 @@ async def _ssrf_request_hook(request: httpx.Request) -> None:
     if not hostname:
         return
     try:
-        infos = await asyncio.to_thread(
-            socket.getaddrinfo, hostname, None, 0, socket.SOCK_STREAM
-        )
+        infos = await asyncio.to_thread(socket.getaddrinfo, hostname, None, 0, socket.SOCK_STREAM)
     except socket.gaierror:
         raise httpx.ConnectError(f"DNS resolution failed for {hostname}")
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
         for network in _BLOCKED_NETWORKS:
             if ip in network:
-                raise httpx.ConnectError(
-                    f"Blocked: {hostname} resolves to private IP {ip}"
-                )
+                raise httpx.ConnectError(f"Blocked: {hostname} resolves to private IP {ip}")
 
 
 async def _validate_url_safe(url: str) -> None:
@@ -71,9 +67,7 @@ async def _validate_url_safe(url: str) -> None:
 
     # DNS resolve
     try:
-        infos = await asyncio.to_thread(
-            socket.getaddrinfo, parsed.hostname, None, 0, socket.SOCK_STREAM
-        )
+        infos = await asyncio.to_thread(socket.getaddrinfo, parsed.hostname, None, 0, socket.SOCK_STREAM)
     except socket.gaierror:
         raise ValueError(f"Cannot resolve hostname: {parsed.hostname}")
 
@@ -247,7 +241,9 @@ async def scrape_url(url: str) -> str:
 
             # Content-Type check on the final URL
             content_type = head_response.headers.get("content-type", "")
-            if content_type and not any(ct in content_type.lower() for ct in ("text/html", "text/plain", "application/xhtml")):
+            if content_type and not any(
+                ct in content_type.lower() for ct in ("text/html", "text/plain", "application/xhtml")
+            ):
                 return f"Error: URL returned non-HTML content type: {content_type.split(';')[0]}"
 
             # Streaming GET with size cap to avoid full response buffering

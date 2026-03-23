@@ -31,6 +31,7 @@ from .project_assignments import router as project_assignments_router
 from .project_members import router as project_members_router
 from .projects import router as projects_router
 from .tasks import router as tasks_router
+from .team_activity import router as team_activity_router
 from .users import router as users_router
 
 __all__ = [
@@ -55,11 +56,11 @@ __all__ = [
     "files_router",
     "folder_files_router",
     "invitations_router",
-
     "notifications_router",
     "project_assignments_router",
     "project_members_router",
     "projects_router",
     "tasks_router",
+    "team_activity_router",
     "users_router",
 ]

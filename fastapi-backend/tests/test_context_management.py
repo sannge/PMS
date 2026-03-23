@@ -30,7 +30,6 @@ from app.ai.agent.graph import (
 
 
 class TestStripCompletedToolMessages:
-
     def test_single_completed_group_stripped(self):
         """A single completed tool turn (AI+tool_calls -> ToolMessages -> AI+content)
         has the AI+tool_calls and ToolMessages stripped, but closing AI kept."""
@@ -117,10 +116,13 @@ class TestStripCompletedToolMessages:
         """A tool group with multiple ToolMessages is stripped correctly."""
         messages = [
             HumanMessage(content="Hello"),
-            AIMessage(content="", tool_calls=[
-                {"id": "tc1", "name": "t1", "args": {}},
-                {"id": "tc2", "name": "t2", "args": {}},
-            ]),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"id": "tc1", "name": "t1", "args": {}},
+                    {"id": "tc2", "name": "t2", "args": {}},
+                ],
+            ),
             ToolMessage(content="r1", tool_call_id="tc1"),
             ToolMessage(content="r2", tool_call_id="tc2"),
             AIMessage(content="Combined results"),
@@ -176,10 +178,13 @@ class TestStripCompletedToolMessages:
         """Multiple KB tools in same group should all be preserved."""
         messages = [
             HumanMessage(content="Research"),
-            AIMessage(content="", tool_calls=[
-                {"name": "search_knowledge", "id": "tc1", "args": {}},
-                {"name": "read_document", "id": "tc2", "args": {}},
-            ]),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "search_knowledge", "id": "tc1", "args": {}},
+                    {"name": "read_document", "id": "tc2", "args": {}},
+                ],
+            ),
             ToolMessage(content="Search result A", name="search_knowledge", tool_call_id="tc1"),
             ToolMessage(content="Document content B", name="read_document", tool_call_id="tc2"),
             AIMessage(content="Here is what I found"),
@@ -206,7 +211,6 @@ class TestStripCompletedToolMessages:
 
 
 class TestSanitizeOrphanedToolCalls:
-
     def test_orphaned_ids_removed(self):
         """AI messages with tool_calls that have no matching ToolMessage
         are sanitized (tool_calls stripped, content kept)."""
@@ -280,7 +284,6 @@ class TestSanitizeOrphanedToolCalls:
 
 
 class TestMaybeSummarize:
-
     async def test_under_threshold_returns_unchanged(self):
         """Messages under the context threshold are returned unchanged."""
         messages = [
@@ -326,16 +329,18 @@ class TestMaybeSummarize:
         # With context_window=100 and threshold=0.9, threshold=90 tokens
         # Fixed overhead is 40000, so we need messages that push past it
         # Actually let's use a different approach -- mock the char calculation
-        messages = [
-            HumanMessage(content="Initial question about something"),
-            AIMessage(content="Let me check that for you"),
-            HumanMessage(content="Thanks"),
-            AIMessage(content="Here is what I found"),
-        ] + [
-            HumanMessage(content="x" * 100000),  # Very large message
-        ] + [
-            HumanMessage(content=f"Recent msg {i}") for i in range(15)
-        ]
+        messages = (
+            [
+                HumanMessage(content="Initial question about something"),
+                AIMessage(content="Let me check that for you"),
+                HumanMessage(content="Thanks"),
+                AIMessage(content="Here is what I found"),
+            ]
+            + [
+                HumanMessage(content="x" * 100000),  # Very large message
+            ]
+            + [HumanMessage(content=f"Recent msg {i}") for i in range(15)]
+        )
 
         model = AsyncMock()
         model.ainvoke = AsyncMock(return_value=AIMessage(content="Summary of conversation"))
@@ -420,9 +425,7 @@ class TestMaybeSummarize:
 
         model = AsyncMock()
         model.ainvoke = AsyncMock(
-            side_effect=GraphInterrupt(
-                interrupts=(Interrupt(value={}, resumable=True, ns=(), when="during"),)
-            )
+            side_effect=GraphInterrupt(interrupts=(Interrupt(value={}, resumable=True, ns=(), when="during"),))
         )
         state = {}
 

@@ -22,13 +22,14 @@ import {
   Settings,
   Bell,
   Plus,
+  BarChart3,
 } from 'lucide-react'
 
 // ============================================================================
 // Types
 // ============================================================================
 
-type NavItem = 'dashboard' | 'applications' | 'projects' | 'tasks' | 'notes' | 'settings'
+type NavItem = 'dashboard' | 'applications' | 'projects' | 'tasks' | 'notes' | 'team-activity' | 'settings'
 
 export interface SidebarProps {
   activeItem?: NavItem
@@ -37,6 +38,7 @@ export interface SidebarProps {
   onCollapsedChange?: (collapsed: boolean) => void
   onNotificationClick?: () => void
   onQuickCreate?: () => void
+  showTeamActivity?: boolean
   className?: string
 }
 
@@ -116,6 +118,7 @@ export function Sidebar({
   onCollapsedChange,
   onNotificationClick,
   onQuickCreate,
+  showTeamActivity = false,
   className,
 }: SidebarProps): JSX.Element {
   // Use TanStack Query for unread count (auto-refreshes)
@@ -142,11 +145,14 @@ export function Sidebar({
     }
   }, [onNotificationClick, toggleNotifications])
 
-  const navItems = [
-    { id: 'dashboard' as NavItem, icon: <LayoutDashboard className="h-4 w-4" />, label: 'Dashboard' },
-    { id: 'applications' as NavItem, icon: <FolderKanban className="h-4 w-4" />, label: 'Workspaces' },
-    { id: 'tasks' as NavItem, icon: <ListTodo className="h-4 w-4" />, label: 'Tasks' },
-    { id: 'notes' as NavItem, icon: <FileText className="h-4 w-4" />, label: 'Notes' },
+  const navItems: Array<{ id: NavItem; icon: JSX.Element; label: string }> = [
+    { id: 'dashboard', icon: <LayoutDashboard className="h-4 w-4" />, label: 'Dashboard' },
+    { id: 'applications', icon: <FolderKanban className="h-4 w-4" />, label: 'Workspaces' },
+    { id: 'tasks', icon: <ListTodo className="h-4 w-4" />, label: 'Tasks' },
+    { id: 'notes', icon: <FileText className="h-4 w-4" />, label: 'Notes' },
+    ...(showTeamActivity
+      ? [{ id: 'team-activity' as NavItem, icon: <BarChart3 className="h-4 w-4" />, label: 'Team Activity' }]
+      : []),
   ]
 
   return (

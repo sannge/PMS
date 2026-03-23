@@ -96,16 +96,13 @@ class ProviderRegistry:
         auth_method = getattr(provider, "auth_method", "api_key")
         if auth_method in ("oauth", "session_token"):
             if not provider.oauth_access_token:
-                raise ConfigurationError(
-                    f"Provider '{provider.name}' uses {auth_method} but has no access token."
-                )
+                raise ConfigurationError(f"Provider '{provider.name}' uses {auth_method} but has no access token.")
             encryption = ApiKeyEncryption(settings.ai_encryption_key)
             try:
                 access_token = encryption.decrypt(provider.oauth_access_token)
             except Exception:
                 raise ConfigurationError(
-                    f"Provider '{provider.name}' has a corrupt or "
-                    f"re-keyed access token — please reconnect."
+                    f"Provider '{provider.name}' has a corrupt or re-keyed access token — please reconnect."
                 )
 
             if provider.provider_type == "openai":
@@ -127,24 +124,19 @@ class ProviderRegistry:
                         base_url=provider.base_url,
                     )
             else:
-                raise ConfigurationError(
-                    f"{auth_method} not supported for provider type: {provider.provider_type}"
-                )
+                raise ConfigurationError(f"{auth_method} not supported for provider type: {provider.provider_type}")
 
         # Standard API key path
         factory = _PROVIDER_FACTORIES.get(provider.provider_type)
         if factory is None:
-            raise ConfigurationError(
-                f"Unknown provider type: {provider.provider_type}"
-            )
+            raise ConfigurationError(f"Unknown provider type: {provider.provider_type}")
 
         if provider.provider_type == "ollama":
             return factory(api_key=api_key, base_url=provider.base_url)
         else:
             if not api_key:
                 raise ConfigurationError(
-                    f"Provider '{provider.name}' ({provider.provider_type}) "
-                    f"requires an API key but none is configured."
+                    f"Provider '{provider.name}' ({provider.provider_type}) requires an API key but none is configured."
                 )
             return factory(api_key=api_key, base_url=provider.base_url)
 
@@ -176,22 +168,17 @@ class ProviderRegistry:
         """
         # Try user-specific provider first
         if user_id is not None:
-            user_provider = await self._find_provider_for_capability(
-                db, capability, scope="user", user_id=user_id
-            )
+            user_provider = await self._find_provider_for_capability(db, capability, scope="user", user_id=user_id)
             if user_provider is not None:
                 return user_provider
 
         # Fall back to global provider
-        global_provider = await self._find_provider_for_capability(
-            db, capability, scope="global"
-        )
+        global_provider = await self._find_provider_for_capability(db, capability, scope="global")
         if global_provider is not None:
             return global_provider
 
         raise ConfigurationError(
-            f"No enabled AI provider configured for '{capability}'. "
-            f"Please configure a provider in Admin > AI Settings."
+            f"No enabled AI provider configured for '{capability}'. Please configure a provider in Admin > AI Settings."
         )
 
     async def _find_provider_for_capability(
@@ -280,9 +267,7 @@ class ProviderRegistry:
         provider.oauth_access_token = encryption.encrypt(tokens["access_token"])
         if tokens.get("refresh_token"):
             provider.oauth_refresh_token = encryption.encrypt(tokens["refresh_token"])
-        provider.oauth_token_expires_at = utc_now() + timedelta(
-            seconds=tokens.get("expires_in", 3600)
-        )
+        provider.oauth_token_expires_at = utc_now() + timedelta(seconds=tokens.get("expires_in", 3600))
         await db.commit()
 
         # Clear cached adapter so it rebuilds with new token
@@ -368,8 +353,7 @@ class ProviderRegistry:
             adapter = self._build_adapter(provider, api_key)
             if not isinstance(adapter, VisionProvider):
                 raise ConfigurationError(
-                    f"Provider '{provider.name}' ({provider.provider_type}) "
-                    f"does not support vision capabilities."
+                    f"Provider '{provider.name}' ({provider.provider_type}) does not support vision capabilities."
                 )
             self._cache[cache_key] = adapter
 

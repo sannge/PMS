@@ -114,9 +114,7 @@ async def _check_token_rate_limit(
 _VALIDATE_TIMEOUT = 15.0  # seconds
 
 
-async def _validate_token(
-    provider_type: str, token: str
-) -> tuple[bool, str, int | None, str]:
+async def _validate_token(provider_type: str, token: str) -> tuple[bool, str, int | None, str]:
     """Test a subscription token by making a minimal API call.
 
     For Anthropic, tries ``auth_token`` (bearer/OAuth) first, then falls
@@ -223,9 +221,7 @@ async def save_subscription_token(
     5. Returns connection status (never includes the token)
     """
     # Validate the token first
-    valid, message, _latency, token_mode = await _validate_token(
-        body.provider_type, body.token
-    )
+    valid, message, _latency, token_mode = await _validate_token(body.provider_type, body.token)
     if not valid:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -251,9 +247,7 @@ async def save_subscription_token(
     # Determine model ID
     model_id = body.preferred_model
     if not model_id:
-        model_id = (
-            "gpt-4o" if body.provider_type == "openai" else "claude-sonnet-4-20250514"
-        )
+        model_id = "gpt-4o" if body.provider_type == "openai" else "claude-sonnet-4-20250514"
 
     if provider:
         # Update existing provider to use session token
@@ -334,9 +328,7 @@ async def subscription_token_status(
     db: AsyncSession = Depends(get_db),
 ) -> SubscriptionTokenStatus:
     """Get current subscription token connection status. Never returns the token."""
-    result = await db.execute(
-        _subscription_token_query(current_user.id, with_models=True)
-    )
+    result = await db.execute(_subscription_token_query(current_user.id, with_models=True))
     provider = result.scalars().first()
 
     if not provider:
@@ -367,9 +359,7 @@ async def test_subscription_token(
     db: AsyncSession = Depends(get_db),
 ) -> SubscriptionTokenTestResult:
     """Test the stored subscription token by making a minimal API call."""
-    result = await db.execute(
-        _subscription_token_query(current_user.id)
-    )
+    result = await db.execute(_subscription_token_query(current_user.id))
     provider = result.scalars().first()
 
     if not provider or not provider.oauth_access_token:
@@ -407,9 +397,7 @@ async def remove_subscription_token(
     db: AsyncSession = Depends(get_db),
 ) -> OAuthDisconnectResponse:
     """Remove the subscription token and fall back to company default."""
-    result = await db.execute(
-        _subscription_token_query(current_user.id)
-    )
+    result = await db.execute(_subscription_token_query(current_user.id))
     provider = result.scalars().first()
 
     if not provider:

@@ -61,11 +61,10 @@ class TestGetUserApplicationRole:
         app_id = uuid4()
 
         mock_db = self._create_mock_db()
-        mock_app = self._create_mock_application(owner_id=user_id)
 
-        # First execute returns Application
+        # Single JOIN query: result.first() returns (owner_id, member_role)
         mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = mock_app
+        mock_result.first.return_value = (user_id, None)
         mock_db.execute = AsyncMock(return_value=mock_result)
 
         service = PermissionService(mock_db)
@@ -80,15 +79,11 @@ class TestGetUserApplicationRole:
         app_id = uuid4()
 
         mock_db = self._create_mock_db()
-        mock_app = self._create_mock_application(owner_id=other_user_id)
-        mock_member = self._create_mock_member(role="editor")
 
-        # First execute returns Application, second returns ApplicationMember
-        mock_result1 = MagicMock()
-        mock_result1.scalar_one_or_none.return_value = mock_app
-        mock_result2 = MagicMock()
-        mock_result2.scalar_one_or_none.return_value = mock_member
-        mock_db.execute = AsyncMock(side_effect=[mock_result1, mock_result2])
+        # Single JOIN query: result.first() returns (owner_id, member_role)
+        mock_result = MagicMock()
+        mock_result.first.return_value = (other_user_id, "editor")
+        mock_db.execute = AsyncMock(return_value=mock_result)
 
         service = PermissionService(mock_db)
         result = await service.get_user_application_role(user_id, app_id)
@@ -102,14 +97,11 @@ class TestGetUserApplicationRole:
         app_id = uuid4()
 
         mock_db = self._create_mock_db()
-        mock_app = self._create_mock_application(owner_id=other_user_id)
-        mock_member = self._create_mock_member(role="viewer")
 
-        mock_result1 = MagicMock()
-        mock_result1.scalar_one_or_none.return_value = mock_app
-        mock_result2 = MagicMock()
-        mock_result2.scalar_one_or_none.return_value = mock_member
-        mock_db.execute = AsyncMock(side_effect=[mock_result1, mock_result2])
+        # Single JOIN query: result.first() returns (owner_id, member_role)
+        mock_result = MagicMock()
+        mock_result.first.return_value = (other_user_id, "viewer")
+        mock_db.execute = AsyncMock(return_value=mock_result)
 
         service = PermissionService(mock_db)
         result = await service.get_user_application_role(user_id, app_id)
@@ -123,14 +115,11 @@ class TestGetUserApplicationRole:
         app_id = uuid4()
 
         mock_db = self._create_mock_db()
-        mock_app = self._create_mock_application(owner_id=other_user_id)
 
-        # Application found, but member not found
-        mock_result1 = MagicMock()
-        mock_result1.scalar_one_or_none.return_value = mock_app
-        mock_result2 = MagicMock()
-        mock_result2.scalar_one_or_none.return_value = None
-        mock_db.execute = AsyncMock(side_effect=[mock_result1, mock_result2])
+        # Single JOIN query: app exists but no member record (role is None)
+        mock_result = MagicMock()
+        mock_result.first.return_value = (other_user_id, None)
+        mock_db.execute = AsyncMock(return_value=mock_result)
 
         service = PermissionService(mock_db)
         result = await service.get_user_application_role(user_id, app_id)
@@ -143,8 +132,10 @@ class TestGetUserApplicationRole:
         app_id = uuid4()
 
         mock_db = self._create_mock_db()
+
+        # Single JOIN query: no row returned (application doesn't exist)
         mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = None
+        mock_result.first.return_value = None
         mock_db.execute = AsyncMock(return_value=mock_result)
 
         service = PermissionService(mock_db)
@@ -420,15 +411,15 @@ class TestCheckCanBeAssigned:
 
         assert result is True
 
-    async def test_owner_non_member_cannot_be_assigned(self):
-        """Owner who is NOT a ProjectMember cannot be assigned."""
+    async def test_owner_non_member_can_be_assigned(self):
+        """Owner who is NOT a ProjectMember can still be assigned (owner guard)."""
         service = self._setup_service_with_mocks(role="owner", is_member=False)
         user_id = uuid4()
         project_id = uuid4()
 
         result = await service.check_can_be_assigned(user_id, project_id)
 
-        assert result is False
+        assert result is True
 
     async def test_editor_member_can_be_assigned(self):
         """Editor who is ProjectMember can be assigned to tasks."""
@@ -606,68 +597,30 @@ class TestGetAssignableUsersForProject:
         project_id = uuid4()
         app_id = uuid4()
 
-        # Create mock project
+        # Create mock project with application
         mock_project = MagicMock()
         mock_project.application_id = app_id
         mock_app = MagicMock()
-        mock_app.owner_id = uuid4()  # Some other user is app owner
+        mock_app.owner_id = uuid4()
         mock_project.application = mock_app
         service.get_project_with_application = AsyncMock(return_value=mock_project)
 
-        # Create mock project members
+        # Create mock users
         owner_user = MagicMock()
         owner_user.id = uuid4()
-        owner_member = MagicMock()
-        owner_member.user_id = owner_user.id
-        owner_member.user = owner_user
-
         editor_user = MagicMock()
         editor_user.id = uuid4()
-        editor_member = MagicMock()
-        editor_member.user_id = editor_user.id
-        editor_member.user = editor_user
 
-        viewer_user = MagicMock()
-        viewer_user.id = uuid4()
-        viewer_member = MagicMock()
-        viewer_member.user_id = viewer_user.id
-        viewer_member.user = viewer_user
-
-        # Mock db.execute for ProjectMember query, app owner query, and app member query
-        pm_result = MagicMock()
-        pm_result.scalars.return_value.all.return_value = [
-            owner_member, editor_member, viewer_member,
-        ]
-        # App owner user query
-        app_owner_user = MagicMock()
-        app_owner_user.id = mock_app.owner_id
-        owner_result = MagicMock()
-        owner_result.scalar_one_or_none.return_value = app_owner_user
-        # App owner members query (no additional owner members)
-        app_owner_members_result = MagicMock()
-        app_owner_members_result.scalars.return_value.all.return_value = []
-
-        mock_db.execute = AsyncMock(
-            side_effect=[pm_result, owner_result, app_owner_members_result]
-        )
-
-        # Mock role lookups
-        def get_role(user_id, app_id, app=None):
-            if user_id == owner_user.id:
-                return "owner"
-            elif user_id == editor_user.id:
-                return "editor"
-            else:
-                return "viewer"
-
-        service.get_user_application_role = AsyncMock(side_effect=get_role)
+        # Single UNION ALL query: db.execute returns User objects via scalars().all()
+        combined_result = MagicMock()
+        combined_result.scalars.return_value.all.return_value = [owner_user, editor_user]
+        mock_db.execute = AsyncMock(return_value=combined_result)
 
         result = await service.get_assignable_users_for_project(project_id)
 
-        # Should include: owner_member, editor_member (from project), + app owner
         assert owner_user in result
         assert editor_user in result
-        assert viewer_user not in result
+        assert len(result) == 2
 
     async def test_returns_empty_for_no_members(self):
         """Returns empty list when project has no members (only app owner)."""
@@ -681,21 +634,12 @@ class TestGetAssignableUsersForProject:
         mock_project.application = mock_app
         service.get_project_with_application = AsyncMock(return_value=mock_project)
 
-        # Empty project members
-        pm_result = MagicMock()
-        pm_result.scalars.return_value.all.return_value = []
-        # App owner user
+        # App owner returned from the single UNION ALL query
         app_owner_user = MagicMock()
         app_owner_user.id = mock_app.owner_id
-        owner_result = MagicMock()
-        owner_result.scalar_one_or_none.return_value = app_owner_user
-        # No additional owner members
-        app_owner_members_result = MagicMock()
-        app_owner_members_result.scalars.return_value.all.return_value = []
-
-        mock_db.execute = AsyncMock(
-            side_effect=[pm_result, owner_result, app_owner_members_result]
-        )
+        combined_result = MagicMock()
+        combined_result.scalars.return_value.all.return_value = [app_owner_user]
+        mock_db.execute = AsyncMock(return_value=combined_result)
 
         result = await service.get_assignable_users_for_project(uuid4())
 
@@ -799,9 +743,9 @@ class TestPermissionRulesIntegration:
         service.is_project_member = AsyncMock(return_value=True)
         assert await service.check_can_be_assigned(user_id, project_id) is True
 
-        # Owner + NOT Member = NOT assignable
+        # Owner + NOT Member = still assignable (owner guard)
         service.is_project_member = AsyncMock(return_value=False)
-        assert await service.check_can_be_assigned(user_id, project_id) is False
+        assert await service.check_can_be_assigned(user_id, project_id) is True
 
         # Editor + Member = assignable
         service.get_user_application_role = AsyncMock(return_value="editor")

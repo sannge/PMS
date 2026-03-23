@@ -137,13 +137,9 @@ class AgentConfigService:
                     rows = result.scalars().all()
                     self._cache = {row.key: row.value for row in rows}
                     self._cache_loaded_at = time.monotonic()
-                    logger.info(
-                        "AgentConfigService: loaded %d configs", len(self._cache)
-                    )
+                    logger.info("AgentConfigService: loaded %d configs", len(self._cache))
             except Exception:
-                logger.exception(
-                    "AgentConfigService: failed to load configs from DB"
-                )
+                logger.exception("AgentConfigService: failed to load configs from DB")
 
     async def _ensure_loaded(self) -> None:
         """Reload cache if empty or stale."""
@@ -160,9 +156,7 @@ class AgentConfigService:
             if redis_service.is_connected:
                 await redis_service.client.publish(self.CHANNEL, "invalidate")
         except Exception:
-            logger.warning(
-                "AgentConfigService: failed to publish invalidation to Redis"
-            )
+            logger.warning("AgentConfigService: failed to publish invalidation to Redis")
 
     async def subscribe_invalidation(self) -> None:
         """Listen for Redis invalidation messages and clear cache.
@@ -181,20 +175,14 @@ class AgentConfigService:
                 await pubsub.subscribe(self.CHANNEL)
                 async for message in pubsub.listen():
                     if message["type"] == "message":
-                        logger.info(
-                            "AgentConfigService: received invalidation, clearing cache"
-                        )
+                        logger.info("AgentConfigService: received invalidation, clearing cache")
                         self._cache.clear()
                         self._cache_loaded_at = 0.0
             except Exception:
-                logger.warning(
-                    "Config invalidation listener crashed, retrying in 30s"
-                )
+                logger.warning("Config invalidation listener crashed, retrying in 30s")
                 await asyncio.sleep(30)
 
-    async def set_value(
-        self, key: str, value: str, user_id: Any, db: AsyncSession
-    ) -> None:
+    async def set_value(self, key: str, value: str, user_id: Any, db: AsyncSession) -> None:
         """Update a config value, validate, and invalidate cache.
 
         Args:
@@ -208,9 +196,7 @@ class AgentConfigService:
         """
         from app.models.agent_config import AgentConfiguration
 
-        row = await db.scalar(
-            select(AgentConfiguration).where(AgentConfiguration.key == key)
-        )
+        row = await db.scalar(select(AgentConfiguration).where(AgentConfiguration.key == key))
         if not row:
             raise ValueError(f"Config key not found: {key}")
         # Validate type and bounds
@@ -218,14 +204,11 @@ class AgentConfigService:
         # Extra validation for prompt keys
         if key.startswith("prompt."):
             if len(value) > 2000:
-                raise ValueError(
-                    f"Prompt config values must be 2000 characters or fewer (got {len(value)})"
-                )
+                raise ValueError(f"Prompt config values must be 2000 characters or fewer (got {len(value)})")
             import re as _re
+
             if _re.search(r"\[USER\s+CONTENT", value, _re.IGNORECASE):
-                raise ValueError(
-                    "Prompt values must not contain '[USER CONTENT' delimiter"
-                )
+                raise ValueError("Prompt values must not contain '[USER CONTENT' delimiter")
         row.value = value
         row.updated_by = user_id
         await db.commit()

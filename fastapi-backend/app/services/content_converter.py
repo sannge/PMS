@@ -37,6 +37,7 @@ _MARK_WRAPPERS: dict[str, str] = {
 
 
 from ..ai.config_service import get_agent_config
+
 _cc_cfg = get_agent_config()
 _MAX_RECURSION_DEPTH = _cc_cfg.get_int("content.max_recursion_depth", 100)
 _MAX_NODE_COUNT = _cc_cfg.get_int("content.max_node_count", 50_000)
@@ -217,10 +218,7 @@ def _md_table(node: dict[str, Any]) -> str:
         cells = row.get("content", [])
         md_cells: list[str] = []
         for cell in cells:
-            cell_content = _md_inline(
-                cell.get("content", [{}])[0].get("content", [])
-                if cell.get("content") else []
-            )
+            cell_content = _md_inline(cell.get("content", [{}])[0].get("content", []) if cell.get("content") else [])
             md_cells.append(cell_content.strip())
         md_rows.append(md_cells)
 
@@ -310,8 +308,12 @@ def _extract_text_from_nodes(
             parts.append(_extract_text_from_nodes(node["content"], depth=depth + 1, node_counter=node_counter))
             # Add newline after block-level nodes
             if node.get("type") in (
-                "paragraph", "heading", "listItem", "taskItem",
-                "codeBlock", "blockquote",
+                "paragraph",
+                "heading",
+                "listItem",
+                "taskItem",
+                "codeBlock",
+                "blockquote",
             ):
                 parts.append("\n")
     return "".join(parts)

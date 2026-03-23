@@ -108,7 +108,7 @@ class APIOnlyUser(HttpUser):
         """Create a new task."""
         if not self.token or not self.project_id:
             return
-        random_suffix = ''.join(random.choices(string.ascii_lowercase, k=8))
+        random_suffix = "".join(random.choices(string.ascii_lowercase, k=8))
         response = self.client.post(
             f"/api/projects/{self.project_id}/tasks",
             json={
@@ -166,7 +166,7 @@ class APIOnlyUser(HttpUser):
         task_id = random.choice(task_ids) if task_ids else None
         if not task_id:
             return
-        random_suffix = ''.join(random.choices(string.ascii_lowercase, k=8))
+        random_suffix = "".join(random.choices(string.ascii_lowercase, k=8))
         response = self.client.post(
             f"/api/tasks/{task_id}/comments",
             json={

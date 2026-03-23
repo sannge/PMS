@@ -54,27 +54,26 @@ def _patch_health_deps(
 
     if mock_registry is None:
         mock_registry = AsyncMock()
-        mock_registry.get_embedding_provider = AsyncMock(
-            side_effect=Exception("not configured")
-        )
-        mock_registry.get_chat_provider = AsyncMock(
-            side_effect=Exception("not configured")
-        )
+        mock_registry.get_embedding_provider = AsyncMock(side_effect=Exception("not configured"))
+        mock_registry.get_chat_provider = AsyncMock(side_effect=Exception("not configured"))
 
     if valid_views is None:
         valid_views = []
 
     # Clear the AI health cache before each test to avoid stale cached results
     import app.main as _main_mod
+
     _main_mod._ai_health_cache.clear()
 
-    with patch("app.database.async_session_maker", mock_maker), \
-         patch("app.main.redis_service", mock_redis), \
-         patch(
-             "app.ai.provider_registry.ProviderRegistry",
-             return_value=mock_registry,
-         ), \
-         patch("app.ai.schema_context.VALID_VIEW_NAMES", valid_views):
+    with (
+        patch("app.database.async_session_maker", mock_maker),
+        patch("app.main.redis_service", mock_redis),
+        patch(
+            "app.ai.provider_registry.ProviderRegistry",
+            return_value=mock_registry,
+        ),
+        patch("app.ai.schema_context.VALID_VIEW_NAMES", valid_views),
+    ):
         yield
 
 
@@ -101,9 +100,7 @@ class TestBuildAiHealthAllPass:
         mock_registry.get_embedding_provider = AsyncMock(
             return_value=(mock_embedding_provider, "text-embedding-3-small")
         )
-        mock_registry.get_chat_provider = AsyncMock(
-            return_value=(mock_chat_provider, "gpt-5")
-        )
+        mock_registry.get_chat_provider = AsyncMock(return_value=(mock_chat_provider, "gpt-5"))
 
         mock_result = MagicMock()
         mock_result.scalar_one.return_value = 42
@@ -115,6 +112,7 @@ class TestBuildAiHealthAllPass:
             valid_views=["v_tasks", "v_projects", "v_users"],
         ):
             from app.main import _build_ai_health
+
             result = await _build_ai_health()
 
         assert result["embedding_provider"]["connected"] is True
@@ -142,9 +140,7 @@ class TestBuildAiHealthOneTimeout:
             await asyncio.sleep(10)  # Will be timed out by _safe_check
 
         mock_registry.get_embedding_provider = slow_embedding
-        mock_registry.get_chat_provider = AsyncMock(
-            return_value=(mock_chat_provider, "claude-sonnet-4-6")
-        )
+        mock_registry.get_chat_provider = AsyncMock(return_value=(mock_chat_provider, "claude-sonnet-4-6"))
 
         mock_result = MagicMock()
         mock_result.scalar_one.return_value = 10
@@ -156,6 +152,7 @@ class TestBuildAiHealthOneTimeout:
             valid_views=["v_tasks"],
         ):
             from app.main import _build_ai_health
+
             result = await _build_ai_health()
 
         # Embedding timed out -> degraded default
@@ -177,13 +174,9 @@ class TestBuildAiHealthAllFail:
         mock_registry.get_embedding_provider = AsyncMock(
             side_effect=ConfigurationError("No embedding provider configured")
         )
-        mock_registry.get_chat_provider = AsyncMock(
-            side_effect=ConfigurationError("No chat provider configured")
-        )
+        mock_registry.get_chat_provider = AsyncMock(side_effect=ConfigurationError("No chat provider configured"))
 
-        mock_session = _make_mock_session(
-            execute_side_effect=Exception("Database connection failed")
-        )
+        mock_session = _make_mock_session(execute_side_effect=Exception("Database connection failed"))
 
         with _patch_health_deps(
             mock_registry=mock_registry,
@@ -191,6 +184,7 @@ class TestBuildAiHealthAllFail:
             valid_views=[],
         ):
             from app.main import _build_ai_health
+
             result = await _build_ai_health()
 
         assert result["embedding_provider"] == DEFAULT_EMBEDDING
@@ -212,9 +206,7 @@ class TestBuildAiHealthPendingJobs:
         mock_redis.is_connected = True
         mock_redis.client = mock_redis_client
 
-        mock_session = _make_mock_session(
-            execute_side_effect=Exception("no db")
-        )
+        mock_session = _make_mock_session(execute_side_effect=Exception("no db"))
 
         with _patch_health_deps(
             mock_session=mock_session,
@@ -222,6 +214,7 @@ class TestBuildAiHealthPendingJobs:
             valid_views=[],
         ):
             from app.main import _build_ai_health
+
             result = await _build_ai_health()
 
         assert result["pending_embedding_jobs"] == 7
@@ -232,9 +225,7 @@ class TestBuildAiHealthPendingJobs:
         mock_redis = MagicMock()
         mock_redis.is_connected = False
 
-        mock_session = _make_mock_session(
-            execute_side_effect=Exception("no db")
-        )
+        mock_session = _make_mock_session(execute_side_effect=Exception("no db"))
 
         with _patch_health_deps(
             mock_session=mock_session,
@@ -242,6 +233,7 @@ class TestBuildAiHealthPendingJobs:
             valid_views=[],
         ):
             from app.main import _build_ai_health
+
             result = await _build_ai_health()
 
         assert result["pending_embedding_jobs"] == 0

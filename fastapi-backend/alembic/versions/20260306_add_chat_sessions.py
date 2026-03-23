@@ -4,6 +4,7 @@ Revision ID: 20260306_add_chat_sessions
 Revises: 20260302_add_embedding_status
 Create Date: 2026-03-06
 """
+
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB, UUID

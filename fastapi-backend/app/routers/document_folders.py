@@ -112,9 +112,7 @@ async def _broadcast_to_rooms(
 
 @router.get("/tree", response_model=list[FolderTreeNode])
 async def get_folder_tree(
-    scope: Literal["application", "project", "personal"] = Query(
-        ..., description="Scope type"
-    ),
+    scope: Literal["application", "project", "personal"] = Query(..., description="Scope type"),
     scope_id: UUID = Query(..., description="Scope entity ID"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -156,9 +154,7 @@ async def get_folder_tree(
         .where(Document.deleted_at.is_(None))
         .group_by(Document.folder_id)
     )
-    doc_counts: dict[UUID, int] = {
-        row.folder_id: row.doc_count for row in doc_count_result
-    }
+    doc_counts: dict[UUID, int] = {row.folder_id: row.doc_count for row in doc_count_result}
 
     # Build tree from flat list
     nodes: dict[UUID, FolderTreeNode] = {}
@@ -239,7 +235,9 @@ async def create_folder(
 
     # Capture broadcast data before commit (folder attrs needed)
     broadcast_data, broadcast_rooms = _build_folder_broadcast(
-        folder, current_user.id, project_application_id,
+        folder,
+        current_user.id,
+        project_application_id,
     )
 
     await db.commit()
@@ -260,10 +258,7 @@ async def update_folder(
     for this folder and all its descendants.
     """
     result = await db.execute(
-        select(DocumentFolder)
-        .options(lazyload("*"))
-        .where(DocumentFolder.id == folder_id)
-        .with_for_update()
+        select(DocumentFolder).options(lazyload("*")).where(DocumentFolder.id == folder_id).with_for_update()
     )
     folder = result.scalar_one_or_none()
 
@@ -289,8 +284,12 @@ async def update_folder(
         new_parent_id = update_data.get("parent_id", folder.parent_id)
         scope_type, scope_id_str = _get_folder_scope(folder)
         await check_name_uniqueness(
-            db, new_name, scope_type, UUID(scope_id_str),
-            new_parent_id, exclude_folder_id=folder.id,
+            db,
+            new_name,
+            scope_type,
+            UUID(scope_id_str),
+            new_parent_id,
+            exclude_folder_id=folder.id,
         )
 
     # Handle parent_id change (folder move)
@@ -300,9 +299,7 @@ async def update_folder(
         # Prevent moving folder under itself
         if new_parent_id is not None:
             target_result = await db.execute(
-                select(DocumentFolder.materialized_path)
-                .where(DocumentFolder.id == new_parent_id)
-                .with_for_update()
+                select(DocumentFolder.materialized_path).where(DocumentFolder.id == new_parent_id).with_for_update()
             )
             target_path = target_result.scalar_one_or_none()
             if target_path and f"/{folder_id}/" in target_path:
@@ -361,7 +358,9 @@ async def update_folder(
 
     # Capture broadcast data before commit (folder attrs needed)
     broadcast_data, broadcast_rooms = _build_folder_broadcast(
-        folder, current_user.id, project_application_id,
+        folder,
+        current_user.id,
+        project_application_id,
     )
 
     await db.commit()
@@ -384,9 +383,7 @@ async def delete_folder(
     (moved to trash). Child folders are cascade-deleted via the FK
     ondelete CASCADE constraint.
     """
-    result = await db.execute(
-        select(DocumentFolder).where(DocumentFolder.id == folder_id)
-    )
+    result = await db.execute(select(DocumentFolder).where(DocumentFolder.id == folder_id))
     folder = result.scalar_one_or_none()
 
     if folder is None:
@@ -414,8 +411,7 @@ async def delete_folder(
     # Must run BEFORE db.delete(folder), because the FK ondelete="SET NULL"
     # will null out folder_id on cascade, making documents unfindable.
     descendant_result = await db.execute(
-        select(DocumentFolder.id)
-        .where(DocumentFolder.materialized_path.like(f"{folder.materialized_path}%"))
+        select(DocumentFolder.id).where(DocumentFolder.materialized_path.like(f"{folder.materialized_path}%"))
     )
     all_folder_ids = [row[0] for row in descendant_result.all()]
     child_files: list = []
@@ -444,8 +440,7 @@ async def delete_folder(
 
         # F-223: Soft-delete child FolderFiles and clean up storage/search
         child_files_result = await db.execute(
-            select(FolderFile)
-            .where(
+            select(FolderFile).where(
                 FolderFile.folder_id.in_(all_folder_ids),
                 FolderFile.deleted_at.is_(None),
             )
@@ -456,9 +451,7 @@ async def delete_folder(
             # Delete associated document chunks BEFORE soft-deleting files
             # to prevent orphaned chunks in vector search and RBAC leakage
             file_ids_to_clean = [ff.id for ff in child_files]
-            await db.execute(
-                sa_delete(DocumentChunk).where(DocumentChunk.file_id.in_(file_ids_to_clean))
-            )
+            await db.execute(sa_delete(DocumentChunk).where(DocumentChunk.file_id.in_(file_ids_to_clean)))
 
             # Soft-delete all child files
             await db.execute(
@@ -478,13 +471,14 @@ async def delete_folder(
 
             # Capture file storage info for post-commit cleanup
             _files_to_cleanup = [
-                (str(ff.id), ff.storage_bucket, ff.storage_key, ff.thumbnail_key)
-                for ff in child_files
+                (str(ff.id), ff.storage_bucket, ff.storage_key, ff.thumbnail_key) for ff in child_files
             ]
 
     # Capture broadcast data before deletion (folder attrs unavailable after delete+commit)
     broadcast_data, broadcast_rooms = _build_folder_broadcast(
-        folder, current_user.id, project_application_id,
+        folder,
+        current_user.id,
+        project_application_id,
     )
 
     await db.delete(folder)
@@ -500,38 +494,44 @@ async def delete_folder(
     # Batch-sync soft-deleted documents to Meilisearch via background task
     if soft_deleted_doc_ids:
         deleted_ts = int(now.timestamp())
+
         async def _sync_deleted_docs_to_meili() -> None:
             try:
                 from ..services.search_service import _meili_circuit_is_open
+
                 if _meili_circuit_is_open():
                     logger.info("Skipping doc soft-delete sync: circuit breaker open")
                     return
                 index = get_meili_index()
-                await index.update_documents([
-                    {"id": str(doc_id), "deleted_at": deleted_ts}
-                    for doc_id in soft_deleted_doc_ids
-                ])
+                await index.update_documents(
+                    [{"id": str(doc_id), "deleted_at": deleted_ts} for doc_id in soft_deleted_doc_ids]
+                )
             except Exception as exc:
                 logger.warning(
                     "Failed to batch-sync %d soft-deleted docs to search index: %s",
-                    len(soft_deleted_doc_ids), exc,
+                    len(soft_deleted_doc_ids),
+                    exc,
                 )
+
         background_tasks.add_task(_sync_deleted_docs_to_meili)
 
     # FIX-21: MinIO cleanup AFTER commit succeeds, via background tasks
     # to avoid blocking the async event loop with sync I/O
     if all_folder_ids and child_files:
-        def _cleanup_folder_files_minio() -> None:
+
+        async def _cleanup_folder_files_minio() -> None:
             try:
                 minio = get_minio_service()
                 for file_id_str, bucket, key, thumb_key in _files_to_cleanup:
                     try:
-                        minio.delete_file(bucket=bucket, object_name=key)
+                        await minio.delete_file(bucket=bucket, object_name=key)
                         if thumb_key:
-                            minio.delete_file(bucket=bucket, object_name=thumb_key)
+                            await minio.delete_file(bucket=bucket, object_name=thumb_key)
                     except Exception as minio_err:
                         logger.warning(
-                            "Failed to delete MinIO object for file %s: %s", file_id_str, minio_err,
+                            "Failed to delete MinIO object for file %s: %s",
+                            file_id_str,
+                            minio_err,
                         )
             except Exception as minio_init_err:
                 logger.warning("Failed to initialize MinIO service during folder delete: %s", minio_init_err)
@@ -542,22 +542,23 @@ async def delete_folder(
         if child_files:
             file_search_ids = [f"file_{ff.id}" for ff in child_files]
             deleted_ts = int(now.timestamp())
+
             async def _batch_remove_files_from_meili() -> None:
                 try:
                     from ..services.search_service import _meili_circuit_is_open
+
                     if _meili_circuit_is_open():
                         logger.info("Skipping file soft-delete sync: circuit breaker open")
                         return
                     index = get_meili_index()
-                    await index.update_documents([
-                        {"id": fid, "deleted_at": deleted_ts}
-                        for fid in file_search_ids
-                    ])
+                    await index.update_documents([{"id": fid, "deleted_at": deleted_ts} for fid in file_search_ids])
                 except Exception as exc:
                     logger.warning(
                         "Failed to batch soft-delete %d files from search index: %s",
-                        len(file_search_ids), exc,
+                        len(file_search_ids),
+                        exc,
                     )
+
             background_tasks.add_task(_batch_remove_files_from_meili)
 
     # Broadcast AFTER commit so other clients re-fetch committed data

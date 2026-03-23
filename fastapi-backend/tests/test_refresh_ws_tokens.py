@@ -138,14 +138,17 @@ class TestRotateRefreshToken:
     @pytest.mark.asyncio
     async def test_valid_token_returns_new_pair(self):
         old_token = create_refresh_token("user-1", "a@b.com")
-        with patch(
-            "app.services.auth_service.is_token_blacklisted",
-            new_callable=AsyncMock,
-            return_value=False,
-        ), patch(
-            "app.services.auth_service.blacklist_token",
-            new_callable=AsyncMock,
-        ) as mock_blacklist:
+        with (
+            patch(
+                "app.services.auth_service.is_token_blacklisted",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "app.services.auth_service.blacklist_token",
+                new_callable=AsyncMock,
+            ) as mock_blacklist,
+        ):
             result = await rotate_refresh_token(old_token)
 
         assert result is not None
@@ -175,13 +178,16 @@ class TestRotateRefreshToken:
     @pytest.mark.asyncio
     async def test_new_refresh_token_is_different(self):
         old_token = create_refresh_token("user-1", "a@b.com")
-        with patch(
-            "app.services.auth_service.is_token_blacklisted",
-            new_callable=AsyncMock,
-            return_value=False,
-        ), patch(
-            "app.services.auth_service.blacklist_token",
-            new_callable=AsyncMock,
+        with (
+            patch(
+                "app.services.auth_service.is_token_blacklisted",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "app.services.auth_service.blacklist_token",
+                new_callable=AsyncMock,
+            ),
         ):
             result = await rotate_refresh_token(old_token)
 
@@ -192,13 +198,16 @@ class TestRotateRefreshToken:
     @pytest.mark.asyncio
     async def test_new_refresh_token_is_valid(self):
         old_token = create_refresh_token("user-1", "a@b.com")
-        with patch(
-            "app.services.auth_service.is_token_blacklisted",
-            new_callable=AsyncMock,
-            return_value=False,
-        ), patch(
-            "app.services.auth_service.blacklist_token",
-            new_callable=AsyncMock,
+        with (
+            patch(
+                "app.services.auth_service.is_token_blacklisted",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "app.services.auth_service.blacklist_token",
+                new_callable=AsyncMock,
+            ),
         ):
             result = await rotate_refresh_token(old_token)
 

@@ -9,6 +9,7 @@ Revision ID: 20260310_pipeline_config
 Revises: 20260309_session_token
 Create Date: 2026-03-10
 """
+
 from alembic import op
 
 revision = "20260310_pipeline_config"
@@ -59,6 +60,4 @@ def upgrade() -> None:
 def downgrade() -> None:
     # Build a comma-separated list of quoted keys for the IN clause.
     keys_csv = ", ".join(f"'{k}'" for k in _KEYS)
-    op.execute(
-        f'DELETE FROM "AgentConfigurations" WHERE key IN ({keys_csv})'
-    )
+    op.execute(f'DELETE FROM "AgentConfigurations" WHERE key IN ({keys_csv})')

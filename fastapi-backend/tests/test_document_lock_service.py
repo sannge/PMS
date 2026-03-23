@@ -49,9 +49,7 @@ def lock_service():
 def mock_redis():
     """Patch redis_service.client and scan_keys with AsyncMock."""
     mock_client = AsyncMock()
-    with patch(
-        "app.services.document_lock_service.redis_service"
-    ) as mock_rs:
+    with patch("app.services.document_lock_service.redis_service") as mock_rs:
         mock_rs.client = mock_client
         mock_rs.scan_keys = AsyncMock(return_value=[])
         yield mock_rs
@@ -92,15 +90,19 @@ class TestAcquireLock:
     @pytest.mark.asyncio
     async def test_acquire_renewal_same_user(self, lock_service, mock_redis):
         """Same user re-acquires -> status 'renewed', returns existing lock data."""
-        existing_data = json.dumps({
-            "user_id": USER_ID_A,
-            "user_name": USER_NAME_A,
-            "acquired_at": 1700000000.0,
-        })
-        mock_redis.client.eval.return_value = json.dumps({
-            "status": "renewed",
-            "holder": existing_data,
-        })
+        existing_data = json.dumps(
+            {
+                "user_id": USER_ID_A,
+                "user_name": USER_NAME_A,
+                "acquired_at": 1700000000.0,
+            }
+        )
+        mock_redis.client.eval.return_value = json.dumps(
+            {
+                "status": "renewed",
+                "holder": existing_data,
+            }
+        )
 
         result = await lock_service.acquire_lock(DOC_ID, USER_ID_A, USER_NAME_A)
 
@@ -240,11 +242,13 @@ class TestForceTakeLock:
     @pytest.mark.asyncio
     async def test_force_take_with_previous_holder(self, lock_service, mock_redis):
         """Force-take replaces existing holder -> returns old holder data."""
-        old_holder = json.dumps({
-            "user_id": USER_ID_A,
-            "user_name": USER_NAME_A,
-            "acquired_at": 1700000000.0,
-        })
+        old_holder = json.dumps(
+            {
+                "user_id": USER_ID_A,
+                "user_name": USER_NAME_A,
+                "acquired_at": 1700000000.0,
+            }
+        )
         mock_redis.client.eval.return_value = old_holder
 
         result = await lock_service.force_take_lock(DOC_ID, USER_ID_B, USER_NAME_B)

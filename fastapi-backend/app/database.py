@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 engine = create_async_engine(
     settings.database_url,
     echo=settings.sql_echo,
-    pool_size=settings.db_pool_size,      # default: 10 base connections
+    pool_size=settings.db_pool_size,  # default: 10 base connections
     max_overflow=settings.db_max_overflow,  # default: 20 overflow connections
     pool_timeout=15,  # Fail fast - let clients retry rather than hang
     pool_pre_ping=True,
@@ -34,6 +34,7 @@ async_session_maker = async_sessionmaker(
 
 class Base(DeclarativeBase):
     """Declarative base for ORM models."""
+
     pass
 
 

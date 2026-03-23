@@ -210,6 +210,7 @@ class TestMultiWorkerDeduplication:
             # Check stderr for any critical errors
             # (non-blocking read)
             import select
+
             if sys.platform != "win32":
                 # Unix: use select
                 readable, _, _ = select.select([worker.stderr], [], [], 0)
@@ -292,9 +293,7 @@ class TestJobAtomicity:
 
         # Simulate two workers trying to pop at the same time
         async def worker_pop():
-            result = await redis_client.client.brpoplpush(
-                test_queue, test_processing, timeout=1
-            )
+            result = await redis_client.client.brpoplpush(test_queue, test_processing, timeout=1)
             return result
 
         # Run two workers concurrently

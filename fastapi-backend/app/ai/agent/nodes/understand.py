@@ -14,6 +14,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from ..constants import get_confidence_fast_path
+from ..graph_context import chat_model_var, system_prompt_var
 from ..prompts import CLASSIFICATION_PROMPT
 from ..state import AgentState, RequestClassification
 
@@ -47,7 +48,7 @@ def _parse_classification(raw_text: str) -> RequestClassification:
         first_newline = text.index("\n") if "\n" in text else len(text)
         text = text[first_newline + 1 :]
     if text.endswith("```"):
-        text = text[: -3]
+        text = text[:-3]
     text = text.strip()
 
     try:
@@ -58,8 +59,12 @@ def _parse_classification(raw_text: str) -> RequestClassification:
 
     # Validate and coerce fields
     valid_intents = {
-        "info_query", "action_request", "needs_clarification",
-        "multi_step", "greeting", "follow_up",
+        "info_query",
+        "action_request",
+        "needs_clarification",
+        "multi_step",
+        "greeting",
+        "follow_up",
     }
     valid_complexities = {"simple", "moderate", "complex"}
 
@@ -84,9 +89,7 @@ def _parse_classification(raw_text: str) -> RequestClassification:
         "data_sources": data.get("data_sources", []) if isinstance(data.get("data_sources"), list) else [],
         "entities": data.get("entities", []) if isinstance(data.get("entities"), list) else [],
         "clarification_questions": (
-            data.get("clarification_questions", [])
-            if isinstance(data.get("clarification_questions"), list)
-            else []
+            data.get("clarification_questions", []) if isinstance(data.get("clarification_questions"), list) else []
         ),
         "complexity": complexity,
         "reasoning": str(data.get("reasoning", "")),
@@ -96,8 +99,8 @@ def _parse_classification(raw_text: str) -> RequestClassification:
 async def understand_node(
     state: AgentState,
     *,
-    chat_model_cache: list[Any],
-    system_prompt_cache: list[str],
+    chat_model_cache: list[Any] | None = None,
+    system_prompt_cache: list[str] | None = None,
 ) -> dict:
     """Classify the user's request with 1 LLM call.
 
@@ -107,12 +110,21 @@ async def understand_node(
     Args:
         state: Current pipeline state.
         chat_model_cache: Mutable list containing the raw LangChain chat model.
+            Falls back to ``chat_model_var`` ContextVar when ``None``.
         system_prompt_cache: Mutable list containing the system prompt (unused
-            here but kept for consistent node signatures).
+            here but kept for consistent node signatures).  Falls back to
+            ``system_prompt_var`` ContextVar when ``None``.
 
     Returns:
         State update dict with classification, current_phase, and fast_path.
     """
+    chat_model_cache = chat_model_cache or chat_model_var.get()
+    if chat_model_cache is None:
+        chat_model_cache = []
+    system_prompt_cache = system_prompt_cache or system_prompt_var.get()
+    if system_prompt_cache is None:
+        system_prompt_cache = []
+
     total_llm_calls = state.get("total_llm_calls", 0)
 
     if not chat_model_cache:
@@ -162,10 +174,9 @@ async def understand_node(
         classification = dict(_FALLBACK_CLASSIFICATION)  # type: ignore[assignment]
 
     # Determine fast path
-    fast_path = (
-        classification.get("confidence", 0.0) >= get_confidence_fast_path()
-        and classification.get("intent") in ("greeting", "follow_up")
-    )
+    fast_path = classification.get("confidence", 0.0) >= get_confidence_fast_path() and classification.get(
+        "intent"
+    ) in ("greeting", "follow_up")
 
     return {
         "current_phase": "understand",

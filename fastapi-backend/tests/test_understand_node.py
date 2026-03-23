@@ -29,7 +29,6 @@ from app.ai.agent.nodes.understand import (
 
 
 class TestParseClassification:
-
     def test_valid_json_parsed(self):
         raw = (
             '{"intent": "info_query", "confidence": 0.85, '
@@ -112,7 +111,6 @@ class TestParseClassification:
 
 
 class TestUnderstandNode:
-
     async def test_normal_classification(self):
         """Normal classification with valid JSON response."""
         json_response = (

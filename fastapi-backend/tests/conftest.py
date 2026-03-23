@@ -45,12 +45,13 @@ def get_test_password_hash(password: str) -> str:
     Uses bcrypt directly to avoid passlib version detection issues.
     """
     import bcrypt
+
     # Use bcrypt directly - encode password to bytes
-    password_bytes = password.encode('utf-8')
+    password_bytes = password.encode("utf-8")
     # Generate salt and hash
     salt = bcrypt.gensalt()
     hashed = bcrypt.hashpw(password_bytes, salt)
-    return hashed.decode('utf-8')
+    return hashed.decode("utf-8")
 
 
 # Use test database (pmsdb_test) - NEVER use main database for tests!
@@ -80,23 +81,23 @@ END $$;"""
 
 _DROP_STATEMENTS = [
     # Drop scoped views first (created by migration, reference tables below)
-    'DROP VIEW IF EXISTS v_checklist_items CASCADE',
-    'DROP VIEW IF EXISTS v_checklists CASCADE',
-    'DROP VIEW IF EXISTS v_attachments CASCADE',
-    'DROP VIEW IF EXISTS v_users CASCADE',
-    'DROP VIEW IF EXISTS v_project_assignments CASCADE',
-    'DROP VIEW IF EXISTS v_project_members CASCADE',
-    'DROP VIEW IF EXISTS v_application_members CASCADE',
-    'DROP VIEW IF EXISTS v_comments CASCADE',
-    'DROP VIEW IF EXISTS v_document_folders CASCADE',
-    'DROP VIEW IF EXISTS v_documents CASCADE',
-    'DROP VIEW IF EXISTS v_task_statuses CASCADE',
-    'DROP VIEW IF EXISTS v_tasks CASCADE',
-    'DROP VIEW IF EXISTS v_projects CASCADE',
-    'DROP VIEW IF EXISTS v_applications CASCADE',
+    "DROP VIEW IF EXISTS v_checklist_items CASCADE",
+    "DROP VIEW IF EXISTS v_checklists CASCADE",
+    "DROP VIEW IF EXISTS v_attachments CASCADE",
+    "DROP VIEW IF EXISTS v_users CASCADE",
+    "DROP VIEW IF EXISTS v_project_assignments CASCADE",
+    "DROP VIEW IF EXISTS v_project_members CASCADE",
+    "DROP VIEW IF EXISTS v_application_members CASCADE",
+    "DROP VIEW IF EXISTS v_comments CASCADE",
+    "DROP VIEW IF EXISTS v_document_folders CASCADE",
+    "DROP VIEW IF EXISTS v_documents CASCADE",
+    "DROP VIEW IF EXISTS v_task_statuses CASCADE",
+    "DROP VIEW IF EXISTS v_tasks CASCADE",
+    "DROP VIEW IF EXISTS v_projects CASCADE",
+    "DROP VIEW IF EXISTS v_applications CASCADE",
     # Drop tables in FK-safe order
     'DROP TABLE IF EXISTS "AgentConfigurations" CASCADE',
-    'DROP TABLE IF EXISTS ai_system_prompts CASCADE',
+    "DROP TABLE IF EXISTS ai_system_prompts CASCADE",
     'DROP TABLE IF EXISTS "ChatMessages" CASCADE',
     'DROP TABLE IF EXISTS "ChatSessions" CASCADE',
     'DROP TABLE IF EXISTS "ImportJobs" CASCADE',
@@ -152,15 +153,19 @@ async def engine():
     # (NullPool creates a fresh TCP socket per begin() block which can
     # cause ConnectionDoesNotExistError when connections drop mid-DDL).
     _ddl_engine = create_async_engine(
-        TEST_DATABASE_URL, pool_size=1, max_overflow=0,
+        TEST_DATABASE_URL,
+        pool_size=1,
+        max_overflow=0,
     )
 
     # Terminate stale connections to avoid deadlocks during DROP TABLE
     async with _ddl_engine.begin() as conn:
-        await conn.execute(text(
-            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-            "WHERE datname = current_database() AND pid != pg_backend_pid()"
-        ))
+        await conn.execute(
+            text(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = current_database() AND pid != pg_backend_pid()"
+            )
+        )
 
     # Drop all tables and stale composite types (clean slate)
     async with _ddl_engine.begin() as conn:
@@ -175,12 +180,10 @@ async def engine():
     _pgvector_available = False
 
     async with _ddl_engine.begin() as conn:
-        result = await conn.execute(
-            text("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'")
-        )
+        result = await conn.execute(text("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'"))
         if result.scalar() is not None:
             try:
-                await conn.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
+                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
                 _pgvector_available = True
                 _pgvector_installed = True
             except Exception:
@@ -188,7 +191,7 @@ async def engine():
 
     async with _ddl_engine.begin() as conn:
         try:
-            await conn.execute(text('CREATE EXTENSION IF NOT EXISTS pg_trgm'))
+            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
         except Exception:
             pass  # Already installed or insufficient privileges
 
@@ -204,15 +207,9 @@ async def engine():
         else:
             # Create all tables except DocumentChunks (which requires vector type)
             from app.models.document_chunk import DocumentChunk
-            tables_to_create = [
-                t for t in Base.metadata.sorted_tables
-                if t.name != DocumentChunk.__tablename__
-            ]
-            await conn.run_sync(
-                lambda sync_conn: Base.metadata.create_all(
-                    sync_conn, tables=tables_to_create
-                )
-            )
+
+            tables_to_create = [t for t in Base.metadata.sorted_tables if t.name != DocumentChunk.__tablename__]
+            await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables_to_create))
 
     # Dispose DDL engine — its connections are no longer needed
     await _ddl_engine.dispose()
@@ -290,6 +287,21 @@ def _clear_user_caches():
 
 
 @pytest.fixture(autouse=True)
+def _clear_graph_cache():
+    """Invalidate the cached compiled agent graph between tests.
+
+    The graph is cached at module level for production performance
+    (Finding #12).  Tests that call ``build_agent_graph`` with different
+    tools/checkpointers need a fresh graph each time.
+    """
+    from app.ai.agent.graph import _invalidate_graph_cache
+
+    _invalidate_graph_cache()
+    yield
+    _invalidate_graph_cache()
+
+
+@pytest.fixture(autouse=True)
 def _clear_rate_limit_counters():
     """Clear in-memory rate limit counters between tests.
 
@@ -298,6 +310,7 @@ def _clear_rate_limit_counters():
     across tests sharing the same test client IP.
     """
     from app.ai.rate_limiter import _inmemory_counters
+
     _inmemory_counters.clear()
     yield
     _inmemory_counters.clear()
@@ -339,15 +352,13 @@ def _mock_token_blacklist():
 @pytest_asyncio.fixture(scope="function")
 async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     """Create async test client with database dependency override."""
+
     async def override_get_db():
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app),
-        base_url="http://test"
-    ) as test_client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as test_client:
         yield test_client
 
     app.dependency_overrides.clear()
@@ -388,17 +399,13 @@ async def test_user_2(db_session: AsyncSession) -> User:
 @pytest.fixture
 def auth_token(test_user: User) -> str:
     """Create an authentication token for the test user."""
-    return create_access_token(
-        data={"sub": str(test_user.id), "email": test_user.email}
-    )
+    return create_access_token(data={"sub": str(test_user.id), "email": test_user.email})
 
 
 @pytest.fixture
 def auth_token_2(test_user_2: User) -> str:
     """Create an authentication token for the second test user."""
-    return create_access_token(
-        data={"sub": str(test_user_2.id), "email": test_user_2.email}
-    )
+    return create_access_token(data={"sub": str(test_user_2.id), "email": test_user_2.email})
 
 
 @pytest.fixture
@@ -457,6 +464,7 @@ async def test_project(db_session: AsyncSession, test_application: Application) 
 async def test_task_status_todo(db_session: AsyncSession, test_project: Project) -> TaskStatus:
     """Get the Todo status for the test project."""
     from sqlalchemy import select
+
     result = await db_session.execute(
         select(TaskStatus).where(
             TaskStatus.project_id == test_project.id,
@@ -467,7 +475,9 @@ async def test_task_status_todo(db_session: AsyncSession, test_project: Project)
 
 
 @pytest_asyncio.fixture
-async def test_task(db_session: AsyncSession, test_project: Project, test_user: User, test_task_status_todo: TaskStatus) -> Task:
+async def test_task(
+    db_session: AsyncSession, test_project: Project, test_user: User, test_task_status_todo: TaskStatus
+) -> Task:
     """Create a test task."""
     task = Task(
         id=uuid4(),

@@ -144,7 +144,9 @@ class AiModel(Base):
     # Constraints
     __table_args__ = (
         UniqueConstraint(
-            "provider_id", "model_id", "capability",
+            "provider_id",
+            "model_id",
+            "capability",
             name="uq_ai_models_provider_model_capability",
         ),
         CheckConstraint(

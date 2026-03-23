@@ -96,27 +96,19 @@ async def list_tasks(
                 if mapped:
                     query = query.where(TaskStatus.name == mapped)
                 else:
-                    return (
-                        f"Invalid status '{status}'. "
-                        f"Use one of: {', '.join(status_map.keys())}."
-                    )
+                    return f"Invalid status '{status}'. Use one of: {', '.join(status_map.keys())}."
 
             # Priority filter
             valid_priorities = {"lowest", "low", "medium", "high", "highest"}
             if priority and priority.strip():
                 p = priority.strip().lower()
                 if p not in valid_priorities:
-                    return (
-                        f"Invalid priority '{priority}'. "
-                        f"Use one of: {', '.join(sorted(valid_priorities))}."
-                    )
+                    return f"Invalid priority '{priority}'. Use one of: {', '.join(sorted(valid_priorities))}."
                 query = query.where(Task.priority == p)
 
             # Assignee filter
             if assignee and assignee.strip():
-                user_id, user_err = await _resolve_user(
-                    assignee, db, scope_project_id=resolved_id
-                )
+                user_id, user_err = await _resolve_user(assignee, db, scope_project_id=resolved_id)
                 if user_err:
                     return user_err
                 query = query.where(Task.assignee_id == UUID(user_id))  # type: ignore[arg-type]
@@ -130,6 +122,7 @@ async def list_tasks(
                 )
 
             from app.ai.config_service import get_agent_config
+
             _LIST_TASKS_LIMIT = get_agent_config().get_int("agent_tool.list_tasks_limit", 200)
             query = query.limit(_LIST_TASKS_LIMIT)
             result = await db.execute(query)
@@ -140,9 +133,7 @@ async def list_tasks(
 
         # Format
         lines: list[str] = []
-        lines.append(
-            "| Key | Title | Status | Priority | Assignee | Due | Checklist |"
-        )
+        lines.append("| Key | Title | Status | Priority | Assignee | Due | Checklist |")
         lines.append("| --- | --- | --- | --- | --- | --- | --- |")
 
         for t in tasks:
@@ -158,10 +149,7 @@ async def list_tasks(
             cl_total = t.checklist_total or 0
             cl_text = f"{cl_done}/{cl_total}" if cl_total > 0 else "\u2014"
 
-            lines.append(
-                f"| {t.task_key} | {t.title} | {st} | "
-                f"{t.priority} | {assignee_name} | {due} | {cl_text} |"
-            )
+            lines.append(f"| {t.task_key} | {t.title} | {st} | {t.priority} | {assignee_name} | {due} | {cl_text} |")
 
         if len(tasks) >= _LIST_TASKS_LIMIT:
             lines.append(f"\n*Showing first {_LIST_TASKS_LIMIT} tasks. Use filters to narrow results.*")
@@ -216,29 +204,20 @@ async def get_task_detail(task: str) -> str:
 
             # Separate queries for dynamic relationships
             _subtasks_result = await db.execute(
-                select(Task)
-                .where(Task.parent_id == task_uuid)
-                .options(selectinload(Task.task_status))
+                select(Task).where(Task.parent_id == task_uuid).options(selectinload(Task.task_status))
             )
             _subtasks = _subtasks_result.scalars().all()
 
-            _attachments_result = await db.execute(
-                select(Attachment)
-                .where(Attachment.task_id == task_uuid)
-            )
+            _attachments_result = await db.execute(select(Attachment).where(Attachment.task_id == task_uuid))
             _attachments = _attachments_result.scalars().all()
 
             checklists_result = await db.execute(
-                select(Checklist)
-                .where(Checklist.task_id == task_uuid)
-                .options(selectinload(Checklist.items))
+                select(Checklist).where(Checklist.task_id == task_uuid).options(selectinload(Checklist.items))
             )
             _checklists = checklists_result.scalars().all()
 
             comments_result = await db.execute(
-                select(Comment)
-                .where(Comment.task_id == task_uuid)
-                .options(selectinload(Comment.author))
+                select(Comment).where(Comment.task_id == task_uuid).options(selectinload(Comment.author))
             )
             _comments = comments_result.scalars().all()
 
@@ -289,9 +268,7 @@ async def get_task_detail(task: str) -> str:
         if checklists:
             parts.append("### Checklists")
             for cl in checklists:
-                parts.append(
-                    f"**{cl.title}** ({cl.completed_items}/{cl.total_items})"
-                )
+                parts.append(f"**{cl.title}** ({cl.completed_items}/{cl.total_items})")
                 items = list(cl.items)
                 for item in items:
                     check = "[x]" if item.is_done else "[ ]"
@@ -304,9 +281,7 @@ async def get_task_detail(task: str) -> str:
             parts.append(f"### Attachments ({len(attachments)})")
             for att in attachments:
                 size_kb = (att.file_size or 0) / 1024
-                parts.append(
-                    f"- {att.file_name} ({att.file_type}, {size_kb:.1f} KB)"
-                )
+                parts.append(f"- {att.file_name} ({att.file_type}, {size_kb:.1f} KB)")
             parts.append("")
 
         # Comments (last 5 non-deleted)
@@ -346,6 +321,7 @@ async def get_task_comments(task: str) -> str:
         task: Task UUID, task key (e.g., "PROJ-123"), or title (partial match).
     """
     from app.ai.config_service import get_agent_config
+
     _COMMENTS_LIMIT = get_agent_config().get_int("agent_tool.comments_limit", 200)
 
     try:
@@ -357,9 +333,7 @@ async def get_task_comments(task: str) -> str:
 
             # RBAC check
             task_check = await db.execute(
-                select(Task.project_id, Task.task_key, Task.title).where(
-                    Task.id == task_uuid
-                )
+                select(Task.project_id, Task.task_key, Task.title).where(Task.id == task_uuid)
             )
             row = task_check.one_or_none()
             if not row:
@@ -447,13 +421,7 @@ async def _get_blocked_tasks_inner(project: str) -> str:
                 Task.project_id.in_(project_uuids),
                 Task.archived_at.is_(None),
             )
-            .where(
-                (TaskStatus.name == "Issue")
-                | (
-                    (Task.due_date < today)
-                    & (TaskStatus.category != "Done")
-                )
-            )
+            .where((TaskStatus.name == "Issue") | ((Task.due_date < today) & (TaskStatus.category != "Done")))
             .options(
                 selectinload(Task.task_status),
                 selectinload(Task.assignee),

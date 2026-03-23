@@ -38,6 +38,7 @@ from app.ai.excel_export import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _user_dir(user_id) -> Path:
     return EXPORT_DIR / str(user_id)
 
@@ -53,8 +54,8 @@ def _cleanup_user(user_id) -> None:
 # Tests: export_to_excel
 # ---------------------------------------------------------------------------
 
-class TestExportToExcel:
 
+class TestExportToExcel:
     async def test_creates_valid_xlsx(self):
         uid = uuid4()
         try:
@@ -111,7 +112,10 @@ class TestExportToExcel:
         ]
         try:
             result = await export_to_excel(
-                columns=columns, rows=rows, title="Data", user_id=uid,
+                columns=columns,
+                rows=rows,
+                title="Data",
+                user_id=uid,
             )
             file_path = _user_dir(uid) / result.filename
             wb = load_workbook(str(file_path))
@@ -187,7 +191,10 @@ class TestExportToExcel:
         rows = [{"a": i} for i in range(5)]
         try:
             result = await export_to_excel(
-                columns=["a"], rows=rows, title="Count", user_id=uid,
+                columns=["a"],
+                rows=rows,
+                title="Count",
+                user_id=uid,
             )
             assert result.row_count == 5
         finally:
@@ -198,8 +205,8 @@ class TestExportToExcel:
 # Tests: get_export_path
 # ---------------------------------------------------------------------------
 
-class TestGetExportPath:
 
+class TestGetExportPath:
     async def test_returns_path_for_existing_file(self):
         uid = uuid4()
         try:
@@ -220,13 +227,16 @@ class TestGetExportPath:
         path = get_export_path("does_not_exist.xlsx", uid)
         assert path is None
 
-    @pytest.mark.parametrize("bad_name", [
-        "../../etc/passwd",
-        "../secret.xlsx",
-        "..\\windows\\system32",
-        "sub/dir/file.xlsx",
-        "sub\\dir\\file.xlsx",
-    ])
+    @pytest.mark.parametrize(
+        "bad_name",
+        [
+            "../../etc/passwd",
+            "../secret.xlsx",
+            "..\\windows\\system32",
+            "sub/dir/file.xlsx",
+            "sub\\dir\\file.xlsx",
+        ],
+    )
     def test_rejects_path_traversal(self, bad_name):
         uid = uuid4()
         path = get_export_path(bad_name, uid)
@@ -237,8 +247,8 @@ class TestGetExportPath:
 # Tests: _cleanup_old_exports
 # ---------------------------------------------------------------------------
 
-class TestCleanupOldExports:
 
+class TestCleanupOldExports:
     async def test_removes_old_files(self):
         uid = uuid4()
         try:

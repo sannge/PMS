@@ -86,9 +86,7 @@ async def add_checklist(
         project_id = task_obj.project_id
 
         # Check task is not in Done status
-        status_result = await db.execute(
-            select(TaskStatus).where(TaskStatus.id == task_obj.task_status_id)
-        )
+        status_result = await db.execute(select(TaskStatus).where(TaskStatus.id == task_obj.task_status_id))
         current_status = status_result.scalar_one_or_none()
         if current_status and current_status.name == "Done":
             return (
@@ -137,15 +135,10 @@ async def add_checklist(
 
             # Get last checklist rank for ordering
             rank_result = await db.execute(
-                select(Checklist)
-                .where(Checklist.task_id == task_uuid)
-                .order_by(Checklist.rank.desc())
-                .limit(1)
+                select(Checklist).where(Checklist.task_id == task_uuid).order_by(Checklist.rank.desc()).limit(1)
             )
             last_checklist = rank_result.scalar_one_or_none()
-            new_rank = _generate_lexorank(
-                last_checklist.rank if last_checklist else None, None
-            )
+            new_rank = _generate_lexorank(last_checklist.rank if last_checklist else None, None)
 
             checklist = Checklist(
                 task_id=task_uuid,
@@ -224,9 +217,7 @@ async def add_checklist_item(
         checklist_obj = cl_result.scalar_one_or_none()
         if not checklist_obj:
             # List available checklists to help the user
-            all_cl_result = await db.execute(
-                select(Checklist.title).where(Checklist.task_id == task_uuid)
-            )
+            all_cl_result = await db.execute(select(Checklist.title).where(Checklist.task_id == task_uuid))
             available = [r[0] for r in all_cl_result.all()]
             if available:
                 return (
@@ -234,10 +225,7 @@ async def add_checklist_item(
                     f"task {task_key}. Available checklists: "
                     f"{', '.join(available)}."
                 )
-            return (
-                f"Error: No checklists found on task {task_key}. "
-                "Create a checklist first using add_checklist."
-            )
+            return f"Error: No checklists found on task {task_key}. Create a checklist first using add_checklist."
 
         checklist_id = checklist_obj.id
         checklist_name = checklist_obj.title
@@ -246,10 +234,7 @@ async def add_checklist_item(
     confirmation: dict[str, Any] = {
         "type": "confirmation",
         "action": "add_checklist_item",
-        "summary": (
-            f"Add item '{item_title}' to checklist '{checklist_name}' "
-            f"on {task_key}"
-        ),
+        "summary": (f"Add item '{item_title}' to checklist '{checklist_name}' on {task_key}"),
         "details": {
             "task_id": str(task_uuid),
             "task_key": task_key,
@@ -281,9 +266,7 @@ async def add_checklist_item(
                 return "Access denied: you no longer have access to this task's project."
 
             # Re-load checklist to get fresh state
-            cl_result = await db.execute(
-                select(Checklist).where(Checklist.id == checklist_id)
-            )
+            cl_result = await db.execute(select(Checklist).where(Checklist.id == checklist_id))
             checklist_obj = cl_result.scalar_one_or_none()
             if not checklist_obj:
                 return f"Error: Checklist '{checklist_title}' no longer exists."
@@ -296,9 +279,7 @@ async def add_checklist_item(
                 .limit(1)
             )
             last_item = rank_result.scalar_one_or_none()
-            new_rank = _generate_lexorank(
-                last_item.rank if last_item else None, None
-            )
+            new_rank = _generate_lexorank(last_item.rank if last_item else None, None)
 
             item = ChecklistItem(
                 checklist_id=checklist_id,
@@ -313,11 +294,7 @@ async def add_checklist_item(
             checklist_obj.total_items += 1
 
             # Update Task.checklist_total (denormalized counter)
-            await db.execute(
-                update(Task)
-                .where(Task.id == task_uuid)
-                .values(checklist_total=Task.checklist_total + 1)
-            )
+            await db.execute(update(Task).where(Task.id == task_uuid).values(checklist_total=Task.checklist_total + 1))
 
             await db.flush()
 
@@ -383,10 +360,7 @@ async def toggle_checklist_item(
         )
         checklist_obj = cl_result.scalar_one_or_none()
         if not checklist_obj:
-            return (
-                f"Error: No checklist matching '{checklist_title}' found on "
-                f"task {task_key}."
-            )
+            return f"Error: No checklist matching '{checklist_title}' found on task {task_key}."
 
         checklist_id = checklist_obj.id
         checklist_name = checklist_obj.title
@@ -396,18 +370,14 @@ async def toggle_checklist_item(
         item_result = await db.execute(
             select(ChecklistItem).where(
                 ChecklistItem.checklist_id == checklist_id,
-                ChecklistItem.content.ilike(
-                    f"%{escaped_item_title}%", escape="\\"
-                ),
+                ChecklistItem.content.ilike(f"%{escaped_item_title}%", escape="\\"),
             )
         )
         item_obj = item_result.scalar_one_or_none()
         if not item_obj:
             # List available items to help the user
             all_items_result = await db.execute(
-                select(ChecklistItem.content).where(
-                    ChecklistItem.checklist_id == checklist_id
-                )
+                select(ChecklistItem.content).where(ChecklistItem.checklist_id == checklist_id)
             )
             available = [r[0] for r in all_items_result.all()]
             if available:
@@ -416,10 +386,7 @@ async def toggle_checklist_item(
                     f"checklist '{checklist_name}' on task {task_key}. "
                     f"Available items: {', '.join(available[:10])}."
                 )
-            return (
-                f"Error: No items found in checklist '{checklist_name}' "
-                f"on task {task_key}."
-            )
+            return f"Error: No items found in checklist '{checklist_name}' on task {task_key}."
 
         item_id = item_obj.id
         currently_done = item_obj.is_done
@@ -429,10 +396,7 @@ async def toggle_checklist_item(
     confirmation: dict[str, Any] = {
         "type": "confirmation",
         "action": "toggle_checklist_item",
-        "summary": (
-            f"Mark '{item_title}' as {action_verb} in checklist "
-            f"'{checklist_name}' on {task_key}"
-        ),
+        "summary": (f"Mark '{item_title}' as {action_verb} in checklist '{checklist_name}' on {task_key}"),
         "details": {
             "task_id": str(task_uuid),
             "task_key": task_key,
@@ -465,17 +429,13 @@ async def toggle_checklist_item(
                 return "Access denied: you no longer have access to this task's project."
 
             # Re-load item to get fresh state
-            item_result = await db.execute(
-                select(ChecklistItem).where(ChecklistItem.id == item_id)
-            )
+            item_result = await db.execute(select(ChecklistItem).where(ChecklistItem.id == item_id))
             item_obj = item_result.scalar_one_or_none()
             if not item_obj:
                 return f"Error: Checklist item '{item_title}' no longer exists."
 
             # Re-load checklist for counter updates
-            cl_result = await db.execute(
-                select(Checklist).where(Checklist.id == checklist_id)
-            )
+            cl_result = await db.execute(select(Checklist).where(Checklist.id == checklist_id))
             checklist_obj = cl_result.scalar_one_or_none()
             if not checklist_obj:
                 return f"Error: Checklist '{checklist_title}' no longer exists."
@@ -488,24 +448,18 @@ async def toggle_checklist_item(
             if item_obj.is_done:
                 checklist_obj.completed_items += 1
             else:
-                checklist_obj.completed_items = max(
-                    0, checklist_obj.completed_items - 1
-                )
+                checklist_obj.completed_items = max(0, checklist_obj.completed_items - 1)
 
             # Update Task.checklist_done (denormalized counter)
             if item_obj.is_done:
                 await db.execute(
-                    update(Task)
-                    .where(Task.id == task_uuid)
-                    .values(checklist_done=Task.checklist_done + 1)
+                    update(Task).where(Task.id == task_uuid).values(checklist_done=Task.checklist_done + 1)
                 )
             else:
                 await db.execute(
                     update(Task)
                     .where(Task.id == task_uuid)
-                    .values(
-                        checklist_done=func.greatest(Task.checklist_done - 1, 0)
-                    )
+                    .values(checklist_done=func.greatest(Task.checklist_done - 1, 0))
                 )
 
             await db.flush()

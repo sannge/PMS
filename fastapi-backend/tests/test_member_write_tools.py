@@ -25,6 +25,7 @@ from app.ai.agent.tools.context import clear_tool_context, set_tool_context
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _setup_context(**overrides):
     """Populate tool context with sensible defaults + overrides."""
     ctx = {
@@ -35,10 +36,18 @@ def _setup_context(**overrides):
         "provider_registry": MagicMock(),
     }
     ctx.update(overrides)
-    set_tool_context(**{k: ctx[k] for k in (
-        "user_id", "accessible_app_ids", "accessible_project_ids",
-        "db_session_factory", "provider_registry",
-    )})
+    set_tool_context(
+        **{
+            k: ctx[k]
+            for k in (
+                "user_id",
+                "accessible_app_ids",
+                "accessible_project_ids",
+                "db_session_factory",
+                "provider_registry",
+            )
+        }
+    )
     return ctx
 
 
@@ -70,8 +79,8 @@ def _make_ctx(session):
 # Registry
 # ---------------------------------------------------------------------------
 
-class TestMemberWriteToolsRegistry:
 
+class TestMemberWriteToolsRegistry:
     def test_has_3_tools(self):
         assert len(MEMBER_WRITE_TOOLS) == 3
 
@@ -88,15 +97,17 @@ class TestMemberWriteToolsRegistry:
 # add_application_member
 # ---------------------------------------------------------------------------
 
-class TestAddApplicationMember:
 
+class TestAddApplicationMember:
     async def test_invalid_role(self):
         _setup_context()
-        result = await add_application_member.ainvoke({
-            "app": str(uuid4()),
-            "email": "test@example.com",
-            "role": "admin",
-        })
+        result = await add_application_member.ainvoke(
+            {
+                "app": str(uuid4()),
+                "email": "test@example.com",
+                "role": "admin",
+            }
+        )
         assert "Invalid role" in result
         _clear()
 
@@ -124,11 +135,13 @@ class TestAddApplicationMember:
             session.execute = AsyncMock(side_effect=[app_result, member_result])
             mock_ts.return_value = _make_ctx(session)
 
-            result = await add_application_member.ainvoke({
-                "app": app_id,
-                "email": "new@example.com",
-                "role": "viewer",
-            })
+            result = await add_application_member.ainvoke(
+                {
+                    "app": app_id,
+                    "email": "new@example.com",
+                    "role": "viewer",
+                }
+            )
             assert "don't have permission" in result.lower()
         _clear()
 
@@ -158,11 +171,13 @@ class TestAddApplicationMember:
             session.execute = AsyncMock(side_effect=[app_result, member_result, user_result])
             mock_ts.return_value = _make_ctx(session)
 
-            result = await add_application_member.ainvoke({
-                "app": app_id,
-                "email": "noone@example.com",
-                "role": "viewer",
-            })
+            result = await add_application_member.ainvoke(
+                {
+                    "app": app_id,
+                    "email": "noone@example.com",
+                    "role": "viewer",
+                }
+            )
             assert "No user found" in result
             assert "invitation system" in result
         _clear()
@@ -197,16 +212,23 @@ class TestAddApplicationMember:
             existing_result = MagicMock()
             existing_result.scalar_one_or_none.return_value = MagicMock()
 
-            session.execute = AsyncMock(side_effect=[
-                app_result, actor_result, user_result, existing_result,
-            ])
+            session.execute = AsyncMock(
+                side_effect=[
+                    app_result,
+                    actor_result,
+                    user_result,
+                    existing_result,
+                ]
+            )
             mock_ts.return_value = _make_ctx(session)
 
-            result = await add_application_member.ainvoke({
-                "app": app_id,
-                "email": "alice@example.com",
-                "role": "editor",
-            })
+            result = await add_application_member.ainvoke(
+                {
+                    "app": app_id,
+                    "email": "alice@example.com",
+                    "role": "editor",
+                }
+            )
             assert "already a member" in result.lower()
             assert "update_application_member_role" in result
         _clear()
@@ -239,9 +261,14 @@ class TestAddApplicationMember:
         # Not already a member
         existing_result = MagicMock()
         existing_result.scalar_one_or_none.return_value = None
-        pre_session.execute = AsyncMock(side_effect=[
-            app_result, actor_result, user_result, existing_result,
-        ])
+        pre_session.execute = AsyncMock(
+            side_effect=[
+                app_result,
+                actor_result,
+                user_result,
+                existing_result,
+            ]
+        )
 
         # TOCTOU + write combined session
         toctou_write_session = _mock_db_session()
@@ -252,9 +279,7 @@ class TestAddApplicationMember:
         # Not already a member check
         existing_check = MagicMock()
         existing_check.scalar_one_or_none.return_value = None
-        toctou_write_session.execute = AsyncMock(
-            side_effect=[toctou_result, existing_check]
-        )
+        toctou_write_session.execute = AsyncMock(side_effect=[toctou_result, existing_check])
 
         mock_tool_session.side_effect = [
             _make_ctx(pre_session),
@@ -262,11 +287,13 @@ class TestAddApplicationMember:
         ]
         mock_interrupt.return_value = {"approved": True}
 
-        result = await add_application_member.ainvoke({
-            "app": app_id,
-            "email": "bob@example.com",
-            "role": "editor",
-        })
+        result = await add_application_member.ainvoke(
+            {
+                "app": app_id,
+                "email": "bob@example.com",
+                "role": "editor",
+            }
+        )
         assert "Added Bob as Editor" in result
         toctou_write_session.add.assert_called_once()
         _clear()
@@ -276,15 +303,17 @@ class TestAddApplicationMember:
 # update_application_member_role
 # ---------------------------------------------------------------------------
 
-class TestUpdateApplicationMemberRole:
 
+class TestUpdateApplicationMemberRole:
     async def test_invalid_role(self):
         _setup_context()
-        result = await update_application_member_role.ainvoke({
-            "app": str(uuid4()),
-            "user": "alice@example.com",
-            "new_role": "superadmin",
-        })
+        result = await update_application_member_role.ainvoke(
+            {
+                "app": str(uuid4()),
+                "user": "alice@example.com",
+                "new_role": "superadmin",
+            }
+        )
         assert "Invalid role" in result
         _clear()
 
@@ -310,11 +339,13 @@ class TestUpdateApplicationMemberRole:
             session.execute = AsyncMock(side_effect=[app_result, member_result])
             mock_ts.return_value = _make_ctx(session)
 
-            result = await update_application_member_role.ainvoke({
-                "app": app_id,
-                "user": "alice@example.com",
-                "new_role": "editor",
-            })
+            result = await update_application_member_role.ainvoke(
+                {
+                    "app": app_id,
+                    "user": "alice@example.com",
+                    "new_role": "editor",
+                }
+            )
             assert "viewers cannot" in result.lower()
         _clear()
 
@@ -356,17 +387,24 @@ class TestUpdateApplicationMemberRole:
             count_result = MagicMock()
             count_result.scalar.return_value = 1
 
-            session.execute = AsyncMock(side_effect=[
-                app_result, actor_result, user_result,
-                target_member_result, count_result,
-            ])
+            session.execute = AsyncMock(
+                side_effect=[
+                    app_result,
+                    actor_result,
+                    user_result,
+                    target_member_result,
+                    count_result,
+                ]
+            )
             mock_ts.return_value = _make_ctx(session)
 
-            result = await update_application_member_role.ainvoke({
-                "app": app_id,
-                "user": str(target_id),
-                "new_role": "editor",
-            })
+            result = await update_application_member_role.ainvoke(
+                {
+                    "app": app_id,
+                    "user": str(target_id),
+                    "new_role": "editor",
+                }
+            )
             assert "last owner" in result.lower()
         _clear()
 
@@ -403,16 +441,23 @@ class TestUpdateApplicationMemberRole:
             target_member_result = MagicMock()
             target_member_result.scalar_one_or_none.return_value = mock_target_member
 
-            session.execute = AsyncMock(side_effect=[
-                app_result, actor_result, user_result, target_member_result,
-            ])
+            session.execute = AsyncMock(
+                side_effect=[
+                    app_result,
+                    actor_result,
+                    user_result,
+                    target_member_result,
+                ]
+            )
             mock_ts.return_value = _make_ctx(session)
 
-            result = await update_application_member_role.ainvoke({
-                "app": app_id,
-                "user": str(target_id),
-                "new_role": "owner",
-            })
+            result = await update_application_member_role.ainvoke(
+                {
+                    "app": app_id,
+                    "user": str(target_id),
+                    "new_role": "owner",
+                }
+            )
             assert "only promote viewers to editors" in result.lower()
         _clear()
 
@@ -421,8 +466,8 @@ class TestUpdateApplicationMemberRole:
 # remove_application_member
 # ---------------------------------------------------------------------------
 
-class TestRemoveApplicationMember:
 
+class TestRemoveApplicationMember:
     async def test_non_owner_denied(self):
         """Editor cannot remove others (only owners can)."""
         app_id = str(uuid4())
@@ -454,10 +499,12 @@ class TestRemoveApplicationMember:
             session.execute = AsyncMock(side_effect=[app_result, actor_result, user_result])
             mock_ts.return_value = _make_ctx(session)
 
-            result = await remove_application_member.ainvoke({
-                "app": app_id,
-                "user": str(target_id),
-            })
+            result = await remove_application_member.ainvoke(
+                {
+                    "app": app_id,
+                    "user": str(target_id),
+                }
+            )
             assert "only owners" in result.lower()
         _clear()
 
@@ -498,16 +545,23 @@ class TestRemoveApplicationMember:
             count_result = MagicMock()
             count_result.scalar.return_value = 1
 
-            session.execute = AsyncMock(side_effect=[
-                app_result, actor_result, user_result,
-                target_member_result, count_result,
-            ])
+            session.execute = AsyncMock(
+                side_effect=[
+                    app_result,
+                    actor_result,
+                    user_result,
+                    target_member_result,
+                    count_result,
+                ]
+            )
             mock_ts.return_value = _make_ctx(session)
 
-            result = await remove_application_member.ainvoke({
-                "app": app_id,
-                "user": str(target_id),
-            })
+            result = await remove_application_member.ainvoke(
+                {
+                    "app": app_id,
+                    "user": str(target_id),
+                }
+            )
             assert "last owner" in result.lower()
         _clear()
 
@@ -558,17 +612,25 @@ class TestRemoveApplicationMember:
             active_count_result = MagicMock()
             active_count_result.scalar.return_value = 3
 
-            session.execute = AsyncMock(side_effect=[
-                app_result, actor_result, user_result,
-                target_member_result,
-                project_ids_result, done_result, active_count_result,
-            ])
+            session.execute = AsyncMock(
+                side_effect=[
+                    app_result,
+                    actor_result,
+                    user_result,
+                    target_member_result,
+                    project_ids_result,
+                    done_result,
+                    active_count_result,
+                ]
+            )
             mock_ts.return_value = _make_ctx(session)
 
-            result = await remove_application_member.ainvoke({
-                "app": app_id,
-                "user": str(target_id),
-            })
+            result = await remove_application_member.ainvoke(
+                {
+                    "app": app_id,
+                    "user": str(target_id),
+                }
+            )
             assert "3 active tasks" in result
             assert "Reassign" in result
         _clear()
@@ -605,16 +667,23 @@ class TestRemoveApplicationMember:
         project_ids_result = MagicMock()
         project_ids_result.all.return_value = []
 
-        session.execute = AsyncMock(side_effect=[
-            app_result, actor_result, user_result,
-            target_member_result, project_ids_result,
-        ])
+        session.execute = AsyncMock(
+            side_effect=[
+                app_result,
+                actor_result,
+                user_result,
+                target_member_result,
+                project_ids_result,
+            ]
+        )
         mock_tool_session.return_value = _make_ctx(session)
         mock_interrupt.return_value = {"approved": False}
 
-        result = await remove_application_member.ainvoke({
-            "app": app_id,
-            "user": str(target_id),
-        })
+        result = await remove_application_member.ainvoke(
+            {
+                "app": app_id,
+                "user": str(target_id),
+            }
+        )
         assert "cancelled" in result.lower()
         _clear()

@@ -33,9 +33,7 @@ def _make_mock_provider(embedding_dim: int = 1536):
     """Create a mock LLM provider."""
     mock = AsyncMock()
     mock.generate_embedding = AsyncMock(return_value=[0.1] * embedding_dim)
-    mock.generate_embeddings_batch = AsyncMock(
-        side_effect=lambda texts, model: [[0.1] * embedding_dim for _ in texts]
-    )
+    mock.generate_embeddings_batch = AsyncMock(side_effect=lambda texts, model: [[0.1] * embedding_dim for _ in texts])
     return mock
 
 
@@ -44,16 +42,12 @@ def _make_mock_registry(provider=None):
     if provider is None:
         provider = _make_mock_provider()
     mock_registry = AsyncMock()
-    mock_registry.get_embedding_provider = AsyncMock(
-        return_value=(provider, "text-embedding-3-small")
-    )
+    mock_registry.get_embedding_provider = AsyncMock(return_value=(provider, "text-embedding-3-small"))
     return mock_registry
 
 
 @pytest_asyncio.fixture
-async def test_doc_with_chunks(
-    db_session: AsyncSession, test_user, test_application, requires_pgvector
-) -> Document:
+async def test_doc_with_chunks(db_session: AsyncSession, test_user, test_application, requires_pgvector) -> Document:
     """Create a test document with pre-created chunks."""
     doc = Document(
         id=uuid.uuid4(),
@@ -101,9 +95,7 @@ async def second_application(db_session: AsyncSession, test_user_2) -> Applicati
 
 
 @pytest_asyncio.fixture
-async def doc_in_second_app(
-    db_session: AsyncSession, test_user_2, second_application, requires_pgvector
-) -> Document:
+async def doc_in_second_app(db_session: AsyncSession, test_user_2, second_application, requires_pgvector) -> Document:
     """Create a document in the second application."""
     doc = Document(
         id=uuid.uuid4(),
@@ -147,16 +139,30 @@ class TestReciprocalRankFusion:
         )
 
         doc_id = uuid.uuid4()
-        semantic = [_RankedResult(
-            document_id=doc_id, document_title="Test", chunk_text="text",
-            heading_context=None, chunk_index=0, rank=1, raw_score=0.9,
-            source="semantic",
-        )]
-        keyword = [_RankedResult(
-            document_id=doc_id, document_title="Test", chunk_text="text",
-            heading_context=None, chunk_index=0, rank=2, raw_score=0.8,
-            source="keyword",
-        )]
+        semantic = [
+            _RankedResult(
+                document_id=doc_id,
+                document_title="Test",
+                chunk_text="text",
+                heading_context=None,
+                chunk_index=0,
+                rank=1,
+                raw_score=0.9,
+                source="semantic",
+            )
+        ]
+        keyword = [
+            _RankedResult(
+                document_id=doc_id,
+                document_title="Test",
+                chunk_text="text",
+                heading_context=None,
+                chunk_index=0,
+                rank=2,
+                raw_score=0.8,
+                source="keyword",
+            )
+        ]
 
         results = service._reciprocal_rank_fusion(semantic, keyword, k=60)
         assert len(results) == 1
@@ -176,16 +182,30 @@ class TestReciprocalRankFusion:
         )
 
         doc_id = uuid.uuid4()
-        list1 = [_RankedResult(
-            document_id=doc_id, document_title="Test", chunk_text="chunk text",
-            heading_context="H1", chunk_index=0, rank=1, raw_score=0.95,
-            source="semantic",
-        )]
-        list2 = [_RankedResult(
-            document_id=doc_id, document_title="Test", chunk_text="chunk text",
-            heading_context="H1", chunk_index=0, rank=3, raw_score=0.7,
-            source="keyword",
-        )]
+        list1 = [
+            _RankedResult(
+                document_id=doc_id,
+                document_title="Test",
+                chunk_text="chunk text",
+                heading_context="H1",
+                chunk_index=0,
+                rank=1,
+                raw_score=0.95,
+                source="semantic",
+            )
+        ]
+        list2 = [
+            _RankedResult(
+                document_id=doc_id,
+                document_title="Test",
+                chunk_text="chunk text",
+                heading_context="H1",
+                chunk_index=0,
+                rank=3,
+                raw_score=0.7,
+                source="keyword",
+            )
+        ]
 
         results = service._reciprocal_rank_fusion(list1, list2, k=60)
         assert len(results) == 1
@@ -206,13 +226,23 @@ class TestReciprocalRankFusion:
         doc_id = uuid.uuid4()
         list1 = [
             _RankedResult(
-                document_id=doc_id, document_title="Test", chunk_text="chunk 0 most relevant",
-                heading_context="Billing", chunk_index=0, rank=1, raw_score=0.9,
+                document_id=doc_id,
+                document_title="Test",
+                chunk_text="chunk 0 most relevant",
+                heading_context="Billing",
+                chunk_index=0,
+                rank=1,
+                raw_score=0.9,
                 source="semantic",
             ),
             _RankedResult(
-                document_id=doc_id, document_title="Test", chunk_text="chunk 1 is longer text but less relevant",
-                heading_context="Security", chunk_index=1, rank=2, raw_score=0.8,
+                document_id=doc_id,
+                document_title="Test",
+                chunk_text="chunk 1 is longer text but less relevant",
+                heading_context="Security",
+                chunk_index=1,
+                rank=2,
+                raw_score=0.8,
                 source="semantic",
             ),
         ]
@@ -239,13 +269,23 @@ class TestReciprocalRankFusion:
         doc_id_2 = uuid.uuid4()
         list1 = [
             _RankedResult(
-                document_id=doc_id_1, document_title="Doc A", chunk_text="text a",
-                heading_context=None, chunk_index=0, rank=1, raw_score=0.9,
+                document_id=doc_id_1,
+                document_title="Doc A",
+                chunk_text="text a",
+                heading_context=None,
+                chunk_index=0,
+                rank=1,
+                raw_score=0.9,
                 source="semantic",
             ),
             _RankedResult(
-                document_id=doc_id_2, document_title="Doc B", chunk_text="text b",
-                heading_context=None, chunk_index=0, rank=2, raw_score=0.8,
+                document_id=doc_id_2,
+                document_title="Doc B",
+                chunk_text="text b",
+                heading_context=None,
+                chunk_index=0,
+                rank=2,
+                raw_score=0.8,
                 source="semantic",
             ),
         ]
@@ -267,16 +307,30 @@ class TestReciprocalRankFusion:
         )
 
         doc_id = uuid.uuid4()
-        semantic = [_RankedResult(
-            document_id=doc_id, document_title="Test", chunk_text="semantic chunk",
-            heading_context="H1", chunk_index=0, rank=1, raw_score=0.9,
-            source="semantic",
-        )]
-        keyword = [_RankedResult(
-            document_id=doc_id, document_title="Test", chunk_text="keyword full content preview",
-            heading_context=None, chunk_index=None, rank=3, raw_score=0.8,
-            source="keyword",
-        )]
+        semantic = [
+            _RankedResult(
+                document_id=doc_id,
+                document_title="Test",
+                chunk_text="semantic chunk",
+                heading_context="H1",
+                chunk_index=0,
+                rank=1,
+                raw_score=0.9,
+                source="semantic",
+            )
+        ]
+        keyword = [
+            _RankedResult(
+                document_id=doc_id,
+                document_title="Test",
+                chunk_text="keyword full content preview",
+                heading_context=None,
+                chunk_index=None,
+                rank=3,
+                raw_score=0.8,
+                source="keyword",
+            )
+        ]
 
         results = service._reciprocal_rank_fusion(semantic, keyword, k=60)
         # chunk_index=0 and chunk_index=None are different dedup keys,
@@ -305,11 +359,18 @@ class TestReciprocalRankFusion:
         )
 
         doc_id = uuid.uuid4()
-        semantic = [_RankedResult(
-            document_id=doc_id, document_title="T", chunk_text="t",
-            heading_context=None, chunk_index=0, rank=1, raw_score=0.9,
-            source="semantic",
-        )]
+        semantic = [
+            _RankedResult(
+                document_id=doc_id,
+                document_title="T",
+                chunk_text="t",
+                heading_context=None,
+                chunk_index=0,
+                rank=1,
+                raw_score=0.9,
+                source="semantic",
+            )
+        ]
 
         results = service._reciprocal_rank_fusion(semantic, k=60)
         assert len(results) == 1
@@ -323,12 +384,18 @@ class TestReciprocalRankFusion:
             db=AsyncMock(),
         )
 
-        semantic = [_RankedResult(
-            document_id=uuid.uuid4(), document_title="Title",
-            chunk_text="This is the chunk text content.",
-            heading_context="Introduction",
-            chunk_index=0, rank=1, raw_score=0.9, source="semantic",
-        )]
+        semantic = [
+            _RankedResult(
+                document_id=uuid.uuid4(),
+                document_title="Title",
+                chunk_text="This is the chunk text content.",
+                heading_context="Introduction",
+                chunk_index=0,
+                rank=1,
+                raw_score=0.9,
+                source="semantic",
+            )
+        ]
 
         results = service._reciprocal_rank_fusion(semantic, k=60)
         assert len(results) == 1
@@ -351,9 +418,7 @@ class TestRetrievalEmptyQuery:
         assert results == []
 
     @pytest.mark.asyncio
-    async def test_retrieval_whitespace_query_returns_empty(
-        self, db_session, test_user, requires_pgvector
-    ):
+    async def test_retrieval_whitespace_query_returns_empty(self, db_session, test_user, requires_pgvector):
         """Whitespace-only query returns empty list."""
         service = HybridRetrievalService(
             provider_registry=_make_mock_registry(),
@@ -419,6 +484,7 @@ class TestRetrievalRBACBoundaries:
         # Verify the scope resolution logic directly
         # User 1 should only have access to test_application
         from app.services.search_service import _get_user_application_ids
+
         app_ids = await _get_user_application_ids(db_session, test_user.id)
         assert test_doc_with_chunks.application_id in app_ids
         assert doc_in_second_app.application_id not in app_ids
@@ -444,9 +510,7 @@ class TestRetrievalRBACBoundaries:
         assert results == []
 
     @pytest.mark.asyncio
-    async def test_retrieval_filters_by_project(
-        self, db_session, test_user, requires_pgvector
-    ):
+    async def test_retrieval_filters_by_project(self, db_session, test_user, requires_pgvector):
         """retrieve(project_id=Y) with non-accessible project returns empty."""
         service = HybridRetrievalService(
             provider_registry=_make_mock_registry(),
@@ -502,6 +566,7 @@ class TestRetrievalExcludesDeleted:
         # Verify that deleted doc's application is still accessible but
         # the SQL WHERE clause filters out deleted documents.
         from app.services.search_service import _get_user_application_ids
+
         app_ids = await _get_user_application_ids(db_session, test_user.id)
         assert test_application.id in app_ids
 
@@ -518,11 +583,18 @@ class TestRetrievalGracefulDegradation:
         )
 
         doc_id = uuid.uuid4()
-        semantic_only = [_RankedResult(
-            document_id=doc_id, document_title="Test", chunk_text="text",
-            heading_context=None, chunk_index=0, rank=1, raw_score=0.9,
-            source="semantic",
-        )]
+        semantic_only = [
+            _RankedResult(
+                document_id=doc_id,
+                document_title="Test",
+                chunk_text="text",
+                heading_context=None,
+                chunk_index=0,
+                rank=1,
+                raw_score=0.9,
+                source="semantic",
+            )
+        ]
 
         results = service._reciprocal_rank_fusion(semantic_only, [], k=60)
         assert len(results) == 1
@@ -540,17 +612,30 @@ class TestRetrievalGracefulDegradation:
         doc_id = uuid.uuid4()
         # Semantic has rank=1 (best), keyword has rank=3 (worse)
         # Both use chunk_index=0 so they share the same dedup key
-        semantic_hit = [_RankedResult(
-            document_id=doc_id, document_title="Test", chunk_text="relevant semantic chunk",
-            heading_context="Security", chunk_index=0, rank=1, raw_score=0.9,
-            source="semantic",
-        )]
-        keyword_hit = [_RankedResult(
-            document_id=doc_id, document_title="Test",
-            chunk_text="this is a much longer keyword text that is less relevant",
-            heading_context=None, chunk_index=0, rank=3, raw_score=0.8,
-            source="keyword",
-        )]
+        semantic_hit = [
+            _RankedResult(
+                document_id=doc_id,
+                document_title="Test",
+                chunk_text="relevant semantic chunk",
+                heading_context="Security",
+                chunk_index=0,
+                rank=1,
+                raw_score=0.9,
+                source="semantic",
+            )
+        ]
+        keyword_hit = [
+            _RankedResult(
+                document_id=doc_id,
+                document_title="Test",
+                chunk_text="this is a much longer keyword text that is less relevant",
+                heading_context=None,
+                chunk_index=0,
+                rank=3,
+                raw_score=0.8,
+                source="keyword",
+            )
+        ]
 
         results = service._reciprocal_rank_fusion(semantic_hit, keyword_hit, k=60)
         assert len(results) == 1
@@ -559,9 +644,7 @@ class TestRetrievalGracefulDegradation:
         assert results[0].heading_context == "Security"
 
     @pytest.mark.asyncio
-    async def test_retrieval_empty_app_ids_returns_empty(
-        self, db_session, requires_pgvector
-    ):
+    async def test_retrieval_empty_app_ids_returns_empty(self, db_session, requires_pgvector):
         """User with no accessible applications gets empty results."""
         service = HybridRetrievalService(
             provider_registry=_make_mock_registry(),

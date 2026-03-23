@@ -56,21 +56,50 @@ MAX_IMAGES = _cfg.get_int("file.max_chat_images", 5)
 MAX_IMAGE_SIZE = _cfg.get_int("file.max_image_size", 10 * 1024 * 1024)  # 10 MB decoded
 ALLOWED_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 
-# NOTE: These values are read once at import time and do NOT change at runtime.
-# Changing these config keys requires a process/worker restart to take effect.
-STREAM_OVERALL_TIMEOUT_S = _cfg.get_int("stream.overall_timeout_s", 300)
-STREAM_IDLE_TIMEOUT_S = _cfg.get_int("stream.idle_timeout_s", 60)
-MAX_CHUNKS_PER_RESPONSE = _cfg.get_int("stream.max_chunks", 2000)
+# ---------------------------------------------------------------------------
+# Runtime getter functions for stream constants (read from config at call time)
+# ---------------------------------------------------------------------------
+
+
+def get_stream_overall_timeout_s() -> int:
+    """Return stream overall timeout (seconds) from config at call time."""
+    return max(1, get_agent_config().get_int("stream.overall_timeout_s", 300))
+
+
+def get_stream_idle_timeout_s() -> int:
+    """Return stream idle timeout (seconds) from config at call time."""
+    return max(1, get_agent_config().get_int("stream.idle_timeout_s", 60))
+
+
+def get_max_chunks_per_response() -> int:
+    """Return max chunks per SSE response from config at call time."""
+    return max(1, get_agent_config().get_int("stream.max_chunks", 2000))
+
+
+def get_thread_owner_ttl() -> int:
+    """Return thread owner TTL (seconds) from config at call time."""
+    return max(1, get_agent_config().get_int("stream.thread_owner_ttl", 86400))
+
 
 # S6: Allowlisted keys for interrupt payloads (prevent arbitrary data injection)
 _SAFE_INTERRUPT_KEYS = {
-    "type", "questions", "context", "action", "tool_name", "args",
-    "summary", "details", "question", "options", "prompt", "items",
+    "type",
+    "questions",
+    "context",
+    "action",
+    "tool_name",
+    "args",
+    "summary",
+    "details",
+    "question",
+    "options",
+    "prompt",
+    "items",
 }
 
-# NOTE: This value is read once at import time and does NOT change at runtime.
-# Changing this config key requires a process/worker restart to take effect.
-# asyncio.Semaphore cannot be resized after creation.
+# NOTE: _MAX_CONCURRENT_AGENTS and _agent_semaphore are read once at import
+# time and do NOT change at runtime. asyncio.Semaphore cannot be resized after
+# creation — changing agent.max_concurrent_agents requires a process restart.
 _MAX_CONCURRENT_AGENTS = _cfg.get_int("agent.max_concurrent_agents", 50)
 _agent_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_AGENTS)
 
@@ -121,8 +150,11 @@ async def _distributed_acquire() -> bool:
             "return 1"
         )
         result = await redis_service.client.eval(
-            _LUA, 1, _DISTRIBUTED_SEM_KEY,
-            str(_MAX_CONCURRENT_AGENTS), str(_DISTRIBUTED_SEM_TTL),
+            _LUA,
+            1,
+            _DISTRIBUTED_SEM_KEY,
+            str(_MAX_CONCURRENT_AGENTS),
+            str(_DISTRIBUTED_SEM_TTL),
         )
         return result == 1
     except Exception:
@@ -154,14 +186,11 @@ async def _distributed_release() -> None:
 
     try:
         # DECR with floor at 0
-        _LUA = (
-            "local c = redis.call('DECR', KEYS[1]) "
-            "if c < 0 then redis.call('SET', KEYS[1], 0) end "
-            "return c"
-        )
+        _LUA = "local c = redis.call('DECR', KEYS[1]) if c < 0 then redis.call('SET', KEYS[1], 0) end return c"
         await redis_service.client.eval(_LUA, 1, _DISTRIBUTED_SEM_KEY)
     except Exception:
         logger.debug("Distributed semaphore release Redis error", exc_info=True)
+
 
 # Module-level cancel tracking
 _MAX_CANCEL_EVENTS = 1000  # Safety cap — should never hit this in practice
@@ -181,6 +210,7 @@ def _register_cancel_event(thread_id: str) -> asyncio.Event:
     _active_stream_cancels[thread_id] = event
     return event
 
+
 # ---------------------------------------------------------------------------
 # Thread ownership tracking (H4 — prevent IDOR)
 # ---------------------------------------------------------------------------
@@ -191,8 +221,7 @@ def _register_cancel_event(thread_id: str) -> asyncio.Event:
 # down, cross-worker requests to foreign threads are allowed through (fail-open)
 # to avoid breaking existing sessions.
 
-# NOTE: This value is read once at import time and does NOT change at runtime.
-_THREAD_OWNER_TTL = _cfg.get_int("stream.thread_owner_ttl", 86400)  # 24 hours
+# get_thread_owner_ttl() is now a runtime getter: get_thread_owner_ttl()
 
 # In-memory fallback (used only when Redis is down)
 _thread_owners_fallback: OrderedDict[str, str] = OrderedDict()
@@ -212,9 +241,7 @@ async def _register_thread(thread_id: str, user_id: str) -> None:
 
     try:
         if _time.monotonic() >= _redis_circuit_open_until and redis_service.is_connected:
-            await redis_service.set(
-                f"thread_owner:{thread_id}", user_id, ttl=_THREAD_OWNER_TTL
-            )
+            await redis_service.set(f"thread_owner:{thread_id}", user_id, ttl=get_thread_owner_ttl())
             return
     except Exception:
         _redis_circuit_open_until = _time.monotonic() + _REDIS_CIRCUIT_COOLDOWN_S
@@ -271,8 +298,7 @@ async def _validate_thread_owner(
     # CRIT-4: For strict endpoints, refuse immediately when Redis is down
     if strict and not redis_available:
         logger.warning(
-            "Thread ownership check (strict) refused: Redis unavailable "
-            "for thread %s",
+            "Thread ownership check (strict) refused: Redis unavailable for thread %s",
             thread_id,
         )
         raise HTTPException(
@@ -286,9 +312,7 @@ async def _validate_thread_owner(
         # F10: Backfill into Redis if it's now available (owner was only in fallback)
         if owner is not None and redis_available:
             try:
-                await redis_service.set(
-                    f"thread_owner:{thread_id}", owner, ttl=_THREAD_OWNER_TTL
-                )
+                await redis_service.set(f"thread_owner:{thread_id}", owner, ttl=get_thread_owner_ttl())
                 async with _fallback_lock:
                     _thread_owners_fallback.pop(thread_id, None)
             except Exception:
@@ -297,8 +321,7 @@ async def _validate_thread_owner(
     if owner is None and not redis_available:
         # Fail-closed: Redis down + not in local fallback = refuse
         logger.warning(
-            "Thread ownership check fail-closed: Redis unavailable, "
-            "thread %s not in local fallback",
+            "Thread ownership check fail-closed: Redis unavailable, thread %s not in local fallback",
             thread_id,
         )
         raise HTTPException(
@@ -318,6 +341,7 @@ async def _validate_thread_owner(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Thread does not belong to the current user",
         )
+
 
 # ---------------------------------------------------------------------------
 # Database session factory for agent tools
@@ -432,9 +456,7 @@ def _build_human_message(
         content_blocks.append(
             {
                 "type": "image_url",
-                "image_url": {
-                    "url": f"data:{img.media_type};base64,{img.data}"
-                },
+                "image_url": {"url": f"data:{img.media_type};base64,{img.data}"},
             }
         )
     return HumanMessage(content=content_blocks)
@@ -486,6 +508,10 @@ async def _setup_agent_context(
     the connection back to the pool before returning.  This prevents
     holding a connection idle for the entire agent execution (~120 s).
 
+    Per-request mutable state (LLM model caches, provider registry, etc.)
+    is written into ``ContextVar`` instances so the cached compiled graph
+    can be safely reused across concurrent requests.
+
     Args:
         current_user: Authenticated user.
         warm_model: If True, resolve the LLM model upfront and inject it
@@ -496,9 +522,25 @@ async def _setup_agent_context(
     Caller must call clear_tool_context() in a finally block.
     """
     from ..ai.agent.graph import build_agent_graph, get_checkpointer
+    from ..ai.agent.graph_context import (
+        bound_model_var,
+        chat_model_var,
+        db_session_factory_var,
+        provider_registry_var,
+        system_prompt_var,
+        tools_var,
+    )
     from ..ai.agent.rbac_context import AgentRBACContext
     from ..ai.agent.tools import ALL_READ_TOOLS, ALL_WRITE_TOOLS, set_tool_context
     from ..ai.provider_registry import ProviderRegistry
+
+    # Reset ContextVars to prevent stale state from failed prior requests
+    chat_model_var.set([])
+    system_prompt_var.set([])
+    bound_model_var.set([])
+    provider_registry_var.set(None)
+    db_session_factory_var.set(None)
+    tools_var.set([])
 
     async with async_session_maker() as db:
         context = await AgentRBACContext.build_agent_context(str(current_user.id), db)
@@ -511,16 +553,21 @@ async def _setup_agent_context(
         provider_registry=registry,
     )
 
+    all_tools = ALL_READ_TOOLS + ALL_WRITE_TOOLS
+
     # Pre-warm model for resume flows (intake won't re-run after interrupt)
     pre_warmed_model = None
     pre_warmed_prompt = None
     if warm_model:
         from ..ai.agent.graph import _get_langchain_chat_model
         from ..ai.agent.prompts import SYSTEM_PROMPT, load_system_prompt
+
         try:
             async with async_session_maker() as db:
                 pre_warmed_model = await _get_langchain_chat_model(
-                    registry, db, current_user.id,
+                    registry,
+                    db,
+                    current_user.id,
                 )
                 # Load system prompt via unified loader (config + legacy fallback)
                 try:
@@ -530,14 +577,24 @@ async def _setup_agent_context(
         except Exception as exc:
             logger.warning("Failed to pre-warm model for resume: %s", exc)
 
-    all_tools = ALL_READ_TOOLS + ALL_WRITE_TOOLS
+    # Populate per-request ContextVars so the cached graph's nodes can
+    # read request-scoped mutable state without cross-request pollution.
+    chat_model_cache: list[Any] = [pre_warmed_model] if pre_warmed_model else []
+    system_prompt_cache: list[str] = [pre_warmed_prompt] if pre_warmed_prompt else []
+    bound_model_cache: list[Any] = []
+    if pre_warmed_model and all_tools:
+        bound_model_cache.append(pre_warmed_model.bind_tools(all_tools))
+
+    chat_model_var.set(chat_model_cache)
+    system_prompt_var.set(system_prompt_cache)
+    bound_model_var.set(bound_model_cache)
+    provider_registry_var.set(registry)
+    db_session_factory_var.set(get_tool_db)
+    tools_var.set(all_tools)
+
     graph = build_agent_graph(
         tools=all_tools,
         checkpointer=get_checkpointer(),
-        provider_registry=registry,
-        db_session_factory=get_tool_db,
-        pre_warmed_model=pre_warmed_model,
-        pre_warmed_system_prompt=pre_warmed_prompt,
     )
     return graph, context
 
@@ -563,8 +620,7 @@ def _build_chat_response(
             response_text = content
         elif isinstance(content, list):
             response_text = " ".join(
-                block.get("text", "") if isinstance(block, dict) else str(block)
-                for block in content
+                block.get("text", "") if isinstance(block, dict) else str(block) for block in content
             )
 
     return ChatResponse(
@@ -587,8 +643,13 @@ _STREAMABLE_NODES = {"explore", "respond", "synthesize"}
 
 # Pipeline nodes that emit thinking_step events.
 _THINKING_NODES = {
-    "intake", "understand", "clarify", "explore",
-    "explore_tools", "synthesize", "respond",
+    "intake",
+    "understand",
+    "clarify",
+    "explore",
+    "explore_tools",
+    "synthesize",
+    "respond",
 }
 
 _NODE_LABELS_START: dict[str, str] = {
@@ -684,20 +745,24 @@ async def _stream_agent(
                 if node_name in _THINKING_NODES and lg_node and label:
                     yield {
                         "event": "thinking_step",
-                        "data": json.dumps({
-                            "type": "node",
-                            "node": node_name,
-                            "label": label,
-                            "status": "active",
-                        }),
+                        "data": json.dumps(
+                            {
+                                "type": "node",
+                                "node": node_name,
+                                "label": label,
+                                "status": "active",
+                            }
+                        ),
                     }
                     # S3: Emit phase_changed event for frontend phase tracking
                     yield {
                         "event": "phase_changed",
-                        "data": json.dumps({
-                            "phase": node_name,
-                            "label": label,
-                        }),
+                        "data": json.dumps(
+                            {
+                                "phase": node_name,
+                                "label": label,
+                            }
+                        ),
                     }
 
             elif event_kind == "on_chain_end":
@@ -736,10 +801,12 @@ async def _stream_agent(
                 _tool_starts[run_id] = _time.monotonic()
                 yield {
                     "event": "tool_call_start",
-                    "data": json.dumps({
-                        "id": run_id,
-                        "name": event.get("name", "unknown"),
-                    }),
+                    "data": json.dumps(
+                        {
+                            "id": run_id,
+                            "name": event.get("name", "unknown"),
+                        }
+                    ),
                 }
 
             elif event_kind == "on_tool_end":
@@ -805,6 +872,7 @@ async def _stream_agent(
     if not _any_text_emitted and graph_state:
         try:
             from langchain_core.messages import AIMessage as _AIMessage
+
             _fb_msgs = graph_state.values.get("messages", [])
             for _fb_msg in reversed(_fb_msgs):
                 if isinstance(_fb_msg, _AIMessage) and _fb_msg.content and not getattr(_fb_msg, "tool_calls", None):
@@ -822,12 +890,14 @@ async def _stream_agent(
             if _active_node in _THINKING_NODES:
                 yield {
                     "event": "thinking_step",
-                    "data": json.dumps({
-                        "type": "node",
-                        "node": _active_node,
-                        "label": _NODE_LABELS_START.get(_active_node, _active_node),
-                        "status": "complete",
-                    }),
+                    "data": json.dumps(
+                        {
+                            "type": "node",
+                            "node": _active_node,
+                            "label": _NODE_LABELS_START.get(_active_node, _active_node),
+                            "status": "complete",
+                        }
+                    ),
                 }
             # Extract the interrupt payload from pending tasks
             interrupt_payload: dict[str, Any] = {"thread_id": thread_id}
@@ -868,6 +938,7 @@ async def _stream_agent(
     _output_tokens = 0
     if graph_state:
         from langchain_core.messages import AIMessage as _AIMsg
+
         for msg in reversed(graph_state.values.get("messages", [])):
             if isinstance(msg, _AIMsg):
                 usage = getattr(msg, "usage_metadata", None)
@@ -878,12 +949,14 @@ async def _stream_agent(
 
     yield {
         "event": "token_usage",
-        "data": json.dumps({
-            "input_tokens": _input_tokens,
-            "output_tokens": _output_tokens,
-            "total_tokens": _input_tokens + _output_tokens,
-            "context_limit": context_limit,
-        }),
+        "data": json.dumps(
+            {
+                "input_tokens": _input_tokens,
+                "output_tokens": _output_tokens,
+                "total_tokens": _input_tokens + _output_tokens,
+                "context_limit": context_limit,
+            }
+        ),
     }
 
     # Emit context_summary if the agent auto-summarized old messages
@@ -896,20 +969,24 @@ async def _stream_agent(
         _summary_seq = len(graph_state.values.get("messages", [])) if graph_state else 0
         yield {
             "event": "context_summary",
-            "data": json.dumps({
-                "summary": _context_summary_text,
-                "up_to_sequence": _summary_seq,
-            }),
+            "data": json.dumps(
+                {
+                    "summary": _context_summary_text,
+                    "up_to_sequence": _summary_seq,
+                }
+            ),
         }
 
     yield {
         "event": "run_finished",
-        "data": json.dumps({
-            "interrupted": interrupted,
-            "sources": get_accumulated_sources(),
-            "session_id": session_id,
-            **({"checkpoint_id": checkpoint_id} if checkpoint_id else {}),
-        }),
+        "data": json.dumps(
+            {
+                "interrupted": interrupted,
+                "sources": get_accumulated_sources(),
+                "session_id": session_id,
+                **({"checkpoint_id": checkpoint_id} if checkpoint_id else {}),
+            }
+        ),
     }
     yield {"event": "end", "data": "{}"}
 
@@ -975,8 +1052,14 @@ async def _guarded_sse_stream(
     # HIGH-17: Shared mutable container so idle-timeout state fetch is reused by _stream_agent
     shared_state: dict[str, Any] = {}
     aiter_stream = _stream_agent(
-        graph, state, config, thread_id=thread_id, shared_state=shared_state,
-        session_id=session_id, context_limit=context_limit, user_id=user_id,
+        graph,
+        state,
+        config,
+        thread_id=thread_id,
+        shared_state=shared_state,
+        session_id=session_id,
+        context_limit=context_limit,
+        user_id=user_id,
     ).__aiter__()
 
     # H11: Subscribe to Redis cancel channel for cross-worker cancellation
@@ -995,7 +1078,7 @@ async def _guarded_sse_stream(
             pass
 
     try:
-        async with asyncio.timeout(STREAM_OVERALL_TIMEOUT_S):
+        async with asyncio.timeout(get_stream_overall_timeout_s()):
             while True:
                 if cancel_event and cancel_event.is_set():
                     yield {"event": "error", "data": json.dumps({"message": "Cancelled by user"})}
@@ -1005,7 +1088,7 @@ async def _guarded_sse_stream(
                 try:
                     event = await asyncio.wait_for(
                         anext(aiter_stream),
-                        timeout=STREAM_IDLE_TIMEOUT_S,
+                        timeout=get_stream_idle_timeout_s(),
                     )
                 except StopAsyncIteration:
                     break
@@ -1027,7 +1110,8 @@ async def _guarded_sse_stream(
                                 try:
                                     while True:
                                         remaining = await asyncio.wait_for(
-                                            anext(aiter_stream), timeout=5,
+                                            anext(aiter_stream),
+                                            timeout=5,
                                         )
                                         if remaining.get("event") == "interrupt":
                                             emitted_interrupt = True
@@ -1072,33 +1156,29 @@ async def _guarded_sse_stream(
 
                     log.warning(
                         "Stream idle timeout (%ds) for user %s, thread %s",
-                        STREAM_IDLE_TIMEOUT_S,
+                        get_stream_idle_timeout_s(),
                         user_id,
                         thread_id,
                     )
                     yield {
                         "event": "error",
-                        "data": json.dumps(
-                            {"message": "Stream timeout — response took too long"}
-                        ),
+                        "data": json.dumps({"message": "Stream timeout — response took too long"}),
                     }
                     yield {"event": "end", "data": "{}"}
                     return
 
                 # Chunk limit check
                 chunk_count += 1
-                if chunk_count > MAX_CHUNKS_PER_RESPONSE:
+                if chunk_count > get_max_chunks_per_response():
                     log.warning(
                         "Stream chunk limit (%d) exceeded for user %s, thread %s",
-                        MAX_CHUNKS_PER_RESPONSE,
+                        get_max_chunks_per_response(),
                         user_id,
                         thread_id,
                     )
                     yield {
                         "event": "error",
-                        "data": json.dumps(
-                            {"message": "Response exceeded maximum size"}
-                        ),
+                        "data": json.dumps({"message": "Response exceeded maximum size"}),
                     }
                     yield {"event": "end", "data": "{}"}
                     return
@@ -1113,15 +1193,13 @@ async def _guarded_sse_stream(
     except TimeoutError:
         log.warning(
             "Stream overall timeout (%ds) for user %s, thread %s",
-            STREAM_OVERALL_TIMEOUT_S,
+            get_stream_overall_timeout_s(),
             user_id,
             thread_id,
         )
         yield {
             "event": "error",
-            "data": json.dumps(
-                {"message": "Stream timeout — response took too long"}
-            ),
+            "data": json.dumps({"message": "Stream timeout — response took too long"}),
         }
         yield {"event": "end", "data": "{}"}
     finally:
@@ -1138,9 +1216,7 @@ async def _guarded_sse_stream(
         if emitted_interrupt and not emitted_run_finished:
             try:
                 if _rs.is_connected:
-                    await _rs.client.set(
-                        f"hitl_pending:{thread_id}", "1", ex=3600
-                    )
+                    await _rs.client.set(f"hitl_pending:{thread_id}", "1", ex=3600)
             except Exception:
                 pass
         # R2-10: Clear HITL pending flag when run completed without new interrupt
@@ -1164,9 +1240,12 @@ async def _guarded_sse_stream(
                 async with asyncio.timeout(5):
                     from sqlalchemy import update as sa_update
                     from ..models.chat_session import ChatSession as _CS
+
                     async with async_session_maker() as _db:
                         await _db.execute(
-                            sa_update(_CS).where(_CS.id == _tu["session_id"]).values(
+                            sa_update(_CS)
+                            .where(_CS.id == _tu["session_id"])
+                            .values(
                                 total_input_tokens=_CS.total_input_tokens + _tu["input_tokens"],
                                 total_output_tokens=_CS.total_output_tokens + _tu["output_tokens"],
                             )
@@ -1180,16 +1259,19 @@ async def _guarded_sse_stream(
                 async with asyncio.timeout(5):
                     from sqlalchemy import update as _sa_update, or_
                     from ..models.chat_session import ChatSession as _CSSum
+
                     async with async_session_maker() as _sum_db:
                         # R2-5: Use or_(IS NULL, < seq) to handle first-time summary
                         await _sum_db.execute(
-                            _sa_update(_CSSum).where(
+                            _sa_update(_CSSum)
+                            .where(
                                 _CSSum.id == _cs["session_id"],
                                 or_(
                                     _CSSum.summary_up_to_msg_seq.is_(None),
                                     _CSSum.summary_up_to_msg_seq < _cs["summary_seq"],
                                 ),
-                            ).values(
+                            )
+                            .values(
                                 context_summary=_cs["summary_text"],
                                 summary_up_to_msg_seq=_cs["summary_seq"],
                             )
@@ -1244,10 +1326,7 @@ async def chat(
             # 3. Build messages
             # HIGH-6: Only trust user messages from client-supplied history
             if request.conversation_history:
-                request.conversation_history = [
-                    entry for entry in request.conversation_history
-                    if entry.role == "user"
-                ]
+                request.conversation_history = [entry for entry in request.conversation_history if entry.role == "user"]
             messages = _history_to_langchain_messages(request.conversation_history)
             human_msg = _build_human_message(request.message, request.images)
             messages.append(human_msg)
@@ -1273,12 +1352,12 @@ async def chat(
             # 5. Run graph to completion (with timeout)
             timer = TelemetryTimer().start()
             try:
-                async with asyncio.timeout(STREAM_OVERALL_TIMEOUT_S):
+                async with asyncio.timeout(get_stream_overall_timeout_s()):
                     result = await graph.ainvoke(state, config=config)
             except TimeoutError:
                 logger.warning(
                     "Agent graph timed out (%ds) for user %s",
-                    STREAM_OVERALL_TIMEOUT_S,
+                    get_stream_overall_timeout_s(),
                     current_user.id,
                 )
                 AITelemetry.log_chat_request(
@@ -1422,10 +1501,7 @@ async def chat_stream(
         # 3. Build messages
         # HIGH-6: Only trust user messages from client-supplied history
         if request.conversation_history:
-            request.conversation_history = [
-                entry for entry in request.conversation_history
-                if entry.role == "user"
-            ]
+            request.conversation_history = [entry for entry in request.conversation_history if entry.role == "user"]
         messages = _history_to_langchain_messages(request.conversation_history)
         human_msg = _build_human_message(request.message, request.images)
         messages.append(human_msg)
@@ -1437,6 +1513,7 @@ async def chat_stream(
 
             # H15: Reject non-resume requests to threads awaiting HITL
             from ..services.redis_service import redis_service as _h15_rs
+
             if _h15_rs.is_connected:
                 try:
                     _hitl_flag = await _h15_rs.client.get(f"hitl_pending:{thread_id}")
@@ -1496,9 +1573,7 @@ async def chat_stream(
 
             if request.session_id:
                 # Verify ownership
-                sess_result = await db.execute(
-                    select(ChatSession).where(ChatSession.id == request.session_id)
-                )
+                sess_result = await db.execute(select(ChatSession).where(ChatSession.id == request.session_id))
                 sess = sess_result.scalar_one_or_none()
                 if sess is None:
                     raise HTTPException(
@@ -1527,7 +1602,9 @@ async def chat_stream(
                 )
 
                 count_q = (
-                    select(func.count()).select_from(ChatSession).where(
+                    select(func.count())
+                    .select_from(ChatSession)
+                    .where(
                         ChatSession.user_id == current_user.id,
                         ChatSession.is_archived.is_(False),
                     )
@@ -1546,9 +1623,7 @@ async def chat_stream(
                     oldest_ids = [row[0] for row in (await db.execute(oldest_q)).all()]
                     if oldest_ids:
                         await db.execute(
-                            update(ChatSession)
-                            .where(ChatSession.id.in_(oldest_ids))
-                            .values(is_archived=True)
+                            update(ChatSession).where(ChatSession.id.in_(oldest_ids)).values(is_archived=True)
                         )
 
                 now = utc_now()
@@ -1601,7 +1676,10 @@ async def chat_stream(
 
     return EventSourceResponse(
         _guarded_sse_stream(
-            graph, state, config, thread_id,
+            graph,
+            state,
+            config,
+            thread_id,
             user_id=str(current_user.id),
             check_interrupt=True,
             cleanup=_cleanup,
@@ -1636,11 +1714,10 @@ async def cancel_chat(
 
     # H11: Publish cancel across workers via Redis pub/sub
     from ..services.redis_service import redis_service
+
     if redis_service.is_connected:
         try:
-            await redis_service.publish(
-                f"cancel:{thread_id}", {"action": "cancel"}
-            )
+            await redis_service.publish(f"cancel:{thread_id}", {"action": "cancel"})
         except Exception:
             logger.debug("Failed to publish cancel to Redis", exc_info=True)
 
@@ -1679,7 +1756,10 @@ async def resume_chat(
 
     # Validate thread ownership (SA-001: require_existing for resume, CRIT-4: strict)
     await _validate_thread_owner(
-        request.thread_id, str(current_user.id), require_existing=True, strict=True,
+        request.thread_id,
+        str(current_user.id),
+        require_existing=True,
+        strict=True,
     )
 
     checkpointer = get_checkpointer()
@@ -1707,17 +1787,14 @@ async def resume_chat(
 
         try:
             timer = TelemetryTimer().start()
-            config: dict[str, Any] = {
-                "configurable": {"thread_id": request.thread_id}
-            }
+            config: dict[str, Any] = {"configurable": {"thread_id": request.thread_id}}
 
             try:
-                async with asyncio.timeout(STREAM_OVERALL_TIMEOUT_S):
-                    result = await graph.ainvoke(
-                        Command(resume=request.response), config=config
-                    )
+                async with asyncio.timeout(get_stream_overall_timeout_s()):
+                    result = await graph.ainvoke(Command(resume=request.response), config=config)
                 # R2-10: Clear HITL pending flag AFTER resume succeeds
                 from ..services.redis_service import redis_service as _h15_resume_rs
+
                 if _h15_resume_rs.is_connected:
                     try:
                         await _h15_resume_rs.client.delete(f"hitl_pending:{request.thread_id}")
@@ -1726,7 +1803,7 @@ async def resume_chat(
             except TimeoutError:
                 logger_ctx.warning(
                     "Agent resume timed out (%ds) for user %s, thread %s",
-                    STREAM_OVERALL_TIMEOUT_S,
+                    get_stream_overall_timeout_s(),
                     current_user.id,
                     request.thread_id,
                 )
@@ -1832,7 +1909,10 @@ async def resume_chat_stream(
 
     # Validate thread ownership (SA-001: require_existing for resume, CRIT-4: strict)
     await _validate_thread_owner(
-        request.thread_id, str(current_user.id), require_existing=True, strict=True,
+        request.thread_id,
+        str(current_user.id),
+        require_existing=True,
+        strict=True,
     )
 
     # R2-10: HITL pending flag is cleared by _guarded_sse_stream's finally block
@@ -1862,9 +1942,7 @@ async def resume_chat_stream(
         clear_tool_context()
         raise
 
-    config: dict[str, Any] = {
-        "configurable": {"thread_id": request.thread_id}
-    }
+    config: dict[str, Any] = {"configurable": {"thread_id": request.thread_id}}
     resume_cmd = Command(resume=request.response)
 
     # CR-004: Create cancel event for this stream (SA-R2-002: bounded dict)
@@ -1880,11 +1958,14 @@ async def resume_chat_stream(
     try:
         async with async_session_maker() as db:
             from ..models.chat_session import ChatSession
+
             sess_result = await db.execute(
-                select(ChatSession.id).where(
+                select(ChatSession.id)
+                .where(
                     ChatSession.thread_id == request.thread_id,
                     ChatSession.user_id == current_user.id,
-                ).limit(1)
+                )
+                .limit(1)
             )
             sess_row = sess_result.scalar_one_or_none()
             if sess_row:
@@ -1917,7 +1998,10 @@ async def resume_chat_stream(
 
     return EventSourceResponse(
         _guarded_sse_stream(
-            graph, resume_cmd, config, request.thread_id,
+            graph,
+            resume_cmd,
+            config,
+            request.thread_id,
             user_id=str(current_user.id),
             check_interrupt=True,  # DA-R4-005: detect chained interrupts during resume
             cleanup=_cleanup,
@@ -1980,11 +2064,7 @@ async def get_conversation_history(
 
     # Filter to user-visible turns (ReAct loop node names)
     _VISIBLE_NODES = {"agent", "tools"}
-    visible = [
-        cp
-        for cp in checkpoints
-        if cp.node in _VISIBLE_NODES and cp.message_count > 0
-    ]
+    visible = [cp for cp in checkpoints if cp.node in _VISIBLE_NODES and cp.message_count > 0]
     return {"checkpoints": visible[:limit]}
 
 
@@ -2017,7 +2097,10 @@ async def replay_conversation(
 
     # H4: validate thread ownership (SA-001: require_existing for replay, CRIT-4: strict)
     await _validate_thread_owner(
-        request.thread_id, str(current_user.id), require_existing=True, strict=True,
+        request.thread_id,
+        str(current_user.id),
+        require_existing=True,
+        strict=True,
     )
 
     checkpointer = get_checkpointer()
@@ -2102,7 +2185,10 @@ async def replay_conversation(
 
         return EventSourceResponse(
             _guarded_sse_stream(
-                graph, input_state, branch_config, branch_thread_id,
+                graph,
+                input_state,
+                branch_config,
+                branch_thread_id,
                 user_id=str(current_user.id),
                 check_interrupt=False,
                 cleanup=_cleanup,
@@ -2135,9 +2221,7 @@ async def replay_conversation(
                 "message_count": len(msgs),
                 "messages": [
                     {
-                        "role": (
-                            "assistant" if hasattr(m, "type") and m.type == "ai" else "user"
-                        ),
+                        "role": ("assistant" if hasattr(m, "type") and m.type == "ai" else "user"),
                         "content": m.content if hasattr(m, "content") else str(m),
                     }
                     for m in msgs

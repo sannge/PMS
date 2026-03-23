@@ -11,6 +11,7 @@ Revision ID: 20260314_folder_file_idx
 Revises: 20260314_doc_embed_failed
 Create Date: 2026-03-14
 """
+
 from alembic import op
 
 revision = "20260314_folder_file_idx"
@@ -22,17 +23,17 @@ depends_on = None
 def upgrade() -> None:
     op.execute("COMMIT")
     op.execute(
-        'CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_folder_files_folder_sort '
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_folder_files_folder_sort "
         'ON "FolderFiles" (folder_id, sort_order) '
-        'WHERE deleted_at IS NULL'
+        "WHERE deleted_at IS NULL"
     )
     op.execute(
-        'CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_folder_files_embedding_stale '
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_folder_files_embedding_stale "
         'ON "FolderFiles" (embedding_status) '
         "WHERE deleted_at IS NULL AND embedding_status IN ('stale', 'none', 'failed')"
     )
 
 
 def downgrade() -> None:
-    op.execute('DROP INDEX IF EXISTS ix_folder_files_embedding_stale')
-    op.execute('DROP INDEX IF EXISTS ix_folder_files_folder_sort')
+    op.execute("DROP INDEX IF EXISTS ix_folder_files_embedding_stale")
+    op.execute("DROP INDEX IF EXISTS ix_folder_files_folder_sort")

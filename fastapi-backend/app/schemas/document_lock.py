@@ -12,18 +12,14 @@ class LockHolder(BaseModel):
 
     user_id: str = Field(..., description="UUID of the lock holder")
     user_name: str = Field(..., description="Display name of the lock holder")
-    acquired_at: Optional[float] = Field(
-        None, description="Unix timestamp when lock was acquired"
-    )
+    acquired_at: Optional[float] = Field(None, description="Unix timestamp when lock was acquired")
 
 
 class DocumentLockResponse(BaseModel):
     """Schema for document lock status response."""
 
     is_locked: bool = Field(..., description="Whether the document is currently locked")
-    lock_holder: Optional[LockHolder] = Field(
-        None, description="Lock holder info if locked"
-    )
+    lock_holder: Optional[LockHolder] = Field(None, description="Lock holder info if locked")
 
 
 class ActiveLockItem(BaseModel):

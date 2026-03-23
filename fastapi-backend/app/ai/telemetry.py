@@ -150,9 +150,7 @@ class AITelemetry:
     ) -> None:
         """Log a chat completion request."""
         if cost_estimate is None:
-            cost_estimate = AITelemetry.estimate_cost(
-                provider, model, input_tokens, output_tokens
-            )
+            cost_estimate = AITelemetry.estimate_cost(provider, model, input_tokens, output_tokens)
         safe_error = _sanitize_error(error)
         AITelemetry._emit(
             "chat",
@@ -182,9 +180,7 @@ class AITelemetry:
     ) -> None:
         """Log an embedding batch operation."""
         if cost_estimate is None:
-            cost_estimate = AITelemetry.estimate_cost(
-                provider, model, total_tokens, 0
-            )
+            cost_estimate = AITelemetry.estimate_cost(provider, model, total_tokens, 0)
         safe_error = _sanitize_error(error)
         AITelemetry._emit(
             "embedding",

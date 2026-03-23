@@ -30,6 +30,7 @@ def _hash_code(code: str) -> str:
 def _check_bcrypt_available():
     try:
         from app.utils.security import get_password_hash
+
         get_password_hash("test")
         return True
     except Exception:
@@ -44,9 +45,7 @@ class TestLogin2FA:
     """Tests for the Login 2FA flow."""
 
     @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
-    async def test_login_returns_2fa_required(
-        self, client: AsyncClient, test_user: User
-    ):
+    async def test_login_returns_2fa_required(self, client: AsyncClient, test_user: User):
         """Valid credentials return 200 with requires_2fa=True."""
         response = await client.post(
             "/auth/login",
@@ -63,9 +62,7 @@ class TestLogin2FA:
         assert "message" in data
 
     @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
-    async def test_login_sends_email(
-        self, client: AsyncClient, test_user: User
-    ):
+    async def test_login_sends_email(self, client: AsyncClient, test_user: User):
         """Login calls send_login_code_email."""
         with patch(
             "app.services.auth_service.send_login_code_email",
@@ -89,9 +86,7 @@ class TestLogin2FA:
         assert call_args[0][1].isdigit()
 
     @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
-    async def test_login_stores_hashed_code(
-        self, client: AsyncClient, test_user: User, db_session: AsyncSession
-    ):
+    async def test_login_stores_hashed_code(self, client: AsyncClient, test_user: User, db_session: AsyncSession):
         """Login stores a SHA-256 hash of the code, not plaintext."""
         with patch(
             "app.services.auth_service.send_login_code_email",
@@ -120,9 +115,7 @@ class TestLogin2FA:
         assert test_user.verification_code != captured_code
 
     @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
-    async def test_login_invalid_credentials_no_code(
-        self, client: AsyncClient, test_user: User
-    ):
+    async def test_login_invalid_credentials_no_code(self, client: AsyncClient, test_user: User):
         """Wrong password returns 401, no 2FA code is generated."""
         response = await client.post(
             "/auth/login",
@@ -135,9 +128,7 @@ class TestLogin2FA:
         assert response.status_code == 401
 
     @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
-    async def test_login_unverified_email_403(
-        self, client: AsyncClient, db_session: AsyncSession
-    ):
+    async def test_login_unverified_email_403(self, client: AsyncClient, db_session: AsyncSession):
         """Login with email_verified=False returns 403."""
         user = User(
             id=uuid4(),
@@ -163,9 +154,7 @@ class TestLogin2FA:
         assert "not verified" in response.json()["detail"].lower()
 
     @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
-    async def test_verify_login_correct_code(
-        self, client: AsyncClient, db_session: AsyncSession
-    ):
+    async def test_verify_login_correct_code(self, client: AsyncClient, db_session: AsyncSession):
         """POST /auth/verify-login with correct code returns 200 + JWT."""
         code = "654321"
         user = User(
@@ -191,9 +180,7 @@ class TestLogin2FA:
         assert data["token_type"] == "bearer"
 
     @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
-    async def test_verify_login_wrong_code(
-        self, client: AsyncClient, db_session: AsyncSession
-    ):
+    async def test_verify_login_wrong_code(self, client: AsyncClient, db_session: AsyncSession):
         """Invalid code returns 400."""
         user = User(
             id=uuid4(),
@@ -216,9 +203,7 @@ class TestLogin2FA:
         assert "invalid" in response.json()["detail"].lower()
 
     @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
-    async def test_verify_login_expired_code(
-        self, client: AsyncClient, db_session: AsyncSession
-    ):
+    async def test_verify_login_expired_code(self, client: AsyncClient, db_session: AsyncSession):
         """Expired code returns 400."""
         user = User(
             id=uuid4(),
@@ -241,9 +226,7 @@ class TestLogin2FA:
         assert "expired" in response.json()["detail"].lower()
 
     @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
-    async def test_verify_login_brute_force(
-        self, client: AsyncClient, db_session: AsyncSession
-    ):
+    async def test_verify_login_brute_force(self, client: AsyncClient, db_session: AsyncSession):
         """5 wrong attempts clears the code (brute force protection)."""
         user = User(
             id=uuid4(),
@@ -274,9 +257,7 @@ class TestLogin2FA:
         assert user.verification_code_expires_at is None
 
     @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
-    async def test_verify_login_code_single_use(
-        self, client: AsyncClient, db_session: AsyncSession
-    ):
+    async def test_verify_login_code_single_use(self, client: AsyncClient, db_session: AsyncSession):
         """Code is cleared after successful verification (single-use)."""
         code = "654321"
         user = User(
@@ -306,9 +287,7 @@ class TestLogin2FA:
         assert r2.status_code == 400
 
     @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
-    async def test_login_regenerates_code(
-        self, client: AsyncClient, test_user: User, db_session: AsyncSession
-    ):
+    async def test_login_regenerates_code(self, client: AsyncClient, test_user: User, db_session: AsyncSession):
         """Calling login again overwrites the previous code."""
         with patch(
             "app.services.auth_service.send_login_code_email",
@@ -348,9 +327,7 @@ class TestLogin2FA:
         assert test_user.verification_code == _hash_code(codes[1])
 
     @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
-    async def test_login_2fa_email_distinct_subject(
-        self, client: AsyncClient, test_user: User
-    ):
+    async def test_login_2fa_email_distinct_subject(self, client: AsyncClient, test_user: User):
         """Login 2FA email uses a distinct subject from registration verification."""
         from app.services.email_service import send_login_code_email, send_verification_email
 
@@ -362,9 +339,7 @@ class TestLogin2FA:
         # Both are distinct functions producing different email content
 
     @pytest.mark.skipif(not _bcrypt_available, reason="bcrypt not properly configured")
-    async def test_verify_login_nonexistent_email(
-        self, client: AsyncClient
-    ):
+    async def test_verify_login_nonexistent_email(self, client: AsyncClient):
         """verify-login with non-existent email returns 400 (no user enumeration)."""
         response = await client.post(
             "/auth/verify-login",

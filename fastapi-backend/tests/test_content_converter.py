@@ -19,6 +19,7 @@ from app.services.content_converter import (
 # Helper: wrap content in a doc node
 # ---------------------------------------------------------------------------
 
+
 def doc(*content: dict) -> dict:
     return {"type": "doc", "content": list(content)}
 
@@ -133,6 +134,7 @@ def horizontal_rule() -> dict:
 # Markdown Tests
 # ===========================================================================
 
+
 class TestMarkdownEmpty:
     def test_empty_doc(self):
         assert tiptap_json_to_markdown(doc()) == ""
@@ -153,10 +155,12 @@ class TestMarkdownParagraph:
         assert result == "Hello world\n\n"
 
     def test_multiple_paragraphs(self):
-        result = tiptap_json_to_markdown(doc(
-            paragraph(text("First")),
-            paragraph(text("Second")),
-        ))
+        result = tiptap_json_to_markdown(
+            doc(
+                paragraph(text("First")),
+                paragraph(text("Second")),
+            )
+        )
         assert result == "First\n\n" + "Second\n\n"
 
     def test_empty_paragraph(self):
@@ -216,56 +220,76 @@ class TestMarkdownMarks:
         assert result == "highlighted\n\n"
 
     def test_bold_and_italic(self):
-        result = tiptap_json_to_markdown(doc(paragraph(
-            text("bold", [bold()]),
-            text(" "),
-            text("italic", [italic()]),
-        )))
+        result = tiptap_json_to_markdown(
+            doc(
+                paragraph(
+                    text("bold", [bold()]),
+                    text(" "),
+                    text("italic", [italic()]),
+                )
+            )
+        )
         assert result == "**bold** _italic_\n\n"
 
     def test_combined_bold_italic_link(self):
-        result = tiptap_json_to_markdown(doc(paragraph(
-            text("click me", [bold(), italic(), link("https://ex.com")]),
-        )))
+        result = tiptap_json_to_markdown(
+            doc(
+                paragraph(
+                    text("click me", [bold(), italic(), link("https://ex.com")]),
+                )
+            )
+        )
         # Marks applied in order: bold wraps text, italic wraps bold, link wraps all
         assert result == "[_**click me**_](https://ex.com)\n\n"
 
 
 class TestMarkdownBulletList:
     def test_simple_bullet_list(self):
-        result = tiptap_json_to_markdown(doc(bullet_list(
-            list_item(paragraph(text("one"))),
-            list_item(paragraph(text("two"))),
-        )))
+        result = tiptap_json_to_markdown(
+            doc(
+                bullet_list(
+                    list_item(paragraph(text("one"))),
+                    list_item(paragraph(text("two"))),
+                )
+            )
+        )
         assert "- one\n" in result
         assert "- two\n" in result
 
     def test_nested_bullet_list(self):
-        result = tiptap_json_to_markdown(doc(bullet_list(
-            list_item(
-                paragraph(text("parent")),
+        result = tiptap_json_to_markdown(
+            doc(
                 bullet_list(
-                    list_item(paragraph(text("child"))),
-                ),
-            ),
-        )))
+                    list_item(
+                        paragraph(text("parent")),
+                        bullet_list(
+                            list_item(paragraph(text("child"))),
+                        ),
+                    ),
+                )
+            )
+        )
         assert "- parent\n" in result
         assert "  - child\n" in result
 
     def test_deeply_nested_list(self):
-        result = tiptap_json_to_markdown(doc(bullet_list(
-            list_item(
-                paragraph(text("level 0")),
+        result = tiptap_json_to_markdown(
+            doc(
                 bullet_list(
                     list_item(
-                        paragraph(text("level 1")),
+                        paragraph(text("level 0")),
                         bullet_list(
-                            list_item(paragraph(text("level 2"))),
+                            list_item(
+                                paragraph(text("level 1")),
+                                bullet_list(
+                                    list_item(paragraph(text("level 2"))),
+                                ),
+                            ),
                         ),
                     ),
-                ),
-            ),
-        )))
+                )
+            )
+        )
         assert "- level 0\n" in result
         assert "  - level 1\n" in result
         assert "    - level 2\n" in result
@@ -273,32 +297,48 @@ class TestMarkdownBulletList:
 
 class TestMarkdownOrderedList:
     def test_simple_ordered_list(self):
-        result = tiptap_json_to_markdown(doc(ordered_list(
-            list_item(paragraph(text("first"))),
-            list_item(paragraph(text("second"))),
-        )))
+        result = tiptap_json_to_markdown(
+            doc(
+                ordered_list(
+                    list_item(paragraph(text("first"))),
+                    list_item(paragraph(text("second"))),
+                )
+            )
+        )
         assert "1. first\n" in result
         assert "2. second\n" in result
 
 
 class TestMarkdownTaskList:
     def test_task_item_checked(self):
-        result = tiptap_json_to_markdown(doc(task_list(
-            task_item(True, paragraph(text("done"))),
-        )))
+        result = tiptap_json_to_markdown(
+            doc(
+                task_list(
+                    task_item(True, paragraph(text("done"))),
+                )
+            )
+        )
         assert "- [x] done\n" in result
 
     def test_task_item_unchecked(self):
-        result = tiptap_json_to_markdown(doc(task_list(
-            task_item(False, paragraph(text("pending"))),
-        )))
+        result = tiptap_json_to_markdown(
+            doc(
+                task_list(
+                    task_item(False, paragraph(text("pending"))),
+                )
+            )
+        )
         assert "- [ ] pending\n" in result
 
     def test_mixed_task_list(self):
-        result = tiptap_json_to_markdown(doc(task_list(
-            task_item(True, paragraph(text("done"))),
-            task_item(False, paragraph(text("pending"))),
-        )))
+        result = tiptap_json_to_markdown(
+            doc(
+                task_list(
+                    task_item(True, paragraph(text("done"))),
+                    task_item(False, paragraph(text("pending"))),
+                )
+            )
+        )
         assert "- [x] done\n" in result
         assert "- [ ] pending\n" in result
 
@@ -330,26 +370,34 @@ class TestMarkdownBlockquote:
         assert "> quoted text" in result
 
     def test_multiline_blockquote(self):
-        result = tiptap_json_to_markdown(doc(blockquote(
-            paragraph(text("line one")),
-            paragraph(text("line two")),
-        )))
+        result = tiptap_json_to_markdown(
+            doc(
+                blockquote(
+                    paragraph(text("line one")),
+                    paragraph(text("line two")),
+                )
+            )
+        )
         lines = [l for l in result.strip().split("\n") if l.strip()]
         assert all(l.startswith(">") for l in lines)
 
 
 class TestMarkdownTable:
     def test_simple_table(self):
-        result = tiptap_json_to_markdown(doc(table(
-            table_row(
-                table_header(paragraph(text("H1"))),
-                table_header(paragraph(text("H2"))),
-            ),
-            table_row(
-                table_cell(paragraph(text("A"))),
-                table_cell(paragraph(text("B"))),
-            ),
-        )))
+        result = tiptap_json_to_markdown(
+            doc(
+                table(
+                    table_row(
+                        table_header(paragraph(text("H1"))),
+                        table_header(paragraph(text("H2"))),
+                    ),
+                    table_row(
+                        table_cell(paragraph(text("A"))),
+                        table_cell(paragraph(text("B"))),
+                    ),
+                )
+            )
+        )
         assert "| H1 | H2 |" in result
         assert "| --- | --- |" in result
         assert "| A | B |" in result
@@ -363,20 +411,22 @@ class TestMarkdownHorizontalRule:
 
 class TestMarkdownHardBreak:
     def test_hard_break(self):
-        result = tiptap_json_to_markdown(doc(paragraph(
-            text("before"),
-            hard_break(),
-            text("after"),
-        )))
+        result = tiptap_json_to_markdown(
+            doc(
+                paragraph(
+                    text("before"),
+                    hard_break(),
+                    text("after"),
+                )
+            )
+        )
         assert "before  \nafter" in result
 
 
 class TestMarkdownUnknownNode:
     def test_unknown_node_renders_children(self):
         """Unknown node types should render their children without crashing."""
-        result = tiptap_json_to_markdown(doc(
-            {"type": "customWidget", "content": [paragraph(text("inner"))]}
-        ))
+        result = tiptap_json_to_markdown(doc({"type": "customWidget", "content": [paragraph(text("inner"))]}))
         assert "inner" in result
 
     def test_unknown_node_no_content(self):
@@ -388,6 +438,7 @@ class TestMarkdownUnknownNode:
 # ===========================================================================
 # Plain Text Tests
 # ===========================================================================
+
 
 class TestPlainTextBasic:
     def test_empty_doc(self):
@@ -412,14 +463,18 @@ class TestPlainTextMarksStripped:
         assert "**" not in result
 
     def test_all_marks_stripped(self):
-        result = tiptap_json_to_plain_text(doc(paragraph(
-            text("b", [bold()]),
-            text("i", [italic()]),
-            text("s", [strike()]),
-            text("c", [code_mark()]),
-            text("u", [underline()]),
-            text("l", [link("http://x.com")]),
-        )))
+        result = tiptap_json_to_plain_text(
+            doc(
+                paragraph(
+                    text("b", [bold()]),
+                    text("i", [italic()]),
+                    text("s", [strike()]),
+                    text("c", [code_mark()]),
+                    text("u", [underline()]),
+                    text("l", [link("http://x.com")]),
+                )
+            )
+        )
         assert result == "biscul"
 
 
@@ -430,27 +485,37 @@ class TestPlainTextBlocks:
         assert "```" not in result
 
     def test_multiple_paragraphs(self):
-        result = tiptap_json_to_plain_text(doc(
-            paragraph(text("First")),
-            paragraph(text("Second")),
-        ))
+        result = tiptap_json_to_plain_text(
+            doc(
+                paragraph(text("First")),
+                paragraph(text("Second")),
+            )
+        )
         assert "First" in result
         assert "Second" in result
         assert "\n" in result
 
     def test_hard_break(self):
-        result = tiptap_json_to_plain_text(doc(paragraph(
-            text("before"),
-            hard_break(),
-            text("after"),
-        )))
+        result = tiptap_json_to_plain_text(
+            doc(
+                paragraph(
+                    text("before"),
+                    hard_break(),
+                    text("after"),
+                )
+            )
+        )
         assert "before\nafter" in result
 
     def test_task_list_text_only(self):
-        result = tiptap_json_to_plain_text(doc(task_list(
-            task_item(True, paragraph(text("done"))),
-            task_item(False, paragraph(text("pending"))),
-        )))
+        result = tiptap_json_to_plain_text(
+            doc(
+                task_list(
+                    task_item(True, paragraph(text("done"))),
+                    task_item(False, paragraph(text("pending"))),
+                )
+            )
+        )
         assert "done" in result
         assert "pending" in result
         assert "[" not in result
@@ -460,15 +525,24 @@ class TestPlainTextBlocks:
 # Canvas Markdown Tests
 # ===========================================================================
 
+
 class TestCanvasMarkdown:
     def test_canvas_single_container(self):
         canvas = {
-            "format": "canvas", "version": 1,
+            "format": "canvas",
+            "version": 1,
             "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
-            "containers": [{
-                "id": "c1", "x": 50, "y": 50, "width": 600, "minWidth": 200, "zIndex": 1,
-                "content": doc(paragraph(text("Hello canvas")))
-            }]
+            "containers": [
+                {
+                    "id": "c1",
+                    "x": 50,
+                    "y": 50,
+                    "width": 600,
+                    "minWidth": 200,
+                    "zIndex": 1,
+                    "content": doc(paragraph(text("Hello canvas"))),
+                }
+            ],
         }
         result = tiptap_json_to_markdown(canvas)
         assert "## Section 1" in result
@@ -476,14 +550,29 @@ class TestCanvasMarkdown:
 
     def test_canvas_multi_container(self):
         canvas = {
-            "format": "canvas", "version": 1,
+            "format": "canvas",
+            "version": 1,
             "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
             "containers": [
-                {"id": "c1", "x": 50, "y": 50, "width": 600, "minWidth": 200, "zIndex": 1,
-                 "content": doc(paragraph(text("First")))},
-                {"id": "c2", "x": 700, "y": 50, "width": 600, "minWidth": 200, "zIndex": 2,
-                 "content": doc(paragraph(text("Second")))},
-            ]
+                {
+                    "id": "c1",
+                    "x": 50,
+                    "y": 50,
+                    "width": 600,
+                    "minWidth": 200,
+                    "zIndex": 1,
+                    "content": doc(paragraph(text("First"))),
+                },
+                {
+                    "id": "c2",
+                    "x": 700,
+                    "y": 50,
+                    "width": 600,
+                    "minWidth": 200,
+                    "zIndex": 2,
+                    "content": doc(paragraph(text("Second"))),
+                },
+            ],
         }
         result = tiptap_json_to_markdown(canvas)
         assert "## Section 1" in result
@@ -492,75 +581,113 @@ class TestCanvasMarkdown:
         assert "Second" in result
 
     def test_canvas_empty_containers(self):
-        canvas = {"format": "canvas", "version": 1,
-                  "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1}, "containers": []}
+        canvas = {
+            "format": "canvas",
+            "version": 1,
+            "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
+            "containers": [],
+        }
         assert tiptap_json_to_markdown(canvas) == ""
 
     def test_canvas_container_empty_content(self):
         canvas = {
-            "format": "canvas", "version": 1,
+            "format": "canvas",
+            "version": 1,
             "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
-            "containers": [{"id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1,
-                           "content": doc()}]
+            "containers": [{"id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1, "content": doc()}],
         }
         assert tiptap_json_to_markdown(canvas) == ""
 
     def test_canvas_skips_non_doc_content(self):
         canvas = {
-            "format": "canvas", "version": 1,
+            "format": "canvas",
+            "version": 1,
             "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
-            "containers": [{"id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1,
-                           "content": {"type": "not-a-doc"}}]
+            "containers": [
+                {
+                    "id": "c1",
+                    "x": 0,
+                    "y": 0,
+                    "width": 600,
+                    "minWidth": 200,
+                    "zIndex": 1,
+                    "content": {"type": "not-a-doc"},
+                }
+            ],
         }
         assert tiptap_json_to_markdown(canvas) == ""
 
     def test_canvas_container_missing_content(self):
         """Container without content field should be skipped gracefully."""
         canvas = {
-            "format": "canvas", "version": 1,
+            "format": "canvas",
+            "version": 1,
             "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
-            "containers": [{"id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1}]
+            "containers": [{"id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1}],
         }
         assert tiptap_json_to_markdown(canvas) == ""
 
     def test_canvas_container_null_content(self):
         """Container with content=None should be skipped."""
         canvas = {
-            "format": "canvas", "version": 1,
+            "format": "canvas",
+            "version": 1,
             "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
-            "containers": [{"id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1, "content": None}]
+            "containers": [{"id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1, "content": None}],
         }
         assert tiptap_json_to_markdown(canvas) == ""
 
     def test_canvas_with_formatting_marks(self):
         """Bold/italic text in canvas containers should be preserved in markdown."""
         canvas = {
-            "format": "canvas", "version": 1,
+            "format": "canvas",
+            "version": 1,
             "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
-            "containers": [{
-                "id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1,
-                "content": doc(paragraph(text("bold", [bold()])))
-            }]
+            "containers": [
+                {
+                    "id": "c1",
+                    "x": 0,
+                    "y": 0,
+                    "width": 600,
+                    "minWidth": 200,
+                    "zIndex": 1,
+                    "content": doc(paragraph(text("bold", [bold()]))),
+                }
+            ],
         }
         result = tiptap_json_to_markdown(canvas)
         assert "**bold**" in result
 
     def test_canvas_containers_not_a_list(self):
         """Canvas with containers as non-list should return empty."""
-        canvas = {"format": "canvas", "version": 1,
-                  "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
-                  "containers": "not-a-list"}
+        canvas = {
+            "format": "canvas",
+            "version": 1,
+            "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
+            "containers": "not-a-list",
+        }
         assert tiptap_json_to_markdown(canvas) == ""
 
     def test_canvas_container_non_dict_items(self):
         """Non-dict items in containers list should be skipped gracefully."""
         canvas = {
-            "format": "canvas", "version": 1,
+            "format": "canvas",
+            "version": 1,
             "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
-            "containers": [42, "not-a-dict", None, {
-                "id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1,
-                "content": doc(paragraph(text("valid")))
-            }]
+            "containers": [
+                42,
+                "not-a-dict",
+                None,
+                {
+                    "id": "c1",
+                    "x": 0,
+                    "y": 0,
+                    "width": 600,
+                    "minWidth": 200,
+                    "zIndex": 1,
+                    "content": doc(paragraph(text("valid"))),
+                },
+            ],
         }
         result = tiptap_json_to_markdown(canvas)
         assert "valid" in result
@@ -570,29 +697,53 @@ class TestCanvasMarkdown:
 # Canvas Plain Text Tests
 # ===========================================================================
 
+
 class TestCanvasPlainText:
     def test_canvas_single_container(self):
         canvas = {
-            "format": "canvas", "version": 1,
+            "format": "canvas",
+            "version": 1,
             "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
-            "containers": [{
-                "id": "c1", "x": 50, "y": 50, "width": 600, "minWidth": 200, "zIndex": 1,
-                "content": doc(paragraph(text("Hello")))
-            }]
+            "containers": [
+                {
+                    "id": "c1",
+                    "x": 50,
+                    "y": 50,
+                    "width": 600,
+                    "minWidth": 200,
+                    "zIndex": 1,
+                    "content": doc(paragraph(text("Hello"))),
+                }
+            ],
         }
         result = tiptap_json_to_plain_text(canvas)
         assert result == "Hello"
 
     def test_canvas_multi_container_joined(self):
         canvas = {
-            "format": "canvas", "version": 1,
+            "format": "canvas",
+            "version": 1,
             "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
             "containers": [
-                {"id": "c1", "x": 50, "y": 50, "width": 600, "minWidth": 200, "zIndex": 1,
-                 "content": doc(paragraph(text("Hello")))},
-                {"id": "c2", "x": 700, "y": 50, "width": 600, "minWidth": 200, "zIndex": 2,
-                 "content": doc(paragraph(text("World")))},
-            ]
+                {
+                    "id": "c1",
+                    "x": 50,
+                    "y": 50,
+                    "width": 600,
+                    "minWidth": 200,
+                    "zIndex": 1,
+                    "content": doc(paragraph(text("Hello"))),
+                },
+                {
+                    "id": "c2",
+                    "x": 700,
+                    "y": 50,
+                    "width": 600,
+                    "minWidth": 200,
+                    "zIndex": 2,
+                    "content": doc(paragraph(text("World"))),
+                },
+            ],
         }
         result = tiptap_json_to_plain_text(canvas)
         assert "Hello" in result
@@ -600,44 +751,64 @@ class TestCanvasPlainText:
         assert "Section" not in result
 
     def test_canvas_empty(self):
-        canvas = {"format": "canvas", "version": 1,
-                  "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1}, "containers": []}
+        canvas = {
+            "format": "canvas",
+            "version": 1,
+            "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
+            "containers": [],
+        }
         assert tiptap_json_to_plain_text(canvas) == ""
 
     def test_canvas_container_missing_content_plain(self):
         """Container without content field should be skipped in plain text."""
         canvas = {
-            "format": "canvas", "version": 1,
+            "format": "canvas",
+            "version": 1,
             "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
-            "containers": [{"id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1}]
+            "containers": [{"id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1}],
         }
         assert tiptap_json_to_plain_text(canvas) == ""
 
     def test_canvas_container_null_content_plain(self):
         """Container with content=None should be skipped in plain text."""
         canvas = {
-            "format": "canvas", "version": 1,
+            "format": "canvas",
+            "version": 1,
             "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
-            "containers": [{"id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1, "content": None}]
+            "containers": [{"id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1, "content": None}],
         }
         assert tiptap_json_to_plain_text(canvas) == ""
 
     def test_canvas_containers_not_a_list_plain(self):
         """Canvas with containers as non-list should return empty in plain text."""
-        canvas = {"format": "canvas", "version": 1,
-                  "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
-                  "containers": "not-a-list"}
+        canvas = {
+            "format": "canvas",
+            "version": 1,
+            "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
+            "containers": "not-a-list",
+        }
         assert tiptap_json_to_plain_text(canvas) == ""
 
     def test_canvas_container_non_dict_items_plain(self):
         """Non-dict items in containers list should be skipped in plain text."""
         canvas = {
-            "format": "canvas", "version": 1,
+            "format": "canvas",
+            "version": 1,
             "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
-            "containers": [42, "not-a-dict", None, {
-                "id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1,
-                "content": doc(paragraph(text("valid")))
-            }]
+            "containers": [
+                42,
+                "not-a-dict",
+                None,
+                {
+                    "id": "c1",
+                    "x": 0,
+                    "y": 0,
+                    "width": 600,
+                    "minWidth": 200,
+                    "zIndex": 1,
+                    "content": doc(paragraph(text("valid"))),
+                },
+            ],
         }
         result = tiptap_json_to_plain_text(canvas)
         assert result == "valid"
@@ -664,28 +835,46 @@ from app.services.document_service import extract_attachment_ids
 class TestCanvasAttachmentIds:
     def test_extract_attachment_ids_canvas(self):
         canvas = {
-            "format": "canvas", "version": 1,
+            "format": "canvas",
+            "version": 1,
             "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
-            "containers": [{
-                "id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1,
-                "content": {"type": "doc", "content": [
-                    {"type": "image", "attrs": {"src": "...", "attachmentId": "att-123"}}
-                ]}
-            }]
+            "containers": [
+                {
+                    "id": "c1",
+                    "x": 0,
+                    "y": 0,
+                    "width": 600,
+                    "minWidth": 200,
+                    "zIndex": 1,
+                    "content": {
+                        "type": "doc",
+                        "content": [{"type": "image", "attrs": {"src": "...", "attachmentId": "att-123"}}],
+                    },
+                }
+            ],
         }
         ids = extract_attachment_ids(json.dumps(canvas))
         assert ids == {"att-123"}
 
     def test_extract_attachment_ids_canvas_no_images(self):
         canvas = {
-            "format": "canvas", "version": 1,
+            "format": "canvas",
+            "version": 1,
             "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
-            "containers": [{
-                "id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1,
-                "content": {"type": "doc", "content": [
-                    {"type": "paragraph", "content": [{"type": "text", "text": "No images"}]}
-                ]}
-            }]
+            "containers": [
+                {
+                    "id": "c1",
+                    "x": 0,
+                    "y": 0,
+                    "width": 600,
+                    "minWidth": 200,
+                    "zIndex": 1,
+                    "content": {
+                        "type": "doc",
+                        "content": [{"type": "paragraph", "content": [{"type": "text", "text": "No images"}]}],
+                    },
+                }
+            ],
         }
         ids = extract_attachment_ids(json.dumps(canvas))
         assert ids == set()
@@ -738,15 +927,26 @@ class TestCanvasAttachmentIds:
     def test_extract_attachment_ids_drawio_in_canvas(self):
         """Drawio nodes inside canvas containers should be collected."""
         canvas = {
-            "format": "canvas", "version": 1,
+            "format": "canvas",
+            "version": 1,
             "viewport": {"scrollX": 0, "scrollY": 0, "zoom": 1},
-            "containers": [{
-                "id": "c1", "x": 0, "y": 0, "width": 600, "minWidth": 200, "zIndex": 1,
-                "content": {"type": "doc", "content": [
-                    {"type": "drawio", "attrs": {"data": "<xml/>", "attachmentId": "drawio-canvas-001"}},
-                    {"type": "image", "attrs": {"src": "...", "attachmentId": "img-canvas-001"}},
-                ]}
-            }]
+            "containers": [
+                {
+                    "id": "c1",
+                    "x": 0,
+                    "y": 0,
+                    "width": 600,
+                    "minWidth": 200,
+                    "zIndex": 1,
+                    "content": {
+                        "type": "doc",
+                        "content": [
+                            {"type": "drawio", "attrs": {"data": "<xml/>", "attachmentId": "drawio-canvas-001"}},
+                            {"type": "image", "attrs": {"src": "...", "attachmentId": "img-canvas-001"}},
+                        ],
+                    },
+                }
+            ],
         }
         ids = extract_attachment_ids(json.dumps(canvas))
         assert ids == {"drawio-canvas-001", "img-canvas-001"}

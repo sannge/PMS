@@ -103,9 +103,7 @@ async def create_project(
         app_uuid = UUID(resolved_app_id)  # type: ignore[arg-type]
 
         # Load application for display name
-        app_result = await db.execute(
-            select(Application).where(Application.id == app_uuid)
-        )
+        app_result = await db.execute(select(Application).where(Application.id == app_uuid))
         application = app_result.scalar_one_or_none()
         if not application:
             return f"Error: Application '{app}' not found."
@@ -277,9 +275,7 @@ async def update_project(
             return error
         proj_uuid = UUID(resolved_id)  # type: ignore[arg-type]
 
-        result = await db.execute(
-            select(Project).where(Project.id == proj_uuid)
-        )
+        result = await db.execute(select(Project).where(Project.id == proj_uuid))
         proj = result.scalar_one_or_none()
         if not proj:
             return f"Error: Project '{project}' not found."
@@ -343,9 +339,7 @@ async def update_project(
             if not app_member_check or app_member_check.role not in ("owner", "editor"):
                 return "Access denied: you no longer have permission to update this project."
 
-            result = await db.execute(
-                select(Project).where(Project.id == proj_uuid)
-            )
+            result = await db.execute(select(Project).where(Project.id == proj_uuid))
             proj = result.scalar_one_or_none()
             if not proj:
                 return f"Error: Project '{project}' no longer exists."
@@ -392,9 +386,7 @@ async def delete_project(
             return error
         proj_uuid = UUID(resolved_id)  # type: ignore[arg-type]
 
-        result = await db.execute(
-            select(Project).where(Project.id == proj_uuid)
-        )
+        result = await db.execute(select(Project).where(Project.id == proj_uuid))
         proj = result.scalar_one_or_none()
         if not proj:
             return f"Error: Project '{project}' not found."
@@ -427,16 +419,10 @@ async def delete_project(
         is_project_admin = proj_member is not None and proj_member.role == "admin"
 
         if not is_app_owner and not is_project_admin:
-            return (
-                "Access denied: you must be an application Owner or project Admin "
-                "to delete projects."
-            )
+            return "Access denied: you must be an application Owner or project Admin to delete projects."
 
     # Build confirmation with extra cascade warning
-    summary = (
-        f"DELETE project '{project_name}' ({project_key}) "
-        f"and all its contents (irreversible)"
-    )
+    summary = f"DELETE project '{project_name}' ({project_key}) and all its contents (irreversible)"
 
     confirmation: dict[str, Any] = {
         "type": "confirmation",
@@ -471,9 +457,7 @@ async def delete_project(
                 )
             )
             app_member_check = app_member_result.scalar_one_or_none()
-            is_app_owner_check = (
-                app_member_check is not None and app_member_check.role == "owner"
-            )
+            is_app_owner_check = app_member_check is not None and app_member_check.role == "owner"
 
             proj_member_result = await db.execute(
                 select(ProjectMember).where(
@@ -482,16 +466,12 @@ async def delete_project(
                 )
             )
             proj_member_check = proj_member_result.scalar_one_or_none()
-            is_project_admin_check = (
-                proj_member_check is not None and proj_member_check.role == "admin"
-            )
+            is_project_admin_check = proj_member_check is not None and proj_member_check.role == "admin"
 
             if not is_app_owner_check and not is_project_admin_check:
                 return "Access denied: you no longer have permission to delete this project."
 
-            result = await db.execute(
-                select(Project).where(Project.id == proj_uuid)
-            )
+            result = await db.execute(select(Project).where(Project.id == proj_uuid))
             proj = result.scalar_one_or_none()
             if not proj:
                 return f"Error: Project '{project}' no longer exists."
@@ -499,10 +479,7 @@ async def delete_project(
             await db.delete(proj)
             await db.flush()
 
-            return (
-                f"Project '{project_name}' ({project_key}) and all its contents "
-                f"have been permanently deleted."
-            )
+            return f"Project '{project_name}' ({project_key}) and all its contents have been permanently deleted."
 
         except Exception as e:
             logger.exception("delete_project failed: %s", e)

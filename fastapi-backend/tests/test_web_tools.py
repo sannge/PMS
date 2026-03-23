@@ -46,10 +46,18 @@ def _setup_context(**overrides: object) -> dict:
         "provider_registry": MagicMock(),
     }
     ctx.update(overrides)
-    set_tool_context(**{k: ctx[k] for k in (
-        "user_id", "accessible_app_ids", "accessible_project_ids",
-        "db_session_factory", "provider_registry",
-    )})
+    set_tool_context(
+        **{
+            k: ctx[k]
+            for k in (
+                "user_id",
+                "accessible_app_ids",
+                "accessible_project_ids",
+                "db_session_factory",
+                "provider_registry",
+            )
+        }
+    )
     return ctx
 
 
@@ -60,6 +68,7 @@ def _clear() -> None:
 def _make_rate_limit_result(allowed: bool = True) -> RateLimitResult:
     """Build a RateLimitResult stub."""
     from datetime import datetime, timezone
+
     return RateLimitResult(
         allowed=allowed,
         remaining=5 if allowed else 0,
@@ -71,8 +80,10 @@ def _make_rate_limit_result(allowed: bool = True) -> RateLimitResult:
 
 def _mock_getaddrinfo(ip: str):
     """Return a mock getaddrinfo that resolves to *ip*."""
+
     def _getaddrinfo(hostname, port, family=0, type_=0):
         return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", (ip, 0))]
+
     return _getaddrinfo
 
 
@@ -82,7 +93,6 @@ def _mock_getaddrinfo(ip: str):
 
 
 class TestSSRFValidation:
-
     @pytest.mark.asyncio
     async def test_ssrf_blocks_metadata_ip(self):
         """169.254.169.254 (cloud metadata) must be blocked."""
@@ -166,19 +176,14 @@ class TestSSRFValidation:
 
 
 class TestWebRateLimits:
-
     @pytest.mark.asyncio
     async def test_search_rate_limited(self):
         """web_search returns error when rate limit is exceeded."""
         _setup_context()
         try:
             mock_rl = MagicMock()
-            mock_rl.check_and_increment = AsyncMock(
-                return_value=_make_rate_limit_result(allowed=False)
-            )
-            with patch(
-                "app.ai.rate_limiter.get_rate_limiter", return_value=mock_rl
-            ):
+            mock_rl.check_and_increment = AsyncMock(return_value=_make_rate_limit_result(allowed=False))
+            with patch("app.ai.rate_limiter.get_rate_limiter", return_value=mock_rl):
                 result = await web_search.ainvoke({"query": "test query"})
             assert "Rate limit exceeded" in result
         finally:
@@ -190,13 +195,10 @@ class TestWebRateLimits:
         _setup_context()
         try:
             mock_rl = MagicMock()
-            mock_rl.check_and_increment = AsyncMock(
-                return_value=_make_rate_limit_result(allowed=False)
-            )
-            with patch(
-                "socket.getaddrinfo", _mock_getaddrinfo("8.8.8.8")
-            ), patch(
-                "app.ai.rate_limiter.get_rate_limiter", return_value=mock_rl
+            mock_rl.check_and_increment = AsyncMock(return_value=_make_rate_limit_result(allowed=False))
+            with (
+                patch("socket.getaddrinfo", _mock_getaddrinfo("8.8.8.8")),
+                patch("app.ai.rate_limiter.get_rate_limiter", return_value=mock_rl),
             ):
                 result = await scrape_url.ainvoke({"url": "https://example.com"})
             assert "Rate limit exceeded" in result
@@ -210,25 +212,21 @@ class TestWebRateLimits:
 
 
 class TestWebSearch:
-
     @pytest.mark.asyncio
     async def test_search_returns_formatted(self):
         """web_search formats DDGS results with numbered titles and snippets."""
         _setup_context()
         try:
             mock_rl = MagicMock()
-            mock_rl.check_and_increment = AsyncMock(
-                return_value=_make_rate_limit_result(allowed=True)
-            )
+            mock_rl.check_and_increment = AsyncMock(return_value=_make_rate_limit_result(allowed=True))
             mock_results = [
                 {"title": "Example Page", "href": "https://example.com", "body": "A snippet."},
                 {"title": "Another Page", "href": "https://another.com", "body": "More info."},
             ]
-            with patch(
-                "app.ai.rate_limiter.get_rate_limiter", return_value=mock_rl
-            ), patch(
-                "duckduckgo_search.DDGS"
-            ) as MockDDGS:
+            with (
+                patch("app.ai.rate_limiter.get_rate_limiter", return_value=mock_rl),
+                patch("duckduckgo_search.DDGS") as MockDDGS,
+            ):
                 mock_instance = MockDDGS.return_value
                 mock_instance.__enter__ = MagicMock(return_value=mock_instance)
                 mock_instance.__exit__ = MagicMock(return_value=False)
@@ -259,19 +257,16 @@ class TestWebSearch:
             from app.ai.agent_tools import MAX_TOOL_OUTPUT_CHARS
 
             mock_rl = MagicMock()
-            mock_rl.check_and_increment = AsyncMock(
-                return_value=_make_rate_limit_result(allowed=True)
-            )
+            mock_rl.check_and_increment = AsyncMock(return_value=_make_rate_limit_result(allowed=True))
             # Build results that will exceed the limit
             long_body = "X" * (MAX_TOOL_OUTPUT_CHARS + 500)
             mock_results = [
                 {"title": "Big Page", "href": "https://big.com", "body": long_body},
             ]
-            with patch(
-                "app.ai.rate_limiter.get_rate_limiter", return_value=mock_rl
-            ), patch(
-                "duckduckgo_search.DDGS"
-            ) as MockDDGS:
+            with (
+                patch("app.ai.rate_limiter.get_rate_limiter", return_value=mock_rl),
+                patch("duckduckgo_search.DDGS") as MockDDGS,
+            ):
                 mock_instance = MockDDGS.return_value
                 mock_instance.__enter__ = MagicMock(return_value=mock_instance)
                 mock_instance.__exit__ = MagicMock(return_value=False)
@@ -290,16 +285,13 @@ class TestWebSearch:
 
 
 class TestScrapeUrl:
-
     @pytest.mark.asyncio
     async def test_scrape_extracts_text(self):
         """scrape_url extracts text content from HTML via trafilatura."""
         _setup_context()
         try:
             mock_rl = MagicMock()
-            mock_rl.check_and_increment = AsyncMock(
-                return_value=_make_rate_limit_result(allowed=True)
-            )
+            mock_rl.check_and_increment = AsyncMock(return_value=_make_rate_limit_result(allowed=True))
 
             # Mock httpx HEAD response (redirect check)
             mock_head_response = MagicMock()
@@ -325,19 +317,16 @@ class TestScrapeUrl:
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
 
-            with patch(
-                "socket.getaddrinfo", _mock_getaddrinfo("93.184.216.34")
-            ), patch(
-                "app.ai.rate_limiter.get_rate_limiter", return_value=mock_rl
-            ), patch(
-                "app.ai.rate_limiter._get_limits",
-                return_value={"web_scrape": (10, 60), "web_search": (20, 60)},
-            ), patch(
-                "app.ai.config_service.get_agent_config"
-            ) as mock_cfg, patch(
-                "httpx.AsyncClient", return_value=mock_client
-            ), patch(
-                "trafilatura.extract", return_value="Hello World"
+            with (
+                patch("socket.getaddrinfo", _mock_getaddrinfo("93.184.216.34")),
+                patch("app.ai.rate_limiter.get_rate_limiter", return_value=mock_rl),
+                patch(
+                    "app.ai.rate_limiter._get_limits",
+                    return_value={"web_scrape": (10, 60), "web_search": (20, 60)},
+                ),
+                patch("app.ai.config_service.get_agent_config") as mock_cfg,
+                patch("httpx.AsyncClient", return_value=mock_client),
+                patch("trafilatura.extract", return_value="Hello World"),
             ):
                 mock_cfg.return_value.get_int = MagicMock(side_effect=lambda k, d: d)
                 result = await scrape_url.ainvoke({"url": "https://example.com"})
@@ -355,23 +344,18 @@ class TestScrapeUrl:
             import httpx
 
             mock_rl = MagicMock()
-            mock_rl.check_and_increment = AsyncMock(
-                return_value=_make_rate_limit_result(allowed=True)
-            )
+            mock_rl.check_and_increment = AsyncMock(return_value=_make_rate_limit_result(allowed=True))
 
             mock_client = AsyncMock()
             mock_client.head = AsyncMock(side_effect=httpx.TimeoutException("timed out"))
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
 
-            with patch(
-                "socket.getaddrinfo", _mock_getaddrinfo("93.184.216.34")
-            ), patch(
-                "app.ai.rate_limiter.get_rate_limiter", return_value=mock_rl
-            ), patch(
-                "app.ai.config_service.get_agent_config"
-            ) as mock_cfg, patch(
-                "httpx.AsyncClient", return_value=mock_client
+            with (
+                patch("socket.getaddrinfo", _mock_getaddrinfo("93.184.216.34")),
+                patch("app.ai.rate_limiter.get_rate_limiter", return_value=mock_rl),
+                patch("app.ai.config_service.get_agent_config") as mock_cfg,
+                patch("httpx.AsyncClient", return_value=mock_client),
             ):
                 mock_cfg.return_value.get_int = MagicMock(side_effect=lambda k, d: d)
                 result = await scrape_url.ainvoke({"url": "https://slow.example.com"})
@@ -388,16 +372,13 @@ class TestScrapeUrl:
 
 
 class TestScrapeContentTypeRejection:
-
     @pytest.mark.asyncio
     async def test_scrape_rejects_non_html_content_type(self):
         """scrape_url returns error for non-HTML content types like application/pdf."""
         _setup_context()
         try:
             mock_rl = MagicMock()
-            mock_rl.check_and_increment = AsyncMock(
-                return_value=_make_rate_limit_result(allowed=True)
-            )
+            mock_rl.check_and_increment = AsyncMock(return_value=_make_rate_limit_result(allowed=True))
 
             # Mock HEAD response with content-type: application/pdf
             mock_head_response = MagicMock()
@@ -409,14 +390,11 @@ class TestScrapeContentTypeRejection:
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
 
-            with patch(
-                "socket.getaddrinfo", _mock_getaddrinfo("93.184.216.34")
-            ), patch(
-                "app.ai.rate_limiter.get_rate_limiter", return_value=mock_rl
-            ), patch(
-                "app.ai.config_service.get_agent_config"
-            ) as mock_cfg, patch(
-                "httpx.AsyncClient", return_value=mock_client
+            with (
+                patch("socket.getaddrinfo", _mock_getaddrinfo("93.184.216.34")),
+                patch("app.ai.rate_limiter.get_rate_limiter", return_value=mock_rl),
+                patch("app.ai.config_service.get_agent_config") as mock_cfg,
+                patch("httpx.AsyncClient", return_value=mock_client),
             ):
                 mock_cfg.return_value.get_int = MagicMock(side_effect=lambda k, d: d)
                 result = await scrape_url.ainvoke({"url": "https://example.com/file.pdf"})
@@ -433,7 +411,6 @@ class TestScrapeContentTypeRejection:
 
 
 class TestWebToolsExport:
-
     def test_web_tools_list(self):
         """WEB_TOOLS contains exactly 2 tools."""
         assert len(WEB_TOOLS) == 2

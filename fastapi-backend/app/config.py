@@ -14,8 +14,7 @@ _config_logger = logging.getLogger(__name__)
 _app_env = os.getenv("APP_ENV", "prod")
 if not re.fullmatch(r"[a-zA-Z0-9_-]{1,32}", _app_env):
     raise ValueError(
-        f"APP_ENV contains invalid characters: {_app_env!r}. "
-        "Only alphanumerics, hyphens, and underscores are allowed."
+        f"APP_ENV contains invalid characters: {_app_env!r}. Only alphanumerics, hyphens, and underscores are allowed."
     )
 _env_file = f".env.{_app_env}"
 _config_logger.info("Loading config from %s (APP_ENV=%s)", _env_file, _app_env)
@@ -37,11 +36,10 @@ class Settings(BaseSettings):
     db_user: str
     db_password: str
     db_port: int = 5432
-    # C4: Reduced defaults to prevent exceeding PostgreSQL max_connections
-    # across multiple workers. Recommend PgBouncer in transaction mode for
-    # production deployments with 3+ Uvicorn workers.
-    db_pool_size: int = 10
-    db_max_overflow: int = 20
+    # Pool sized for 50+100=150 connections per worker (matches main.py target).
+    # PgBouncer in transaction mode recommended for production.
+    db_pool_size: int = 50
+    db_max_overflow: int = 100
     sql_echo: bool = False
 
     # MinIO settings
@@ -101,6 +99,7 @@ class Settings(BaseSettings):
     def database_url(self) -> str:
         """Build PostgreSQL async connection string."""
         from urllib.parse import quote_plus
+
         return (
             f"postgresql+asyncpg://{self.db_user}:{quote_plus(self.db_password)}"
             f"@{self.db_server}:{self.db_port}/{self.db_name}"
@@ -110,6 +109,7 @@ class Settings(BaseSettings):
     def sync_database_url(self) -> str:
         """Build PostgreSQL sync connection string for Alembic."""
         from urllib.parse import quote_plus
+
         return (
             f"postgresql+psycopg2://{self.db_user}:{quote_plus(self.db_password)}"
             f"@{self.db_server}:{self.db_port}/{self.db_name}"
@@ -122,9 +122,9 @@ class Settings(BaseSettings):
 
     # Meilisearch settings
     meilisearch_url: str = "http://localhost:7700"
-    meilisearch_api_key: str = ""            # Scoped API key for "documents" index
+    meilisearch_api_key: str = ""  # Scoped API key for "documents" index
     meilisearch_index_name: str = "documents"
-    meilisearch_timeout: float = 5.0         # Client HTTP timeout in seconds
+    meilisearch_timeout: float = 5.0  # Client HTTP timeout in seconds
 
     # SMTP settings
     smtp_host: str = ""
@@ -173,6 +173,7 @@ class Settings(BaseSettings):
     def test_database_url(self) -> str:
         """Build test database connection string."""
         from urllib.parse import quote_plus
+
         return (
             f"postgresql+asyncpg://{self.test_db_user}:{quote_plus(self.test_db_password)}"
             f"@{self.db_server}:{self.db_port}/pmsdb_test"
@@ -209,9 +210,7 @@ if not settings.jwt_refresh_secret:
             "access token signing secret. Set JWT_REFRESH_SECRET for production."
         )
     elif _os.environ.get("TESTING") != "1":
-        _config_logger.info(
-            "JWT_REFRESH_SECRET not set — falling back to JWT_SECRET for refresh tokens."
-        )
+        _config_logger.info("JWT_REFRESH_SECRET not set — falling back to JWT_SECRET for refresh tokens.")
 
 # M14: Warn about insecure defaults in production-like environments
 if settings.redis_required and _os.environ.get("TESTING") != "1":

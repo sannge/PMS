@@ -74,7 +74,10 @@ VIEW_DESCRIPTIONS: list[ViewDescription] = [
             ColumnDescription("key", "varchar(10)", False, "Short code used in task keys (e.g. PROJ)"),
             ColumnDescription("description", "text", True, "Optional project description"),
             ColumnDescription(
-                "project_type", "varchar(20)", False, "Type of project",
+                "project_type",
+                "varchar(20)",
+                False,
+                "Type of project",
                 enum_values=["scrum", "kanban"],
             ),
             ColumnDescription("due_date", "date", True, "Project due date"),
@@ -101,11 +104,17 @@ VIEW_DESCRIPTIONS: list[ViewDescription] = [
             ColumnDescription("title", "varchar(500)", False, "Task title/summary"),
             ColumnDescription("description", "text", True, "Detailed task description (may be large)"),
             ColumnDescription(
-                "task_type", "varchar(50)", False, "Type of work item",
+                "task_type",
+                "varchar(50)",
+                False,
+                "Type of work item",
                 enum_values=["story", "task", "bug", "epic", "subtask"],
             ),
             ColumnDescription(
-                "priority", "varchar(20)", False, "Priority level (default: medium)",
+                "priority",
+                "varchar(20)",
+                False,
+                "Priority level (default: medium)",
                 enum_values=["highest", "high", "medium", "low", "lowest"],
             ),
             ColumnDescription("assignee_id", "uuid", True, "FK to v_users — assigned user"),
@@ -143,7 +152,10 @@ VIEW_DESCRIPTIONS: list[ViewDescription] = [
             ColumnDescription("project_id", "uuid", False, "FK to v_projects"),
             ColumnDescription("name", "varchar(50)", False, "Status display name (e.g. Todo, In Progress)"),
             ColumnDescription(
-                "category", "varchar(20)", False, "Category for aggregation",
+                "category",
+                "varchar(20)",
+                False,
+                "Category for aggregation",
                 enum_values=["Todo", "Active", "Issue", "Done"],
             ),
             ColumnDescription("rank", "integer", False, "Sort order for Kanban column display"),
@@ -231,7 +243,10 @@ VIEW_DESCRIPTIONS: list[ViewDescription] = [
             ColumnDescription("application_id", "uuid", False, "FK to v_applications"),
             ColumnDescription("user_id", "uuid", False, "FK to v_users"),
             ColumnDescription(
-                "role", "varchar(50)", False, "User role in the application",
+                "role",
+                "varchar(50)",
+                False,
+                "User role in the application",
                 enum_values=["owner", "editor", "viewer"],
             ),
             ColumnDescription("is_manager", "boolean", False, "Whether user is a manager"),
@@ -251,7 +266,10 @@ VIEW_DESCRIPTIONS: list[ViewDescription] = [
             ColumnDescription("project_id", "uuid", False, "FK to v_projects"),
             ColumnDescription("user_id", "uuid", False, "FK to v_users"),
             ColumnDescription(
-                "role", "varchar(20)", False, "Member role in the project",
+                "role",
+                "varchar(20)",
+                False,
+                "Member role in the project",
                 enum_values=["admin", "member"],
             ),
             ColumnDescription("created_at", "timestamptz", False, "Creation timestamp"),
@@ -486,15 +504,11 @@ async def validate_schema_against_db(db: AsyncSession) -> list[str]:
 
         # Missing from DB
         for missing in sorted(static_col_names - db_col_names):
-            warnings.append(
-                f"View '{view.name}': column '{missing}' in static schema but not in DB."
-            )
+            warnings.append(f"View '{view.name}': column '{missing}' in static schema but not in DB.")
 
         # Extra in DB
         for extra in sorted(db_col_names - static_col_names):
-            warnings.append(
-                f"View '{view.name}': column '{extra}' in DB but not in static schema."
-            )
+            warnings.append(f"View '{view.name}': column '{extra}' in DB but not in static schema.")
 
         # Type/nullability checks for matching columns
         for col in view.columns:
@@ -504,16 +518,13 @@ async def validate_schema_against_db(db: AsyncSession) -> list[str]:
             expected_nullable = "YES" if col.nullable else "NO"
             if db_nullable != expected_nullable:
                 warnings.append(
-                    f"View '{view.name}.{col.name}': nullable mismatch — "
-                    f"static={expected_nullable}, db={db_nullable}."
+                    f"View '{view.name}.{col.name}': nullable mismatch — static={expected_nullable}, db={db_nullable}."
                 )
 
     # Check for DB views not in static schema
     for db_view_name in sorted(db_views.keys()):
         if db_view_name not in _VIEW_MAP:
-            warnings.append(
-                f"View '{db_view_name}' exists in DB but not in static schema."
-            )
+            warnings.append(f"View '{db_view_name}' exists in DB but not in static schema.")
 
     if warnings:
         logger.warning("Schema validation found %d discrepancies.", len(warnings))

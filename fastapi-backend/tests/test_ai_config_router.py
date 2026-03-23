@@ -110,17 +110,13 @@ async def user_override(client: AsyncClient, auth_headers: dict, test_applicatio
 class TestListProviders:
     """Tests for GET /api/ai/config/providers."""
 
-    async def test_list_providers_empty(
-        self, client: AsyncClient, auth_headers: dict, test_application: Application
-    ):
+    async def test_list_providers_empty(self, client: AsyncClient, auth_headers: dict, test_application: Application):
         """Listing providers when none exist returns empty list."""
         response = await client.get("/api/ai/config/providers", headers=auth_headers)
         assert response.status_code == 200
         assert response.json() == []
 
-    async def test_list_providers_returns_data(
-        self, client: AsyncClient, auth_headers: dict, test_provider: dict
-    ):
+    async def test_list_providers_returns_data(self, client: AsyncClient, auth_headers: dict, test_provider: dict):
         """Listing providers returns previously created providers."""
         response = await client.get("/api/ai/config/providers", headers=auth_headers)
         assert response.status_code == 200
@@ -135,9 +131,7 @@ class TestListProviders:
 class TestCreateProvider:
     """Tests for POST /api/ai/config/providers."""
 
-    async def test_create_provider_openai(
-        self, client: AsyncClient, auth_headers: dict, test_application: Application
-    ):
+    async def test_create_provider_openai(self, client: AsyncClient, auth_headers: dict, test_application: Application):
         """Creating an OpenAI provider succeeds with 201."""
         response = await client.post(
             "/api/ai/config/providers",
@@ -314,9 +308,7 @@ class TestCreateProvider:
         provider_id = response.json()["id"]
 
         # Query the DB directly to verify encryption
-        result = await db_session.execute(
-            select(AiProvider).where(AiProvider.id == provider_id)
-        )
+        result = await db_session.execute(select(AiProvider).where(AiProvider.id == provider_id))
         provider = result.scalar_one()
         assert provider.api_key_encrypted is not None
         assert provider.api_key_encrypted != raw_key
@@ -331,9 +323,7 @@ class TestCreateProvider:
 class TestGetProvider:
     """Tests for provider response security."""
 
-    async def test_get_provider_does_not_expose_key(
-        self, client: AsyncClient, auth_headers: dict, test_provider: dict
-    ):
+    async def test_get_provider_does_not_expose_key(self, client: AsyncClient, auth_headers: dict, test_provider: dict):
         """Provider responses never contain the actual or encrypted API key."""
         response = await client.get("/api/ai/config/providers", headers=auth_headers)
         assert response.status_code == 200
@@ -358,9 +348,7 @@ class TestUpdateProvider:
         provider_id = test_provider["id"]
 
         # Get original encrypted key
-        result = await db_session.execute(
-            select(AiProvider).where(AiProvider.id == provider_id)
-        )
+        result = await db_session.execute(select(AiProvider).where(AiProvider.id == provider_id))
         original_encrypted = result.scalar_one().api_key_encrypted
 
         # Update only display_name (no api_key in body)
@@ -373,9 +361,7 @@ class TestUpdateProvider:
         assert response.json()["display_name"] == "Updated Name"
 
         # Re-query to confirm encrypted key is preserved
-        result = await db_session.execute(
-            select(AiProvider).where(AiProvider.id == provider_id)
-        )
+        result = await db_session.execute(select(AiProvider).where(AiProvider.id == provider_id))
         assert result.scalar_one().api_key_encrypted == original_encrypted
 
     async def test_update_provider_re_encrypts_new_key(
@@ -397,9 +383,7 @@ class TestUpdateProvider:
         assert response.status_code == 200
 
         # Verify new encrypted value decrypts to the new key
-        result = await db_session.execute(
-            select(AiProvider).where(AiProvider.id == provider_id)
-        )
+        result = await db_session.execute(select(AiProvider).where(AiProvider.id == provider_id))
         provider = result.scalar_one()
         fernet = Fernet(TEST_ENCRYPTION_KEY.encode())
         decrypted = fernet.decrypt(provider.api_key_encrypted.encode()).decode()
@@ -429,15 +413,11 @@ class TestDeleteProvider:
         assert response.status_code == 204
 
         # Verify provider is gone
-        result = await db_session.execute(
-            select(AiProvider).where(AiProvider.id == provider_id)
-        )
+        result = await db_session.execute(select(AiProvider).where(AiProvider.id == provider_id))
         assert result.scalar_one_or_none() is None
 
         # Verify model is also gone (CASCADE)
-        result = await db_session.execute(
-            select(AiModel).where(AiModel.id == model_id)
-        )
+        result = await db_session.execute(select(AiModel).where(AiModel.id == model_id))
         assert result.scalar_one_or_none() is None
 
 
@@ -500,9 +480,7 @@ class TestTestProvider:
 class TestCreateModel:
     """Tests for model CRUD endpoints."""
 
-    async def test_create_model(
-        self, client: AsyncClient, auth_headers: dict, test_provider: dict
-    ):
+    async def test_create_model(self, client: AsyncClient, auth_headers: dict, test_provider: dict):
         """Creating a model under an existing provider succeeds."""
         response = await client.post(
             "/api/ai/config/models",
@@ -524,9 +502,7 @@ class TestCreateModel:
         assert data["capability"] == "chat"
         assert data["provider_id"] == test_provider["id"]
 
-    async def test_create_model_unique_constraint(
-        self, client: AsyncClient, auth_headers: dict, test_provider: dict
-    ):
+    async def test_create_model_unique_constraint(self, client: AsyncClient, auth_headers: dict, test_provider: dict):
         """Duplicate (provider_id, model_id, capability) is rejected."""
         model_payload = {
             "provider_id": test_provider["id"],
@@ -553,9 +529,7 @@ class TestCreateModel:
         )
         assert resp2.status_code == 409
 
-    async def test_update_model(
-        self, client: AsyncClient, auth_headers: dict, test_model: dict
-    ):
+    async def test_update_model(self, client: AsyncClient, auth_headers: dict, test_model: dict):
         """Updating model fields succeeds."""
         model_id = test_model["id"]
         response = await client.put(
@@ -568,9 +542,7 @@ class TestCreateModel:
         assert data["display_name"] == "GPT-4o Updated"
         assert data["max_tokens"] == 256000
 
-    async def test_delete_model(
-        self, client: AsyncClient, auth_headers: dict, test_model: dict
-    ):
+    async def test_delete_model(self, client: AsyncClient, auth_headers: dict, test_model: dict):
         """Deleting a model returns 204 and removes it."""
         model_id = test_model["id"]
         response = await client.delete(
@@ -595,9 +567,7 @@ class TestCreateModel:
 class TestConfigSummary:
     """Tests for GET /api/ai/config/summary."""
 
-    async def test_config_summary(
-        self, client: AsyncClient, auth_headers: dict, test_provider: dict, test_model: dict
-    ):
+    async def test_config_summary(self, client: AsyncClient, auth_headers: dict, test_provider: dict, test_model: dict):
         """Summary includes providers and resolves default models."""
         response = await client.get("/api/ai/config/summary", headers=auth_headers)
         assert response.status_code == 200
@@ -689,9 +659,7 @@ class TestUserCreateOverride:
         assert response.status_code == 201
         provider_id = response.json()["id"]
 
-        result = await db_session.execute(
-            select(AiProvider).where(AiProvider.id == provider_id)
-        )
+        result = await db_session.execute(select(AiProvider).where(AiProvider.id == provider_id))
         provider = result.scalar_one()
         assert provider.api_key_encrypted is not None
         assert provider.api_key_encrypted != raw_key
@@ -721,9 +689,7 @@ class TestUserCreateOverride:
 class TestUserListOverrides:
     """Tests for GET /api/ai/config/me/providers."""
 
-    async def test_user_list_own_overrides(
-        self, client: AsyncClient, auth_headers: dict, user_override: dict
-    ):
+    async def test_user_list_own_overrides(self, client: AsyncClient, auth_headers: dict, user_override: dict):
         """User sees only their own overrides."""
         response = await client.get("/api/ai/config/me/providers", headers=auth_headers)
         assert response.status_code == 200
@@ -819,9 +785,7 @@ class TestUserDeleteOverride:
 class TestUserTestOverride:
     """Tests for POST /api/ai/config/me/providers/{provider_type}/test."""
 
-    async def test_user_test_own_key_connectivity(
-        self, client: AsyncClient, auth_headers: dict, user_override: dict
-    ):
+    async def test_user_test_own_key_connectivity(self, client: AsyncClient, auth_headers: dict, user_override: dict):
         """User can test connectivity for their own override."""
         with patch(
             "app.routers.ai_config._test_openai",
@@ -868,9 +832,7 @@ class TestUserSummary:
         assert response.status_code == 200
         data = response.json()
         # Should have providers (user override replaces global for openai)
-        openai_providers = [
-            p for p in data["providers"] if p["provider_type"] == "openai"
-        ]
+        openai_providers = [p for p in data["providers"] if p["provider_type"] == "openai"]
         # Exactly one openai provider - the user override
         assert len(openai_providers) == 1
         assert openai_providers[0]["scope"] == "user"
@@ -886,9 +848,7 @@ class TestUserSummary:
         response = await client.get("/api/ai/config/me/summary", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
-        openai_providers = [
-            p for p in data["providers"] if p["provider_type"] == "openai"
-        ]
+        openai_providers = [p for p in data["providers"] if p["provider_type"] == "openai"]
         assert len(openai_providers) == 1
         assert openai_providers[0]["scope"] == "global"
         # Default chat model from global config

@@ -166,19 +166,16 @@ class ImportJob(Base):
 
         if scope == "application":
             from .application import Application
-            result = await db.execute(
-                sa_select(Application.id).where(Application.id == scope_id)
-            )
+
+            result = await db.execute(sa_select(Application.id).where(Application.id == scope_id))
         elif scope == "project":
             from .project import Project
-            result = await db.execute(
-                sa_select(Project.id).where(Project.id == scope_id)
-            )
+
+            result = await db.execute(sa_select(Project.id).where(Project.id == scope_id))
         elif scope == "personal":
             from .user import User
-            result = await db.execute(
-                sa_select(User.id).where(User.id == scope_id)
-            )
+
+            result = await db.execute(sa_select(User.id).where(User.id == scope_id))
         else:
             return False
 
@@ -186,7 +183,4 @@ class ImportJob(Base):
 
     def __repr__(self) -> str:
         """String representation of ImportJob."""
-        return (
-            f"<ImportJob(id={self.id}, file_name={self.file_name}, "
-            f"status={self.status})>"
-        )
+        return f"<ImportJob(id={self.id}, file_name={self.file_name}, status={self.status})>"

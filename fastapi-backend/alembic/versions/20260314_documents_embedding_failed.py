@@ -7,6 +7,7 @@ Revision ID: 20260314_doc_embed_failed
 Revises: 20260313_nullable_folder
 Create Date: 2026-03-14
 """
+
 from alembic import op
 
 revision = "20260314_doc_embed_failed"
@@ -24,10 +25,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(
-        'UPDATE "Documents" SET embedding_status = \'stale\' '
-        "WHERE embedding_status = 'failed'"
-    )
+    op.execute("UPDATE \"Documents\" SET embedding_status = 'stale' WHERE embedding_status = 'failed'")
     op.execute('ALTER TABLE "Documents" DROP CONSTRAINT IF EXISTS ck_documents_embedding_status')
     op.execute(
         'ALTER TABLE "Documents" ADD CONSTRAINT ck_documents_embedding_status '

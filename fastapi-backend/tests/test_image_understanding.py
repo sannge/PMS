@@ -189,9 +189,7 @@ def service(
 class TestExtractImageNodes:
     """Tests for TipTap JSON tree walking."""
 
-    async def test_extract_image_nodes_from_tiptap(
-        self, service: ImageUnderstandingService
-    ) -> None:
+    async def test_extract_image_nodes_from_tiptap(self, service: ImageUnderstandingService) -> None:
         """Pass TipTap JSON with 3 image nodes, verify all detected."""
         nodes = service._extract_image_nodes(SAMPLE_TIPTAP_JSON)
 
@@ -235,9 +233,7 @@ class TestProcessDocumentImages:
         scope_result = MagicMock()
         scope_result.first.return_value = None
 
-        mock_db.execute = AsyncMock(
-            side_effect=[attachment_result, max_idx_result, scope_result]
-        )
+        mock_db.execute = AsyncMock(side_effect=[attachment_result, max_idx_result, scope_result])
 
         single_image_json = {
             "type": "doc",
@@ -326,15 +322,17 @@ class TestProcessDocumentImages:
             att_id = uuid4()
             att = _build_mock_attachment(attachment_id=att_id)
             attachments.append(att)
-            content_nodes.append({
-                "type": "image",
-                "attrs": {
-                    "src": f"http://example.com/img{i}.png",
-                    "attachmentId": str(att_id),
-                    "alt": f"Image {i}",
-                    "width": 500,
-                },
-            })
+            content_nodes.append(
+                {
+                    "type": "image",
+                    "attrs": {
+                        "src": f"http://example.com/img{i}.png",
+                        "attachmentId": str(att_id),
+                        "alt": f"Image {i}",
+                        "width": 500,
+                    },
+                }
+            )
 
         tiptap_json = {"type": "doc", "content": content_nodes}
 
@@ -389,7 +387,7 @@ class TestProcessImportedImages:
                 page_number=1,
             ),
             ExtractedImage(
-                data=b"\xFF\xD8\xFF" + b"\x00" * 20_000,
+                data=b"\xff\xd8\xff" + b"\x00" * 20_000,
                 content_type="image/jpeg",
                 filename="fig2.jpg",
                 caption="Figure 2",
@@ -526,9 +524,7 @@ class TestProcessImportedImages:
     ) -> None:
         """When no vision provider configured, return empty list."""
         registry = MagicMock()
-        registry.get_vision_provider = AsyncMock(
-            side_effect=ConfigurationError("No vision provider configured")
-        )
+        registry.get_vision_provider = AsyncMock(side_effect=ConfigurationError("No vision provider configured"))
 
         with patch("app.ai.image_understanding_service.tiktoken") as mock_tiktoken:
             mock_encoder = MagicMock()
@@ -572,9 +568,7 @@ class TestProcessDocumentImagesNoProvider:
     ) -> None:
         """When no vision provider, process_document_images returns []."""
         registry = MagicMock()
-        registry.get_vision_provider = AsyncMock(
-            side_effect=ConfigurationError("No vision provider")
-        )
+        registry.get_vision_provider = AsyncMock(side_effect=ConfigurationError("No vision provider"))
 
         with patch("app.ai.image_understanding_service.tiktoken") as mock_tiktoken:
             mock_encoder = MagicMock()

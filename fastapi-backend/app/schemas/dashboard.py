@@ -43,12 +43,12 @@ class UpcomingTaskItem(BaseModel):
 
 
 class CompletionDataPoint(BaseModel):
-    date: str      # YYYY-MM-DD
+    date: str  # YYYY-MM-DD
     count: int
 
 
 class TrendData(BaseModel):
-    value: int         # absolute percentage change
+    value: int  # absolute percentage change
     is_positive: bool
 
 
@@ -66,12 +66,12 @@ class DashboardResponse(BaseModel):
 
     # Charts
     task_status_breakdown: TaskStatusBreakdown  # Aggregated across all accessible projects
-    project_health: list[ProjectHealthItem]        # Top 10 by updated_at
-    completion_trend: list[CompletionDataPoint]     # Last 14 days
+    project_health: list[ProjectHealthItem]  # Top 10 by updated_at
+    completion_trend: list[CompletionDataPoint]  # Last 14 days
 
     # Actionable lists
-    overdue_tasks: list[UpcomingTaskItem]           # Past due, not done (limit 5)
-    upcoming_tasks: list[UpcomingTaskItem]          # Due within 14 days (limit 10)
-    recently_completed: list[UpcomingTaskItem]      # Completed last 7 days (limit 5)
+    overdue_tasks: list[UpcomingTaskItem]  # Past due, not done (limit 5)
+    upcoming_tasks: list[UpcomingTaskItem]  # Due within 14 days (limit 10)
+    recently_completed: list[UpcomingTaskItem]  # Completed last 7 days (limit 5)
 
     generated_at: str  # ISO timestamp

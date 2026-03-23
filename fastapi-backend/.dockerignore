@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+tests/
+scripts/
+reset_test_db.py
+.env*
+!.env.prod.example
+*.egg-info/
+.git/

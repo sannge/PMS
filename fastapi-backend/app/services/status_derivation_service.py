@@ -212,8 +212,7 @@ def get_counter_field_for_status(status_name: str) -> str:
     counter_field = STATUS_TO_COUNTER_FIELD.get(status_name)
     if counter_field is None:
         raise ValueError(
-            f"Invalid status name: '{status_name}'. "
-            f"Must be one of: {list(STATUS_TO_COUNTER_FIELD.keys())}"
+            f"Invalid status name: '{status_name}'. Must be one of: {list(STATUS_TO_COUNTER_FIELD.keys())}"
         )
     return counter_field
 

@@ -69,7 +69,8 @@ async def search_documents_endpoint(
     if not result.allowed:
         logger.warning(
             "Search rate limit hit: user_id=%s, remaining=%d",
-            current_user.id, result.remaining,
+            current_user.id,
+            result.remaining,
         )
         raise HTTPException(
             429,
@@ -103,7 +104,13 @@ async def search_documents_endpoint(
         try:
             app_ids, project_ids = await get_fallback_scope_ids(db, current_user.id)
             results = await search_documents_pg_fallback(
-                db, q_clean, app_ids, project_ids, current_user.id, limit, offset,
+                db,
+                q_clean,
+                app_ids,
+                project_ids,
+                current_user.id,
+                limit,
+                offset,
                 scope_application_id=str(application_id) if application_id else None,
                 scope_project_id=str(project_id) if project_id else None,
             )

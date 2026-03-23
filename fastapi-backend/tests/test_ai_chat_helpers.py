@@ -26,7 +26,6 @@ from langchain_core.messages import AIMessage
 
 
 class TestBuildChatResponse:
-
     def test_empty_messages_raises_500(self):
         from app.routers.ai_chat import _build_chat_response
 
@@ -46,10 +45,12 @@ class TestBuildChatResponse:
         """Multimodal list-block content is joined."""
         from app.routers.ai_chat import _build_chat_response
 
-        msg = AIMessage(content=[
-            {"type": "text", "text": "Part A"},
-            {"type": "text", "text": "Part B"},
-        ])
+        msg = AIMessage(
+            content=[
+                {"type": "text", "text": "Part A"},
+                {"type": "text", "text": "Part B"},
+            ]
+        )
         result = _build_chat_response([msg], "thread-2")
         assert "Part A" in result.response
         assert "Part B" in result.response
@@ -65,9 +66,7 @@ class TestBuildChatResponse:
         from app.routers.ai_chat import _build_chat_response
 
         msg = AIMessage(content="paused")
-        result = _build_chat_response(
-            [msg], "t1", interrupted=True, interrupt_payload={"type": "confirmation"}
-        )
+        result = _build_chat_response([msg], "t1", interrupted=True, interrupt_payload={"type": "confirmation"})
         assert result.interrupted is True
         assert result.interrupt_payload == {"type": "confirmation"}
 
@@ -90,7 +89,6 @@ class TestBuildChatResponse:
 
 
 class TestRegisterCancelEvent:
-
     def test_returns_asyncio_event(self):
         import app.routers.ai_chat as mod
 
@@ -135,7 +133,6 @@ class TestRegisterCancelEvent:
 
 
 class TestRegisterThread:
-
     async def test_fallback_stores_owner(self):
         """When Redis is down, stores in in-memory fallback."""
         import app.routers.ai_chat as mod
@@ -185,7 +182,6 @@ class TestRegisterThread:
 
 
 class TestGetToolDb:
-
     async def test_cancelled_error_rolls_back_and_reraises(self):
         """CancelledError in get_tool_db body causes rollback and re-raise."""
         from app.routers.ai_chat import get_tool_db
@@ -252,7 +248,6 @@ class TestGetToolDb:
 
 
 class TestExtractHelpers:
-
     def test_extract_tool_calls_from_ai_messages(self):
         from app.routers.ai_chat import _extract_tool_calls
 

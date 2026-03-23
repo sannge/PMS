@@ -21,6 +21,7 @@ router = APIRouter(prefix="/api/users", tags=["Users"])
 # Response schema for user search (matches frontend expectations)
 class UserSearchResponse(BaseModel):
     """User search result for invitation modal"""
+
     id: UUID
     email: str
     full_name: Optional[str] = None
@@ -58,12 +59,7 @@ async def search_users(
         return []
 
     # Build async query
-    stmt = (
-        select(User)
-        .where(or_(*conditions))
-        .where(User.id != current_user.id)
-        .limit(limit)
-    )
+    stmt = select(User).where(or_(*conditions)).where(User.id != current_user.id).limit(limit)
 
     result = await db.execute(stmt)
     users = result.scalars().all()

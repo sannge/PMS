@@ -38,10 +38,7 @@ def create_copilotkit_sdk(agent_graph: Any) -> Any | None:
             agents=[
                 LangGraphAgent(
                     name="blair",
-                    description=(
-                        "Blair — PM Desktop AI Copilot for projects, "
-                        "tasks, and knowledge base"
-                    ),
+                    description=("Blair — PM Desktop AI Copilot for projects, tasks, and knowledge base"),
                     agent=agent_graph,
                 )
             ]
@@ -50,13 +47,9 @@ def create_copilotkit_sdk(agent_graph: Any) -> Any | None:
         return sdk
 
     except ImportError:
-        logger.warning(
-            "copilotkit package not installed — CopilotKit endpoints disabled"
-        )
+        logger.warning("copilotkit package not installed — CopilotKit endpoints disabled")
         return None
 
     except Exception:
-        logger.warning(
-            "Failed to initialise CopilotKit SDK", exc_info=True
-        )
+        logger.warning("Failed to initialise CopilotKit SDK", exc_info=True)
         return None

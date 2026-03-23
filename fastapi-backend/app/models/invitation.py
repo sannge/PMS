@@ -42,11 +42,11 @@ class Invitation(Base):
     # Composite indexes for optimal query performance
     __table_args__ = (
         # For listing pending invitations by invitee (most common query)
-        Index('ix_invitations_invitee_status_created', 'invitee_id', 'status', 'created_at'),
+        Index("ix_invitations_invitee_status_created", "invitee_id", "status", "created_at"),
         # For listing sent invitations by inviter
-        Index('ix_invitations_inviter_status_created', 'inviter_id', 'status', 'created_at'),
+        Index("ix_invitations_inviter_status_created", "inviter_id", "status", "created_at"),
         # For duplicate invitation check on create
-        Index('ix_invitations_app_invitee_status', 'application_id', 'invitee_id', 'status'),
+        Index("ix_invitations_app_invitee_status", "application_id", "invitee_id", "status"),
     )
 
     # Primary key - UUID

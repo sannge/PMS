@@ -225,36 +225,28 @@ class DoclingService:
         # --- Conversion ---------------------------------------------------
         try:
             conv_result = await asyncio.to_thread(
-                self._convert_sync, file_path,
+                self._convert_sync,
+                file_path,
             )
         except ImportError:
             raise
         except Exception as exc:
-            raise ImportError(
-                f"Failed to convert file: {exc}"
-            ) from exc
+            raise ImportError(f"Failed to convert file: {exc}") from exc
 
         if progress_callback is not None:
             progress_callback(30)
 
         # Check conversion status for partial success / warnings
         if conv_result.status == ConversionStatus.PARTIAL_SUCCESS:
-            warnings.append(
-                "Document was only partially converted; some content may be "
-                "missing."
-            )
+            warnings.append("Document was only partially converted; some content may be missing.")
         elif conv_result.status == ConversionStatus.FAILURE:
             error_msgs = [e.error_message for e in (conv_result.errors or [])]
             detail = "; ".join(error_msgs) if error_msgs else "unknown error"
-            raise ImportError(
-                f"Document conversion failed: {detail}"
-            )
+            raise ImportError(f"Document conversion failed: {detail}")
 
         # Collect conversion-level warnings from Docling error items
         for err_item in conv_result.errors or []:
-            warnings.append(
-                f"[{err_item.component_type}] {err_item.error_message}"
-            )
+            warnings.append(f"[{err_item.component_type}] {err_item.error_message}")
 
         # --- Markdown export -----------------------------------------------
         try:
@@ -321,22 +313,14 @@ class DoclingService:
         except Exception as exc:
             exc_str = str(exc).lower()
             if "password" in exc_str or "encrypted" in exc_str:
-                raise ImportError(
-                    "Password-protected PDF files are not supported"
-                ) from exc
-            raise ImportError(
-                f"Failed to convert document: {exc}"
-            ) from exc
+                raise ImportError("Password-protected PDF files are not supported") from exc
+            raise ImportError(f"Failed to convert document: {exc}") from exc
 
         # Detect password-protection from Docling error items
         if result.status == ConversionStatus.FAILURE:
-            error_msgs = " ".join(
-                e.error_message for e in (result.errors or [])
-            ).lower()
+            error_msgs = " ".join(e.error_message for e in (result.errors or [])).lower()
             if "password" in error_msgs or "encrypted" in error_msgs:
-                raise ImportError(
-                    "Password-protected PDF files are not supported"
-                )
+                raise ImportError("Password-protected PDF files are not supported")
 
         return result
 
@@ -380,13 +364,15 @@ class DoclingService:
             page_number = self._get_picture_page(element)
             caption = self._get_picture_caption(element)
 
-            images.append(ExtractedImage(
-                image_bytes=image_bytes,
-                image_format=image_format,
-                page_number=page_number,
-                caption=caption,
-                position=position,
-            ))
+            images.append(
+                ExtractedImage(
+                    image_bytes=image_bytes,
+                    image_format=image_format,
+                    page_number=page_number,
+                    caption=caption,
+                    position=position,
+                )
+            )
             position += 1
 
         return images
@@ -477,9 +463,7 @@ class DoclingService:
             annotations = getattr(element, "annotations", None)
             if annotations:
                 for ann in annotations:
-                    label = getattr(ann, "label", None) or getattr(
-                        ann, "predicted_class", None
-                    )
+                    label = getattr(ann, "label", None) or getattr(ann, "predicted_class", None)
                     if label and str(label).strip():
                         return str(label).strip()
         except Exception:
@@ -557,11 +541,7 @@ def _extract_title(doc: Any, markdown: str) -> str | None:
         if name and isinstance(name, str):
             name = name.strip()
             # Skip names that look like hashes or temp file names
-            if (
-                len(name) > 2
-                and not name.startswith("tmp")
-                and not _looks_like_hash(name)
-            ):
+            if len(name) > 2 and not name.startswith("tmp") and not _looks_like_hash(name):
                 return name
     except Exception:
         pass

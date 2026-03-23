@@ -63,6 +63,7 @@ async def sql_query(question: str) -> str:
 
     except Exception as exc:
         from langgraph.errors import GraphBubbleUp
+
         if isinstance(exc, GraphBubbleUp):
             raise
         logger.warning("sql_query failed: %s: %s", type(exc).__name__, exc)
@@ -94,11 +95,7 @@ async def understand_image(
     try:
         async with _get_tool_session() as db:
             # Load attachment record
-            att_result = await db.execute(
-                select(Attachment).where(
-                    Attachment.id == UUID(attachment_id)
-                )
-            )
+            att_result = await db.execute(select(Attachment).where(Attachment.id == UUID(attachment_id)))
             attachment = att_result.scalar_one_or_none()
 
             if attachment is None:
@@ -106,28 +103,16 @@ async def understand_image(
 
             # RBAC -- check that user can access the entity
             if attachment.task_id:
-                task_result = await db.execute(
-                    select(Task.project_id).where(
-                        Task.id == attachment.task_id
-                    )
-                )
+                task_result = await db.execute(select(Task.project_id).where(Task.id == attachment.task_id))
                 project_id = task_result.scalar_one_or_none()
                 if not project_id or not _check_project_access(str(project_id)):
                     return "Access denied: you do not have access to this attachment's project."
             elif attachment.comment_id is not None:
-                comment_result = await db.execute(
-                    select(Comment.task_id).where(
-                        Comment.id == attachment.comment_id
-                    )
-                )
+                comment_result = await db.execute(select(Comment.task_id).where(Comment.id == attachment.comment_id))
                 comment_task_id = comment_result.scalar_one_or_none()
                 if not comment_task_id:
                     return "Access denied: unable to verify access permissions for this attachment."
-                task_result = await db.execute(
-                    select(Task.project_id).where(
-                        Task.id == comment_task_id
-                    )
-                )
+                task_result = await db.execute(select(Task.project_id).where(Task.id == comment_task_id))
                 project_id = task_result.scalar_one_or_none()
                 if not project_id or not _check_project_access(str(project_id)):
                     return "Access denied: you do not have access to this attachment's project."
@@ -146,19 +131,14 @@ async def understand_image(
             key = attachment.minio_key
 
             if not bucket or not key:
-                return (
-                    "Attachment has no storage reference. "
-                    "The file may not have been uploaded successfully."
-                )
+                return "Attachment has no storage reference. The file may not have been uploaded successfully."
 
             # Get vision provider while we have the DB session open
-            vision_provider, model_id = await provider_registry.get_vision_provider(
-                db, _get_user_id()
-            )
+            vision_provider, model_id = await provider_registry.get_vision_provider(db, _get_user_id())
 
         # Download outside the db session (only after confirming provider is available)
         minio_svc = MinIOService()
-        image_bytes = minio_svc.download_file(bucket, key)
+        image_bytes = await minio_svc.download_file(bucket, key)
 
         # Build prompt
         prompt = question or (
@@ -177,11 +157,10 @@ async def understand_image(
 
     except Exception as exc:
         from langgraph.errors import GraphBubbleUp
+
         if isinstance(exc, GraphBubbleUp):
             raise
-        logger.warning(
-            "understand_image failed: %s: %s", type(exc).__name__, exc
-        )
+        logger.warning("understand_image failed: %s: %s", type(exc).__name__, exc)
         return "Error analyzing image. Please try again."
 
 

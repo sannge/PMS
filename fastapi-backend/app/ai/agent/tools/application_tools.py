@@ -116,9 +116,7 @@ async def list_applications(include_archived: bool = False) -> str:
         return _truncate("\n".join(lines))
 
     except Exception as exc:
-        logger.warning(
-            "list_applications failed: %s: %s", type(exc).__name__, exc
-        )
+        logger.warning("list_applications failed: %s: %s", type(exc).__name__, exc)
         return "Error retrieving applications. Please try again."
 
 
@@ -141,9 +139,7 @@ async def get_application_details(app: str) -> str:
 
             # Fetch application with owner
             result = await db.execute(
-                select(Application)
-                .options(selectinload(Application.owner))
-                .where(Application.id == app_uuid)
+                select(Application).options(selectinload(Application.owner)).where(Application.id == app_uuid)
             )
             application = result.scalar_one_or_none()
             if not application:
@@ -186,11 +182,7 @@ async def get_application_details(app: str) -> str:
 
         # Format output
         owner = application.owner
-        owner_info = (
-            f"{owner.display_name or owner.email} ({owner.email})"
-            if owner
-            else "\u2014"
-        )
+        owner_info = f"{owner.display_name or owner.email} ({owner.email})" if owner else "\u2014"
 
         lines = [
             f"## {application.name}",
@@ -230,9 +222,7 @@ async def get_application_details(app: str) -> str:
         return _truncate("\n".join(lines))
 
     except Exception as exc:
-        logger.warning(
-            "get_application_details failed: %s: %s", type(exc).__name__, exc
-        )
+        logger.warning("get_application_details failed: %s: %s", type(exc).__name__, exc)
         return "Error retrieving application details. Please try again."
 
 
@@ -252,9 +242,7 @@ async def get_application_members(app: str) -> str:
 
             # Get app name
             app_result = await db.execute(
-                select(Application.name, Application.owner_id).where(
-                    Application.id == app_uuid
-                )
+                select(Application.name, Application.owner_id).where(Application.id == app_uuid)
             )
             app_row = app_result.one_or_none()
             if not app_row:
@@ -285,9 +273,7 @@ async def get_application_members(app: str) -> str:
             # Get project memberships for all members in this app's projects
             proj_mem_result = await db.execute(
                 select(ProjectMember.user_id, ProjectMember.project_id).where(
-                    ProjectMember.project_id.in_(
-                        [UUID(pid) for pid in projects]
-                    )
+                    ProjectMember.project_id.in_([UUID(pid) for pid in projects])
                 )
             )
             # Build user -> project names map
@@ -323,7 +309,5 @@ async def get_application_members(app: str) -> str:
             return _truncate("\n".join(lines))
 
     except Exception as exc:
-        logger.warning(
-            "get_application_members failed: %s: %s", type(exc).__name__, exc
-        )
+        logger.warning("get_application_members failed: %s: %s", type(exc).__name__, exc)
         return "Error retrieving application members. Please try again."

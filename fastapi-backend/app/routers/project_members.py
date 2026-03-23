@@ -127,9 +127,7 @@ async def verify_project_access(
     """
     # Fetch project with application eagerly loaded
     result = await db.execute(
-        select(Project)
-        .options(selectinload(Project.application))
-        .where(Project.id == project_id)
+        select(Project).options(selectinload(Project.application)).where(Project.id == project_id)
     )
     project = result.scalar_one_or_none()
 
@@ -140,9 +138,7 @@ async def verify_project_access(
         )
 
     # Get user's role in the parent application
-    user_role = await get_user_application_role(
-        db, current_user.id, project.application_id, project.application
-    )
+    user_role = await get_user_application_role(db, current_user.id, project.application_id, project.application)
 
     if not user_role:
         raise HTTPException(
@@ -278,9 +274,7 @@ async def get_project_member_count(
     # Verify user has access to view the project
     await verify_project_access(project_id, current_user, db)
 
-    result = await db.execute(
-        select(func.count(ProjectMember.id)).where(ProjectMember.project_id == project_id)
-    )
+    result = await db.execute(select(func.count(ProjectMember.id)).where(ProjectMember.project_id == project_id))
     total = result.scalar() or 0
 
     return {"total": total}
@@ -408,9 +402,7 @@ async def add_project_member(
         )
 
     # Verify the target user is an owner or editor of the application (not viewer)
-    target_role = await get_user_application_role(
-        db, member_data.user_id, project.application_id, project.application
-    )
+    target_role = await get_user_application_role(db, member_data.user_id, project.application_id, project.application)
     if not target_role:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -420,7 +412,7 @@ async def add_project_member(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Application viewers cannot be added as project members. "
-                   "Viewers already have read-only access to all projects.",
+            "Viewers already have read-only access to all projects.",
         )
 
     # Check if user is already a project member
@@ -485,7 +477,8 @@ async def add_project_member(
     invalidate_project_role(new_member.user_id, project_id)
     fire_and_forget(
         publish_user_cache_invalidation(
-            user_id=str(new_member.user_id), project_id=str(project_id),
+            user_id=str(new_member.user_id),
+            project_id=str(project_id),
         ),
         name="add-project-member-user-cache-invalidation",
     )
@@ -500,6 +493,7 @@ async def add_project_member(
     # R2-6: Invalidate RBAC scope cache so AI retrieval reflects new membership
     try:
         from ..services.redis_service import redis_service
+
         if redis_service.is_connected:
             await redis_service.delete(f"rbac_scope:{new_member.user_id}")
     except Exception:
@@ -617,7 +611,7 @@ async def remove_project_member(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "message": "Cannot remove member. They have active tasks assigned in this project. "
-                           "Reassign or unassign their tasks first.",
+                "Reassign or unassign their tasks first.",
                 "active_task_count": len(active_task_ids),
                 "active_task_ids": active_task_ids,
             },
@@ -631,7 +625,8 @@ async def remove_project_member(
     invalidate_project_role(user_id, project_id)
     fire_and_forget(
         publish_user_cache_invalidation(
-            user_id=str(user_id), project_id=str(project_id),
+            user_id=str(user_id),
+            project_id=str(project_id),
         ),
         name="remove-project-member-user-cache-invalidation",
     )
@@ -670,6 +665,7 @@ async def remove_project_member(
     # Invalidate search scope cache so removed user can no longer see docs in search
     try:
         from ..services.redis_service import redis_service
+
         if redis_service.is_connected:
             await redis_service.delete(f"search:scope:{user_id}")
             # R2-6: Invalidate RBAC scope cache so AI retrieval reflects removal
@@ -739,12 +735,16 @@ async def change_project_member_role(
 
     # No change needed
     if old_role == new_role:
-        user_summary = UserSummary(
-            id=member.user.id,
-            email=member.user.email,
-            display_name=member.user.display_name,
-            avatar_url=member.user.avatar_url,
-        ) if member.user else None
+        user_summary = (
+            UserSummary(
+                id=member.user.id,
+                email=member.user.email,
+                display_name=member.user.display_name,
+                avatar_url=member.user.avatar_url,
+            )
+            if member.user
+            else None
+        )
 
         return ProjectMemberWithUser(
             id=member.id,
@@ -789,7 +789,8 @@ async def change_project_member_role(
     invalidate_project_role(user_id, project_id)
     fire_and_forget(
         publish_user_cache_invalidation(
-            user_id=str(user_id), project_id=str(project_id),
+            user_id=str(user_id),
+            project_id=str(project_id),
         ),
         name="change-project-member-role-user-cache-invalidation",
     )
@@ -829,17 +830,22 @@ async def change_project_member_role(
     # R2-6: Invalidate RBAC scope cache so AI retrieval reflects role change
     try:
         from ..services.redis_service import redis_service
+
         if redis_service.is_connected:
             await redis_service.delete(f"rbac_scope:{user_id}")
     except Exception:
         pass  # Best-effort; cache has 30s TTL anyway
 
-    user_summary = UserSummary(
-        id=member.user.id,
-        email=member.user.email,
-        display_name=member.user.display_name,
-        avatar_url=member.user.avatar_url,
-    ) if member.user else None
+    user_summary = (
+        UserSummary(
+            id=member.user.id,
+            email=member.user.email,
+            display_name=member.user.display_name,
+            avatar_url=member.user.avatar_url,
+        )
+        if member.user
+        else None
+    )
 
     return ProjectMemberWithUser(
         id=member.id,
@@ -889,9 +895,7 @@ async def list_assignable_users(
 
     # Get all project members
     result = await db.execute(
-        select(ProjectMember)
-        .options(selectinload(ProjectMember.user))
-        .where(ProjectMember.project_id == project_id)
+        select(ProjectMember).options(selectinload(ProjectMember.user)).where(ProjectMember.project_id == project_id)
     )
     members = result.scalars().all()
 
@@ -900,9 +904,7 @@ async def list_assignable_users(
     seen_user_ids = set()
 
     for member in members:
-        app_role = await get_user_application_role(
-            db, member.user_id, project.application_id, project.application
-        )
+        app_role = await get_user_application_role(db, member.user_id, project.application_id, project.application)
         if app_role in ("owner", "editor"):
             user_summary = None
             if member.user:
@@ -912,24 +914,24 @@ async def list_assignable_users(
                     display_name=member.user.display_name,
                     avatar_url=member.user.avatar_url,
                 )
-            assignable.append(ProjectMemberWithUser(
-                id=member.id,
-                project_id=member.project_id,
-                user_id=member.user_id,
-                role=member.role,
-                added_by_user_id=member.added_by_user_id,
-                created_at=member.created_at,
-                updated_at=member.updated_at,
-                user=user_summary,
-            ))
+            assignable.append(
+                ProjectMemberWithUser(
+                    id=member.id,
+                    project_id=member.project_id,
+                    user_id=member.user_id,
+                    role=member.role,
+                    added_by_user_id=member.added_by_user_id,
+                    created_at=member.created_at,
+                    updated_at=member.updated_at,
+                    user=user_summary,
+                )
+            )
             seen_user_ids.add(member.user_id)
 
     # Also include App Owners even if not project members
     # Include the original owner
     if project.application.owner_id not in seen_user_ids:
-        result = await db.execute(
-            select(User).where(User.id == project.application.owner_id)
-        )
+        result = await db.execute(select(User).where(User.id == project.application.owner_id))
         owner_user = result.scalar_one_or_none()
         if owner_user:
             user_summary = UserSummary(
@@ -939,16 +941,18 @@ async def list_assignable_users(
                 avatar_url=owner_user.avatar_url,
             )
             # Create a "virtual" member response for the owner
-            assignable.append(ProjectMemberWithUser(
-                id=project.application.owner_id,  # Use owner's user ID as placeholder
-                project_id=project_id,
-                user_id=project.application.owner_id,
-                role="owner",  # Virtual role for display
-                added_by_user_id=None,
-                created_at=project.created_at,
-                updated_at=project.updated_at or project.created_at,
-                user=user_summary,
-            ))
+            assignable.append(
+                ProjectMemberWithUser(
+                    id=project.application.owner_id,  # Use owner's user ID as placeholder
+                    project_id=project_id,
+                    user_id=project.application.owner_id,
+                    role="owner",  # Virtual role for display
+                    added_by_user_id=None,
+                    created_at=project.created_at,
+                    updated_at=project.updated_at or project.created_at,
+                    user=user_summary,
+                )
+            )
 
     return assignable
 

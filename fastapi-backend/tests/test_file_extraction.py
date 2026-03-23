@@ -94,9 +94,7 @@ class TestMarkdownTable:
     """Tests for _rows_to_markdown_table."""
 
     def test_simple_table(self):
-        result = _rows_to_markdown_table(
-            ["Name", "Age"], [["Alice", "30"], ["Bob", "25"]]
-        )
+        result = _rows_to_markdown_table(["Name", "Age"], [["Alice", "30"], ["Bob", "25"]])
         assert "| Name | Age |" in result
         assert "| --- | --- |" in result
         assert "| Alice | 30 |" in result
@@ -111,9 +109,7 @@ class TestMarkdownTable:
 
     def test_exact_row_count(self):
         """Output has exactly 1 header + 1 separator + N data rows."""
-        result = _rows_to_markdown_table(
-            ["A", "B"], [["1", "2"], ["3", "4"], ["5", "6"]]
-        )
+        result = _rows_to_markdown_table(["A", "B"], [["1", "2"], ["3", "4"], ["5", "6"]])
         lines = [l for l in result.strip().split("\n") if l.strip()]
         assert len(lines) == 5  # header + separator + 3 data rows
 
@@ -122,17 +118,13 @@ class TestMarkdownKV:
     """Tests for _rows_to_markdown_kv."""
 
     def test_kv_format(self):
-        result = _rows_to_markdown_kv(
-            ["Name", "Value"], [["key1", "val1"]]
-        )
+        result = _rows_to_markdown_kv(["Name", "Value"], [["key1", "val1"]])
         assert "**Row 1**" in result
         assert "- **Name**: key1" in result
         assert "- **Value**: val1" in result
 
     def test_multiple_rows(self):
-        result = _rows_to_markdown_kv(
-            ["A", "B"], [["1", "2"], ["3", "4"]]
-        )
+        result = _rows_to_markdown_kv(["A", "B"], [["1", "2"], ["3", "4"]])
         assert "**Row 1**" in result
         assert "**Row 2**" in result
 
@@ -217,7 +209,10 @@ class TestSpreadsheetExtractorExcel:
 
         with patch("app.ai.spreadsheet_extractor.CalamineWorkbook", create=True) as MockCW:
             # Patch the import inside the method
-            with patch.dict("sys.modules", {"python_calamine": MagicMock(CalamineWorkbook=MagicMock(from_path=MagicMock(return_value=mock_wb)))}):
+            with patch.dict(
+                "sys.modules",
+                {"python_calamine": MagicMock(CalamineWorkbook=MagicMock(from_path=MagicMock(return_value=mock_wb)))},
+            ):
                 # We need to patch the local import
                 import importlib
                 import app.ai.spreadsheet_extractor as ss_mod
@@ -238,7 +233,7 @@ class TestSpreadsheetExtractorExcel:
                             continue
                         total_rows += len(data)
                         raw_headers = data[0]
-                        headers = [_format_cell(h) or f"Col{i+1}" for i, h in enumerate(raw_headers)]
+                        headers = [_format_cell(h) or f"Col{i + 1}" for i, h in enumerate(raw_headers)]
                         rows = [[_format_cell(c) for c in row] for row in data[1:]]
                         section_title = f"## {sheet_name}\n\n"
                         if len(headers) <= 10:
@@ -249,8 +244,10 @@ class TestSpreadsheetExtractorExcel:
 
                     markdown = "\n\n".join(sections) if sections else "*Empty workbook*\n"
                     return SpreadsheetResult(
-                        markdown=markdown, sheet_count=len(sheet_names),
-                        total_rows=total_rows, warnings=warnings,
+                        markdown=markdown,
+                        sheet_count=len(sheet_names),
+                        total_rows=total_rows,
+                        warnings=warnings,
                     )
 
                 result = patched_extract(extractor, "/tmp/test.xlsx")
@@ -272,7 +269,12 @@ class TestSpreadsheetExtractorExcel:
             mock_calamine = MagicMock()
             mock_calamine.CalamineWorkbook.from_path.side_effect = BadZipFile("Not a zip file")
 
-            with patch("builtins.__import__", side_effect=lambda name, *args: mock_calamine if name == "python_calamine" else __builtins__.__import__(name, *args)):
+            with patch(
+                "builtins.__import__",
+                side_effect=lambda name, *args: (
+                    mock_calamine if name == "python_calamine" else __builtins__.__import__(name, *args)
+                ),
+            ):
                 # Use a simpler approach: directly test the logic path
                 pass
 
@@ -347,7 +349,7 @@ class TestSpreadsheetExtractorExcel:
         sections = []
         data = mock_sheet.to_python()
         raw_headers = data[0]
-        fmt_headers = [_format_cell(h) or f"Col{i+1}" for i, h in enumerate(raw_headers)]
+        fmt_headers = [_format_cell(h) or f"Col{i + 1}" for i, h in enumerate(raw_headers)]
         rows = [[_format_cell(c) for c in row] for row in data[1:]]
 
         assert len(fmt_headers) == 15
@@ -397,9 +399,16 @@ class TestFileExtractionService:
     async def test_supported_extensions(self):
         """Verify the SUPPORTED_EXTENSIONS set is correct."""
         expected = {
-            ".pdf", ".docx", ".pptx",
-            ".xlsx", ".xls", ".xlsm", ".xlsb",
-            ".csv", ".tsv", ".vsdx",
+            ".pdf",
+            ".docx",
+            ".pptx",
+            ".xlsx",
+            ".xls",
+            ".xlsm",
+            ".xlsb",
+            ".csv",
+            ".tsv",
+            ".vsdx",
         }
         assert SUPPORTED_EXTENSIONS == expected
 
@@ -438,7 +447,8 @@ class TestFileExtractionService:
         """Exceptions in extractors are caught and returned as errors."""
         svc = FileExtractionService()
         with patch.object(
-            svc, "_extract_spreadsheet",
+            svc,
+            "_extract_spreadsheet",
             new_callable=AsyncMock,
             side_effect=RuntimeError("Boom"),
         ):
@@ -451,7 +461,8 @@ class TestFileExtractionService:
         """ValueError from extractors (e.g., BadZipFile, password) is caught."""
         svc = FileExtractionService()
         with patch.object(
-            svc, "_extract_spreadsheet",
+            svc,
+            "_extract_spreadsheet",
             new_callable=AsyncMock,
             side_effect=ValueError("Password-protected Excel files are not supported"),
         ):
@@ -482,6 +493,7 @@ class TestVisioExtractor:
         vsdx_file.write_bytes(b"")
 
         from app.ai.visio_extractor import VisioExtractor
+
         extractor = VisioExtractor()
 
         with pytest.raises(ValueError, match="Empty"):
@@ -491,6 +503,7 @@ class TestVisioExtractor:
     def test_extract_nonexistent_file(self):
         """Non-existent file raises ValueError (was ImportError before MED-11)."""
         from app.ai.visio_extractor import VisioExtractor
+
         extractor = VisioExtractor()
 
         with pytest.raises(ValueError, match="not found"):
@@ -502,6 +515,7 @@ class TestVisioExtractor:
             pytest.skip("vsdx is installed; cannot test import failure")
 
         from app.ai.visio_extractor import VisioExtractor
+
         extractor = VisioExtractor()
 
         with pytest.raises(ImportError, match="vsdx is required"):

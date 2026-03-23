@@ -35,9 +35,7 @@ class TestPKCEGeneration:
     def test_code_verifier_url_safe(self):
         """code_verifier contains only unreserved characters [A-Za-z0-9\\-._~]."""
         verifier, _ = OAuthService.generate_pkce_pair()
-        assert re.fullmatch(r"[A-Za-z0-9\-._~]+", verifier), (
-            f"Verifier contains invalid characters: {verifier}"
-        )
+        assert re.fullmatch(r"[A-Za-z0-9\-._~]+", verifier), f"Verifier contains invalid characters: {verifier}"
 
     def test_code_challenge_s256(self):
         """code_challenge equals BASE64URL(SHA256(code_verifier))."""
@@ -76,9 +74,10 @@ class TestStateManagement:
         user_id = uuid4()
         mock_redis = AsyncMock()
 
-        with patch(
-            "app.services.redis_service.redis_service", mock_redis
-        ), patch("app.ai.oauth_service.settings") as mock_settings:
+        with (
+            patch("app.services.redis_service.redis_service", mock_redis),
+            patch("app.ai.oauth_service.settings") as mock_settings,
+        ):
             mock_settings.oauth_state_ttl_seconds = 600
             mock_settings.openai_oauth_client_id = "test-client"
 
@@ -112,11 +111,13 @@ class TestStateManagement:
     async def test_state_single_use(self):
         """State is deleted after first read; second read returns None (atomic GETDEL)."""
         user_id = uuid4()
-        state_data = json.dumps({
-            "user_id": str(user_id),
-            "code_verifier": "verifier123",
-            "provider_type": "openai",
-        })
+        state_data = json.dumps(
+            {
+                "user_id": str(user_id),
+                "code_verifier": "verifier123",
+                "provider_type": "openai",
+            }
+        )
 
         call_count = 0
 

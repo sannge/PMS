@@ -8,6 +8,7 @@ Revision ID: 20260225_pgvector_ext
 Revises: 20260224_ai_config
 Create Date: 2026-02-25
 """
+
 from typing import Sequence, Union
 
 from alembic import op

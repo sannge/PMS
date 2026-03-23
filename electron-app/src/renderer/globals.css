@@ -321,6 +321,290 @@
   }
 }
 
+/* ============================================================================
+   TOAST NOTIFICATIONS — Sonner custom styling
+   Uses design system CSS vars for type-specific backgrounds and accents
+   ============================================================================ */
+
+.toast-base {
+  font-family: var(--font-sans);
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  width: 360px;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
+  box-shadow:
+    0 8px 24px -4px rgb(0 0 0 / 0.08),
+    0 2px 8px -2px rgb(0 0 0 / 0.04);
+  backdrop-filter: blur(12px);
+  animation: toast-slide-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+}
+
+/* Icon stays pinned left, never pushed by text */
+.toast-base [data-icon] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+}
+
+/* Content wrapper takes remaining space, truncates long text */
+.toast-base [data-content] {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.dark .toast-base {
+  box-shadow:
+    0 8px 24px -4px rgb(0 0 0 / 0.35),
+    0 2px 8px -2px rgb(0 0 0 / 0.25);
+}
+
+.toast-title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toast-description {
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  color: hsl(var(--muted-foreground));
+  margin-top: 2px;
+}
+
+/* ── Type variants ──────────────────────────────────────────── */
+
+.toast-success {
+  border-left: 3px solid hsl(var(--success));
+  background: hsl(var(--success) / 0.06);
+}
+
+.toast-success .toast-title {
+  color: hsl(142 60% 30%);
+}
+
+.dark .toast-success {
+  background: hsl(var(--success) / 0.08);
+}
+
+.dark .toast-success .toast-title {
+  color: hsl(142 60% 70%);
+}
+
+.toast-success [data-icon] {
+  color: hsl(var(--success));
+}
+
+.toast-error {
+  border-left: 3px solid hsl(var(--destructive));
+  background: hsl(var(--destructive) / 0.06);
+}
+
+.toast-error .toast-title {
+  color: hsl(0 60% 35%);
+}
+
+.dark .toast-error {
+  background: hsl(var(--destructive) / 0.08);
+}
+
+.dark .toast-error .toast-title {
+  color: hsl(0 70% 72%);
+}
+
+.toast-error [data-icon] {
+  color: hsl(var(--destructive));
+}
+
+.toast-warning {
+  border-left: 3px solid hsl(var(--warning));
+  background: hsl(var(--warning) / 0.06);
+}
+
+.toast-warning .toast-title {
+  color: hsl(30 70% 30%);
+}
+
+.dark .toast-warning {
+  background: hsl(var(--warning) / 0.08);
+}
+
+.dark .toast-warning .toast-title {
+  color: hsl(38 85% 70%);
+}
+
+.toast-warning [data-icon] {
+  color: hsl(var(--warning));
+}
+
+.toast-info {
+  border-left: 3px solid hsl(var(--ring));
+  background: hsl(var(--ring) / 0.05);
+}
+
+.toast-info .toast-title {
+  color: hsl(220 60% 35%);
+}
+
+.dark .toast-info {
+  background: hsl(var(--ring) / 0.08);
+}
+
+.dark .toast-info .toast-title {
+  color: hsl(220 80% 75%);
+}
+
+.toast-info [data-icon] {
+  color: hsl(var(--ring));
+}
+
+/* ── Loading ────────────────────────────────────────────────── */
+
+.toast-loading {
+  border-left: 3px solid hsl(var(--accent));
+  background: hsl(var(--accent) / 0.05);
+}
+
+.toast-loading .toast-title {
+  color: hsl(30 50% 30%);
+}
+
+.dark .toast-loading {
+  background: hsl(var(--accent) / 0.08);
+}
+
+.dark .toast-loading .toast-title {
+  color: hsl(35 80% 75%);
+}
+
+.toast-loading [data-icon] {
+  color: hsl(var(--accent));
+}
+
+/* Override Sonner's absolute-positioned loader that centers in the toast */
+.toast-base .sonner-loader {
+  position: static;
+  transform: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.toast-spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ── Default (plain toast.message) ──────────────────────────── */
+
+.toast-default {
+  border-left: 3px solid hsl(var(--border));
+}
+
+/* ── Action / Cancel buttons ────────────────────────────────── */
+
+.toast-action {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  border: none;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  margin-left: auto;
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.toast-action:hover {
+  opacity: 0.85;
+}
+
+.toast-cancel {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s;
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.toast-cancel:hover {
+  background: hsl(var(--muted-foreground) / 0.15);
+}
+
+/* ── Close button ───────────────────────────────────────────── */
+
+.toast-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.toast-base:hover .toast-close {
+  opacity: 1;
+}
+
+.toast-close:hover {
+  background: hsl(var(--muted));
+}
+
+/* ── Entrance animation ─────────────────────────────────────── */
+
+@keyframes toast-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
 @layer utilities {
   /* Electron window draggable regions */
   .app-drag {

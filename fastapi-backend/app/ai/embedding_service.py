@@ -129,9 +129,7 @@ class EmbeddingService:
             )
 
         # Step 3: Normalize embeddings
-        normalized_embeddings = [
-            self.normalizer.normalize(emb) for emb in raw_embeddings
-        ]
+        normalized_embeddings = [self.normalizer.normalize(emb) for emb in raw_embeddings]
 
         # Step 4: Delete existing chunks (replace on re-embed)
         await self.delete_document_chunks(document_id)
@@ -164,7 +162,10 @@ class EmbeddingService:
         elapsed = int((time.monotonic() - start_time) * 1000)
         logger.info(
             "Embedded document %s: %d chunks, %d tokens, %dms",
-            document_id, len(chunks), total_tokens, elapsed,
+            document_id,
+            len(chunks),
+            total_tokens,
+            elapsed,
         )
 
         # Telemetry: log embedding operation
@@ -258,7 +259,9 @@ class EmbeddingService:
 
         logger.info(
             "Batch embed complete: total=%d, succeeded=%d, failed=%d",
-            total, succeeded, failed,
+            total,
+            succeeded,
+            failed,
         )
 
         return BatchResult(
@@ -324,9 +327,7 @@ class EmbeddingService:
             )
 
         # Step 3: Normalize
-        normalized_embeddings = [
-            self.normalizer.normalize(emb) for emb in raw_embeddings
-        ]
+        normalized_embeddings = [self.normalizer.normalize(emb) for emb in raw_embeddings]
 
         # Step 4: Delete existing file chunks
         await self.delete_file_chunks(file_id)
@@ -360,7 +361,10 @@ class EmbeddingService:
         elapsed = int((time.monotonic() - start_time) * 1000)
         logger.info(
             "Embedded file %s: %d chunks, %d tokens, %dms",
-            file_id, len(chunks), total_tokens, elapsed,
+            file_id,
+            len(chunks),
+            total_tokens,
+            elapsed,
         )
 
         return EmbedResult(
@@ -380,11 +384,7 @@ class EmbeddingService:
         Returns:
             Count of deleted chunks.
         """
-        result = await self.db.execute(
-            delete(DocumentChunk).where(
-                DocumentChunk.file_id == file_id
-            )
-        )
+        result = await self.db.execute(delete(DocumentChunk).where(DocumentChunk.file_id == file_id))
         count = result.rowcount
         if count > 0:
             logger.debug("Deleted %d chunks for file %s", count, file_id)
@@ -418,11 +418,7 @@ class EmbeddingService:
         Returns:
             Count of deleted chunks.
         """
-        result = await self.db.execute(
-            delete(DocumentChunk).where(
-                DocumentChunk.document_id == document_id
-            )
-        )
+        result = await self.db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document_id))
         count = result.rowcount
         if count > 0:
             logger.debug("Deleted %d chunks for document %s", count, document_id)

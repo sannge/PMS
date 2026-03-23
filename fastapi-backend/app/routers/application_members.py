@@ -205,9 +205,7 @@ async def list_application_members(
     """
     # Fetch application with owner eagerly loaded in single query
     result = await db.execute(
-        select(Application)
-        .options(selectinload(Application.owner))
-        .where(Application.id == application_id)
+        select(Application).options(selectinload(Application.owner)).where(Application.id == application_id)
     )
     application = result.scalar_one_or_none()
 
@@ -228,10 +226,7 @@ async def list_application_members(
 
     # Check if current user is a member (either app owner or in members list)
     is_app_owner = application.owner_id == current_user.id
-    current_user_member = next(
-        (m for m in all_members if m.user_id == current_user.id),
-        None
-    )
+    current_user_member = next((m for m in all_members if m.user_id == current_user.id), None)
 
     if not is_app_owner and not current_user_member:
         raise HTTPException(
@@ -242,10 +237,7 @@ async def list_application_members(
     result_members = []
 
     # Check if owner is in the members list
-    owner_in_members = next(
-        (m for m in all_members if m.user_id == application.owner_id),
-        None
-    )
+    owner_in_members = next((m for m in all_members if m.user_id == application.owner_id), None)
 
     # If owner is not in members table, create a synthetic member entry
     # and add them at the beginning (only if not filtering by role or filtering by owner)
@@ -278,7 +270,7 @@ async def list_application_members(
     effective_limit = limit - len(result_members) if result_members else limit
 
     if effective_limit > 0:
-        paginated_members = filtered_members[effective_skip:effective_skip + effective_limit]
+        paginated_members = filtered_members[effective_skip : effective_skip + effective_limit]
         result_members.extend(paginated_members)
 
     return result_members
@@ -540,7 +532,8 @@ async def update_member_role(
     invalidate_app_role(user_id, application_id)
     fire_and_forget(
         publish_user_cache_invalidation(
-            user_id=str(user_id), app_id=str(application_id),
+            user_id=str(user_id),
+            app_id=str(application_id),
         ),
         name="change-app-member-role-user-cache-invalidation",
     )
@@ -584,6 +577,7 @@ async def update_member_role(
         # R2-6: Invalidate RBAC scope cache so AI retrieval reflects new role
         try:
             from ..services.redis_service import redis_service
+
             if redis_service.is_connected:
                 await redis_service.delete(f"rbac_scope:{user_id}")
         except Exception:
@@ -704,8 +698,7 @@ async def remove_member(
             project_counts[project_name] = project_counts.get(project_name, 0) + 1
 
         active_assignments = [
-            {"project_name": name, "active_task_count": count}
-            for name, count in project_counts.items()
+            {"project_name": name, "active_task_count": count} for name, count in project_counts.items()
         ]
 
     if active_assignments:
@@ -728,7 +721,8 @@ async def remove_member(
     invalidate_app_role(user_id, application_id)
     fire_and_forget(
         publish_user_cache_invalidation(
-            user_id=str(user_id), app_id=str(application_id),
+            user_id=str(user_id),
+            app_id=str(application_id),
         ),
         name="remove-app-member-user-cache-invalidation",
     )
@@ -773,6 +767,7 @@ async def remove_member(
     # Invalidate search scope cache so removed user can no longer see docs in search
     try:
         from ..services.redis_service import redis_service
+
         if redis_service.is_connected:
             await redis_service.delete(f"search:scope:{user_id}")
             # R2-6: Invalidate RBAC scope cache so AI retrieval reflects removal

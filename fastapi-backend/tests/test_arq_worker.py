@@ -36,10 +36,11 @@ ARCHIVE_AFTER_DAYS = 7
 def get_test_password_hash(password: str) -> str:
     """Generate a password hash for testing."""
     import bcrypt
-    password_bytes = password.encode('utf-8')
+
+    password_bytes = password.encode("utf-8")
     salt = bcrypt.gensalt()
     hashed = bcrypt.hashpw(password_bytes, salt)
-    return hashed.decode('utf-8')
+    return hashed.decode("utf-8")
 
 
 @pytest_asyncio.fixture
@@ -76,6 +77,7 @@ async def arq_test_application(db_session: AsyncSession, arq_test_user: User) ->
 async def arq_test_project(db_session: AsyncSession, arq_test_application: Application) -> Project:
     """Create a test project with statuses for ARQ tests."""
     from datetime import date
+
     project = Project(
         id=uuid4(),
         application_id=arq_test_application.id,
@@ -219,9 +221,7 @@ class TestArchiveStaledoneTasks:
     """Tests for archive_stale_done_tasks function."""
 
     @pytest.mark.asyncio
-    async def test_archives_old_done_task(
-        self, db_session: AsyncSession, archivable_task: Task
-    ):
+    async def test_archives_old_done_task(self, db_session: AsyncSession, archivable_task: Task):
         """Task done 8+ days ago should be archived."""
         # Verify task is not archived initially
         assert archivable_task.archived_at is None
@@ -236,9 +236,7 @@ class TestArchiveStaledoneTasks:
         assert archivable_task.archived_at is not None
 
     @pytest.mark.asyncio
-    async def test_does_not_archive_recent_done_task(
-        self, db_session: AsyncSession, recent_done_task: Task
-    ):
+    async def test_does_not_archive_recent_done_task(self, db_session: AsyncSession, recent_done_task: Task):
         """Task done less than 7 days ago should NOT be archived."""
         task_id = recent_done_task.id
 
@@ -251,9 +249,7 @@ class TestArchiveStaledoneTasks:
         assert recent_done_task.archived_at is None
 
     @pytest.mark.asyncio
-    async def test_does_not_archive_active_task(
-        self, db_session: AsyncSession, active_task: Task
-    ):
+    async def test_does_not_archive_active_task(self, db_session: AsyncSession, active_task: Task):
         """Active (non-done) task should NOT be archived."""
         # Run archive
         await archive_stale_done_tasks(db_session)
@@ -264,9 +260,7 @@ class TestArchiveStaledoneTasks:
         assert active_task.archived_at is None
 
     @pytest.mark.asyncio
-    async def test_archive_is_idempotent(
-        self, db_session: AsyncSession, archivable_task: Task
-    ):
+    async def test_archive_is_idempotent(self, db_session: AsyncSession, archivable_task: Task):
         """Running archive twice should not cause errors."""
         # First run
         count1 = await archive_stale_done_tasks(db_session)
@@ -332,9 +326,7 @@ class TestRunArchiveJobs:
     """Tests for the combined run_archive_jobs function."""
 
     @pytest.mark.asyncio
-    async def test_run_archive_jobs_returns_counts(
-        self, db_session: AsyncSession, archivable_task: Task
-    ):
+    async def test_run_archive_jobs_returns_counts(self, db_session: AsyncSession, archivable_task: Task):
         """run_archive_jobs should return counts of archived items."""
         from unittest.mock import patch, AsyncMock
 
@@ -371,15 +363,10 @@ class TestCleanupStalePresence:
 
         # Add a stale presence entry (old timestamp)
         stale_timestamp = time.time() - 60  # 60 seconds ago (TTL is 45s)
-        await redis_service.client.zadd(
-            f"{PRESENCE_PREFIX}{room_id}",
-            {user_id: stale_timestamp}
-        )
+        await redis_service.client.zadd(f"{PRESENCE_PREFIX}{room_id}", {user_id: stale_timestamp})
 
         # Verify entry exists
-        score = await redis_service.client.zscore(
-            f"{PRESENCE_PREFIX}{room_id}", user_id
-        )
+        score = await redis_service.client.zscore(f"{PRESENCE_PREFIX}{room_id}", user_id)
         assert score is not None
 
         # Run cleanup
@@ -387,9 +374,7 @@ class TestCleanupStalePresence:
         result = await cleanup_stale_presence(ctx)
 
         # Verify entry was removed
-        score = await redis_service.client.zscore(
-            f"{PRESENCE_PREFIX}{room_id}", user_id
-        )
+        score = await redis_service.client.zscore(f"{PRESENCE_PREFIX}{room_id}", user_id)
         assert score is None
         assert result["removed"] >= 1
 
@@ -404,19 +389,14 @@ class TestCleanupStalePresence:
 
         # Add a fresh presence entry (current timestamp)
         fresh_timestamp = time.time()
-        await redis_service.client.zadd(
-            f"{PRESENCE_PREFIX}{room_id}",
-            {user_id: fresh_timestamp}
-        )
+        await redis_service.client.zadd(f"{PRESENCE_PREFIX}{room_id}", {user_id: fresh_timestamp})
 
         # Run cleanup
         ctx = {}
         await cleanup_stale_presence(ctx)
 
         # Verify entry still exists
-        score = await redis_service.client.zscore(
-            f"{PRESENCE_PREFIX}{room_id}", user_id
-        )
+        score = await redis_service.client.zscore(f"{PRESENCE_PREFIX}{room_id}", user_id)
         assert score is not None
 
         # Cleanup

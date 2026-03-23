@@ -151,8 +151,7 @@ class DocumentChunk(Base):
     # Constraints and indexes
     __table_args__ = (
         CheckConstraint(
-            "(document_id IS NOT NULL AND file_id IS NULL)"
-            " OR (document_id IS NULL AND file_id IS NOT NULL)",
+            "(document_id IS NOT NULL AND file_id IS NULL) OR (document_id IS NULL AND file_id IS NOT NULL)",
             name="ck_chunks_exactly_one_source",
         ),
         Index("idx_document_chunks_doc_idx", "document_id", "chunk_index", unique=True),

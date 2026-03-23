@@ -121,7 +121,9 @@ class FileExtractionService:
         except Exception as exc:
             logger.error(
                 "File extraction failed for %s: %s: %s",
-                file_path, type(exc).__name__, exc,
+                file_path,
+                type(exc).__name__,
+                exc,
             )
             return ExtractionResult(
                 markdown="",
@@ -129,9 +131,7 @@ class FileExtractionService:
                 error=f"Extraction failed: {type(exc).__name__}: {exc}",
             )
 
-    async def _extract_docling(
-        self, file_path: str | Path, ext: str
-    ) -> ExtractionResult:
+    async def _extract_docling(self, file_path: str | Path, ext: str) -> ExtractionResult:
         """Extract content using DoclingService."""
         from .docling_service import DoclingService
 
@@ -155,22 +155,16 @@ class FileExtractionService:
             success=True,
         )
 
-    async def _extract_spreadsheet(
-        self, file_path: str | Path, ext: str
-    ) -> ExtractionResult:
+    async def _extract_spreadsheet(self, file_path: str | Path, ext: str) -> ExtractionResult:
         """Extract content using SpreadsheetExtractor."""
         from .spreadsheet_extractor import SpreadsheetExtractor
 
         extractor = SpreadsheetExtractor()
 
         if ext in {".csv", ".tsv"}:
-            result = await asyncio.to_thread(
-                extractor.extract_csv, file_path
-            )
+            result = await asyncio.to_thread(extractor.extract_csv, file_path)
         else:
-            result = await asyncio.to_thread(
-                extractor.extract_excel, file_path
-            )
+            result = await asyncio.to_thread(extractor.extract_excel, file_path)
 
         return ExtractionResult(
             markdown=result.markdown,
@@ -182,9 +176,7 @@ class FileExtractionService:
             success=True,
         )
 
-    async def _extract_visio(
-        self, file_path: str | Path
-    ) -> ExtractionResult:
+    async def _extract_visio(self, file_path: str | Path) -> ExtractionResult:
         """Extract content using VisioExtractor."""
         from .visio_extractor import VisioExtractor
 

@@ -8,15 +8,16 @@ This module provides WebSocket connection management with:
 """
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import Any, Optional
 from uuid import UUID
 
-from fastapi import WebSocket, WebSocketDisconnect
+from fastapi import WebSocket
 
 from ..ai.config_service import get_agent_config
 from ..config import settings
@@ -25,8 +26,19 @@ from ..utils.timezone import utc_now
 
 logger = logging.getLogger(__name__)
 
-_cfg = get_agent_config()
-_WS_BATCH_SIZE = _cfg.get_int("websocket.batch_size", 50)
+
+def _ws_json_default(obj: Any) -> Any:
+    """Custom JSON serializer for WebSocket messages.
+
+    Handles UUID and datetime objects that ``json.dumps`` cannot
+    serialize by default.  Matches Starlette's ``send_json`` behaviour
+    which falls back to ``str()`` for unknown types.
+    """
+    if isinstance(obj, UUID):
+        return str(obj)
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
 class MessageType(str, Enum):
@@ -192,12 +204,22 @@ class ConnectionManager:
         self._user_connections: dict[UUID, set[WebSocketConnection]] = {}
         # Debounce timestamp for Redis disconnection warnings
         self._last_redis_warning: float = 0.0
-        # Lock for thread-safe operations
-        self._lock = asyncio.Lock()
+        # Separate locks for connect/disconnect vs room operations (Finding #25)
+        self._connection_lock = asyncio.Lock()
+        # Per-room locks to avoid serializing unrelated room operations
+        self._room_locks: dict[str, asyncio.Lock] = {}
+        self._room_locks_lock = asyncio.Lock()  # protects _room_locks dict creation
         # M20: Lock to prevent double-subscribe race in initialize_redis
         self._init_lock = asyncio.Lock()
         # Redis initialization flag
         self._redis_initialized = False
+
+    async def _get_room_lock(self, room_id: str) -> asyncio.Lock:
+        """Get or create a lock for a specific room."""
+        async with self._room_locks_lock:
+            if room_id not in self._room_locks:
+                self._room_locks[room_id] = asyncio.Lock()
+            return self._room_locks[room_id]
 
     async def initialize_redis(self) -> None:
         """Set up Redis pub/sub handlers for cross-worker messaging.
@@ -212,14 +234,8 @@ class ConnectionManager:
             if self._redis_initialized:
                 return
 
-            await redis_service.subscribe(
-                self._BROADCAST_CHANNEL,
-                self._handle_redis_broadcast
-            )
-            await redis_service.subscribe(
-                self._USER_CHANNEL,
-                self._handle_redis_user_message
-            )
+            await redis_service.subscribe(self._BROADCAST_CHANNEL, self._handle_redis_broadcast)
+            await redis_service.subscribe(self._USER_CHANNEL, self._handle_redis_user_message)
             self._redis_initialized = True
             logger.info("ConnectionManager Redis pub/sub initialized")
 
@@ -241,7 +257,8 @@ class ConnectionManager:
 
         # Send to LOCAL connections only (Redis already distributed to all workers)
         connections = [
-            conn for conn in self._rooms.get(room_id, set()).copy()
+            conn
+            for conn in self._rooms.get(room_id, set()).copy()
             if not (exclude_conn_id and str(id(conn.websocket)) == exclude_conn_id)
         ]
 
@@ -276,6 +293,9 @@ class ConnectionManager:
     ) -> int:
         """Send a message to connections in batches with per-send timeout.
 
+        Pre-serializes the message to JSON once, then sends the text string
+        to each connection to avoid redundant serialization per recipient.
+
         Sends in groups of 50 with a 2-second timeout per send to prevent
         amplification and stalled connections from blocking the event loop.
 
@@ -289,15 +309,18 @@ class ConnectionManager:
         if not connections:
             return 0
 
-        _BATCH_SIZE = _WS_BATCH_SIZE
+        _BATCH_SIZE = get_agent_config().get_int("websocket.batch_size", 50)
         _SEND_TIMEOUT_S = 2.0
         success_count = 0
 
+        # Pre-serialize once instead of per-connection
+        serialized = json.dumps(message, default=_ws_json_default)
+
         for i in range(0, len(connections), _BATCH_SIZE):
-            batch = connections[i:i + _BATCH_SIZE]
+            batch = connections[i : i + _BATCH_SIZE]
             tasks = [
                 asyncio.wait_for(
-                    self.send_personal(conn, message),
+                    self._send_text_personal(conn, serialized),
                     timeout=_SEND_TIMEOUT_S,
                 )
                 for conn in batch
@@ -346,11 +369,13 @@ class ConnectionManager:
             WebSocketConnection: The connection wrapper object, or None if rejected
         """
         # L3: Global WebSocket connection cap (per worker process)
-        _global_cap = _cfg.get_int("websocket.max_global_connections", 10000)
+        _global_cap = get_agent_config().get_int("websocket.max_global_connections", 10000)
         if len(self._connections) >= _global_cap:
             logger.warning(
                 "Global WebSocket cap reached: %d/%d — rejecting connection for user %s",
-                len(self._connections), _global_cap, user_id,
+                len(self._connections),
+                _global_cap,
+                user_id,
             )
             await websocket.close(code=4029, reason="Server at connection capacity")
             return None
@@ -372,7 +397,7 @@ class ConnectionManager:
             user_id=user_id,
         )
 
-        async with self._lock:
+        async with self._connection_lock:
             self._connections[websocket] = connection
 
             # Track by user
@@ -385,10 +410,7 @@ class ConnectionManager:
             for room_id in initial_rooms:
                 await self.join_room(connection, room_id)
 
-        logger.info(
-            f"WebSocket connected: user={user_id}, "
-            f"total_connections={self.total_connections}"
-        )
+        logger.info(f"WebSocket connected: user={user_id}, total_connections={self.total_connections}")
 
         # Send connection confirmation
         await self.send_personal(
@@ -412,7 +434,8 @@ class ConnectionManager:
         Args:
             websocket: The WebSocket instance to disconnect
         """
-        async with self._lock:
+        empty_rooms: list[str] = []
+        async with self._connection_lock:
             connection = self._connections.pop(websocket, None)
 
             if connection is None:
@@ -424,17 +447,22 @@ class ConnectionManager:
                 if not self._user_connections[connection.user_id]:
                     del self._user_connections[connection.user_id]
 
-            # Remove from all rooms
+            # Remove from all rooms (lightweight, no per-room lock needed
+            # since we hold connection_lock and only modify sets)
             for room_id in list(connection.rooms):
                 if room_id in self._rooms:
                     self._rooms[room_id].discard(connection)
                     if not self._rooms[room_id]:
                         del self._rooms[room_id]
+                        empty_rooms.append(room_id)
 
-        logger.info(
-            f"WebSocket disconnected: user={connection.user_id}, "
-            f"total_connections={self.total_connections}"
-        )
+        # Clean up per-room locks outside connection_lock to avoid deadlock
+        if empty_rooms:
+            async with self._room_locks_lock:
+                for room_id in empty_rooms:
+                    self._room_locks.pop(room_id, None)
+
+        logger.info(f"WebSocket disconnected: user={connection.user_id}, total_connections={self.total_connections}")
 
     async def join_room(
         self,
@@ -450,13 +478,12 @@ class ConnectionManager:
             room_id: The room identifier
             notify_others: Whether to notify other room members
         """
-        async with self._lock:
+        room_lock = await self._get_room_lock(room_id)
+        async with room_lock:
             if room_id not in self._rooms:
                 self._rooms[room_id] = set()
             self._rooms[room_id].add(connection)
             connection.rooms.add(room_id)
-
-        room_size = self.get_room_count(room_id)
 
         # Confirm to the joining user
         await self.send_personal(
@@ -500,17 +527,22 @@ class ConnectionManager:
             room_id: The room identifier
             notify_others: Whether to notify other room members
         """
-        async with self._lock:
+        room_lock = await self._get_room_lock(room_id)
+        room_empty = False
+        async with room_lock:
             if room_id in self._rooms:
                 self._rooms[room_id].discard(connection)
                 if not self._rooms[room_id]:
                     del self._rooms[room_id]
+                    room_empty = True
             connection.rooms.discard(room_id)
 
-        logger.info(
-            f"User {connection.user_id} left room {room_id} "
-            f"(room_size={self.get_room_count(room_id)})"
-        )
+        # Clean up per-room lock when room becomes empty to prevent unbounded growth
+        if room_empty:
+            async with self._room_locks_lock:
+                self._room_locks.pop(room_id, None)
+
+        logger.info(f"User {connection.user_id} left room {room_id} (room_size={self.get_room_count(room_id)})")
 
         # Confirm to the leaving user
         await self.send_personal(
@@ -570,6 +602,39 @@ class ConnectionManager:
                 task.add_done_callback(self._log_disconnect_error)
             return False
 
+    async def _send_text_personal(
+        self,
+        connection: WebSocketConnection,
+        serialized: str,
+    ) -> bool:
+        """Send a pre-serialized JSON string to a specific connection.
+
+        Same failure tracking as send_personal but avoids per-connection
+        JSON serialization overhead during broadcasts.
+
+        Args:
+            connection: The target connection
+            serialized: Pre-serialized JSON string
+
+        Returns:
+            bool: True if sent successfully, False otherwise
+        """
+        try:
+            await connection.websocket.send_text(serialized)
+            connection.consecutive_failures = 0
+            return True
+        except Exception:
+            connection.consecutive_failures += 1
+            if connection.consecutive_failures >= 3:
+                logger.info(
+                    "Disconnecting stale connection: user=%s, failures=%d",
+                    connection.user_id,
+                    connection.consecutive_failures,
+                )
+                task = asyncio.create_task(self.disconnect(connection.websocket))
+                task.add_done_callback(self._log_disconnect_error)
+            return False
+
     @staticmethod
     def _log_disconnect_error(task: asyncio.Task) -> None:
         """Log exceptions from background disconnect tasks."""
@@ -606,7 +671,7 @@ class ConnectionManager:
                     "room_id": room_id,
                     "message": message,
                     "exclude_conn_id": str(id(exclude.websocket)) if exclude else None,
-                }
+                },
             )
             # Redis will deliver to all workers including this one via _handle_redis_broadcast
             return len(self._rooms.get(room_id, []))
@@ -617,8 +682,7 @@ class ConnectionManager:
         if now - self._last_redis_warning > 60:
             self._last_redis_warning = now
             logger.warning(
-                "Redis not connected - falling back to local-only broadcast. "
-                "Cross-worker real-time sync is degraded.",
+                "Redis not connected - falling back to local-only broadcast. Cross-worker real-time sync is degraded.",
             )
         connections = list(self._rooms.get(room_id, set()).copy())
 
@@ -654,7 +718,7 @@ class ConnectionManager:
                 {
                     "user_id": str(user_id),
                     "message": message,
-                }
+                },
             )
             # Redis will deliver to all workers including this one via _handle_redis_user_message
             return len(self._user_connections.get(user_id, []))
@@ -778,9 +842,7 @@ class ConnectionManager:
                 )
 
         else:
-            logger.debug(
-                f"Unhandled message type: {message_type} from user {connection.user_id}"
-            )
+            logger.debug(f"Unhandled message type: {message_type} from user {connection.user_id}")
 
     def get_room_users(self, room_id: str) -> list[UUID]:
         """

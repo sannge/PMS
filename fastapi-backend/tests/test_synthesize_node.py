@@ -23,12 +23,9 @@ from app.ai.agent.nodes.synthesize import synthesize_node
 
 
 class TestSynthesizeNode:
-
     async def test_normal_synthesis(self):
         model = AsyncMock()
-        model.ainvoke = AsyncMock(
-            return_value=AIMessage(content="| Metric | Alpha | Beta |\n| Tasks | 12 | 8 |")
-        )
+        model.ainvoke = AsyncMock(return_value=AIMessage(content="| Metric | Alpha | Beta |\n| Tasks | 12 | 8 |"))
 
         state = {
             "messages": [
@@ -161,9 +158,7 @@ class TestSynthesizeNode:
 
         model = AsyncMock()
         model.ainvoke = AsyncMock(
-            side_effect=GraphInterrupt(
-                interrupts=(Interrupt(value={}, resumable=True, ns=(), when="during"),)
-            )
+            side_effect=GraphInterrupt(interrupts=(Interrupt(value={}, resumable=True, ns=(), when="during"),))
         )
 
         state = {

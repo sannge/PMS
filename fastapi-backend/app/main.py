@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import random
 import traceback
 from contextlib import asynccontextmanager
 from uuid import UUID
@@ -25,10 +26,44 @@ logger = logging.getLogger(__name__)
 logger.info("PM API starting up - WebSocket logging ENABLED")
 
 from .database import warmup_connection_pool
-from .routers import admin_config_router, ai_chat_router, ai_config_router, ai_import_router, ai_oauth_router, ai_query_router, application_members_router, applications_router, auth_router, chat_sessions_router, checklists_router, comments_router, dashboard_router, document_folders_router, document_locks_router, document_search_router, document_tags_router, documents_router, files_router, folder_files_router, invitations_router, notifications_router, project_assignments_router, project_members_router, projects_router, tasks_router, users_router
+from .routers import (
+    admin_config_router,
+    ai_chat_router,
+    ai_config_router,
+    ai_import_router,
+    ai_oauth_router,
+    ai_query_router,
+    application_members_router,
+    applications_router,
+    auth_router,
+    chat_sessions_router,
+    checklists_router,
+    comments_router,
+    dashboard_router,
+    document_folders_router,
+    document_locks_router,
+    document_search_router,
+    document_tags_router,
+    documents_router,
+    files_router,
+    folder_files_router,
+    invitations_router,
+    notifications_router,
+    project_assignments_router,
+    project_members_router,
+    projects_router,
+    tasks_router,
+    team_activity_router,
+    users_router,
+)
 from .websocket import manager, route_incoming_message, check_room_access
 from .models.user import User
-from .services.auth_service import decode_access_token, get_current_user, is_token_blacklisted, validate_ws_connection_token
+from .services.auth_service import (
+    decode_access_token,
+    get_current_user,
+    is_token_blacklisted,
+    validate_ws_connection_token,
+)
 from .dependencies.redis_gate import require_redis
 from .services.redis_service import redis_service
 from .services.archive_service import archive_service
@@ -58,6 +93,7 @@ async def lifespan(app: FastAPI):
         # Subscribe cross-worker cache invalidation channels
         from .websocket.room_auth import setup_room_auth_pubsub
         from .services.user_cache_service import setup_user_cache_pubsub
+
         await setup_room_auth_pubsub()
         await setup_user_cache_pubsub()
         logger.info("Cache invalidation pub/sub channels subscribed")
@@ -76,6 +112,7 @@ async def lifespan(app: FastAPI):
                 # Flush stale in-memory caches accumulated during the outage
                 try:
                     from .services.user_cache_service import clear_all_caches
+
                     clear_all_caches()
                     logger.info("Flushed stale in-memory caches after Redis recovery")
                 except Exception as exc:
@@ -85,24 +122,23 @@ async def lifespan(app: FastAPI):
 
             # Broadcast status change to all local WebSocket connections
             from .websocket.manager import MessageType
+
             try:
-                await manager.broadcast_to_all({
-                    "type": MessageType.REDIS_STATUS_CHANGED,
-                    "data": {"connected": connected},
-                })
+                await manager.broadcast_to_all(
+                    {
+                        "type": MessageType.REDIS_STATUS_CHANGED,
+                        "data": {"connected": connected},
+                    }
+                )
             except Exception as exc:
                 logger.error("Failed to broadcast Redis status change: %s", exc)
 
-        await redis_service.start_health_monitor(
-            interval=5, on_state_change=_on_redis_state_change
-        )
+        await redis_service.start_health_monitor(interval=5, on_state_change=_on_redis_state_change)
         logger.info("Redis health monitor started")
     except Exception as e:
         if settings.redis_required:
             logger.error(f"Redis connection failed and REDIS_REQUIRED=true: {e}")
-            raise RuntimeError(
-                f"Redis is required for multi-worker deployment but connection failed: {e}"
-            )
+            raise RuntimeError(f"Redis is required for multi-worker deployment but connection failed: {e}")
         logger.warning(f"Redis connection failed, running in single-worker mode: {e}")
 
     # Note: Background jobs (archive, presence cleanup) are handled by ARQ worker
@@ -118,11 +154,13 @@ async def lifespan(app: FastAPI):
     # - Total per worker: 160
     # - With 4 workers: 640 total (ensure Postgres max_connections >= 700)
     from .ai.agent.graph import set_checkpointer
+
     try:
         from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
         from psycopg_pool import AsyncConnectionPool
         from psycopg.rows import dict_row
         from urllib.parse import quote_plus
+
         pg_uri = (
             f"postgresql://{settings.db_user}:{quote_plus(settings.db_password)}"
             f"@{settings.db_server}:{settings.db_port}/{settings.db_name}"
@@ -146,22 +184,23 @@ async def lifespan(app: FastAPI):
         app.state._checkpointer_pool = _checkpointer_pool  # prevent GC, clean up on shutdown
         logger.info("LangGraph checkpointer initialized (AsyncPostgresSaver → Postgres, pool_size=10)")
     except Exception as e:
-        if getattr(settings, 'redis_required', False):
+        if getattr(settings, "redis_required", False):
             logger.critical(
                 "Postgres checkpointer failed and redis_required=True "
-                "(multi-worker mode). Cannot use MemorySaver fallback: %s", e,
+                "(multi-worker mode). Cannot use MemorySaver fallback: %s",
+                e,
             )
-            raise RuntimeError(
-                f"Checkpointer initialization failed in multi-worker mode: {e}"
-            ) from e
+            raise RuntimeError(f"Checkpointer initialization failed in multi-worker mode: {e}") from e
         logger.warning(f"Postgres checkpointer failed, falling back to MemorySaver: {e}")
         from langgraph.checkpoint.memory import MemorySaver
+
         set_checkpointer(MemorySaver())
         logger.info("LangGraph checkpointer initialized (MemorySaver — in-memory fallback, single-worker only)")
 
     # Initialize Meilisearch (non-critical -- app starts even if Meilisearch is down)
     try:
         from .services.search_service import init_meilisearch
+
         await init_meilisearch()
         logger.info("Meilisearch initialized")
     except Exception as e:
@@ -171,6 +210,7 @@ async def lifespan(app: FastAPI):
     try:
         from .ai.config_service import get_agent_config
         from .database import async_session_maker as _asm
+
         _agent_cfg = get_agent_config()
         _agent_cfg.set_db_session_factory(_asm)
         await _agent_cfg.load_all()
@@ -178,11 +218,13 @@ async def lifespan(app: FastAPI):
 
         # Reload rate limits now that config is available from DB
         from .ai.rate_limiter import reload_rate_limits
+
         reload_rate_limits()
         logger.info("Rate limits reloaded from config")
 
         # Start Redis invalidation listener as background task
         from .utils.tasks import fire_and_forget
+
         fire_and_forget(_agent_cfg.subscribe_invalidation(), name="agent-cfg-subscription")
     except Exception as e:
         logger.warning(f"AgentConfigService initialization failed: {e}")
@@ -192,6 +234,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     # Drain any in-flight background tasks before tearing down connections
     from .utils.tasks import drain_background_tasks
+
     await drain_background_tasks(timeout=5.0)
 
     # Close Postgres checkpointer connection pool (DB-002: bounded psycopg_pool)
@@ -256,9 +299,7 @@ async def add_security_headers(request: Request, call_next):
 @app.exception_handler(SQLAlchemyTimeoutError)
 async def db_pool_exhausted_handler(request: Request, exc: SQLAlchemyTimeoutError):
     """Handle database connection pool exhaustion with 503 Service Unavailable."""
-    logger.warning(
-        f"Database pool exhausted on {request.method} {request.url}: {exc}"
-    )
+    logger.warning(f"Database pool exhausted on {request.method} {request.url}: {exc}")
     return JSONResponse(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         content={
@@ -281,6 +322,7 @@ async def global_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content={"detail": "Internal server error"},
     )
+
 
 # Include API routers
 app.include_router(auth_router)
@@ -315,6 +357,7 @@ app.include_router(ai_chat_router)
 app.include_router(ai_import_router)
 app.include_router(chat_sessions_router)
 app.include_router(folder_files_router)
+app.include_router(team_activity_router)
 
 # TODO: Mount CopilotKit AG-UI endpoint at startup when the agent graph is
 # built.  Requires a compiled graph instance which depends on provider config
@@ -362,10 +405,9 @@ async def health_check(request: Request):
     db_health = "unavailable"
     try:
         from .database import async_session_maker
+
         async with async_session_maker() as db:
-            await asyncio.wait_for(
-                db.execute(text("SELECT 1")), timeout=2.0
-            )
+            await asyncio.wait_for(db.execute(text("SELECT 1")), timeout=2.0)
             db_health = "healthy"
     except Exception:
         db_health = "unavailable"
@@ -375,6 +417,7 @@ async def health_check(request: Request):
 
     # QE-R2-001: Include AI agent semaphore utilization
     from .routers.ai_chat import get_agent_semaphore_usage
+
     ai_agent_slots = get_agent_semaphore_usage()
 
     return {
@@ -418,6 +461,7 @@ async def _build_ai_health() -> dict:
     async def check_sql_access() -> dict:
         """Count available scoped views and report last AI query timestamp."""
         from .ai.schema_context import VALID_VIEW_NAMES
+
         return {
             "scoped_views_count": len(VALID_VIEW_NAMES),
             "last_query_at": None,  # TODO: track via telemetry once available
@@ -435,13 +479,14 @@ async def _build_ai_health() -> dict:
             return cached[0]
 
         from .ai.provider_registry import ProviderRegistry, ConfigurationError
+
         try:
             async with async_session_maker() as db:
                 registry = ProviderRegistry()
                 provider, model_id = await registry.get_embedding_provider(db)
                 await provider.generate_embedding("test", model_id)
                 result = {
-                    "name": getattr(provider, '__class__', type(provider)).__name__.lower().replace("provider", ""),
+                    "name": getattr(provider, "__class__", type(provider)).__name__.lower().replace("provider", ""),
                     "model": model_id,
                     "connected": True,
                 }
@@ -468,6 +513,7 @@ async def _build_ai_health() -> dict:
             return cached[0]
 
         from .ai.provider_registry import ProviderRegistry, ConfigurationError
+
         try:
             async with async_session_maker() as db:
                 registry = ProviderRegistry()
@@ -497,11 +543,10 @@ async def _build_ai_health() -> dict:
         """Count total DocumentChunk rows."""
         from sqlalchemy import func, select
         from .models.document_chunk import DocumentChunk
+
         try:
             async with async_session_maker() as db:
-                result = await db.execute(
-                    select(func.count()).select_from(DocumentChunk)
-                )
+                result = await db.execute(select(func.count()).select_from(DocumentChunk))
                 return result.scalar_one()
         except Exception:
             return 0
@@ -557,6 +602,7 @@ async def run_archive_jobs_manually(
     Returns the count of archived items.
     """
     from .routers.ai_config import require_developer
+
     await require_developer(current_user)
 
     result = await archive_service.run_now()
@@ -609,6 +655,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = None):
 
     # Connection configuration (read from AgentConfigService with hardcoded fallbacks)
     from .ai.config_service import get_agent_config as _get_ws_cfg
+
     _ws_cfg = _get_ws_cfg()
     RECEIVE_TIMEOUT = _ws_cfg.get_int("websocket.receive_timeout", 45)
     SERVER_PING_INTERVAL = _ws_cfg.get_int("websocket.ping_interval", 30)
@@ -622,11 +669,11 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = None):
     token_valid = True
 
     async def server_ping_task():
-        """Background task to send periodic pings."""
+        """Background task to send periodic pings with jitter."""
         nonlocal token_valid
         try:
             while True:
-                await asyncio.sleep(SERVER_PING_INTERVAL)
+                await asyncio.sleep(SERVER_PING_INTERVAL + random.uniform(-5, 5))
                 try:
                     # Send ping
                     await websocket.send_json({"type": "ping", "data": {}})
@@ -642,18 +689,12 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = None):
         while token_valid:
             # Receive with timeout to detect stale connections
             try:
-                raw_message = await asyncio.wait_for(
-                    websocket.receive_text(),
-                    timeout=RECEIVE_TIMEOUT
-                )
+                raw_message = await asyncio.wait_for(websocket.receive_text(), timeout=RECEIVE_TIMEOUT)
             except asyncio.TimeoutError:
                 # No message received within timeout - send ping to verify
                 try:
                     await websocket.send_json({"type": "ping", "data": {}})
-                    raw_message = await asyncio.wait_for(
-                        websocket.receive_text(),
-                        timeout=10
-                    )
+                    raw_message = await asyncio.wait_for(websocket.receive_text(), timeout=10)
                 except (asyncio.TimeoutError, Exception):
                     logger.info(f"Connection timeout for user: {user_id}")
                     break
@@ -665,10 +706,12 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = None):
 
             if len(message_timestamps) >= RATE_LIMIT_MESSAGES:
                 logger.warning(f"Rate limit exceeded for user {user_id}")
-                await websocket.send_json({
-                    "type": "error",
-                    "data": {"error": "RATE_LIMIT", "message": "Too many messages, slow down"},
-                })
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "data": {"error": "RATE_LIMIT", "message": "Too many messages, slow down"},
+                    }
+                )
                 continue
 
             message_timestamps.append(current_time)
@@ -679,13 +722,15 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = None):
                     f"Message too large from user {user_id}: "
                     f"{len(raw_message)} bytes (max: {settings.ws_max_message_size})"
                 )
-                await websocket.send_json({
-                    "type": "error",
-                    "data": {
-                        "error": "MESSAGE_TOO_LARGE",
-                        "message": f"Message exceeds maximum size of {settings.ws_max_message_size} bytes",
-                    },
-                })
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "data": {
+                            "error": "MESSAGE_TOO_LARGE",
+                            "message": f"Message exceeds maximum size of {settings.ws_max_message_size} bytes",
+                        },
+                    }
+                )
                 continue
 
             # Parse JSON
@@ -693,10 +738,12 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = None):
                 data = json.loads(raw_message)
             except json.JSONDecodeError:
                 logger.warning(f"Invalid JSON from user {user_id}")
-                await websocket.send_json({
-                    "type": "error",
-                    "data": {"error": "INVALID_JSON", "message": "Invalid JSON format"},
-                })
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "data": {"error": "INVALID_JSON", "message": "Invalid JSON format"},
+                    }
+                )
                 continue
 
             await route_incoming_message(connection, data, room_authorizer=check_room_access)

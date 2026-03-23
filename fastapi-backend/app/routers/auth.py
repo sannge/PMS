@@ -146,9 +146,7 @@ async def verify_login(
 ) -> TokenWithRefresh:
     """Verify login 2FA code and return access + refresh tokens."""
     user = await verify_login_code(db, data.email, data.code)
-    access_token = create_access_token(
-        data={"sub": str(user.id), "email": user.email}
-    )
+    access_token = create_access_token(data={"sub": str(user.id), "email": user.email})
     refresh_token = create_refresh_token(str(user.id), user.email)
     return TokenWithRefresh(access_token=access_token, refresh_token=refresh_token)
 
@@ -170,9 +168,7 @@ async def verify_email(
 ) -> TokenWithRefresh:
     """Verify email and return access + refresh tokens for auto-login."""
     user = await verify_email_code(db, data.email, data.code)
-    access_token = create_access_token(
-        data={"sub": str(user.id), "email": user.email}
-    )
+    access_token = create_access_token(data={"sub": str(user.id), "email": user.email})
     refresh_token = create_refresh_token(str(user.id), user.email)
     return TokenWithRefresh(access_token=access_token, refresh_token=refresh_token)
 

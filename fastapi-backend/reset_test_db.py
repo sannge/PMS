@@ -1,4 +1,5 @@
 """Reset test database - drop all tables and composite types."""
+
 import asyncio
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy import text
@@ -6,24 +7,24 @@ from app.config import settings
 
 # Drop views first
 DROP_VIEWS = [
-    'DROP VIEW IF EXISTS v_checklist_items CASCADE',
-    'DROP VIEW IF EXISTS v_checklists CASCADE',
-    'DROP VIEW IF EXISTS v_attachments CASCADE',
-    'DROP VIEW IF EXISTS v_users CASCADE',
-    'DROP VIEW IF EXISTS v_project_assignments CASCADE',
-    'DROP VIEW IF EXISTS v_project_members CASCADE',
-    'DROP VIEW IF EXISTS v_application_members CASCADE',
-    'DROP VIEW IF EXISTS v_comments CASCADE',
-    'DROP VIEW IF EXISTS v_document_folders CASCADE',
-    'DROP VIEW IF EXISTS v_documents CASCADE',
-    'DROP VIEW IF EXISTS v_task_statuses CASCADE',
-    'DROP VIEW IF EXISTS v_tasks CASCADE',
-    'DROP VIEW IF EXISTS v_projects CASCADE',
-    'DROP VIEW IF EXISTS v_applications CASCADE',
+    "DROP VIEW IF EXISTS v_checklist_items CASCADE",
+    "DROP VIEW IF EXISTS v_checklists CASCADE",
+    "DROP VIEW IF EXISTS v_attachments CASCADE",
+    "DROP VIEW IF EXISTS v_users CASCADE",
+    "DROP VIEW IF EXISTS v_project_assignments CASCADE",
+    "DROP VIEW IF EXISTS v_project_members CASCADE",
+    "DROP VIEW IF EXISTS v_application_members CASCADE",
+    "DROP VIEW IF EXISTS v_comments CASCADE",
+    "DROP VIEW IF EXISTS v_document_folders CASCADE",
+    "DROP VIEW IF EXISTS v_documents CASCADE",
+    "DROP VIEW IF EXISTS v_task_statuses CASCADE",
+    "DROP VIEW IF EXISTS v_tasks CASCADE",
+    "DROP VIEW IF EXISTS v_projects CASCADE",
+    "DROP VIEW IF EXISTS v_applications CASCADE",
 ]
 
 DROP_STMTS = [
-    'DROP TABLE IF EXISTS ai_system_prompts CASCADE',
+    "DROP TABLE IF EXISTS ai_system_prompts CASCADE",
     'DROP TABLE IF EXISTS "ImportJobs" CASCADE',
     'DROP TABLE IF EXISTS "DocumentChunks" CASCADE',
     'DROP TABLE IF EXISTS "DocumentSnapshots" CASCADE',
@@ -64,6 +65,7 @@ BEGIN
     END LOOP;
 END $$;"""
 
+
 async def reset():
     engine = create_async_engine(settings.test_database_url, pool_size=1, max_overflow=0)
     # Drop views
@@ -79,16 +81,15 @@ async def reset():
         await conn.execute(text(DROP_TYPES_SQL))
     # Verify no "Users" type remains
     async with engine.begin() as conn:
-        result = await conn.execute(text(
-            "SELECT typname FROM pg_type WHERE typname = 'Users' AND typtype = 'c'"
-        ))
+        result = await conn.execute(text("SELECT typname FROM pg_type WHERE typname = 'Users' AND typtype = 'c'"))
         rows = result.fetchall()
         if rows:
-            print(f'WARNING: Users composite type still exists! Dropping explicitly...')
+            print(f"WARNING: Users composite type still exists! Dropping explicitly...")
             await conn.execute(text('DROP TYPE IF EXISTS "Users" CASCADE'))
         else:
-            print('No stale composite types found')
+            print("No stale composite types found")
     await engine.dispose()
-    print('Test database reset complete')
+    print("Test database reset complete")
+
 
 asyncio.run(reset())

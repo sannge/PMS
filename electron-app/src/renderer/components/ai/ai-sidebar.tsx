@@ -153,11 +153,35 @@ const MessageList = memo(function MessageList({
 // ============================================================================
 
 export function AiSidebar(): JSX.Element | null {
+  const isOpen = useAiSidebar(s => s.isOpen)
+
+  // Global keyboard shortcut: Ctrl+Shift+A (must run even when closed)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.shiftKey && e.key === 'A') {
+        e.preventDefault()
+        useAiSidebar.getState().toggle()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
+  if (!isOpen) return null
+  return <AiSidebarContent />
+}
+
+// ============================================================================
+// AI Sidebar Content (only mounts when sidebar is open — hooks run lazily)
+// ============================================================================
+
+function AiSidebarContent(): JSX.Element {
   const queryClient = useQueryClient()
   // Single subscription instead of 10+ separate useAiSidebar
   // selectors, each of which created its own useSyncExternalStore subscription.
   const {
-    isOpen, close, resetChat, messages, isStreaming, chatKey,
+    close, resetChat, messages, isStreaming, chatKey,
     threadId, rewindMessageIndex, rewindCheckpointId,
     enterRewindMode, exitRewindMode,
     activeSessionId, activeSessionTitle, view, setActiveSession, setView,
@@ -393,13 +417,11 @@ export function AiSidebar(): JSX.Element | null {
     prevMsgCountRef.current = messages.length
   }, [messages.length, isStreaming])
 
-  // Focus chat input when sidebar opens
+  // Focus chat input when content mounts (sidebar just opened)
   useEffect(() => {
-    if (isOpen) {
-      const timer = setTimeout(() => chatInputRef.current?.focus(), 100)
-      return () => clearTimeout(timer)
-    }
-  }, [isOpen])
+    const timer = setTimeout(() => chatInputRef.current?.focus(), 100)
+    return () => clearTimeout(timer)
+  }, [])
 
   // Refocus chat input when streaming finishes
   const wasStreamingRef = useRef(false)
@@ -409,21 +431,6 @@ export function AiSidebar(): JSX.Element | null {
     }
     wasStreamingRef.current = isStreaming
   }, [isStreaming])
-
-  // Global keyboard shortcut: Ctrl+Shift+A
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.shiftKey && e.key === 'A') {
-        e.preventDefault()
-        useAiSidebar.getState().toggle()
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [])
-
-  if (!isOpen) return null
 
   return (
     <div

@@ -138,9 +138,7 @@ class TestRegistryOAuthResolution:
         registry._cache = {}
 
         with patch("app.ai.codex_provider.AsyncOpenAI"):
-            adapter, model_id = await registry.get_chat_provider(
-                db_session, user_id=test_user.id
-            )
+            adapter, model_id = await registry.get_chat_provider(db_session, user_id=test_user.id)
 
         assert isinstance(adapter, CodexProvider)
         assert model_id == "gpt-4o"
@@ -184,11 +182,13 @@ class TestRegistryOAuthResolution:
         await db_session.commit()
 
         # Mock the refresh to succeed
-        mock_refresh = AsyncMock(return_value={
-            "access_token": "at-new-refreshed",
-            "refresh_token": "rt-new-refreshed",
-            "expires_in": 3600,
-        })
+        mock_refresh = AsyncMock(
+            return_value={
+                "access_token": "at-new-refreshed",
+                "refresh_token": "rt-new-refreshed",
+                "expires_in": 3600,
+            }
+        )
 
         registry = ProviderRegistry.__new__(ProviderRegistry)
         registry._cache = {}
@@ -200,9 +200,7 @@ class TestRegistryOAuthResolution:
                 mock_refresh,
             ),
         ):
-            adapter, model_id = await registry.get_chat_provider(
-                db_session, user_id=test_user.id
-            )
+            adapter, model_id = await registry.get_chat_provider(db_session, user_id=test_user.id)
 
         # Refresh should have been called
         mock_refresh.assert_called_once()

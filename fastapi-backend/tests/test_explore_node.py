@@ -32,7 +32,6 @@ from app.ai.agent.nodes.explore import (
 
 
 class TestBuildExploreSuffix:
-
     def test_builds_suffix_from_classification(self):
         state = {
             "classification": {
@@ -142,7 +141,6 @@ class TestBuildExploreSuffix:
 
 
 class TestExploreNode:
-
     async def test_normal_call_returns_response(self):
         model = AsyncMock()
         model.ainvoke = AsyncMock(return_value=AIMessage(content="Here are tasks."))
@@ -245,9 +243,7 @@ class TestExploreNode:
     async def test_auto_clarify_converts_question(self):
         """Text question auto-converted to request_clarification tool call."""
         model = AsyncMock()
-        model.ainvoke = AsyncMock(
-            return_value=AIMessage(content="Which project would you like?")
-        )
+        model.ainvoke = AsyncMock(return_value=AIMessage(content="Which project would you like?"))
 
         state = {
             "messages": [HumanMessage(content="do something")],
@@ -271,9 +267,7 @@ class TestExploreNode:
     async def test_auto_clarify_not_repeated(self):
         """Auto-clarify only fires once per turn (auto_clarify_attempted=True)."""
         model = AsyncMock()
-        model.ainvoke = AsyncMock(
-            return_value=AIMessage(content="Which project would you like?")
-        )
+        model.ainvoke = AsyncMock(return_value=AIMessage(content="Which project would you like?"))
 
         state = {
             "messages": [HumanMessage(content="do something")],
@@ -331,7 +325,6 @@ class TestExploreNode:
 
 
 class TestExecuteToolsExplore:
-
     async def test_counts_tool_calls(self):
         ai_msg = AIMessage(
             content="",
@@ -377,21 +370,26 @@ class TestExecuteToolsExplore:
 
 
 class TestTextRequestsUserInput:
-
-    @pytest.mark.parametrize("text", [
-        "Which project would you like to export?",
-        "Please specify the data type.",
-        "Let me know your preference.",
-    ])
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Which project would you like to export?",
+            "Please specify the data type.",
+            "Let me know your preference.",
+        ],
+    )
     def test_detects_questions(self, text):
         assert _text_requests_user_input(text) is True
 
-    @pytest.mark.parametrize("text", [
-        "Here are the results.",
-        "Task updated.",
-        "",
-        "OK",
-    ])
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Here are the results.",
+            "Task updated.",
+            "",
+            "OK",
+        ],
+    )
     def test_does_not_detect_statements(self, text):
         assert _text_requests_user_input(text) is False
 
@@ -402,7 +400,6 @@ class TestTextRequestsUserInput:
 
 
 class TestExtractClarification:
-
     def test_extracts_bullet_options(self):
         text = "What would you like to do?\n- Show tasks\n- Export data"
         question, options = _extract_clarification(text)

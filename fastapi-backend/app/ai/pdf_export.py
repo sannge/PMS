@@ -37,8 +37,8 @@ class PdfExportResult:
 
 def _sanitize_filename(title: str) -> str:
     """Sanitize a title for use as a filename."""
-    clean = re.sub(r'[^\w\s\-.]', '', title)
-    clean = re.sub(r'\s+', '_', clean.strip())
+    clean = re.sub(r"[^\w\s\-.]", "", title)
+    clean = re.sub(r"\s+", "_", clean.strip())
     return clean[:100] or "document"
 
 
@@ -92,15 +92,15 @@ def generate_pdf(title: str, content: str) -> bytes:
             pdf.ln(4)
         else:
             # Strip basic markdown formatting for clean PDF text
-            clean = re.sub(r'\*{1,3}(.+?)\*{1,3}', r'\1', stripped)
-            clean = re.sub(r'_{1,3}(.+?)_{1,3}', r'\1', clean)
-            clean = re.sub(r'~~(.+?)~~', r'\1', clean)
-            clean = re.sub(r'`(.+?)`', r'\1', clean)
-            clean = re.sub(r'\[(.+?)\]\(.+?\)', r'\1', clean)
+            clean = re.sub(r"\*{1,3}(.+?)\*{1,3}", r"\1", stripped)
+            clean = re.sub(r"_{1,3}(.+?)_{1,3}", r"\1", clean)
+            clean = re.sub(r"~~(.+?)~~", r"\1", clean)
+            clean = re.sub(r"`(.+?)`", r"\1", clean)
+            clean = re.sub(r"\[(.+?)\]\(.+?\)", r"\1", clean)
 
             # List items -- replace marker with bullet character
-            list_match = re.match(r'^[-*+]\s+(.*)', clean)
-            numbered_match = re.match(r'^(\d+\.)\s+(.*)', clean)
+            list_match = re.match(r"^[-*+]\s+(.*)", clean)
+            numbered_match = re.match(r"^(\d+\.)\s+(.*)", clean)
             if list_match:
                 pdf.set_font("Helvetica", "", 11)
                 pdf.multi_cell(page_width, 6, "  - " + list_match.group(1))
@@ -164,7 +164,9 @@ async def save_pdf_export(
 
     logger.info(
         "PDF export created: %s (%d bytes) for user %s",
-        filename, len(pdf_bytes), user_id,
+        filename,
+        len(pdf_bytes),
+        user_id,
     )
 
     return PdfExportResult(

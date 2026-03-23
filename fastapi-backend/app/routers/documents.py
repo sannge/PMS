@@ -295,9 +295,7 @@ async def get_scopes_summary(
     """
     # Personal docs exist?
     personal_count = await db.scalar(
-        select(func.count(Document.id))
-        .where(Document.user_id == current_user.id)
-        .where(Document.deleted_at.is_(None))
+        select(func.count(Document.id)).where(Document.user_id == current_user.id).where(Document.deleted_at.is_(None))
     )
 
     # Applications where user is an ApplicationMember
@@ -369,25 +367,19 @@ async def get_projects_with_content(
     projects_with_docs = select(Document.project_id).where(
         Document.project_id.isnot(None),
         Document.deleted_at.is_(None),
-        Document.project_id.in_(
-            select(Project.id).where(Project.application_id == application_id)
-        ),
+        Document.project_id.in_(select(Project.id).where(Project.application_id == application_id)),
     )
 
     # Projects with folders
     projects_with_folders = select(DocumentFolder.project_id).where(
         DocumentFolder.project_id.isnot(None),
-        DocumentFolder.project_id.in_(
-            select(Project.id).where(Project.application_id == application_id)
-        ),
+        DocumentFolder.project_id.in_(select(Project.id).where(Project.application_id == application_id)),
     )
 
     # Projects with uploaded files
     projects_with_files = select(FolderFile.project_id).where(
         FolderFile.project_id.isnot(None),
-        FolderFile.project_id.in_(
-            select(Project.id).where(Project.application_id == application_id)
-        ),
+        FolderFile.project_id.in_(select(Project.id).where(Project.application_id == application_id)),
     )
 
     # Combine with UNION and cap at 500 to prevent unbounded results
@@ -396,24 +388,18 @@ async def get_projects_with_content(
     project_ids = [str(row[0]) for row in result.all()]
 
     # Determine per-project edit permissions
-    app_role = await perm_service.get_user_application_role(
-        current_user.id, application_id
-    )
+    app_role = await perm_service.get_user_application_role(current_user.id, application_id)
 
     project_permissions: list[ProjectPermissionItem] = []
     if app_role == "owner":
         # App owners can edit all projects
-        project_permissions = [
-            ProjectPermissionItem(project_id=pid, can_edit=True)
-            for pid in project_ids
-        ]
+        project_permissions = [ProjectPermissionItem(project_id=pid, can_edit=True) for pid in project_ids]
     elif app_role in ("editor", "viewer"):
         # Check ProjectMember for each project in batch
         project_uuids = [UUID(pid) for pid in project_ids]
         if project_uuids:
             pm_result = await db.execute(
-                select(ProjectMember.project_id)
-                .where(
+                select(ProjectMember.project_id).where(
                     ProjectMember.project_id.in_(project_uuids),
                     ProjectMember.user_id == current_user.id,
                 )
@@ -431,10 +417,7 @@ async def get_projects_with_content(
         ]
     else:
         # Not a member — no edit on any project
-        project_permissions = [
-            ProjectPermissionItem(project_id=pid, can_edit=False)
-            for pid in project_ids
-        ]
+        project_permissions = [ProjectPermissionItem(project_id=pid, can_edit=False) for pid in project_ids]
 
     return ProjectsWithContentResponse(
         project_ids=project_ids,
@@ -449,21 +432,15 @@ async def get_projects_with_content(
 
 @router.get("/knowledge-permissions", response_model=KnowledgePermissionsResponse)
 async def get_knowledge_permissions(
-    scope: Literal["application", "project", "personal"] = Query(
-        ..., description="Scope type"
-    ),
+    scope: Literal["application", "project", "personal"] = Query(..., description="Scope type"),
     scope_id: UUID = Query(..., description="Scope entity ID"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> KnowledgePermissionsResponse:
     """Check view/edit permissions for a knowledge scope."""
     perm_service = PermissionService(db)
-    can_view = await perm_service.check_can_view_knowledge(
-        current_user.id, scope, scope_id
-    )
-    can_edit = await perm_service.check_can_edit_knowledge(
-        current_user.id, scope, scope_id
-    )
+    can_view = await perm_service.check_can_view_knowledge(current_user.id, scope, scope_id)
+    can_edit = await perm_service.check_can_edit_knowledge(current_user.id, scope, scope_id)
 
     # Determine owner status (for force-take lock capability)
     is_owner = False
@@ -475,14 +452,10 @@ async def get_knowledge_permissions(
     elif scope == "project":
         project = await perm_service.get_project_with_application(scope_id)
         if project:
-            role = await perm_service.get_user_application_role(
-                current_user.id, project.application_id
-            )
+            role = await perm_service.get_user_application_role(current_user.id, project.application_id)
             is_owner = role == "owner"
 
-    return KnowledgePermissionsResponse(
-        can_view=can_view, can_edit=can_edit, is_owner=is_owner
-    )
+    return KnowledgePermissionsResponse(can_view=can_view, can_edit=can_edit, is_owner=is_owner)
 
 
 # ============================================================================
@@ -492,16 +465,10 @@ async def get_knowledge_permissions(
 
 @router.get("", response_model=DocumentListResponse)
 async def list_documents(
-    scope: Literal["application", "project", "personal"] = Query(
-        ..., description="Scope type"
-    ),
+    scope: Literal["application", "project", "personal"] = Query(..., description="Scope type"),
     scope_id: UUID = Query(..., description="Scope entity ID"),
-    folder_id: Optional[UUID] = Query(
-        None, description="Filter by folder ID (omit for unfiled)"
-    ),
-    include_unfiled: bool = Query(
-        False, description="If true and folder_id is omitted, return unfiled documents"
-    ),
+    folder_id: Optional[UUID] = Query(None, description="Filter by folder ID (omit for unfiled)"),
+    include_unfiled: bool = Query(False, description="If true and folder_id is omitted, return unfiled documents"),
     cursor: Optional[str] = Query(None, description="Pagination cursor"),
     limit: int = Query(30, ge=1, le=200, description="Page size"),
     current_user: User = Depends(get_current_user),
@@ -618,6 +585,7 @@ async def create_document(
 
     # Extract search data BEFORE commit while ORM attributes are still loaded
     from ..services.search_service import build_search_doc_data, index_document_from_data
+
     search_doc_data = build_search_doc_data(document, project_application_id=project_application_id)
 
     # Capture broadcast data BEFORE commit to avoid DetachedInstanceError
@@ -661,11 +629,7 @@ async def get_document(
 
     Returns 404 if the document does not exist or is soft-deleted.
     """
-    result = await db.execute(
-        select(Document)
-        .where(Document.id == document_id)
-        .where(Document.deleted_at.is_(None))
-    )
+    result = await db.execute(select(Document).where(Document.id == document_id).where(Document.deleted_at.is_(None)))
     document = result.scalar_one_or_none()
 
     if document is None:
@@ -709,7 +673,7 @@ async def update_document(
         select(Document)
         .where(Document.id == document_id)
         .where(Document.deleted_at.is_(None))
-        .options(lazyload('*'))
+        .options(lazyload("*"))
         .with_for_update()
     )
     document = result.scalar_one_or_none()
@@ -742,8 +706,12 @@ async def update_document(
         new_folder_id = update_data.get("folder_id", document.folder_id)
         scope_type, scope_id_str = _get_document_scope(document)
         await check_name_uniqueness(
-            db, new_title, scope_type, UUID(scope_id_str),
-            new_folder_id, exclude_document_id=document.id,
+            db,
+            new_title,
+            scope_type,
+            UUID(scope_id_str),
+            new_folder_id,
+            exclude_document_id=document.id,
         )
 
     # Lock ownership check when content is being written — same as save_content.
@@ -801,6 +769,7 @@ async def update_document(
 
     # Extract search data BEFORE commit while ORM attributes are still loaded
     from ..services.search_service import build_search_doc_data, index_document_from_data
+
     search_doc_data = build_search_doc_data(document, project_application_id=project_application_id)
 
     # Capture broadcast data BEFORE commit to avoid DetachedInstanceError
@@ -906,6 +875,7 @@ async def save_content(
     # Fire-and-forget: update search index AFTER commit (non-blocking)
     if search_doc_data:
         from ..services.search_service import index_document_from_data
+
         _create_search_task(index_document_from_data(search_doc_data))
 
     # Auto-embed removed (Phase 9.6): embeddings now triggered only by
@@ -934,11 +904,7 @@ async def delete_document(
     via POST /documents/{id}/restore or permanently deleted via
     DELETE /documents/{id}/permanent.
     """
-    result = await db.execute(
-        select(Document)
-        .where(Document.id == document_id)
-        .where(Document.deleted_at.is_(None))
-    )
+    result = await db.execute(select(Document).where(Document.id == document_id).where(Document.deleted_at.is_(None)))
     document = result.scalar_one_or_none()
 
     if document is None:
@@ -983,6 +949,7 @@ async def delete_document(
 
     # Fire-and-forget: mark document as deleted in search index (non-blocking)
     from ..services.search_service import index_document_soft_delete
+
     _create_search_task(index_document_soft_delete(doc_id_for_search))
 
     # Broadcast document deleted event using pre-captured data
@@ -1011,11 +978,7 @@ async def restore_document(
     Sets deleted_at back to None. Returns 404 if the document does not
     exist or is not in the trash.
     """
-    result = await db.execute(
-        select(Document)
-        .where(Document.id == document_id)
-        .where(Document.deleted_at.isnot(None))
-    )
+    result = await db.execute(select(Document).where(Document.id == document_id).where(Document.deleted_at.isnot(None)))
     document = result.scalar_one_or_none()
 
     if document is None:
@@ -1035,8 +998,12 @@ async def restore_document(
     # Check name uniqueness before restoring
     scope_type, scope_id_str = _get_document_scope(document)
     await check_name_uniqueness(
-        db, document.title, scope_type, UUID(scope_id_str),
-        document.folder_id, exclude_document_id=document.id,
+        db,
+        document.title,
+        scope_type,
+        UUID(scope_id_str),
+        document.folder_id,
+        exclude_document_id=document.id,
     )
 
     document.deleted_at = None
@@ -1071,6 +1038,7 @@ async def restore_document(
 
     # Fire-and-forget: restore document in search index (non-blocking)
     from ..services.search_service import index_document_restore
+
     _create_search_task(index_document_restore(doc_id_for_search))
 
     # Broadcast document restored event using pre-captured data
@@ -1097,11 +1065,7 @@ async def permanent_delete_document(
     This action is irreversible. The document and all its tag assignments
     are removed from the database.
     """
-    result = await db.execute(
-        select(Document)
-        .where(Document.id == document_id)
-        .where(Document.deleted_at.isnot(None))
-    )
+    result = await db.execute(select(Document).where(Document.id == document_id).where(Document.deleted_at.isnot(None)))
     document = result.scalar_one_or_none()
 
     if document is None:
@@ -1130,14 +1094,13 @@ async def permanent_delete_document(
     for attachment in doc_attachments:
         if attachment.minio_bucket and attachment.minio_key:
             try:
-                minio.delete_file(
+                await minio.delete_file(
                     bucket=attachment.minio_bucket,
                     object_name=attachment.minio_key,
                 )
             except MinIOServiceError:
                 logger.warning(
-                    "Failed to delete MinIO file for attachment %s during "
-                    "document permanent deletion",
+                    "Failed to delete MinIO file for attachment %s during document permanent deletion",
                     attachment.id,
                 )
         await db.delete(attachment)
@@ -1149,6 +1112,7 @@ async def permanent_delete_document(
     # Synchronous: remove document from search index (ghost results are worse than slow delete)
     try:
         from ..services.search_service import remove_document_from_index
+
         await remove_document_from_index(document_id)
     except Exception:
         logger.warning("Failed to remove document %s from search index", document_id)
@@ -1156,11 +1120,11 @@ async def permanent_delete_document(
     # Clean up embedding chunks (if pgvector tables exist)
     try:
         from ..models.document_chunk import DocumentChunk
+
         async with db.begin():
             from sqlalchemy import delete as sa_delete
-            await db.execute(
-                sa_delete(DocumentChunk).where(DocumentChunk.document_id == document_id)
-            )
+
+            await db.execute(sa_delete(DocumentChunk).where(DocumentChunk.document_id == document_id))
     except ImportError:
         pass  # DocumentChunk model may not exist yet
     except Exception:
@@ -1194,11 +1158,7 @@ async def assign_tag_to_document(
     Returns 409 if the tag is already assigned.
     """
     # Fetch document
-    result = await db.execute(
-        select(Document)
-        .where(Document.id == document_id)
-        .where(Document.deleted_at.is_(None))
-    )
+    result = await db.execute(select(Document).where(Document.id == document_id).where(Document.deleted_at.is_(None)))
     document = result.scalar_one_or_none()
 
     if document is None:
@@ -1216,9 +1176,7 @@ async def assign_tag_to_document(
         )
 
     # Fetch tag
-    result = await db.execute(
-        select(DocumentTag).where(DocumentTag.id == body.tag_id)
-    )
+    result = await db.execute(select(DocumentTag).where(DocumentTag.id == body.tag_id))
     tag = result.scalar_one_or_none()
 
     if tag is None:
@@ -1276,9 +1234,7 @@ async def remove_tag_from_document(
     """
     # Fetch document for permission check
     doc_result = await db.execute(
-        select(Document)
-        .where(Document.id == document_id)
-        .where(Document.deleted_at.is_(None))
+        select(Document).where(Document.id == document_id).where(Document.deleted_at.is_(None))
     )
     document = doc_result.scalar_one_or_none()
 
@@ -1333,11 +1289,7 @@ async def sync_embeddings(
     Requires Editor or Owner permission on the document's scope.
     Returns 202 Accepted with the job ID.
     """
-    result = await db.execute(
-        select(Document)
-        .where(Document.id == document_id)
-        .where(Document.deleted_at.is_(None))
-    )
+    result = await db.execute(select(Document).where(Document.id == document_id).where(Document.deleted_at.is_(None)))
     document = result.scalar_one_or_none()
 
     if document is None:

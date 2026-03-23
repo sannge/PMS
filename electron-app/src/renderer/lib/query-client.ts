@@ -203,6 +203,18 @@ export const queryKeys = {
   unfiledFiles: (scope: string, scopeId: string) => ['folderFiles', 'unfiled', scope, scopeId] as const,
   folderFile: (fileId: string) => ['folderFile', fileId] as const,
   folderFileDownloadUrl: (fileId: string) => ['folderFileDownloadUrl', fileId] as const,
+
+  // Team Activity
+  teamActivityOverview: (appId: string, from: string, to: string) =>
+    ['team-activity', 'overview', appId, from, to] as const,
+  teamActivityMembers: (appId: string, from: string, to: string) =>
+    ['team-activity', 'members', appId, from, to] as const,
+  teamActivityMemberDetail: (userId: string, appId: string, from: string, to: string) =>
+    ['team-activity', 'member-detail', userId, appId, from, to] as const,
+  teamActivityProjects: (appId: string, from: string, to: string) =>
+    ['team-activity', 'projects', appId, from, to] as const,
+  teamActivityProjectDetail: (projectId: string, appId: string, from: string, to: string) =>
+    ['team-activity', 'project-detail', projectId, appId, from, to] as const,
 }
 
 // ============================================================================
@@ -303,7 +315,7 @@ export async function initializeQueryPersistence(): Promise<void> {
  * Call this on logout for security.
  */
 export async function clearQueryCache(): Promise<void> {
-  // Unsubscribe from cache changes
+  // Unsubscribe from cache changes during clear
   if (cacheUnsubscribe) {
     cacheUnsubscribe()
     cacheUnsubscribe = null
@@ -315,7 +327,10 @@ export async function clearQueryCache(): Promise<void> {
   // Clear IndexedDB cache (skips forceFlush — no point writing data we're about to delete)
   await clearPersistedCache()
 
-  console.log('[QueryClient] Cache cleared')
+  // Re-subscribe so new query data is persisted after the clear
+  cacheUnsubscribe = subscribeToQueryCache(queryClient)
+
+  console.log('[QueryClient] Cache cleared and re-subscribed')
 }
 
 /**

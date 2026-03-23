@@ -28,6 +28,7 @@ from app.ai.agent.tools.helpers import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _setup_context(**overrides):
     """Populate tool context with sensible defaults + overrides."""
     ctx = {
@@ -38,10 +39,18 @@ def _setup_context(**overrides):
         "provider_registry": MagicMock(),
     }
     ctx.update(overrides)
-    set_tool_context(**{k: ctx[k] for k in (
-        "user_id", "accessible_app_ids", "accessible_project_ids",
-        "db_session_factory", "provider_registry",
-    )})
+    set_tool_context(
+        **{
+            k: ctx[k]
+            for k in (
+                "user_id",
+                "accessible_app_ids",
+                "accessible_project_ids",
+                "db_session_factory",
+                "provider_registry",
+            )
+        }
+    )
     return ctx
 
 
@@ -53,8 +62,8 @@ def _clear():
 # _escape_ilike
 # ---------------------------------------------------------------------------
 
-class TestEscapeIlike:
 
+class TestEscapeIlike:
     def test_percent_escaped(self):
         assert _escape_ilike("50% done") == "50\\% done"
 
@@ -81,8 +90,8 @@ class TestEscapeIlike:
 # _wrap_user_content
 # ---------------------------------------------------------------------------
 
-class TestWrapUserContent:
 
+class TestWrapUserContent:
     def test_wraps_with_tags(self):
         result = _wrap_user_content("hello")
         assert result == "[USER CONTENT START]\nhello\n[USER CONTENT END]"
@@ -124,8 +133,8 @@ class TestWrapUserContent:
 # _resolve_task
 # ---------------------------------------------------------------------------
 
-class TestResolveTask:
 
+class TestResolveTask:
     async def test_empty_identifier_returns_error(self):
         _setup_context(accessible_project_ids=[str(uuid4())])
         db = AsyncMock()
@@ -301,8 +310,8 @@ class TestResolveTask:
 # _resolve_user
 # ---------------------------------------------------------------------------
 
-class TestResolveUser:
 
+class TestResolveUser:
     async def test_empty_identifier_returns_error(self):
         _setup_context()
         db = AsyncMock()
@@ -343,9 +352,7 @@ class TestResolveUser:
         scope_result.all.return_value = [(user_id,)]
         db.execute = AsyncMock(return_value=scope_result)
 
-        resolved, error = await _resolve_user(
-            str(user_id), db, scope_project_id=proj_id
-        )
+        resolved, error = await _resolve_user(str(user_id), db, scope_project_id=proj_id)
         assert resolved == str(user_id)
         assert error is None
         _clear()
@@ -362,9 +369,7 @@ class TestResolveUser:
         uuid_result.scalar_one_or_none.return_value = None  # not found
         db.execute = AsyncMock(return_value=uuid_result)
 
-        resolved, error = await _resolve_user(
-            str(user_id), db, scope_project_id=proj_id
-        )
+        resolved, error = await _resolve_user(str(user_id), db, scope_project_id=proj_id)
         assert resolved is None
         assert "No user found" in error
         _clear()
@@ -380,9 +385,7 @@ class TestResolveUser:
         scope_result.all.return_value = [(user_id,)]
         db.execute = AsyncMock(return_value=scope_result)
 
-        resolved, error = await _resolve_user(
-            str(user_id), db, scope_app_id=app_id
-        )
+        resolved, error = await _resolve_user(str(user_id), db, scope_app_id=app_id)
         assert resolved == str(user_id)
         assert error is None
         _clear()
@@ -397,9 +400,7 @@ class TestResolveUser:
         scope_result.all.return_value = []
         db.execute = AsyncMock(return_value=scope_result)
 
-        resolved, error = await _resolve_user(
-            "john", db, scope_project_id=proj_id
-        )
+        resolved, error = await _resolve_user("john", db, scope_project_id=proj_id)
         assert resolved is None
         assert "No user found" in error
         _clear()
@@ -413,9 +414,7 @@ class TestResolveUser:
         db = AsyncMock()
         # DB-007: combined email OR display_name query in single execute
         combined_result = MagicMock()
-        combined_result.all.return_value = [
-            MagicMock(id=user_id, email="john@test.com", display_name="John")
-        ]
+        combined_result.all.return_value = [MagicMock(id=user_id, email="john@test.com", display_name="John")]
         db.execute = AsyncMock(return_value=combined_result)
 
         resolved, error = await _resolve_user("john@test", db)
@@ -453,9 +452,7 @@ class TestResolveUser:
         db = AsyncMock()
         # DB-007: combined email OR display_name query
         combined_result = MagicMock()
-        combined_result.all.return_value = [
-            MagicMock(id=user_id, email="j@test.com", display_name="John Doe")
-        ]
+        combined_result.all.return_value = [MagicMock(id=user_id, email="j@test.com", display_name="John Doe")]
         db.execute = AsyncMock(return_value=combined_result)
 
         resolved, error = await _resolve_user("John", db)
@@ -522,8 +519,8 @@ class TestResolveUser:
 # _resolve_document
 # ---------------------------------------------------------------------------
 
-class TestResolveDocument:
 
+class TestResolveDocument:
     async def test_empty_identifier_returns_error(self):
         _setup_context()
         db = AsyncMock()
@@ -544,9 +541,7 @@ class TestResolveDocument:
 
     async def test_no_scope_returns_not_found(self):
         """Empty accessible_app_ids, accessible_project_ids, and no user_id."""
-        _setup_context(
-            accessible_app_ids=[], accessible_project_ids=[], user_id=None
-        )
+        _setup_context(accessible_app_ids=[], accessible_project_ids=[], user_id=None)
         db = AsyncMock()
 
         resolved, error = await _resolve_document("some doc", db)
@@ -638,9 +633,7 @@ class TestResolveDocument:
         """Personal scope filter is applied when user_id is set."""
         doc_id = uuid4()
         user_id = str(uuid4())
-        _setup_context(
-            accessible_app_ids=[], accessible_project_ids=[], user_id=user_id
-        )
+        _setup_context(accessible_app_ids=[], accessible_project_ids=[], user_id=user_id)
 
         db = AsyncMock()
         mock_result = MagicMock()

@@ -256,13 +256,11 @@ class FolderFile(Base):
             name="ck_folder_files_exactly_one_scope",
         ),
         CheckConstraint(
-            "extraction_status IN ('pending', 'processing', 'completed',"
-            " 'failed', 'unsupported')",
+            "extraction_status IN ('pending', 'processing', 'completed', 'failed', 'unsupported')",
             name="ck_folder_files_extraction_status",
         ),
         CheckConstraint(
-            "embedding_status IN ('none', 'stale', 'syncing', 'synced',"
-            " 'failed')",
+            "embedding_status IN ('none', 'stale', 'syncing', 'synced', 'failed')",
             name="ck_folder_files_embedding_status",
         ),
         # Unique display_name per folder (case-insensitive, excludes soft-deleted).
@@ -363,7 +361,4 @@ class FolderFile(Base):
 
     def __repr__(self) -> str:
         """String representation of FolderFile."""
-        return (
-            f"<FolderFile(id={self.id}, "
-            f"display_name={self.display_name[:30] if self.display_name else ''})>"
-        )
+        return f"<FolderFile(id={self.id}, display_name={self.display_name[:30] if self.display_name else ''})>"

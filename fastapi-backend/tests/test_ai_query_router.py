@@ -55,6 +55,7 @@ async def _override_get_db():
 # Mock dataclasses that match the shapes used by the router
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class MockGenerated:
     sql: str
@@ -83,6 +84,7 @@ class MockValidationResult:
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(autouse=True)
 def _override_deps():
     """Override auth and DB dependencies for all tests in this module."""
@@ -105,8 +107,8 @@ def _no_auth():
 # Tests: POST /api/ai/query
 # ---------------------------------------------------------------------------
 
-class TestQueryEndpoint:
 
+class TestQueryEndpoint:
     @patch("app.ai.sql_executor.execute")
     @patch("app.ai.sql_generator.generate_query")
     async def test_returns_query_response(self, mock_gen, mock_exec):
@@ -124,9 +126,7 @@ class TestQueryEndpoint:
             execution_ms=8,
         )
 
-        async with AsyncClient(
-            transport=ASGITransport(app=fastapi_app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as client:
             resp = await client.post(
                 "/api/ai/query",
                 json={"question": "Who are all users?"},
@@ -144,9 +144,7 @@ class TestQueryEndpoint:
         side_effect=ValueError("LLM refused"),
     )
     async def test_generation_failure_returns_422(self, _mock_gen):
-        async with AsyncClient(
-            transport=ASGITransport(app=fastapi_app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as client:
             resp = await client.post(
                 "/api/ai/query",
                 json={"question": "something impossible"},
@@ -160,8 +158,8 @@ class TestQueryEndpoint:
 # Tests: POST /api/ai/query/validate
 # ---------------------------------------------------------------------------
 
-class TestValidateEndpoint:
 
+class TestValidateEndpoint:
     @patch("app.ai.sql_validator.validate")
     async def test_valid_sql_accepted(self, mock_validate):
         mock_validate.return_value = MockValidationResult(
@@ -169,9 +167,7 @@ class TestValidateEndpoint:
             tables_used=["v_tasks"],
         )
 
-        async with AsyncClient(
-            transport=ASGITransport(app=fastapi_app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as client:
             resp = await client.post(
                 "/api/ai/query/validate",
                 json={"sql": "SELECT * FROM v_tasks LIMIT 10"},
@@ -189,9 +185,7 @@ class TestValidateEndpoint:
             error="Mutation keyword blocked: DROP",
         )
 
-        async with AsyncClient(
-            transport=ASGITransport(app=fastapi_app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as client:
             resp = await client.post(
                 "/api/ai/query/validate",
                 json={"sql": "DROP TABLE v_tasks"},
@@ -207,15 +201,13 @@ class TestValidateEndpoint:
 # Tests: GET /api/ai/schema
 # ---------------------------------------------------------------------------
 
-class TestSchemaEndpoint:
 
+class TestSchemaEndpoint:
     @patch("app.ai.schema_context.get_schema_prompt")
     async def test_returns_schema_text(self, mock_prompt):
         mock_prompt.return_value = "# Database Schema\nv_tasks ..."
 
-        async with AsyncClient(
-            transport=ASGITransport(app=fastapi_app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as client:
             resp = await client.get("/api/ai/schema")
 
         assert resp.status_code == 200
@@ -228,13 +220,11 @@ class TestSchemaEndpoint:
 # Tests: GET /api/ai/export/{filename}
 # ---------------------------------------------------------------------------
 
-class TestExportEndpoint:
 
+class TestExportEndpoint:
     @patch("app.ai.excel_export.get_export_path", return_value=None)
     async def test_nonexistent_file_returns_404(self, _mock_path):
-        async with AsyncClient(
-            transport=ASGITransport(app=fastapi_app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as client:
             resp = await client.get("/api/ai/export/nonexistent.xlsx")
 
         assert resp.status_code == 404
@@ -245,13 +235,11 @@ class TestExportEndpoint:
 # Tests: 401 without authentication
 # ---------------------------------------------------------------------------
 
-class TestAuthRequired:
 
+class TestAuthRequired:
     @pytest.mark.usefixtures("_no_auth")
     async def test_query_requires_auth(self):
-        async with AsyncClient(
-            transport=ASGITransport(app=fastapi_app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as client:
             resp = await client.post(
                 "/api/ai/query",
                 json={"question": "list users"},
@@ -260,9 +248,7 @@ class TestAuthRequired:
 
     @pytest.mark.usefixtures("_no_auth")
     async def test_validate_requires_auth(self):
-        async with AsyncClient(
-            transport=ASGITransport(app=fastapi_app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as client:
             resp = await client.post(
                 "/api/ai/query/validate",
                 json={"sql": "SELECT 1 FROM v_tasks"},
@@ -271,16 +257,12 @@ class TestAuthRequired:
 
     @pytest.mark.usefixtures("_no_auth")
     async def test_schema_requires_auth(self):
-        async with AsyncClient(
-            transport=ASGITransport(app=fastapi_app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as client:
             resp = await client.get("/api/ai/schema")
         assert resp.status_code == 401
 
     @pytest.mark.usefixtures("_no_auth")
     async def test_export_requires_auth(self):
-        async with AsyncClient(
-            transport=ASGITransport(app=fastapi_app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as client:
             resp = await client.get("/api/ai/export/test.xlsx")
         assert resp.status_code == 401

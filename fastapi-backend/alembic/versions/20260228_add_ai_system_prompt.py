@@ -23,14 +23,14 @@ depends_on = None
 def upgrade() -> None:
     """Create ai_system_prompts table."""
     op.create_table(
-        'ai_system_prompts',
-        sa.Column('id', sa.UUID(), nullable=False, server_default=sa.text('gen_random_uuid()')),
-        sa.Column('prompt', sa.Text(), nullable=False),
-        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('now()')),
-        sa.PrimaryKeyConstraint('id'),
+        "ai_system_prompts",
+        sa.Column("id", sa.UUID(), nullable=False, server_default=sa.text("gen_random_uuid()")),
+        sa.Column("prompt", sa.Text(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.PrimaryKeyConstraint("id"),
     )
 
 
 def downgrade() -> None:
     """Drop ai_system_prompts table."""
-    op.drop_table('ai_system_prompts')
+    op.drop_table("ai_system_prompts")

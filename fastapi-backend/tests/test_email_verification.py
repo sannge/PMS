@@ -22,6 +22,7 @@ def _hash_code(code: str) -> str:
 def _check_bcrypt_available():
     try:
         from app.utils.security import get_password_hash
+
         get_password_hash("test")
         return True
     except Exception:

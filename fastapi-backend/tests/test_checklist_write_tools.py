@@ -143,8 +143,8 @@ class TestAddChecklist:
         # 3. select(TaskStatus) -> status_obj
         pre_session = _mock_db_session()
         pre_session.execute.side_effect = [
-            _scalar_result(task_uuid),   # _resolve_task task_key match
-            _scalar_result(task_obj),    # Task select
+            _scalar_result(task_uuid),  # _resolve_task task_key match
+            _scalar_result(task_obj),  # Task select
             _scalar_result(status_obj),  # TaskStatus select
         ]
 
@@ -152,8 +152,8 @@ class TestAddChecklist:
         combined_session = _mock_db_session()
         combined_session.execute.side_effect = [
             _scalar_result(MagicMock()),  # RBAC membership check
-            _scalar_result(task_obj),     # re-load task
-            _scalar_result(None),         # no existing checklists (rank query)
+            _scalar_result(task_obj),  # re-load task
+            _scalar_result(None),  # no existing checklists (rank query)
         ]
 
         mock_tool_session.side_effect = [
@@ -162,10 +162,12 @@ class TestAddChecklist:
         ]
         mock_interrupt.return_value = {"approved": True}
 
-        result = await add_checklist.ainvoke({
-            "task": "TST-1",
-            "title": "QA Steps",
-        })
+        result = await add_checklist.ainvoke(
+            {
+                "task": "TST-1",
+                "title": "QA Steps",
+            }
+        )
 
         assert "Added checklist" in result
         assert "QA Steps" in result
@@ -182,23 +184,23 @@ class TestAddChecklist:
 
         _setup_context(accessible_project_ids=[proj_id])
 
-        task_obj, status_obj = _mock_task(
-            task_uuid, UUID(proj_id), status_name="Done"
-        )
+        task_obj, status_obj = _mock_task(task_uuid, UUID(proj_id), status_name="Done")
 
         pre_session = _mock_db_session()
         pre_session.execute.side_effect = [
-            _scalar_result(task_uuid),   # _resolve_task task_key match
-            _scalar_result(task_obj),    # Task select
+            _scalar_result(task_uuid),  # _resolve_task task_key match
+            _scalar_result(task_obj),  # Task select
             _scalar_result(status_obj),  # TaskStatus select (Done)
         ]
 
         mock_tool_session.return_value = _make_async_ctx(pre_session)
 
-        result = await add_checklist.ainvoke({
-            "task": "TST-1",
-            "title": "QA Steps",
-        })
+        result = await add_checklist.ainvoke(
+            {
+                "task": "TST-1",
+                "title": "QA Steps",
+            }
+        )
 
         assert "Done" in result
         assert "Error" in result
@@ -208,10 +210,12 @@ class TestAddChecklist:
         """Viewer cannot add checklist -- project not in accessible list."""
         _setup_context(accessible_project_ids=[])  # no access
 
-        result = await add_checklist.ainvoke({
-            "task": str(uuid4()),
-            "title": "QA Steps",
-        })
+        result = await add_checklist.ainvoke(
+            {
+                "task": str(uuid4()),
+                "title": "QA Steps",
+            }
+        )
 
         assert "No task found" in result
         _clear()
@@ -250,8 +254,8 @@ class TestAddChecklistItem:
         # 3. select(Checklist) by title ILIKE
         pre_session = _mock_db_session()
         pre_session.execute.side_effect = [
-            _scalar_result(task_uuid),      # _resolve_task
-            _scalar_result(task_obj),       # Task select
+            _scalar_result(task_uuid),  # _resolve_task
+            _scalar_result(task_obj),  # Task select
             _scalar_result(checklist_obj),  # Checklist by title
         ]
 
@@ -259,10 +263,10 @@ class TestAddChecklistItem:
         combined_session = _mock_db_session()
         update_result = MagicMock()
         combined_session.execute.side_effect = [
-            _scalar_result(MagicMock()),    # RBAC membership check
+            _scalar_result(MagicMock()),  # RBAC membership check
             _scalar_result(checklist_obj),  # re-load checklist
-            _scalar_result(None),           # no existing items (rank query)
-            update_result,                  # update Task.checklist_total
+            _scalar_result(None),  # no existing items (rank query)
+            update_result,  # update Task.checklist_total
         ]
 
         mock_tool_session.side_effect = [
@@ -271,11 +275,13 @@ class TestAddChecklistItem:
         ]
         mock_interrupt.return_value = {"approved": True}
 
-        result = await add_checklist_item.ainvoke({
-            "task": "TST-1",
-            "checklist_title": "QA Steps",
-            "item_title": "Step 1",
-        })
+        result = await add_checklist_item.ainvoke(
+            {
+                "task": "TST-1",
+                "checklist_title": "QA Steps",
+                "item_title": "Step 1",
+            }
+        )
 
         assert "Added item" in result
         assert "Step 1" in result
@@ -304,19 +310,21 @@ class TestAddChecklistItem:
         all_cl_result = MagicMock()
         all_cl_result.all.return_value = [("Dev Tasks",), ("QA Steps",)]
         pre_session.execute.side_effect = [
-            _scalar_result(task_uuid),      # _resolve_task
-            _scalar_result(task_obj),       # Task select
-            _scalar_result(None),           # Checklist not found
-            all_cl_result,                  # available checklists
+            _scalar_result(task_uuid),  # _resolve_task
+            _scalar_result(task_obj),  # Task select
+            _scalar_result(None),  # Checklist not found
+            all_cl_result,  # available checklists
         ]
 
         mock_tool_session.return_value = _make_async_ctx(pre_session)
 
-        result = await add_checklist_item.ainvoke({
-            "task": "TST-1",
-            "checklist_title": "Nonexistent",
-            "item_title": "Step 1",
-        })
+        result = await add_checklist_item.ainvoke(
+            {
+                "task": "TST-1",
+                "checklist_title": "Nonexistent",
+                "item_title": "Step 1",
+            }
+        )
 
         assert "No checklist matching" in result
         assert "Nonexistent" in result
@@ -386,10 +394,10 @@ class TestToggleChecklistItem:
 
         combined_session = _mock_db_session()
         combined_session.execute.side_effect = [
-            _scalar_result(MagicMock()),          # RBAC membership check
-            _scalar_result(write_item_obj),       # re-load item
-            _scalar_result(write_checklist_obj),   # re-load checklist
-            MagicMock(),                           # update Task.checklist_done
+            _scalar_result(MagicMock()),  # RBAC membership check
+            _scalar_result(write_item_obj),  # re-load item
+            _scalar_result(write_checklist_obj),  # re-load checklist
+            MagicMock(),  # update Task.checklist_done
         ]
 
         mock_tool_session.side_effect = [
@@ -398,11 +406,13 @@ class TestToggleChecklistItem:
         ]
         mock_interrupt.return_value = {"approved": True}
 
-        result = await toggle_checklist_item.ainvoke({
-            "task": "TST-1",
-            "checklist_title": "QA Steps",
-            "item_title": "Step 1",
-        })
+        result = await toggle_checklist_item.ainvoke(
+            {
+                "task": "TST-1",
+                "checklist_title": "QA Steps",
+                "item_title": "Step 1",
+            }
+        )
 
         assert "complete" in result.lower()
         assert "Step 1" in result
@@ -464,10 +474,10 @@ class TestToggleChecklistItem:
 
         combined_session = _mock_db_session()
         combined_session.execute.side_effect = [
-            _scalar_result(MagicMock()),          # RBAC membership check
-            _scalar_result(write_item_obj),       # re-load item
-            _scalar_result(write_checklist_obj),   # re-load checklist
-            MagicMock(),                           # update Task.checklist_done
+            _scalar_result(MagicMock()),  # RBAC membership check
+            _scalar_result(write_item_obj),  # re-load item
+            _scalar_result(write_checklist_obj),  # re-load checklist
+            MagicMock(),  # update Task.checklist_done
         ]
 
         mock_tool_session.side_effect = [
@@ -476,11 +486,13 @@ class TestToggleChecklistItem:
         ]
         mock_interrupt.return_value = {"approved": True}
 
-        result = await toggle_checklist_item.ainvoke({
-            "task": "TST-1",
-            "checklist_title": "QA Steps",
-            "item_title": "Step 1",
-        })
+        result = await toggle_checklist_item.ainvoke(
+            {
+                "task": "TST-1",
+                "checklist_title": "QA Steps",
+                "item_title": "Step 1",
+            }
+        )
 
         assert "incomplete" in result.lower()
         assert "Step 1" in result
@@ -516,17 +528,19 @@ class TestToggleChecklistItem:
             _scalar_result(task_uuid),
             _scalar_result(task_obj),
             _scalar_result(checklist_obj),
-            _scalar_result(None),       # item not found
-            all_items_result,           # available items
+            _scalar_result(None),  # item not found
+            all_items_result,  # available items
         ]
 
         mock_tool_session.return_value = _make_async_ctx(pre_session)
 
-        result = await toggle_checklist_item.ainvoke({
-            "task": "TST-1",
-            "checklist_title": "QA Steps",
-            "item_title": "Nonexistent Step",
-        })
+        result = await toggle_checklist_item.ainvoke(
+            {
+                "task": "TST-1",
+                "checklist_title": "QA Steps",
+                "item_title": "Nonexistent Step",
+            }
+        )
 
         assert "No item matching" in result
         assert "Nonexistent Step" in result

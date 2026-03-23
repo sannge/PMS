@@ -1,6 +1,7 @@
 """Unit tests for WebSocket connection manager."""
 
 import asyncio
+import json
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -319,14 +320,14 @@ class TestConnectionManagerBroadcast:
         await mgr.join_room(conn1, "test_room")
         await mgr.join_room(conn2, "test_room")
 
-        mock_ws1.send_json.reset_mock()
-        mock_ws2.send_json.reset_mock()
+        mock_ws1.send_text.reset_mock()
+        mock_ws2.send_text.reset_mock()
 
         result = await mgr.broadcast_to_room("test_room", {"type": "test", "data": {}})
 
         assert result == 2
-        mock_ws1.send_json.assert_called_once()
-        mock_ws2.send_json.assert_called_once()
+        mock_ws1.send_text.assert_called_once()
+        mock_ws2.send_text.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_broadcast_to_room_with_exclude(self):
@@ -343,16 +344,14 @@ class TestConnectionManagerBroadcast:
         await mgr.join_room(conn1, "test_room")
         await mgr.join_room(conn2, "test_room")
 
-        mock_ws1.send_json.reset_mock()
-        mock_ws2.send_json.reset_mock()
+        mock_ws1.send_text.reset_mock()
+        mock_ws2.send_text.reset_mock()
 
-        result = await mgr.broadcast_to_room(
-            "test_room", {"type": "test", "data": {}}, exclude=conn1
-        )
+        result = await mgr.broadcast_to_room("test_room", {"type": "test", "data": {}}, exclude=conn1)
 
         assert result == 1
-        mock_ws1.send_json.assert_not_called()
-        mock_ws2.send_json.assert_called_once()
+        mock_ws1.send_text.assert_not_called()
+        mock_ws2.send_text.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_broadcast_to_empty_room(self):
@@ -375,14 +374,14 @@ class TestConnectionManagerBroadcast:
         await mgr.connect(mock_ws1, user_id)
         await mgr.connect(mock_ws2, user_id)
 
-        mock_ws1.send_json.reset_mock()
-        mock_ws2.send_json.reset_mock()
+        mock_ws1.send_text.reset_mock()
+        mock_ws2.send_text.reset_mock()
 
         result = await mgr.broadcast_to_user(user_id, {"type": "test", "data": {}})
 
         assert result == 2
-        mock_ws1.send_json.assert_called_once()
-        mock_ws2.send_json.assert_called_once()
+        mock_ws1.send_text.assert_called_once()
+        mock_ws2.send_text.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_broadcast_to_all(self):
@@ -396,9 +395,9 @@ class TestConnectionManagerBroadcast:
         await mgr.connect(mock_ws2, uuid4())
         await mgr.connect(mock_ws3, uuid4())
 
-        mock_ws1.send_json.reset_mock()
-        mock_ws2.send_json.reset_mock()
-        mock_ws3.send_json.reset_mock()
+        mock_ws1.send_text.reset_mock()
+        mock_ws2.send_text.reset_mock()
+        mock_ws3.send_text.reset_mock()
 
         result = await mgr.broadcast_to_all({"type": "test", "data": {}})
 
@@ -474,7 +473,7 @@ class TestConnectionManagerMessageHandling:
         await mgr.join_room(conn1, "test_room")
         await mgr.join_room(conn2, "test_room")
 
-        mock_ws2.send_json.reset_mock()
+        mock_ws2.send_text.reset_mock()
 
         await mgr.handle_message(
             conn1,
@@ -484,8 +483,8 @@ class TestConnectionManagerMessageHandling:
             },
         )
 
-        # conn2 should receive typing indicator
-        mock_ws2.send_json.assert_called()
+        # conn2 should receive typing indicator (via broadcast_to_room -> send_text)
+        mock_ws2.send_text.assert_called()
 
     @pytest.mark.asyncio
     async def test_handle_unknown_message_type(self):
@@ -552,7 +551,7 @@ class TestProjectStatusChangedHandler:
         app_room = f"application:{application_id}"
         await mgr.join_room(connection, app_room)
 
-        mock_ws.send_json.reset_mock()
+        mock_ws.send_text.reset_mock()
 
         # Trigger project status changed event
         project_data = {
@@ -577,9 +576,9 @@ class TestProjectStatusChangedHandler:
         assert result.success is True
         assert result.message_type == "project_status_changed"
 
-        # Verify WebSocket message was sent
-        mock_ws.send_json.assert_called()
-        call_args = mock_ws.send_json.call_args[0][0]
+        # Verify WebSocket message was sent (broadcast uses send_text with pre-serialized JSON)
+        mock_ws.send_text.assert_called()
+        call_args = json.loads(mock_ws.send_text.call_args[0][0])
         assert call_args["type"] == "project_status_changed"
         assert call_args["data"]["old_status"] == "In Progress"
         assert call_args["data"]["new_status"] == "Issue"
@@ -601,7 +600,7 @@ class TestProjectStatusChangedHandler:
         project_room = f"project:{project_id}"
         await mgr.join_room(connection, project_room)
 
-        mock_ws.send_json.reset_mock()
+        mock_ws.send_text.reset_mock()
 
         # Trigger project status changed event
         project_data = {
@@ -624,9 +623,9 @@ class TestProjectStatusChangedHandler:
         # Verify broadcast succeeded
         assert result.success is True
 
-        # Verify WebSocket message was sent to project room
-        mock_ws.send_json.assert_called()
-        call_args = mock_ws.send_json.call_args[0][0]
+        # Verify WebSocket message was sent to project room (broadcast uses send_text)
+        mock_ws.send_text.assert_called()
+        call_args = json.loads(mock_ws.send_text.call_args[0][0])
         assert call_args["type"] == "project_status_changed"
         assert call_args["data"]["old_status"] == "Todo"
         assert call_args["data"]["new_status"] == "Issue"
@@ -645,7 +644,7 @@ class TestProjectStatusChangedHandler:
         connection = await mgr.connect(mock_ws, user_id)
         await mgr.join_room(connection, f"application:{application_id}")
 
-        mock_ws.send_json.reset_mock()
+        mock_ws.send_text.reset_mock()
 
         # Simulate Issue escalation: a task moved to "blocked" status
         project_data = {
@@ -671,7 +670,7 @@ class TestProjectStatusChangedHandler:
         assert result.message_type == "project_status_changed"
 
         # Verify the event includes all necessary data for UI update
-        call_args = mock_ws.send_json.call_args[0][0]
+        call_args = json.loads(mock_ws.send_text.call_args[0][0])
         data = call_args["data"]
 
         assert data["project_id"] == str(project_id)
@@ -697,7 +696,7 @@ class TestProjectStatusChangedHandler:
         connection = await mgr.connect(mock_ws, user_id)
         await mgr.join_room(connection, f"application:{application_id}")
 
-        mock_ws.send_json.reset_mock()
+        mock_ws.send_text.reset_mock()
 
         project_data = {
             "id": str(project_id),
@@ -718,7 +717,7 @@ class TestProjectStatusChangedHandler:
         )
 
         assert result.success is True
-        call_args = mock_ws.send_json.call_args[0][0]
+        call_args = json.loads(mock_ws.send_text.call_args[0][0])
         assert call_args["data"]["old_status"] == "Done"
         assert call_args["data"]["new_status"] == "Issue"
 
@@ -736,7 +735,7 @@ class TestProjectStatusChangedHandler:
         connection = await mgr.connect(mock_ws, user_id)
         await mgr.join_room(connection, f"application:{application_id}")
 
-        mock_ws.send_json.reset_mock()
+        mock_ws.send_text.reset_mock()
 
         project_data = {
             "id": str(project_id),
@@ -757,7 +756,7 @@ class TestProjectStatusChangedHandler:
         )
 
         assert result.success is True
-        call_args = mock_ws.send_json.call_args[0][0]
+        call_args = json.loads(mock_ws.send_text.call_args[0][0])
         assert call_args["data"]["old_status"] == "Issue"
         assert call_args["data"]["new_status"] == "In Progress"
 

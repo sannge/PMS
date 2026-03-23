@@ -8,6 +8,7 @@ Revision ID: 20260226_drop_kg
 Revises: 20260225_doc_chunks
 Create Date: 2026-02-26
 """
+
 from typing import Sequence, Union
 
 from alembic import op
@@ -23,12 +24,12 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Drop graph_ingested_at column from Documents."""
-    op.drop_column('Documents', 'graph_ingested_at')
+    op.drop_column("Documents", "graph_ingested_at")
 
 
 def downgrade() -> None:
     """Re-add graph_ingested_at column to Documents."""
     op.add_column(
-        'Documents',
-        sa.Column('graph_ingested_at', sa.DateTime(timezone=True), nullable=True),
+        "Documents",
+        sa.Column("graph_ingested_at", sa.DateTime(timezone=True), nullable=True),
     )

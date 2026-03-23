@@ -174,9 +174,7 @@ class DocumentTagAssignment(Base):
     )
 
     # Constraints
-    __table_args__ = (
-        UniqueConstraint("document_id", "tag_id", name="uq_document_tag_assignments_doc_tag"),
-    )
+    __table_args__ = (UniqueConstraint("document_id", "tag_id", name="uq_document_tag_assignments_doc_tag"),)
 
     # Relationships
     document = relationship(

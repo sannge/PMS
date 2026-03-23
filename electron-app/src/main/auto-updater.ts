@@ -50,6 +50,7 @@ export function setupAutoUpdater(): void {
     return
   }
 
+
   // --- Event handlers ---
 
   autoUpdater.on('checking-for-update', () => {

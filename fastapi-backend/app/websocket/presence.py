@@ -72,6 +72,7 @@ class PresenceManager:
     def _get_lock(self):
         """Get or create the asyncio lock (lazy initialization)."""
         import asyncio
+
         if self._lock is None:
             self._lock = asyncio.Lock()
         return self._lock
@@ -102,22 +103,17 @@ class PresenceManager:
                 await redis_service.presence_set(room_id, user_id, now)
 
                 # Store user metadata in hash
-                user_data = json.dumps({
-                    "name": user_name,
-                    "avatar": avatar_url,
-                    "idle": idle,
-                })
-                await redis_service.client.hset(
-                    f"{self._USER_DATA_PREFIX}{room_id}",
-                    user_id,
-                    user_data
+                user_data = json.dumps(
+                    {
+                        "name": user_name,
+                        "avatar": avatar_url,
+                        "idle": idle,
+                    }
                 )
+                await redis_service.client.hset(f"{self._USER_DATA_PREFIX}{room_id}", user_id, user_data)
 
                 # Track room in user's reverse index for O(1) leave_all
-                await redis_service.client.sadd(
-                    f"{self._USER_ROOMS_PREFIX}{user_id}",
-                    room_id
-                )
+                await redis_service.client.sadd(f"{self._USER_ROOMS_PREFIX}{user_id}", room_id)
             except Exception as e:
                 logger.error(f"Redis heartbeat error: {e}")
                 # Fall through to local storage
@@ -157,16 +153,10 @@ class PresenceManager:
                 await redis_service.presence_remove(room_id, user_id)
 
                 # Remove user metadata
-                await redis_service.client.hdel(
-                    f"{self._USER_DATA_PREFIX}{room_id}",
-                    user_id
-                )
+                await redis_service.client.hdel(f"{self._USER_DATA_PREFIX}{room_id}", user_id)
 
                 # Remove room from user's reverse index
-                await redis_service.client.srem(
-                    f"{self._USER_ROOMS_PREFIX}{user_id}",
-                    room_id
-                )
+                await redis_service.client.srem(f"{self._USER_ROOMS_PREFIX}{user_id}", room_id)
 
                 # Broadcast leave event
                 await redis_service.publish(
@@ -175,7 +165,7 @@ class PresenceManager:
                         "type": "user_left",
                         "room_id": room_id,
                         "user_id": user_id,
-                    }
+                    },
                 )
             except Exception as e:
                 logger.error(f"Redis leave error: {e}")
@@ -210,9 +200,7 @@ class PresenceManager:
         if redis_service.is_connected:
             try:
                 # O(1) lookup via reverse index instead of O(N) SCAN
-                room_ids = await redis_service.client.smembers(
-                    f"{self._USER_ROOMS_PREFIX}{user_id}"
-                )
+                room_ids = await redis_service.client.smembers(f"{self._USER_ROOMS_PREFIX}{user_id}")
 
                 if room_ids:
                     # Batch-remove from all rooms in a single pipeline
@@ -272,20 +260,24 @@ class PresenceManager:
                 for user_id, data_str in zip(user_ids, values):
                     if data_str:
                         data = json.loads(data_str)
-                        result.append({
-                            "id": user_id,
-                            "name": data.get("name", "Unknown"),
-                            "avatar": data.get("avatar"),
-                            "idle": data.get("idle", False),
-                        })
+                        result.append(
+                            {
+                                "id": user_id,
+                                "name": data.get("name", "Unknown"),
+                                "avatar": data.get("avatar"),
+                                "idle": data.get("idle", False),
+                            }
+                        )
                     else:
                         # User in sorted set but no metadata
-                        result.append({
-                            "id": user_id,
-                            "name": "Unknown",
-                            "avatar": None,
-                            "idle": False,
-                        })
+                        result.append(
+                            {
+                                "id": user_id,
+                                "name": "Unknown",
+                                "avatar": None,
+                                "idle": False,
+                            }
+                        )
 
                 return result
             except Exception as e:
@@ -324,9 +316,7 @@ class PresenceManager:
         if redis_service.is_connected:
             try:
                 # O(1) lookup via reverse index
-                room_ids = await redis_service.client.smembers(
-                    f"{self._USER_ROOMS_PREFIX}{user_id}"
-                )
+                room_ids = await redis_service.client.smembers(f"{self._USER_ROOMS_PREFIX}{user_id}")
                 if not room_ids:
                     return []
 
@@ -337,11 +327,7 @@ class PresenceManager:
                     pipe.zscore(f"{self._PRESENCE_PREFIX}{room_id}", user_id)
                 scores = await pipe.execute()
 
-                return [
-                    room_id
-                    for room_id, score in zip(room_list, scores)
-                    if score is not None and score > cutoff
-                ]
+                return [room_id for room_id, score in zip(room_list, scores) if score is not None and score > cutoff]
             except Exception as e:
                 logger.error(f"Redis get_user_rooms error: {e}")
                 return []

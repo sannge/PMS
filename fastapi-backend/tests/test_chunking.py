@@ -255,15 +255,13 @@ class TestTipTapChunking:
         last_words_of_first = " ".join(first_words[-5:])  # Last 5 words
         # The start of the second chunk should contain those words (overlap)
         second_start = result[1].text[:200]
-        assert last_words_of_first in second_start or any(
-            w in second_start for w in first_words[-3:]
-        ), "Overlap text from chunk 0 not found at start of chunk 1"
+        assert last_words_of_first in second_start or any(w in second_start for w in first_words[-3:]), (
+            "Overlap text from chunk 0 not found at start of chunk 1"
+        )
 
     def test_chunk_handles_code_blocks(self, chunker):
         """Code block content is included in chunk text."""
-        doc = make_tiptap_doc(
-            code_block("def hello():\n    return 'world'", "python")
-        )
+        doc = make_tiptap_doc(code_block("def hello():\n    return 'world'", "python"))
         result = chunker.chunk_document(doc, "Code Doc", "document")
         assert len(result) == 1
         assert "def hello" in result[0].text
@@ -272,11 +270,13 @@ class TestTipTapChunking:
     def test_chunk_handles_tables(self, chunker):
         """Table cell content is extracted and included."""
         doc = make_tiptap_doc(
-            table([
-                ["Name", "Value"],
-                ["Alpha", "100"],
-                ["Beta", "200"],
-            ])
+            table(
+                [
+                    ["Name", "Value"],
+                    ["Alpha", "100"],
+                    ["Beta", "200"],
+                ]
+            )
         )
         result = chunker.chunk_document(doc, "Table Doc", "document")
         assert len(result) == 1
@@ -320,9 +320,7 @@ class TestTipTapChunking:
 
     def test_chunk_token_count_accuracy(self, chunker):
         """Verify token_count matches actual tiktoken encoding of text."""
-        doc = make_tiptap_doc(
-            paragraph("The quick brown fox jumps over the lazy dog.")
-        )
+        doc = make_tiptap_doc(paragraph("The quick brown fox jumps over the lazy dog."))
         result = chunker.chunk_document(doc, "Token Test", "document")
         assert len(result) == 1
         actual_tokens = chunker.count_tokens(result[0].text)
@@ -528,7 +526,7 @@ class TestCanvasChunking:
             )
         # Connect them all in a chain
         for i in range(29):
-            elements.append(connector(f"c{i}", f"e{i}", f"e{i+1}", f"link{i}"))
+            elements.append(connector(f"c{i}", f"e{i}", f"e{i + 1}", f"link{i}"))
 
         doc = {"elements": elements}
         result = chunker.chunk_document(doc, "Large Canvas", "canvas")
@@ -594,9 +592,7 @@ class TestDrawIOExtraction:
         """Valid drawio XML with mxCell elements extracts text."""
         node = {
             "type": "drawio",
-            "attrs": {
-                "data": '<mxGraphModel><root><mxCell value="Start"/><mxCell value="End"/></root></mxGraphModel>'
-            },
+            "attrs": {"data": '<mxGraphModel><root><mxCell value="Start"/><mxCell value="End"/></root></mxGraphModel>'},
         }
         doc = make_tiptap_doc(node)
         result = chunker.chunk_document(doc, "Drawio Test", "document")

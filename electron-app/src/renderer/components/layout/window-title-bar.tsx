@@ -22,12 +22,7 @@ import {
   LogOut,
   User,
   ChevronDown,
-  RefreshCw,
 } from 'lucide-react'
-import { toast } from 'sonner'
-import { clearQueryCache } from '@/lib/query-client'
-import { clearEventDedup } from '@/hooks/use-websocket-cache'
-import { wsClient } from '@/lib/websocket'
 
 // ============================================================================
 // Types
@@ -180,78 +175,7 @@ function CompactUserMenu(): JSX.Element {
 }
 
 // ============================================================================
-// Hard Refresh Button
-// ============================================================================
-
-function HardRefreshButton(): JSX.Element {
-  const [isRefreshing, setIsRefreshing] = useState(false)
-  const refreshingRef = useRef(false)
-  const mountedRef = useRef(true)
-
-  useEffect(() => () => { mountedRef.current = false }, [])
-
-  const handleRefresh = useCallback(async () => {
-    if (refreshingRef.current) return
-    refreshingRef.current = true
-    setIsRefreshing(true)
-    try {
-      // Snapshot active rooms before disconnect so we can rejoin
-      const activeRooms = wsClient.getRooms()
-      wsClient.disconnect()
-      clearEventDedup()
-
-      // Race clearQueryCache against a timeout so a stuck IndexedDB
-      // transaction can't leave the button spinning forever.
-      let timeoutId: ReturnType<typeof setTimeout>
-      try {
-        await Promise.race([
-          clearQueryCache(),
-          new Promise<void>((_, reject) => {
-            timeoutId = setTimeout(() => reject(new Error('Cache clear timed out')), 5000)
-          }),
-        ])
-      } catch {
-        // Timed out or failed — still reconnect below
-      } finally {
-        clearTimeout(timeoutId!)
-      }
-
-      // Always reconnect — rooms are restored so rejoinRooms()
-      // in handleOpen() sends JOIN_ROOM for each (no duplicates)
-      for (const room of activeRooms) {
-        wsClient.joinRoom(room)
-      }
-      wsClient.connect()
-
-      if (mountedRef.current) toast.success('Reconnected', { duration: 2000 })
-    } catch {
-      if (mountedRef.current) toast.error('Refresh failed', { duration: 3000 })
-    } finally {
-      refreshingRef.current = false
-      if (mountedRef.current) setIsRefreshing(false)
-    }
-  }, [])
-
-  return (
-    <button
-      onClick={handleRefresh}
-      disabled={isRefreshing}
-      aria-label="Refresh connection and clear cache"
-      className={cn(
-        'flex h-6 w-6 items-center justify-center rounded app-no-drag',
-        'text-sidebar-foreground/50 transition-colors',
-        'hover:bg-sidebar-muted/40 hover:text-sidebar-foreground',
-        'disabled:opacity-50'
-      )}
-      title="Refresh connection & clear cache"
-    >
-      <RefreshCw className={cn('h-3.5 w-3.5', isRefreshing && 'animate-spin')} />
-    </button>
-  )
-}
-
-// ============================================================================
-// Utility Controls (User Menu, Refresh)
+// Utility Controls (User Menu)
 // ============================================================================
 
 function UtilityControls({
@@ -262,8 +186,6 @@ function UtilityControls({
   return (
     <div className="flex items-center gap-1 app-no-drag">
       {extraControls}
-
-      <HardRefreshButton />
 
       <div className="h-4 w-px bg-sidebar-muted/20 mx-0.5" />
 

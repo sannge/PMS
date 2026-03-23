@@ -26,6 +26,7 @@ from app.ai.agent.nodes.respond import respond_node
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_mock_model(response: AIMessage | None = None):
     """Create a mock model."""
     if response is None:
@@ -225,9 +226,7 @@ class TestRespondNodeErrors:
 
         model = AsyncMock()
         model.ainvoke = AsyncMock(
-            side_effect=GraphInterrupt(
-                interrupts=(Interrupt(value={}, resumable=True, ns=(), when="during"),)
-            )
+            side_effect=GraphInterrupt(interrupts=(Interrupt(value={}, resumable=True, ns=(), when="during"),))
         )
 
         state = {

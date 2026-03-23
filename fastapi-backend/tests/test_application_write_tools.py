@@ -25,6 +25,7 @@ from app.ai.agent.tools.context import clear_tool_context, set_tool_context
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _setup_context(**overrides):
     """Populate tool context with sensible defaults + overrides."""
     ctx = {
@@ -35,10 +36,18 @@ def _setup_context(**overrides):
         "provider_registry": MagicMock(),
     }
     ctx.update(overrides)
-    set_tool_context(**{k: ctx[k] for k in (
-        "user_id", "accessible_app_ids", "accessible_project_ids",
-        "db_session_factory", "provider_registry",
-    )})
+    set_tool_context(
+        **{
+            k: ctx[k]
+            for k in (
+                "user_id",
+                "accessible_app_ids",
+                "accessible_project_ids",
+                "db_session_factory",
+                "provider_registry",
+            )
+        }
+    )
     return ctx
 
 
@@ -70,8 +79,8 @@ def _make_ctx(session):
 # Registry
 # ---------------------------------------------------------------------------
 
-class TestApplicationWriteToolsRegistry:
 
+class TestApplicationWriteToolsRegistry:
     def test_has_3_tools(self):
         assert len(APPLICATION_WRITE_TOOLS) == 3
 
@@ -88,8 +97,8 @@ class TestApplicationWriteToolsRegistry:
 # create_application
 # ---------------------------------------------------------------------------
 
-class TestCreateApplication:
 
+class TestCreateApplication:
     async def test_empty_name(self):
         _setup_context()
         result = await create_application.ainvoke({"name": ""})
@@ -104,10 +113,12 @@ class TestCreateApplication:
 
     async def test_description_too_long(self):
         _setup_context()
-        result = await create_application.ainvoke({
-            "name": "Valid",
-            "description": "x" * 501,
-        })
+        result = await create_application.ainvoke(
+            {
+                "name": "Valid",
+                "description": "x" * 501,
+            }
+        )
         assert "500 characters" in result
         _clear()
 
@@ -135,6 +146,7 @@ class TestCreateApplication:
         # Mock app.id after flush
         def capture_add(obj):
             obj.id = uuid4()
+
         session.add.side_effect = capture_add
 
         result = await create_application.ainvoke({"name": "My App"})
@@ -147,8 +159,8 @@ class TestCreateApplication:
 # update_application
 # ---------------------------------------------------------------------------
 
-class TestUpdateApplication:
 
+class TestUpdateApplication:
     async def test_no_fields_provided(self):
         _setup_context()
         result = await update_application.ainvoke({"app": "test"})
@@ -224,8 +236,8 @@ class TestUpdateApplication:
 # delete_application
 # ---------------------------------------------------------------------------
 
-class TestDeleteApplication:
 
+class TestDeleteApplication:
     async def test_rbac_editor_denied(self):
         """Editor cannot delete application (owner only)."""
         app_id = str(uuid4())
@@ -305,9 +317,7 @@ class TestDeleteApplication:
         delete_app.name = "Test App"
         delete_result = MagicMock()
         delete_result.scalar_one_or_none.return_value = delete_app
-        toctou_delete_session.execute = AsyncMock(
-            side_effect=[toctou_result, delete_result]
-        )
+        toctou_delete_session.execute = AsyncMock(side_effect=[toctou_result, delete_result])
 
         mock_tool_session.side_effect = [
             _make_ctx(pre_session),
@@ -361,9 +371,7 @@ class TestDeleteApplication:
 
     @patch("app.ai.agent.tools.application_write_tools.interrupt")
     @patch("app.ai.agent.tools.application_write_tools._get_tool_session")
-    async def test_update_application_rbac_denied_post_interrupt(
-        self, mock_tool_session, mock_interrupt
-    ):
+    async def test_update_application_rbac_denied_post_interrupt(self, mock_tool_session, mock_interrupt):
         """If user loses access between approval and execution, deny."""
         app_id = str(uuid4())
         user_id = str(uuid4())

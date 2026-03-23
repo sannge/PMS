@@ -24,9 +24,7 @@ from app.utils.timezone import utc_now
 
 
 @pytest_asyncio.fixture
-async def app_folder(
-    db_session: AsyncSession, test_user: User, test_application: Application
-) -> DocumentFolder:
+async def app_folder(db_session: AsyncSession, test_user: User, test_application: Application) -> DocumentFolder:
     """Create a test folder scoped to the test application."""
     folder = DocumentFolder(
         id=uuid4(),
@@ -44,9 +42,7 @@ async def app_folder(
 
 
 @pytest_asyncio.fixture
-async def personal_folder(
-    db_session: AsyncSession, test_user: User
-) -> DocumentFolder:
+async def personal_folder(db_session: AsyncSession, test_user: User) -> DocumentFolder:
     """Create a personal-scope folder for test_user."""
     folder = DocumentFolder(
         id=uuid4(),
@@ -642,9 +638,7 @@ class TestDeleteFile:
         assert response.status_code == 204
 
         # Verify deleted_at is set
-        result = await db_session.execute(
-            select(FolderFile).where(FolderFile.id == test_folder_file.id)
-        )
+        result = await db_session.execute(select(FolderFile).where(FolderFile.id == test_folder_file.id))
         deleted_file = result.scalar_one_or_none()
         assert deleted_file is not None
         assert deleted_file.deleted_at is not None
@@ -708,7 +702,13 @@ class TestReplaceFile:
         ):
             response = await client.post(
                 f"/api/folder-files/{test_folder_file.id}/replace",
-                files={"file": ("new_report.xlsx", b"new content", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+                files={
+                    "file": (
+                        "new_report.xlsx",
+                        b"new content",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                },
                 headers=auth_headers,
             )
 

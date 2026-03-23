@@ -37,18 +37,14 @@ async def get_my_profile() -> str:
 
         async with _get_tool_session() as db:
             # Fetch user
-            result = await db.execute(
-                select(User).where(User.id == user_id)
-            )
+            result = await db.execute(select(User).where(User.id == user_id))
             user = result.scalar_one_or_none()
             if not user:
                 return "Error: Could not find your user profile."
 
             # Owned applications
             owned_result = await db.execute(
-                select(Application.id, Application.name).where(
-                    Application.owner_id == user_id
-                )
+                select(Application.id, Application.name).where(Application.owner_id == user_id)
             )
             owned_apps = owned_result.all()
 
@@ -131,12 +127,14 @@ async def get_my_workload() -> str:
             # RBAC: only show tasks from projects the user still has access to
             if accessible_project_ids:
                 from uuid import UUID as _UUID
+
                 proj_uuids = [_UUID(pid) for pid in accessible_project_ids]
                 query = query.where(Task.project_id.in_(proj_uuids))
             else:
                 return "You have no accessible projects."
 
             from app.ai.config_service import get_agent_config
+
             _WORKLOAD_LIMIT = get_agent_config().get_int("agent_tool.workload_limit", 200)
             query = query.limit(_WORKLOAD_LIMIT)
             result = await db.execute(query)
@@ -162,13 +160,15 @@ async def get_my_workload() -> str:
                 if overdue:
                     overdue_count += 1
 
-                by_project[proj_name][status_name].append({
-                    "key": t.task_key,
-                    "title": t.title,
-                    "priority": t.priority,
-                    "due_date": _format_date(t.due_date),
-                    "overdue": overdue,
-                })
+                by_project[proj_name][status_name].append(
+                    {
+                        "key": t.task_key,
+                        "title": t.title,
+                        "priority": t.priority,
+                        "due_date": _format_date(t.due_date),
+                        "overdue": overdue,
+                    }
+                )
 
             # Format output
             lines = [

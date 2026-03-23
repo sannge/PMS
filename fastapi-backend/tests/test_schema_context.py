@@ -20,22 +20,24 @@ from app.ai.schema_context import (
 # Expected view names (alphabetical)
 # ---------------------------------------------------------------------------
 
-EXPECTED_VIEWS = frozenset({
-    "v_applications",
-    "v_projects",
-    "v_tasks",
-    "v_task_statuses",
-    "v_documents",
-    "v_document_folders",
-    "v_comments",
-    "v_application_members",
-    "v_project_members",
-    "v_project_assignments",
-    "v_users",
-    "v_attachments",
-    "v_checklists",
-    "v_checklist_items",
-})
+EXPECTED_VIEWS = frozenset(
+    {
+        "v_applications",
+        "v_projects",
+        "v_tasks",
+        "v_task_statuses",
+        "v_documents",
+        "v_document_folders",
+        "v_comments",
+        "v_application_members",
+        "v_project_members",
+        "v_project_assignments",
+        "v_users",
+        "v_attachments",
+        "v_checklists",
+        "v_checklist_items",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -44,7 +46,6 @@ EXPECTED_VIEWS = frozenset({
 
 
 class TestViewDescriptionsCatalog:
-
     def test_all_14_views_present(self):
         """All 14 views from v_applications through v_checklist_items must exist."""
         assert len(VIEW_DESCRIPTIONS) == 14
@@ -58,9 +59,7 @@ class TestViewDescriptionsCatalog:
     def test_each_view_has_at_least_3_columns(self):
         """Every view description must have at least 3 columns."""
         for view in VIEW_DESCRIPTIONS:
-            assert len(view.columns) >= 3, (
-                f"View '{view.name}' has only {len(view.columns)} column(s)"
-            )
+            assert len(view.columns) >= 3, f"View '{view.name}' has only {len(view.columns)} column(s)"
 
     def test_password_hash_not_in_v_users(self):
         """v_users must NOT expose password_hash for security."""
@@ -75,7 +74,6 @@ class TestViewDescriptionsCatalog:
 
 
 class TestGetSchemaPrompt:
-
     def test_returns_non_empty_string(self):
         result = get_schema_prompt()
         assert isinstance(result, str)
@@ -92,10 +90,7 @@ class TestGetSchemaPrompt:
         result = get_schema_prompt()
         word_count = len(result.split())
         estimated_tokens = word_count / 0.75
-        assert estimated_tokens < 8000, (
-            f"Schema prompt too large: ~{estimated_tokens:.0f} tokens "
-            f"({word_count} words)"
-        )
+        assert estimated_tokens < 8000, f"Schema prompt too large: ~{estimated_tokens:.0f} tokens ({word_count} words)"
 
     def test_contains_header_text(self):
         result = get_schema_prompt()
@@ -109,7 +104,6 @@ class TestGetSchemaPrompt:
 
 
 class TestGetSchemaPromptForViews:
-
     def test_subset_contains_only_requested_views(self):
         """Only the requested view section headers should appear in the output."""
         result = get_schema_prompt_for_views(["v_tasks", "v_users"])
@@ -128,9 +122,7 @@ class TestGetSchemaPromptForViews:
         assert "Database Schema" in result
         # None of the actual view names should appear
         for view_name in EXPECTED_VIEWS:
-            assert view_name not in result, (
-                f"View '{view_name}' should not appear in empty-list output"
-            )
+            assert view_name not in result, f"View '{view_name}' should not appear in empty-list output"
 
     def test_nonexistent_view_raises_value_error(self):
         with pytest.raises(ValueError, match="Unknown view names"):
@@ -153,7 +145,6 @@ class TestGetSchemaPromptForViews:
 
 
 class TestValidateSchemaAgainstDb:
-
     async def _build_mock_db(self, rows: list[tuple]) -> AsyncMock:
         """Build a mock AsyncSession that returns the given rows."""
         mock_result = MagicMock()

@@ -65,7 +65,6 @@ def _make_tool_node(result_messages=None):
 
 
 class TestGreetingFastPath:
-
     async def test_greeting_fast_paths_to_respond(self):
         """A greeting classified with high confidence fast-paths to respond."""
         # Simulate understand node producing greeting classification
@@ -122,7 +121,6 @@ class TestGreetingFastPath:
 
 
 class TestSimpleQuery:
-
     async def test_info_query_routes_through_explore(self):
         """An info query goes through explore -> explore_tools -> respond."""
         # First explore LLM call: request tool
@@ -199,7 +197,6 @@ class TestSimpleQuery:
 
 
 class TestComplexQuery:
-
     async def test_complex_query_routes_to_synthesize(self):
         """A complex/multi_step query routes through synthesize after explore."""
         state = {
@@ -247,7 +244,6 @@ class TestComplexQuery:
 
 
 class TestClarificationFlow:
-
     async def test_low_confidence_routes_to_clarify(self):
         """Low confidence classification routes to clarify node."""
         state = {
@@ -277,7 +273,6 @@ class TestClarificationFlow:
 
 
 class TestSafetyLimits:
-
     async def test_max_tool_calls_stops_execution(self):
         """execute_tools returns limit message when tool budget exhausted."""
         ai_msg = AIMessage(
@@ -351,15 +346,30 @@ class TestSafetyLimits:
         )
 
         # LLM limit
-        state_llm = {"messages": [ai_msg], "total_llm_calls": get_max_llm_calls(), "total_tool_calls": 0, "iteration_count": 0}
+        state_llm = {
+            "messages": [ai_msg],
+            "total_llm_calls": get_max_llm_calls(),
+            "total_tool_calls": 0,
+            "iteration_count": 0,
+        }
         assert route_after_explore(state_llm) == "respond"
 
         # Tool limit
-        state_tool = {"messages": [ai_msg], "total_llm_calls": 0, "total_tool_calls": get_max_tool_calls(), "iteration_count": 0}
+        state_tool = {
+            "messages": [ai_msg],
+            "total_llm_calls": 0,
+            "total_tool_calls": get_max_tool_calls(),
+            "iteration_count": 0,
+        }
         assert route_after_explore(state_tool) == "respond"
 
         # Iteration limit
-        state_iter = {"messages": [ai_msg], "total_llm_calls": 0, "total_tool_calls": 0, "iteration_count": get_max_iterations()}
+        state_iter = {
+            "messages": [ai_msg],
+            "total_llm_calls": 0,
+            "total_tool_calls": 0,
+            "iteration_count": get_max_iterations(),
+        }
         assert route_after_explore(state_iter) == "respond"
 
 
@@ -369,7 +379,6 @@ class TestSafetyLimits:
 
 
 class TestBackwardCompat:
-
     async def test_agent_node_wrapper_works(self):
         """_agent_node backward-compat wrapper delegates to explore_node."""
         model = _make_mock_model(AIMessage(content="Hello"))
@@ -424,7 +433,6 @@ class TestBackwardCompat:
 
 
 class TestMisclassificationRecovery:
-
     async def test_fast_path_tool_calls_rerouted(self):
         """If fast-path respond node returns tool_calls, route to explore_tools."""
         ai_msg = AIMessage(
@@ -567,10 +575,12 @@ class TestClarificationFlowMockedInterrupt:
             tool_calls=[{"name": "get_project_details", "args": {"project": "Alpha"}, "id": "tc1"}],
         )
         explore_model = AsyncMock()
-        explore_model.ainvoke = AsyncMock(side_effect=[
-            tool_request,
-            AIMessage(content="Alpha project has 15 tasks."),
-        ])
+        explore_model.ainvoke = AsyncMock(
+            side_effect=[
+                tool_request,
+                AIMessage(content="Alpha project has 15 tasks."),
+            ]
+        )
 
         explore_result = await explore_node(
             merged3,

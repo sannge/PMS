@@ -55,10 +55,7 @@ def upgrade() -> None:
     # DB-P8: Composite index for paginated job listing (list_jobs endpoint).
     # Covers: WHERE user_id = ? AND status = ? ORDER BY created_at DESC
     # Using raw SQL because Alembic's create_index doesn't support DESC columns.
-    op.execute(
-        'CREATE INDEX idx_import_jobs_user_status_created '
-        'ON "ImportJobs" (user_id, status, created_at DESC)'
-    )
+    op.execute('CREATE INDEX idx_import_jobs_user_status_created ON "ImportJobs" (user_id, status, created_at DESC)')
 
     # DB-P7: Note for future reference -- if the HNSW index on DocumentChunks
     # needs to be recreated on a production database with existing data, use:

@@ -184,9 +184,7 @@ async def create_comment(
     # still appear in the task's attachment section
     if comment_data.attachment_ids:
         await db.execute(
-            update(Attachment)
-            .where(Attachment.id.in_(comment_data.attachment_ids))
-            .values(comment_id=comment.id)
+            update(Attachment).where(Attachment.id.in_(comment_data.attachment_ids)).values(comment_id=comment.id)
         )
         await db.flush()
 
@@ -465,15 +463,17 @@ def build_comment_response(comment: Comment) -> Dict[str, Any]:
 
     # Build attachments list
     attachments = []
-    if hasattr(comment, 'attachments') and comment.attachments:
+    if hasattr(comment, "attachments") and comment.attachments:
         for attachment in comment.attachments:
-            attachments.append({
-                "id": str(attachment.id),
-                "file_name": attachment.file_name,
-                "file_type": attachment.file_type,
-                "file_size": attachment.file_size,
-                "created_at": attachment.created_at.isoformat() if attachment.created_at else None,
-            })
+            attachments.append(
+                {
+                    "id": str(attachment.id),
+                    "file_name": attachment.file_name,
+                    "file_type": attachment.file_type,
+                    "file_size": attachment.file_size,
+                    "created_at": attachment.created_at.isoformat() if attachment.created_at else None,
+                }
+            )
 
     return {
         "id": str(comment.id),

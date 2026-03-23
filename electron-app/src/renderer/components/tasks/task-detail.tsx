@@ -21,6 +21,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { toast } from 'sonner'
 import DOMPurify from 'dompurify'
 import { cn } from '@/lib/utils'
 import { formatDateForInput, parseBackendDate } from '@/lib/time-utils'
@@ -454,7 +455,7 @@ export function TaskDetail({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [assigneeError, setAssigneeError] = useState<string | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
-  const [externalUpdateNotice, setExternalUpdateNotice] = useState<string | null>(null)
+  // External update notices now use sonner toast (bottom-right)
   const [mentionSuggestions, setMentionSuggestions] = useState<Array<{ id: string; name: string; email?: string; avatar_url?: string }>>([])
 
   // Local state for description - only save on explicit action
@@ -580,8 +581,7 @@ export function TaskDetail({
             callbackRefs.current.onExternalUpdate(data.task as unknown as Task)
           }
           if (data.changed_by && data.changed_by === currentUserId) return
-          setExternalUpdateNotice('Task was updated by another user')
-          setTimeout(() => setExternalUpdateNotice(null), 3000)
+          toast.info('Task was updated by another user', { duration: 3000 })
         }
       }
     )
@@ -595,8 +595,7 @@ export function TaskDetail({
             callbackRefs.current.onExternalUpdate(data.task as unknown as Task)
           }
           if (data.changed_by && data.changed_by === currentUserId) return
-          setExternalUpdateNotice('Task status was changed by another user')
-          setTimeout(() => setExternalUpdateNotice(null), 3000)
+          toast.info('Task status was changed by another user', { duration: 3000 })
         }
       }
     )
@@ -607,7 +606,7 @@ export function TaskDetail({
       (data) => {
         if (data.task_id === task.id) {
           if (data.changed_by && data.changed_by === currentUserId) return
-          setExternalUpdateNotice('Task was deleted by another user')
+          toast.warning('Task was deleted by another user')
           if (callbackRefs.current.onExternalDelete) {
             callbackRefs.current.onExternalDelete()
           }
@@ -835,13 +834,7 @@ export function TaskDetail({
             </div>
           )}
 
-          {/* External Update Notice */}
-          {externalUpdateNotice && (
-            <div className="mx-5 mt-4 flex items-center gap-3 rounded-lg border border-blue-500/30 bg-blue-500/5 px-4 py-3 text-sm text-blue-600 dark:text-blue-400 animate-in fade-in slide-in-from-top-2 duration-200">
-              <Wifi className="h-4 w-4 flex-shrink-0" />
-              <span>{externalUpdateNotice}</span>
-            </div>
-          )}
+          {/* External update notices now use sonner toast (bottom-right) */}
 
           {/* Loading indicator */}
           {isUpdating && (

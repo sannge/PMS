@@ -82,7 +82,10 @@ async def check_task_attachment_permission(
     # Get task with project and application
     result = await db.execute(
         select(Task)
-        .options(selectinload(Task.project).selectinload(Project.application))
+        .options(
+            selectinload(Task.project).selectinload(Project.application),
+            selectinload(Task.task_status),
+        )
         .where(Task.id == task_id)
     )
     task = result.scalar_one_or_none()
@@ -162,7 +165,8 @@ async def verify_task_attachment_access(
             )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=error_reason or f"Access denied. You must be the application owner or a project member to {action} attachments.",
+            detail=error_reason
+            or f"Access denied. You must be the application owner or a project member to {action} attachments.",
         )
 
 
@@ -218,9 +222,7 @@ async def _verify_attachment_read_access(
 
     # Task-scoped attachments: check membership via task's project
     if attachment.task_id:
-        has_permission, _ = await check_task_attachment_permission(
-            attachment.task_id, current_user, db
-        )
+        has_permission, _ = await check_task_attachment_permission(attachment.task_id, current_user, db)
         if has_permission:
             return
 
@@ -236,9 +238,7 @@ async def _verify_attachment_read_access(
         if document:
             perm_service = PermissionService(db)
             scope_type, scope_id = PermissionService.resolve_entity_scope(document)
-            if await perm_service.check_can_view_knowledge(
-                current_user.id, scope_type, scope_id
-            ):
+            if await perm_service.check_can_view_knowledge(current_user.id, scope_type, scope_id):
                 return
 
     raise HTTPException(
@@ -305,7 +305,8 @@ async def upload_file(
 
     # Sanitize filename: strip null bytes and control characters, enforce max length
     import re as _re
-    sanitized_name = _re.sub(r'[\x00-\x1f\x7f]', '', file.filename)
+
+    sanitized_name = _re.sub(r"[\x00-\x1f\x7f]", "", file.filename)
     if len(sanitized_name) > 255:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -352,18 +353,18 @@ async def upload_file(
     # Magic byte validation for image uploads (reject mismatched Content-Type)
     if content_type in ALLOWED_IMAGE_MIMES:
         _MAGIC_BYTES: dict[bytes, str] = {
-            b'\xff\xd8\xff': 'image/jpeg',
-            b'\x89PNG': 'image/png',
-            b'GIF8': 'image/gif',
+            b"\xff\xd8\xff": "image/jpeg",
+            b"\x89PNG": "image/png",
+            b"GIF8": "image/gif",
         }
         detected_mime: str | None = None
         for magic, mime in _MAGIC_BYTES.items():
-            if content[:len(magic)] == magic:
+            if content[: len(magic)] == magic:
                 detected_mime = mime
                 break
         # WebP: starts with RIFF....WEBP
-        if content[:4] == b'RIFF' and len(content) >= 12 and content[8:12] == b'WEBP':
-            detected_mime = 'image/webp'
+        if content[:4] == b"RIFF" and len(content) >= 12 and content[8:12] == b"WEBP":
+            detected_mime = "image/webp"
         if detected_mime is not None and detected_mime != content_type:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -384,9 +385,7 @@ async def upload_file(
         resolved_entity_type = EntityType.TASK.value
         resolved_entity_id = task_id
         # Verify task exists
-        result = await db.execute(
-            select(Task).where(Task.id == task_id)
-        )
+        result = await db.execute(select(Task).where(Task.id == task_id))
         task = result.scalar_one_or_none()
         if not task:
             raise HTTPException(
@@ -401,9 +400,7 @@ async def upload_file(
         resolved_entity_type = EntityType.COMMENT.value
         resolved_entity_id = comment_id
         # Verify comment exists
-        result = await db.execute(
-            select(Comment).where(Comment.id == comment_id)
-        )
+        result = await db.execute(select(Comment).where(Comment.id == comment_id))
         comment = result.scalar_one_or_none()
         if not comment:
             raise HTTPException(
@@ -426,9 +423,7 @@ async def upload_file(
 
     # Handle explicit entity_type=task with entity_id
     if entity_type == EntityType.TASK and entity_id:
-        result = await db.execute(
-            select(Task).where(Task.id == entity_id)
-        )
+        result = await db.execute(select(Task).where(Task.id == entity_id))
         task = result.scalar_one_or_none()
         if not task:
             raise HTTPException(
@@ -452,7 +447,7 @@ async def upload_file(
 
     # Upload to MinIO
     try:
-        minio.upload_bytes(
+        await minio.upload_bytes(
             bucket=bucket,
             object_name=object_name,
             data=content,
@@ -616,9 +611,7 @@ async def get_file(
     The download URL is valid for 1 hour.
     """
     # Get the attachment
-    result = await db.execute(
-        select(Attachment).where(Attachment.id == attachment_id)
-    )
+    result = await db.execute(select(Attachment).where(Attachment.id == attachment_id))
     attachment = result.scalar_one_or_none()
 
     if not attachment:
@@ -633,7 +626,7 @@ async def get_file(
     # Generate presigned download URL
     if attachment.minio_bucket and attachment.minio_key:
         try:
-            download_url = minio.get_presigned_download_url(
+            download_url = await minio.get_presigned_download_url(
                 bucket=attachment.minio_bucket,
                 object_name=attachment.minio_key,
             )
@@ -677,9 +670,7 @@ async def get_attachment_info(
     Useful for checking attachment details without the overhead of generating a presigned URL.
     """
     # Get the attachment
-    result = await db.execute(
-        select(Attachment).where(Attachment.id == attachment_id)
-    )
+    result = await db.execute(select(Attachment).where(Attachment.id == attachment_id))
     attachment = result.scalar_one_or_none()
 
     if not attachment:
@@ -722,9 +713,7 @@ async def update_attachment(
     Note: This only updates metadata, not the actual file in storage.
     """
     # Get the attachment
-    result = await db.execute(
-        select(Attachment).where(Attachment.id == attachment_id)
-    )
+    result = await db.execute(select(Attachment).where(Attachment.id == attachment_id))
     attachment = result.scalar_one_or_none()
 
     if not attachment:
@@ -790,9 +779,7 @@ async def delete_file(
     This action is irreversible.
     """
     # Get the attachment
-    result = await db.execute(
-        select(Attachment).where(Attachment.id == attachment_id)
-    )
+    result = await db.execute(select(Attachment).where(Attachment.id == attachment_id))
     attachment = result.scalar_one_or_none()
 
     if not attachment:
@@ -830,7 +817,8 @@ async def delete_file(
     if not can_delete:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=error_reason or "Access denied. You must be the application owner or a project member to delete attachments.",
+            detail=error_reason
+            or "Access denied. You must be the application owner or a project member to delete attachments.",
         )
 
     # Capture entity info for WebSocket broadcast before deletion
@@ -841,7 +829,7 @@ async def delete_file(
     # Delete from MinIO storage
     if attachment.minio_bucket and attachment.minio_key:
         try:
-            minio.delete_file(
+            await minio.delete_file(
                 bucket=attachment.minio_bucket,
                 object_name=attachment.minio_key,
             )
@@ -896,9 +884,7 @@ async def get_download_url(
     The new URL is valid for 1 hour.
     """
     # Get the attachment
-    result = await db.execute(
-        select(Attachment).where(Attachment.id == attachment_id)
-    )
+    result = await db.execute(select(Attachment).where(Attachment.id == attachment_id))
     attachment = result.scalar_one_or_none()
 
     if not attachment:
@@ -918,7 +904,7 @@ async def get_download_url(
         )
 
     try:
-        download_url = minio.get_presigned_download_url(
+        download_url = await minio.get_presigned_download_url(
             bucket=attachment.minio_bucket,
             object_name=attachment.minio_key,
         )
@@ -963,9 +949,7 @@ async def get_download_urls_batch(
         return {}
 
     # Get all attachments in one query
-    result = await db.execute(
-        select(Attachment).where(Attachment.id.in_(request.ids))
-    )
+    result = await db.execute(select(Attachment).where(Attachment.id.in_(request.ids)))
     attachments = result.scalars().all()
 
     # Filter to only attachments user has access to
@@ -981,7 +965,7 @@ async def get_download_urls_batch(
     for attachment in accessible_attachments:
         if attachment.minio_bucket and attachment.minio_key:
             try:
-                download_url = minio.get_presigned_download_url(
+                download_url = await minio.get_presigned_download_url(
                     bucket=attachment.minio_bucket,
                     object_name=attachment.minio_key,
                 )
@@ -1023,9 +1007,7 @@ async def get_entity_attachments(
     """
     # Entity-level authorization for document attachments
     if entity_type == EntityType.DOCUMENT:
-        result = await db.execute(
-            select(Document).where(Document.id == entity_id)
-        )
+        result = await db.execute(select(Document).where(Document.id == entity_id))
         document = result.scalar_one_or_none()
         if not document:
             raise HTTPException(
@@ -1044,9 +1026,7 @@ async def get_entity_attachments(
     if entity_type == EntityType.TASK:
         await verify_task_attachment_access(entity_id, current_user, db, action="view")
     elif entity_type == EntityType.COMMENT:
-        result = await db.execute(
-            select(Comment).where(Comment.id == entity_id)
-        )
+        result = await db.execute(select(Comment).where(Comment.id == entity_id))
         comment = result.scalar_one_or_none()
         if not comment:
             raise HTTPException(

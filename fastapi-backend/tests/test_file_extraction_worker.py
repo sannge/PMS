@@ -207,6 +207,7 @@ class TestExtractAndEmbedFileJob:
         cm2 = _make_session_cm(db2)
 
         call_count = 0
+
         def session_factory():
             nonlocal call_count
             call_count += 1
@@ -258,6 +259,7 @@ class TestExtractAndEmbedFileJob:
         cm2 = _make_session_cm(db2)
 
         call_count = 0
+
         def session_factory():
             nonlocal call_count
             call_count += 1
@@ -293,22 +295,25 @@ class TestExtractAndEmbedFileJob:
         from app.ai.embedding_service import EmbedResult
 
         file_id = str(uuid4())
-        ff = _make_mock_folder_file(file_extension="csv", display_name="data.csv",
-                                     mime_type="text/csv",
-                                     storage_key="folder-files/data.csv",
-                                     file_size=256)
+        ff = _make_mock_folder_file(
+            file_extension="csv",
+            display_name="data.csv",
+            mime_type="text/csv",
+            storage_key="folder-files/data.csv",
+            file_size=256,
+        )
 
         # Session 1: load + set processing
         db1 = _make_db_returning(ff)
         cm1 = _make_session_cm(db1)
 
         # Session 2 (success path): re-load for final updates
-        ff3 = _make_mock_folder_file(id=ff.id, file_extension="csv",
-                                      display_name="data.csv", mime_type="text/csv")
+        ff3 = _make_mock_folder_file(id=ff.id, file_extension="csv", display_name="data.csv", mime_type="text/csv")
         db3 = _make_db_returning(ff3)
         cm3 = _make_session_cm(db3)
 
         call_count = 0
+
         def session_factory():
             nonlocal call_count
             call_count += 1
@@ -361,6 +366,7 @@ class TestExtractAndEmbedFileJob:
         mock_embed.assert_called_once()
         embed_kwargs = mock_embed.call_args
         from uuid import UUID as _UUID
+
         assert embed_kwargs[1]["file_id"] == _UUID(file_id)
 
     @pytest.mark.asyncio
@@ -411,6 +417,7 @@ class TestExtractAndEmbedFileJob:
         cm2 = _make_session_cm(mock_err_db)
 
         call_count = 0
+
         def session_factory():
             nonlocal call_count
             call_count += 1
@@ -448,6 +455,7 @@ class TestExtractAndEmbedFileJob:
         cm3 = _make_session_cm(db3)
 
         call_count = 0
+
         def session_factory():
             nonlocal call_count
             call_count += 1
@@ -508,6 +516,7 @@ class TestExtractAndEmbedFileJob:
         cm3 = _make_session_cm(db3)
 
         call_count = 0
+
         def session_factory():
             nonlocal call_count
             call_count += 1
@@ -619,7 +628,9 @@ class TestBroadcastFileEvent:
         with patch("app.worker.redis_service") as mock_redis:
             mock_redis.publish = AsyncMock()
             await _broadcast_file_event(
-                scope, str(uuid4()), "file_extraction_completed",
+                scope,
+                str(uuid4()),
+                "file_extraction_completed",
                 {"folder_id": str(folder_id)},
             )
 
@@ -638,34 +649,42 @@ class TestCategorizeExtractionError:
 
     def test_none_returns_extraction_failed(self):
         from app.worker import _categorize_extraction_error
+
         assert _categorize_extraction_error(None) == "extraction_failed"
 
     def test_empty_string_returns_extraction_failed(self):
         from app.worker import _categorize_extraction_error
+
         assert _categorize_extraction_error("") == "extraction_failed"
 
     def test_password_detected(self):
         from app.worker import _categorize_extraction_error
+
         assert _categorize_extraction_error("File is password protected") == "password_protected"
 
     def test_encrypted_detected(self):
         from app.worker import _categorize_extraction_error
+
         assert _categorize_extraction_error("Encrypted file format") == "password_protected"
 
     def test_corrupt_detected(self):
         from app.worker import _categorize_extraction_error
+
         assert _categorize_extraction_error("File is corrupt") == "corrupt_file"
 
     def test_badzipfile_detected(self):
         from app.worker import _categorize_extraction_error
+
         assert _categorize_extraction_error("BadZipFile: not a zip file") == "corrupt_file"
 
     def test_timeout_detected(self):
         from app.worker import _categorize_extraction_error
+
         assert _categorize_extraction_error("Extraction timeout after 120s") == "extraction_timeout"
 
     def test_unknown_error_returns_extraction_failed(self):
         from app.worker import _categorize_extraction_error
+
         assert _categorize_extraction_error("Some random error") == "extraction_failed"
 
 

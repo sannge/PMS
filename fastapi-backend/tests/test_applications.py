@@ -93,8 +93,13 @@ class TestListApplications:
         assert response.status_code == 401
 
     async def test_list_applications_only_owned(
-        self, client: AsyncClient, auth_headers: dict, auth_headers_2: dict,
-        db_session: AsyncSession, test_user: User, test_user_2: User
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        auth_headers_2: dict,
+        db_session: AsyncSession,
+        test_user: User,
+        test_user_2: User,
     ):
         """Test that users only see their own applications."""
         # Create apps for user 1
@@ -225,9 +230,7 @@ class TestGetApplication:
 
         assert response.status_code == 403
 
-    async def test_get_application_unauthorized(
-        self, client: AsyncClient, test_application: Application
-    ):
+    async def test_get_application_unauthorized(self, client: AsyncClient, test_application: Application):
         """Test getting application without authentication."""
         response = await client.get(f"/api/applications/{test_application.id}")
 
@@ -350,8 +353,12 @@ class TestDeleteApplication:
         assert response.status_code == 403
 
     async def test_delete_application_cascades_to_projects(
-        self, client: AsyncClient, auth_headers: dict, test_application: Application,
-        test_project: Project, db_session: AsyncSession
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        test_application: Application,
+        test_project: Project,
+        db_session: AsyncSession,
     ):
         """Test that deleting application cascades to delete projects."""
         project_id = test_project.id

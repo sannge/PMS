@@ -48,9 +48,7 @@ def _make_state(**overrides) -> dict:
 def _mock_bound_model(summary_text: str = "This is a summary.") -> MagicMock:
     """Build a mock LLM model that returns a canned summary."""
     model = AsyncMock()
-    model.ainvoke = AsyncMock(
-        return_value=AIMessage(content=summary_text)
-    )
+    model.ainvoke = AsyncMock(return_value=AIMessage(content=summary_text))
     return model
 
 
@@ -60,7 +58,6 @@ def _mock_bound_model(summary_text: str = "This is a summary.") -> MagicMock:
 
 
 class TestStripCompletedToolMessages:
-
     def test_completed_turns_stripped_current_preserved(self):
         """Completed tool turns are stripped; in-progress turn is preserved."""
         messages = [
@@ -125,7 +122,6 @@ class TestStripCompletedToolMessages:
 
 
 class TestNoTrimUnderThreshold:
-
     @pytest.mark.asyncio
     async def test_messages_under_threshold_not_modified(self):
         """Messages under the token threshold are returned unchanged."""
@@ -150,7 +146,6 @@ class TestNoTrimUnderThreshold:
 
 
 class TestSummarizeAtThreshold:
-
     @pytest.mark.asyncio
     async def test_messages_at_threshold_trigger_summarization(self):
         """Messages exceeding the token threshold trigger summarization."""
@@ -161,9 +156,7 @@ class TestSummarizeAtThreshold:
         messages = [
             HumanMessage(content=big_content),
             AIMessage(content=big_content),
-        ] + [
-            HumanMessage(content=f"msg {i}") for i in range(15)
-        ]
+        ] + [HumanMessage(content=f"msg {i}") for i in range(15)]
 
         model = _mock_bound_model("Summarized conversation about X.")
         state = _make_state(messages=messages)
@@ -184,7 +177,6 @@ class TestSummarizeAtThreshold:
 
 
 class TestSummaryPreservesRecentWindow:
-
     @pytest.mark.asyncio
     async def test_last_n_messages_kept_verbatim(self):
         """The last RECENT_WINDOW messages are kept verbatim after summarization."""
@@ -195,9 +187,7 @@ class TestSummaryPreservesRecentWindow:
             HumanMessage(content=big_content),
             AIMessage(content=big_content),
         ]
-        recent_messages = [
-            HumanMessage(content=f"recent {i}") for i in range(get_recent_window())
-        ]
+        recent_messages = [HumanMessage(content=f"recent {i}") for i in range(get_recent_window())]
         all_messages = old_messages + recent_messages
 
         model = _mock_bound_model("Summary of old stuff.")
@@ -207,7 +197,7 @@ class TestSummaryPreservesRecentWindow:
 
         assert summary is not None
         # Recent messages should be at the end, verbatim
-        for i, msg in enumerate(result_msgs[-get_recent_window():]):
+        for i, msg in enumerate(result_msgs[-get_recent_window() :]):
             assert isinstance(msg, HumanMessage)
             assert msg.content == f"recent {i}"
 
@@ -218,7 +208,6 @@ class TestSummaryPreservesRecentWindow:
 
 
 class TestSummaryDoesNotSplitToolPairs:
-
     @pytest.mark.asyncio
     async def test_tool_call_and_tool_message_stay_together(self):
         """Split point walks backward to avoid breaking tool_call/ToolMessage pairs."""
@@ -234,9 +223,7 @@ class TestSummaryDoesNotSplitToolPairs:
             AIMessage(content="", tool_calls=[{"id": "tc_boundary", "name": "search", "args": {}}]),
             ToolMessage(content="boundary result", tool_call_id="tc_boundary"),
         ]
-        recent_messages = [
-            HumanMessage(content=f"recent {i}") for i in range(get_recent_window() - 2)
-        ]
+        recent_messages = [HumanMessage(content=f"recent {i}") for i in range(get_recent_window() - 2)]
         all_messages = old_messages + boundary_messages + recent_messages
 
         model = _mock_bound_model("Summary.")
@@ -255,10 +242,7 @@ class TestSummaryDoesNotSplitToolPairs:
             if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
                 # Must have matching ToolMessages following
                 tc_ids = {tc["id"] for tc in msg.tool_calls}
-                following_ids = {
-                    m.tool_call_id for m in result_msgs[i + 1:]
-                    if isinstance(m, ToolMessage)
-                }
+                following_ids = {m.tool_call_id for m in result_msgs[i + 1 :] if isinstance(m, ToolMessage)}
                 assert tc_ids.issubset(following_ids), (
                     f"AIMessage tool_calls {tc_ids} not matched by following ToolMessages {following_ids}"
                 )
@@ -270,7 +254,6 @@ class TestSummaryDoesNotSplitToolPairs:
 
 
 class TestCumulativeResummarization:
-
     @pytest.mark.asyncio
     async def test_existing_summary_plus_new_messages_updated(self):
         """An existing [CONVERSATION SUMMARY] message gets re-summarized with new content."""
@@ -291,7 +274,9 @@ class TestCumulativeResummarization:
         assert summary is not None
         assert "Updated summary" in summary
         # The old summary SystemMessage should be replaced
-        summary_msgs = [m for m in result_msgs if isinstance(m, SystemMessage) and "[CONVERSATION SUMMARY]" in str(m.content)]
+        summary_msgs = [
+            m for m in result_msgs if isinstance(m, SystemMessage) and "[CONVERSATION SUMMARY]" in str(m.content)
+        ]
         assert len(summary_msgs) == 1
 
 
@@ -301,7 +286,6 @@ class TestCumulativeResummarization:
 
 
 class TestEdgeCaseHugeSingleMessage:
-
     @pytest.mark.asyncio
     async def test_falls_back_if_recent_alone_exceeds_threshold(self):
         """If the recent window alone exceeds the threshold, fall back gracefully."""
@@ -328,7 +312,6 @@ class TestEdgeCaseHugeSingleMessage:
 
 
 class TestOrphanedToolCallsSanitized:
-
     def test_orphaned_tool_calls_cleaned(self):
         """AIMessages with tool_calls lacking matching ToolMessages are sanitized."""
         messages = [
@@ -377,7 +360,6 @@ class TestOrphanedToolCallsSanitized:
 
 
 class TestSummarizationTimeout:
-
     @pytest.mark.asyncio
     async def test_summarization_timeout_returns_original_messages(self):
         """If the summarization LLM call times out, return messages unchanged."""
@@ -388,9 +370,7 @@ class TestSummarizationTimeout:
         messages = [
             HumanMessage(content=big_content),
             AIMessage(content=big_content),
-        ] + [
-            HumanMessage(content=f"msg {i}") for i in range(15)
-        ]
+        ] + [HumanMessage(content=f"msg {i}") for i in range(15)]
 
         # Mock the model's ainvoke to raise asyncio.TimeoutError
         model = AsyncMock()

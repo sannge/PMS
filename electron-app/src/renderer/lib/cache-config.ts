@@ -67,4 +67,5 @@ export const NON_PERSISTENT_KEYS = [
   'knowledge-permissions',
   'chat-sessions',
   'chat-messages',
+  'team-activity',
 ] as const

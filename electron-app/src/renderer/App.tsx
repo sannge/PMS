@@ -10,7 +10,7 @@
  * - TanStack Query client provider with IndexedDB persistence
  * - WebSocket cache invalidation
  */
-import { Component, useEffect, useState, useCallback, useRef, ReactNode } from 'react'
+import { Component, createElement, useEffect, useState, useCallback, useRef, ReactNode } from 'react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import appIcon from '@/icon.png'
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
@@ -25,6 +25,7 @@ import { queryClient, initializeQueryPersistence, clearQueryCache } from '@/lib/
 import { AuthProvider, useAuthState, useAuthActions, useAuthToken, NotificationUIProvider } from '@/contexts'
 import { clearEventDedup } from '@/hooks/use-websocket-cache'
 import { Toaster } from 'sonner'
+import { CheckCircle2, XCircle, AlertTriangle, Info, Loader2 } from 'lucide-react'
 import { FindBar } from '@/components/layout/find-bar'
 
 // ============================================================================
@@ -306,7 +307,34 @@ function App(): JSX.Element {
               <AuthRouter />
             </QueryClientInitializer>
             <FindBar />
-            <Toaster richColors />
+            <Toaster
+              position="bottom-right"
+              gap={8}
+              toastOptions={{
+                unstyled: true,
+                classNames: {
+                  toast: 'toast-base',
+                  title: 'toast-title',
+                  description: 'toast-description',
+                  actionButton: 'toast-action',
+                  cancelButton: 'toast-cancel',
+                  closeButton: 'toast-close',
+                  success: 'toast-success',
+                  error: 'toast-error',
+                  warning: 'toast-warning',
+                  info: 'toast-info',
+                  loading: 'toast-loading',
+                  default: 'toast-default',
+                },
+              }}
+              icons={{
+                success: createElement(CheckCircle2, { size: 18, strokeWidth: 2.5 }),
+                error: createElement(XCircle, { size: 18, strokeWidth: 2.5 }),
+                warning: createElement(AlertTriangle, { size: 18, strokeWidth: 2.5 }),
+                info: createElement(Info, { size: 18, strokeWidth: 2.5 }),
+                loading: createElement(Loader2, { size: 18, strokeWidth: 2.5, className: 'toast-spinner' }),
+              }}
+            />
           </ErrorBoundary>
         </NotificationUIProvider>
       </AuthProvider>

@@ -82,7 +82,7 @@ class Application(Base):
     owner = relationship(
         "User",
         back_populates="owned_applications",
-        lazy="joined",
+        lazy="select",
     )
     projects = relationship(
         "Project",

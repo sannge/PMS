@@ -25,17 +25,20 @@ from app.ai.sql_generator import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_llm_response(
     sql: str = "SELECT count(*) AS task_count FROM v_tasks LIMIT 1",
     explanation: str = "Count all tasks.",
     tables_used: list[str] | None = None,
 ) -> str:
     """Build a JSON string mimicking LLM output."""
-    return json.dumps({
-        "sql": sql,
-        "explanation": explanation,
-        "tables_used": tables_used or ["v_tasks"],
-    })
+    return json.dumps(
+        {
+            "sql": sql,
+            "explanation": explanation,
+            "tables_used": tables_used or ["v_tasks"],
+        }
+    )
 
 
 def _mock_provider_and_registry(
@@ -63,8 +66,8 @@ def _mock_provider_and_registry(
 # _parse_llm_json
 # ---------------------------------------------------------------------------
 
-class TestParseLlmJson:
 
+class TestParseLlmJson:
     def test_plain_json(self):
         raw = '{"sql": "SELECT 1", "explanation": "one", "tables_used": ["v_tasks"]}'
         result = _parse_llm_json(raw)
@@ -110,8 +113,8 @@ class TestParseLlmJson:
 # _build_system_prompt
 # ---------------------------------------------------------------------------
 
-class TestBuildSystemPrompt:
 
+class TestBuildSystemPrompt:
     @patch("app.ai.sql_generator.get_schema_prompt")
     def test_includes_schema_context(self, mock_get_schema):
         mock_get_schema.return_value = "## FAKE SCHEMA"
@@ -142,8 +145,8 @@ class TestBuildSystemPrompt:
 # generate_query — happy path
 # ---------------------------------------------------------------------------
 
-class TestGenerateQueryHappyPath:
 
+class TestGenerateQueryHappyPath:
     async def test_simple_question_generates_valid_sql(self):
         """Mock LLM returns valid JSON — should succeed on first attempt."""
         response = _make_llm_response()
@@ -229,8 +232,8 @@ class TestGenerateQueryHappyPath:
 # generate_query — retry scenarios
 # ---------------------------------------------------------------------------
 
-class TestGenerateQueryRetries:
 
+class TestGenerateQueryRetries:
     async def test_retry_on_validation_failure(self):
         """First LLM response references a base table (fails validation),
         second response is valid — should succeed on attempt 2."""
@@ -299,8 +302,8 @@ class TestGenerateQueryRetries:
 # generate_query — error handling
 # ---------------------------------------------------------------------------
 
-class TestGenerateQueryErrors:
 
+class TestGenerateQueryErrors:
     async def test_llm_provider_error_reraised(self):
         """LLMProviderError from provider is not retried — re-raised directly."""
         mock_provider = AsyncMock()

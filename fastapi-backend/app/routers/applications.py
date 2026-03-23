@@ -83,8 +83,7 @@ async def list_applications(
     """
     # Get IDs of applications the user is a member of (through invitation)
     member_app_ids_result = await db.execute(
-        select(ApplicationMember.application_id)
-        .where(ApplicationMember.user_id == current_user.id)
+        select(ApplicationMember.application_id).where(ApplicationMember.user_id == current_user.id)
     )
     member_app_ids = [row[0] for row in member_app_ids_result.all()]
 
@@ -143,8 +142,7 @@ async def list_applications(
     member_roles_map = {}
     if member_app_ids:
         member_roles_result = await db.execute(
-            select(ApplicationMember.application_id, ApplicationMember.role)
-            .where(
+            select(ApplicationMember.application_id, ApplicationMember.role).where(
                 ApplicationMember.application_id.in_(app_ids),
                 ApplicationMember.user_id == current_user.id,
             )
@@ -256,9 +254,7 @@ async def get_application(
     """
     # Query application
     result = await db.execute(
-        select(Application)
-        .options(lazyload(Application.owner))
-        .where(Application.id == application_id)
+        select(Application).options(lazyload(Application.owner)).where(Application.id == application_id)
     )
     application = result.scalar_one_or_none()
 
@@ -277,10 +273,7 @@ async def get_application(
         )
 
     # Get project count separately
-    count_result = await db.execute(
-        select(func.count(Project.id))
-        .where(Project.application_id == application_id)
-    )
+    count_result = await db.execute(select(func.count(Project.id)).where(Project.application_id == application_id))
     projects_count = count_result.scalar() or 0
 
     # Determine ownership type
@@ -329,9 +322,7 @@ async def update_application(
     Viewers have read-only access.
     """
     # Get the application
-    result = await db.execute(
-        select(Application).where(Application.id == application_id)
-    )
+    result = await db.execute(select(Application).where(Application.id == application_id))
     application = result.scalar_one_or_none()
 
     if not application:
@@ -414,9 +405,7 @@ async def delete_application(
     This action is irreversible.
     """
     # Get the application
-    result = await db.execute(
-        select(Application).where(Application.id == application_id)
-    )
+    result = await db.execute(select(Application).where(Application.id == application_id))
     application = result.scalar_one_or_none()
 
     if not application:
@@ -493,9 +482,7 @@ async def list_my_pending_tasks(
         )
 
     # Get all project IDs in this application
-    project_ids_result = await db.execute(
-        select(Project.id).where(Project.application_id == application_id)
-    )
+    project_ids_result = await db.execute(select(Project.id).where(Project.application_id == application_id))
     project_ids = [row[0] for row in project_ids_result.all()]
 
     if not project_ids:
@@ -523,22 +510,18 @@ async def list_my_pending_tasks(
     # Apply search filter if provided
     if search:
         search_term = f"%{search}%"
-        query = query.where(
-            (Task.title.ilike(search_term)) | (Task.task_key.ilike(search_term))
-        )
+        query = query.where((Task.title.ilike(search_term)) | (Task.task_key.ilike(search_term)))
 
     # Apply cursor if provided
     if cursor:
         try:
             cursor_uuid = UUID(cursor)
-            cursor_result = await db.execute(
-                select(Task.updated_at).where(Task.id == cursor_uuid)
-            )
+            cursor_result = await db.execute(select(Task.updated_at).where(Task.id == cursor_uuid))
             cursor_task_updated_at = cursor_result.scalar_one_or_none()
             if cursor_task_updated_at:
                 query = query.where(
-                    (Task.updated_at < cursor_task_updated_at) |
-                    ((Task.updated_at == cursor_task_updated_at) & (Task.id < cursor_uuid))
+                    (Task.updated_at < cursor_task_updated_at)
+                    | ((Task.updated_at == cursor_task_updated_at) & (Task.id < cursor_uuid))
                 )
         except ValueError:
             pass
@@ -628,9 +611,7 @@ async def list_my_completed_tasks(
         )
 
     # Get all project IDs in this application
-    project_ids_result = await db.execute(
-        select(Project.id).where(Project.application_id == application_id)
-    )
+    project_ids_result = await db.execute(select(Project.id).where(Project.application_id == application_id))
     project_ids = [row[0] for row in project_ids_result.all()]
 
     if not project_ids:
@@ -663,22 +644,18 @@ async def list_my_completed_tasks(
     # Apply search filter if provided
     if search:
         search_term = f"%{search}%"
-        query = query.where(
-            (Task.title.ilike(search_term)) | (Task.task_key.ilike(search_term))
-        )
+        query = query.where((Task.title.ilike(search_term)) | (Task.task_key.ilike(search_term)))
 
     # Apply cursor if provided
     if cursor:
         try:
             cursor_uuid = UUID(cursor)
-            cursor_result = await db.execute(
-                select(Task.completed_at).where(Task.id == cursor_uuid)
-            )
+            cursor_result = await db.execute(select(Task.completed_at).where(Task.id == cursor_uuid))
             cursor_task_completed_at = cursor_result.scalar_one_or_none()
             if cursor_task_completed_at:
                 query = query.where(
-                    (Task.completed_at < cursor_task_completed_at) |
-                    ((Task.completed_at == cursor_task_completed_at) & (Task.id < cursor_uuid))
+                    (Task.completed_at < cursor_task_completed_at)
+                    | ((Task.completed_at == cursor_task_completed_at) & (Task.id < cursor_uuid))
                 )
         except ValueError:
             pass
@@ -768,9 +745,7 @@ async def list_my_archived_tasks(
         )
 
     # Get all project IDs in this application
-    project_ids_result = await db.execute(
-        select(Project.id).where(Project.application_id == application_id)
-    )
+    project_ids_result = await db.execute(select(Project.id).where(Project.application_id == application_id))
     project_ids = [row[0] for row in project_ids_result.all()]
 
     if not project_ids:
@@ -796,22 +771,18 @@ async def list_my_archived_tasks(
     # Apply search filter if provided
     if search:
         search_term = f"%{search}%"
-        query = query.where(
-            (Task.title.ilike(search_term)) | (Task.task_key.ilike(search_term))
-        )
+        query = query.where((Task.title.ilike(search_term)) | (Task.task_key.ilike(search_term)))
 
     # Apply cursor if provided
     if cursor:
         try:
             cursor_uuid = UUID(cursor)
-            cursor_result = await db.execute(
-                select(Task.archived_at).where(Task.id == cursor_uuid)
-            )
+            cursor_result = await db.execute(select(Task.archived_at).where(Task.id == cursor_uuid))
             cursor_task_archived_at = cursor_result.scalar_one_or_none()
             if cursor_task_archived_at:
                 query = query.where(
-                    (Task.archived_at < cursor_task_archived_at) |
-                    ((Task.archived_at == cursor_task_archived_at) & (Task.id < cursor_uuid))
+                    (Task.archived_at < cursor_task_archived_at)
+                    | ((Task.archived_at == cursor_task_archived_at) & (Task.id < cursor_uuid))
                 )
         except ValueError:
             pass
@@ -893,7 +864,9 @@ async def list_my_projects(
     search: Optional[str] = Query(None, description="Search term to filter by name or key"),
     sort_by: str = Query("due_date", description="Sort field: due_date, name, updated_at"),
     sort_order: str = Query("asc", description="Sort order: asc or desc"),
-    status_filter: Optional[str] = Query(None, alias="status", description="Filter by derived status: Todo, In Progress, Issue, Done"),
+    status_filter: Optional[str] = Query(
+        None, alias="status", description="Filter by derived status: Todo, In Progress, Issue, Done"
+    ),
 ) -> ProjectCursorPage:
     """
     List projects the current user has access to within an application.
@@ -912,12 +885,9 @@ async def list_my_projects(
         )
 
     # Build query: projects in this application that are not archived
-    query = (
-        select(Project)
-        .where(
-            Project.application_id == application_id,
-            Project.archived_at.is_(None),
-        )
+    query = select(Project).where(
+        Project.application_id == application_id,
+        Project.archived_at.is_(None),
     )
 
     # Apply search filter
@@ -963,43 +933,41 @@ async def list_my_projects(
     if cursor:
         try:
             cursor_uuid = UUID(cursor)
-            cursor_result = await db.execute(
-                select(Project).where(Project.id == cursor_uuid)
-            )
+            cursor_result = await db.execute(select(Project).where(Project.id == cursor_uuid))
             cursor_project = cursor_result.scalar_one_or_none()
             if cursor_project:
                 if sort_by == "due_date":
                     if sort_order == "desc":
                         query = query.where(
-                            (Project.due_date < cursor_project.due_date) |
-                            ((Project.due_date == cursor_project.due_date) & (Project.id < cursor_uuid))
+                            (Project.due_date < cursor_project.due_date)
+                            | ((Project.due_date == cursor_project.due_date) & (Project.id < cursor_uuid))
                         )
                     else:
                         query = query.where(
-                            (Project.due_date > cursor_project.due_date) |
-                            ((Project.due_date == cursor_project.due_date) & (Project.id > cursor_uuid))
+                            (Project.due_date > cursor_project.due_date)
+                            | ((Project.due_date == cursor_project.due_date) & (Project.id > cursor_uuid))
                         )
                 elif sort_by == "updated_at":
                     if sort_order == "desc":
                         query = query.where(
-                            (Project.updated_at < cursor_project.updated_at) |
-                            ((Project.updated_at == cursor_project.updated_at) & (Project.id < cursor_uuid))
+                            (Project.updated_at < cursor_project.updated_at)
+                            | ((Project.updated_at == cursor_project.updated_at) & (Project.id < cursor_uuid))
                         )
                     else:
                         query = query.where(
-                            (Project.updated_at > cursor_project.updated_at) |
-                            ((Project.updated_at == cursor_project.updated_at) & (Project.id > cursor_uuid))
+                            (Project.updated_at > cursor_project.updated_at)
+                            | ((Project.updated_at == cursor_project.updated_at) & (Project.id > cursor_uuid))
                         )
                 elif sort_by == "name":
                     if sort_order == "desc":
                         query = query.where(
-                            (Project.name < cursor_project.name) |
-                            ((Project.name == cursor_project.name) & (Project.id < cursor_uuid))
+                            (Project.name < cursor_project.name)
+                            | ((Project.name == cursor_project.name) & (Project.id < cursor_uuid))
                         )
                     else:
                         query = query.where(
-                            (Project.name > cursor_project.name) |
-                            ((Project.name == cursor_project.name) & (Project.id > cursor_uuid))
+                            (Project.name > cursor_project.name)
+                            | ((Project.name == cursor_project.name) & (Project.id > cursor_uuid))
                         )
         except ValueError:
             pass
@@ -1030,12 +998,11 @@ async def list_my_projects(
 
         # Resolve derived status names
         from ..models.task_status import TaskStatus as TS
+
         derived_ids = [p.derived_status_id for p in projects if p.derived_status_id]
         status_names_map: dict[str, str] = {}
         if derived_ids:
-            status_result = await db.execute(
-                select(TS.id, TS.name).where(TS.id.in_(derived_ids))
-            )
+            status_result = await db.execute(select(TS.id, TS.name).where(TS.id.in_(derived_ids)))
             status_names_map = {str(row[0]): row[1] for row in status_result.all()}
     else:
         counts_map = {}
@@ -1056,7 +1023,6 @@ async def list_my_projects(
                 description=project.description,
                 project_type=project.project_type,
                 due_date=project.due_date,
-
                 application_id=project.application_id,
                 created_by=project.created_by,
                 project_owner_user_id=project.project_owner_user_id,

@@ -32,6 +32,7 @@ def _check_bcrypt_available():
     """Check if bcrypt is available and working."""
     try:
         from app.utils.security import get_password_hash, verify_password
+
         hash_result = get_password_hash("test")
         return True
     except Exception:
@@ -48,6 +49,7 @@ class TestSecurityUtils:
     def test_password_hash_creates_different_hash(self):
         """Test that hashing the same password twice produces different hashes."""
         from app.utils.security import get_password_hash
+
         password = "TestPassword123!"
         hash1 = get_password_hash(password)
         hash2 = get_password_hash(password)
@@ -59,6 +61,7 @@ class TestSecurityUtils:
     def test_verify_password_success(self):
         """Test that password verification works correctly."""
         from app.utils.security import get_password_hash, verify_password
+
         password = "TestPassword123!"
         hashed = get_password_hash(password)
 
@@ -67,6 +70,7 @@ class TestSecurityUtils:
     def test_verify_password_failure(self):
         """Test that wrong password fails verification."""
         from app.utils.security import get_password_hash, verify_password
+
         password = "TestPassword123!"
         wrong_password = "WrongPassword456!"
         hashed = get_password_hash(password)
@@ -76,6 +80,7 @@ class TestSecurityUtils:
     def test_verify_password_with_empty_string(self):
         """Test password verification with empty string."""
         from app.utils.security import get_password_hash, verify_password
+
         password = "TestPassword123!"
         hashed = get_password_hash(password)
 
@@ -213,6 +218,7 @@ class TestUserFunctions:
     async def test_create_user_duplicate_email(self, db_session: AsyncSession, test_user: User):
         """Test creating a user with duplicate email raises error."""
         from fastapi import HTTPException
+
         user_data = UserCreate(
             email=test_user.email,  # Same email as existing user
             password="Password123!",
@@ -391,12 +397,15 @@ class TestRefreshTokenRevocation:
         assert old_data is not None
         assert old_data.jti is not None
 
-        with patch(
-            "app.services.auth_service.blacklist_token",
-            side_effect=mock_blacklist,
-        ), patch(
-            "app.services.auth_service.is_token_blacklisted",
-            side_effect=mock_is_blacklisted,
+        with (
+            patch(
+                "app.services.auth_service.blacklist_token",
+                side_effect=mock_blacklist,
+            ),
+            patch(
+                "app.services.auth_service.is_token_blacklisted",
+                side_effect=mock_is_blacklisted,
+            ),
         ):
             # Rotate — this should blacklist the old token
             result = await rotate_refresh_token(old_token)

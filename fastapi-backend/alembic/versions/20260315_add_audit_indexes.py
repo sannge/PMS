@@ -51,9 +51,9 @@ def upgrade() -> None:
     # ------------------------------------------------------------------
     conn.execute(text("COMMIT"))
     op.execute(
-        'CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_tasks_project_active '
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_tasks_project_active "
         'ON "Tasks" (project_id, task_status_id) '
-        'WHERE archived_at IS NULL'
+        "WHERE archived_at IS NULL"
     )
 
     # ------------------------------------------------------------------
@@ -62,15 +62,11 @@ def upgrade() -> None:
     # ------------------------------------------------------------------
     conn.execute(text("COMMIT"))
     op.execute(
-        'CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_document_folders_name_lower '
-        'ON "DocumentFolders" (lower(name))'
+        'CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_document_folders_name_lower ON "DocumentFolders" (lower(name))'
     )
 
     conn.execute(text("COMMIT"))
-    op.execute(
-        'CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_documents_title_lower '
-        'ON "Documents" (lower(title))'
-    )
+    op.execute('CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_documents_title_lower ON "Documents" (lower(title))')
 
     # ------------------------------------------------------------------
     # QE-M14: Composite indexes for notification pagination.
@@ -79,15 +75,15 @@ def upgrade() -> None:
     # ------------------------------------------------------------------
     conn.execute(text("COMMIT"))
     op.execute(
-        'CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_notifications_user_created '
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_notifications_user_created "
         'ON "Notifications" (user_id, created_at DESC)'
     )
 
     conn.execute(text("COMMIT"))
     op.execute(
-        'CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_notifications_user_unread '
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_notifications_user_unread "
         'ON "Notifications" (user_id, created_at DESC) '
-        'WHERE is_read = false'
+        "WHERE is_read = false"
     )
 
     # ------------------------------------------------------------------
@@ -96,7 +92,7 @@ def upgrade() -> None:
     # ------------------------------------------------------------------
     conn.execute(text("COMMIT"))
     op.execute(
-        'CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_document_folders_path_pattern '
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_document_folders_path_pattern "
         'ON "DocumentFolders" (materialized_path text_pattern_ops)'
     )
 
@@ -115,31 +111,31 @@ def upgrade() -> None:
     # Folders scoped to application (application_id set, no project/user)
     conn.execute(text("COMMIT"))
     op.execute(
-        'CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS '
-        'ix_document_folders_unique_name '
+        "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "
+        "ix_document_folders_unique_name "
         'ON "DocumentFolders" '
         f"(application_id, COALESCE(parent_id, '{_SENTINEL}'), lower(name)) "
-        'WHERE project_id IS NULL AND user_id IS NULL'
+        "WHERE project_id IS NULL AND user_id IS NULL"
     )
 
     # Folders scoped to project (project_id set)
     conn.execute(text("COMMIT"))
     op.execute(
-        'CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS '
-        'ix_document_folders_unique_name_project '
+        "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "
+        "ix_document_folders_unique_name_project "
         'ON "DocumentFolders" '
         f"(project_id, COALESCE(parent_id, '{_SENTINEL}'), lower(name)) "
-        'WHERE project_id IS NOT NULL'
+        "WHERE project_id IS NOT NULL"
     )
 
     # Folders scoped to personal/user (user_id set)
     conn.execute(text("COMMIT"))
     op.execute(
-        'CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS '
-        'ix_document_folders_unique_name_user '
+        "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "
+        "ix_document_folders_unique_name_user "
         'ON "DocumentFolders" '
         f"(user_id, COALESCE(parent_id, '{_SENTINEL}'), lower(name)) "
-        'WHERE user_id IS NOT NULL'
+        "WHERE user_id IS NOT NULL"
     )
 
     # Documents scoped to application (application_id set, no project/user)
@@ -147,53 +143,53 @@ def upgrade() -> None:
     # COALESCE maps NULL folder_id (unfiled) to a sentinel UUID.
     conn.execute(text("COMMIT"))
     op.execute(
-        'CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS '
-        'ix_documents_unique_title '
+        "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "
+        "ix_documents_unique_title "
         'ON "Documents" '
         f"(application_id, COALESCE(folder_id, '{_SENTINEL}'), lower(title)) "
-        'WHERE project_id IS NULL AND user_id IS NULL AND deleted_at IS NULL'
+        "WHERE project_id IS NULL AND user_id IS NULL AND deleted_at IS NULL"
     )
 
     # Documents scoped to project (project_id set)
     conn.execute(text("COMMIT"))
     op.execute(
-        'CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS '
-        'ix_documents_unique_title_project '
+        "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "
+        "ix_documents_unique_title_project "
         'ON "Documents" '
         f"(project_id, COALESCE(folder_id, '{_SENTINEL}'), lower(title)) "
-        'WHERE project_id IS NOT NULL AND deleted_at IS NULL'
+        "WHERE project_id IS NOT NULL AND deleted_at IS NULL"
     )
 
     # Documents scoped to personal/user (user_id set)
     conn.execute(text("COMMIT"))
     op.execute(
-        'CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS '
-        'ix_documents_unique_title_user '
+        "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "
+        "ix_documents_unique_title_user "
         'ON "Documents" '
         f"(user_id, COALESCE(folder_id, '{_SENTINEL}'), lower(title)) "
-        'WHERE user_id IS NOT NULL AND deleted_at IS NULL'
+        "WHERE user_id IS NOT NULL AND deleted_at IS NULL"
     )
 
 
 def downgrade() -> None:
     # QE-L7: Drop unique name indexes (all three scopes)
-    op.execute('DROP INDEX IF EXISTS ix_documents_unique_title_user')
-    op.execute('DROP INDEX IF EXISTS ix_documents_unique_title_project')
-    op.execute('DROP INDEX IF EXISTS ix_documents_unique_title')
-    op.execute('DROP INDEX IF EXISTS ix_document_folders_unique_name_user')
-    op.execute('DROP INDEX IF EXISTS ix_document_folders_unique_name_project')
-    op.execute('DROP INDEX IF EXISTS ix_document_folders_unique_name')
+    op.execute("DROP INDEX IF EXISTS ix_documents_unique_title_user")
+    op.execute("DROP INDEX IF EXISTS ix_documents_unique_title_project")
+    op.execute("DROP INDEX IF EXISTS ix_documents_unique_title")
+    op.execute("DROP INDEX IF EXISTS ix_document_folders_unique_name_user")
+    op.execute("DROP INDEX IF EXISTS ix_document_folders_unique_name_project")
+    op.execute("DROP INDEX IF EXISTS ix_document_folders_unique_name")
 
     # QE-M15: Drop path pattern index
-    op.execute('DROP INDEX IF EXISTS ix_document_folders_path_pattern')
+    op.execute("DROP INDEX IF EXISTS ix_document_folders_path_pattern")
 
     # QE-M14: Drop notification indexes
-    op.execute('DROP INDEX IF EXISTS ix_notifications_user_unread')
-    op.execute('DROP INDEX IF EXISTS ix_notifications_user_created')
+    op.execute("DROP INDEX IF EXISTS ix_notifications_user_unread")
+    op.execute("DROP INDEX IF EXISTS ix_notifications_user_created")
 
     # QE-M5: Drop functional indexes
-    op.execute('DROP INDEX IF EXISTS ix_documents_title_lower')
-    op.execute('DROP INDEX IF EXISTS ix_document_folders_name_lower')
+    op.execute("DROP INDEX IF EXISTS ix_documents_title_lower")
+    op.execute("DROP INDEX IF EXISTS ix_document_folders_name_lower")
 
     # QE-H7: Drop active tasks index
-    op.execute('DROP INDEX IF EXISTS ix_tasks_project_active')
+    op.execute("DROP INDEX IF EXISTS ix_tasks_project_active")

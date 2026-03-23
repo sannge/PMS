@@ -122,9 +122,7 @@ class CodexProvider(LLMProvider, VisionProvider):
         model: str,
         dimensions: int | None = None,
     ) -> list[float]:
-        raise NotImplementedError(
-            "CodexProvider is for chat only. Use the global embedding provider."
-        )
+        raise NotImplementedError("CodexProvider is for chat only. Use the global embedding provider.")
 
     async def generate_embeddings_batch(
         self,
@@ -132,9 +130,7 @@ class CodexProvider(LLMProvider, VisionProvider):
         model: str,
         dimensions: int | None = None,
     ) -> list[list[float]]:
-        raise NotImplementedError(
-            "CodexProvider is for chat only. Use the global embedding provider."
-        )
+        raise NotImplementedError("CodexProvider is for chat only. Use the global embedding provider.")
 
     async def describe_image(
         self,

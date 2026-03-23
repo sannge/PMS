@@ -54,7 +54,6 @@ __all__ = [
     "ImportJob",
     "Invitation",
     "Mention",
-
     "Notification",
     "Project",
     "ProjectAssignment",

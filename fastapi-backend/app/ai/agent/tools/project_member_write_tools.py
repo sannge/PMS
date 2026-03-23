@@ -75,9 +75,7 @@ async def add_project_member(
         proj_uuid = UUID(resolved_proj_id)  # type: ignore[arg-type]
 
         # Load project
-        proj_result = await db.execute(
-            select(Project).where(Project.id == proj_uuid)
-        )
+        proj_result = await db.execute(select(Project).where(Project.id == proj_uuid))
         proj = proj_result.scalar_one_or_none()
         if not proj:
             return f"Error: Project '{project}' not found."
@@ -107,23 +105,16 @@ async def add_project_member(
         is_project_admin = proj_member is not None and proj_member.role == "admin"
 
         if not is_app_owner and not is_project_admin:
-            return (
-                "Access denied: you must be an application Owner or project Admin "
-                "to add project members."
-            )
+            return "Access denied: you must be an application Owner or project Admin to add project members."
 
         # Resolve target user
-        resolved_user_id, user_err = await _resolve_user(
-            user, db, scope_app_id=str(app_id)
-        )
+        resolved_user_id, user_err = await _resolve_user(user, db, scope_app_id=str(app_id))
         if user_err:
             return user_err
         target_uuid = UUID(resolved_user_id)  # type: ignore[arg-type]
 
         # Load target user for display
-        user_result = await db.execute(
-            select(User).where(User.id == target_uuid)
-        )
+        user_result = await db.execute(select(User).where(User.id == target_uuid))
         target_user = user_result.scalar_one_or_none()
         if not target_user:
             return f"Error: User '{user}' not found."
@@ -187,9 +178,7 @@ async def add_project_member(
                 )
             )
             app_member_check = app_member_result.scalar_one_or_none()
-            is_app_owner_check = (
-                app_member_check is not None and app_member_check.role == "owner"
-            )
+            is_app_owner_check = app_member_check is not None and app_member_check.role == "owner"
 
             proj_member_result = await db.execute(
                 select(ProjectMember).where(
@@ -198,9 +187,7 @@ async def add_project_member(
                 )
             )
             proj_member_check = proj_member_result.scalar_one_or_none()
-            is_project_admin_check = (
-                proj_member_check is not None and proj_member_check.role == "admin"
-            )
+            is_project_admin_check = proj_member_check is not None and proj_member_check.role == "admin"
 
             if not is_app_owner_check and not is_project_admin_check:
                 return "Access denied: you no longer have permission to manage project members."
@@ -214,8 +201,7 @@ async def add_project_member(
             )
             if existing_check.scalar_one_or_none() is not None:
                 return (
-                    f"Error: User '{target_name}' was added to project "
-                    f"'{project_name}' while waiting for confirmation."
+                    f"Error: User '{target_name}' was added to project '{project_name}' while waiting for confirmation."
                 )
 
             current_user_id = _get_user_id()
@@ -229,9 +215,7 @@ async def add_project_member(
             db.add(pm)
             await db.flush()
 
-            return (
-                f"{target_name} added as {role_lower} to project '{project_name}'."
-            )
+            return f"{target_name} added as {role_lower} to project '{project_name}'."
 
         except Exception as e:
             logger.exception("add_project_member failed: %s", e)
@@ -272,9 +256,7 @@ async def update_project_member_role(
         proj_uuid = UUID(resolved_proj_id)  # type: ignore[arg-type]
 
         # Load project
-        proj_result = await db.execute(
-            select(Project).where(Project.id == proj_uuid)
-        )
+        proj_result = await db.execute(select(Project).where(Project.id == proj_uuid))
         proj = proj_result.scalar_one_or_none()
         if not proj:
             return f"Error: Project '{project}' not found."
@@ -301,28 +283,19 @@ async def update_project_member_role(
             )
         )
         current_proj_member = proj_member_result.scalar_one_or_none()
-        is_project_admin = (
-            current_proj_member is not None and current_proj_member.role == "admin"
-        )
+        is_project_admin = current_proj_member is not None and current_proj_member.role == "admin"
 
         if not is_app_owner and not is_project_admin:
-            return (
-                "Access denied: you must be an application Owner or project Admin "
-                "to change member roles."
-            )
+            return "Access denied: you must be an application Owner or project Admin to change member roles."
 
         # Resolve target user
-        resolved_user_id, user_err = await _resolve_user(
-            user, db, scope_project_id=str(proj_uuid)
-        )
+        resolved_user_id, user_err = await _resolve_user(user, db, scope_project_id=str(proj_uuid))
         if user_err:
             return user_err
         target_uuid = UUID(resolved_user_id)  # type: ignore[arg-type]
 
         # Load target user for display
-        user_result = await db.execute(
-            select(User).where(User.id == target_uuid)
-        )
+        user_result = await db.execute(select(User).where(User.id == target_uuid))
         target_user = user_result.scalar_one_or_none()
         if not target_user:
             return f"Error: User '{user}' not found."
@@ -337,10 +310,7 @@ async def update_project_member_role(
         )
         target_pm = target_pm_result.scalar_one_or_none()
         if not target_pm:
-            return (
-                f"Error: User '{target_name}' is not a member of project "
-                f"'{project_name}'."
-            )
+            return f"Error: User '{target_name}' is not a member of project '{project_name}'."
 
         current_role = target_pm.role
 
@@ -351,9 +321,7 @@ async def update_project_member_role(
             )
 
     # Build confirmation
-    summary = (
-        f"Change {target_name}'s role to {role_lower} in project '{project_name}'"
-    )
+    summary = f"Change {target_name}'s role to {role_lower} in project '{project_name}'"
 
     confirmation: dict[str, Any] = {
         "type": "confirmation",
@@ -387,9 +355,7 @@ async def update_project_member_role(
                 )
             )
             app_member_check = app_member_result.scalar_one_or_none()
-            is_app_owner_check = (
-                app_member_check is not None and app_member_check.role == "owner"
-            )
+            is_app_owner_check = app_member_check is not None and app_member_check.role == "owner"
 
             proj_member_result = await db.execute(
                 select(ProjectMember).where(
@@ -398,9 +364,7 @@ async def update_project_member_role(
                 )
             )
             proj_member_check = proj_member_result.scalar_one_or_none()
-            is_project_admin_check = (
-                proj_member_check is not None and proj_member_check.role == "admin"
-            )
+            is_project_admin_check = proj_member_check is not None and proj_member_check.role == "admin"
 
             if not is_app_owner_check and not is_project_admin_check:
                 return "Access denied: you no longer have permission to manage project members."
@@ -414,18 +378,12 @@ async def update_project_member_role(
             )
             target_pm = target_pm_result.scalar_one_or_none()
             if not target_pm:
-                return (
-                    f"Error: User '{target_name}' is no longer a member of "
-                    f"project '{project_name}'."
-                )
+                return f"Error: User '{target_name}' is no longer a member of project '{project_name}'."
 
             target_pm.role = role_lower
             await db.flush()
 
-            return (
-                f"{target_name}'s role updated to {role_lower} in "
-                f"project '{project_name}'."
-            )
+            return f"{target_name}'s role updated to {role_lower} in project '{project_name}'."
 
         except Exception as e:
             logger.exception("update_project_member_role failed: %s", e)
@@ -460,9 +418,7 @@ async def remove_project_member(
         proj_uuid = UUID(resolved_proj_id)  # type: ignore[arg-type]
 
         # Load project
-        proj_result = await db.execute(
-            select(Project).where(Project.id == proj_uuid)
-        )
+        proj_result = await db.execute(select(Project).where(Project.id == proj_uuid))
         proj = proj_result.scalar_one_or_none()
         if not proj:
             return f"Error: Project '{project}' not found."
@@ -489,28 +445,19 @@ async def remove_project_member(
             )
         )
         current_proj_member = proj_member_result.scalar_one_or_none()
-        is_project_admin = (
-            current_proj_member is not None and current_proj_member.role == "admin"
-        )
+        is_project_admin = current_proj_member is not None and current_proj_member.role == "admin"
 
         if not is_app_owner and not is_project_admin:
-            return (
-                "Access denied: you must be an application Owner or project Admin "
-                "to remove project members."
-            )
+            return "Access denied: you must be an application Owner or project Admin to remove project members."
 
         # Resolve target user
-        resolved_user_id, user_err = await _resolve_user(
-            user, db, scope_project_id=str(proj_uuid)
-        )
+        resolved_user_id, user_err = await _resolve_user(user, db, scope_project_id=str(proj_uuid))
         if user_err:
             return user_err
         target_uuid = UUID(resolved_user_id)  # type: ignore[arg-type]
 
         # Load target user for display
-        user_result = await db.execute(
-            select(User).where(User.id == target_uuid)
-        )
+        user_result = await db.execute(select(User).where(User.id == target_uuid))
         target_user = user_result.scalar_one_or_none()
         if not target_user:
             return f"Error: User '{user}' not found."
@@ -525,19 +472,13 @@ async def remove_project_member(
         )
         target_pm = target_pm_result.scalar_one_or_none()
         if not target_pm:
-            return (
-                f"Error: User '{target_name}' is not a member of project "
-                f"'{project_name}'."
-            )
+            return f"Error: User '{target_name}' is not a member of project '{project_name}'."
 
         # Block if user has active tasks (not Done/Archived)
         # Active = tasks where status is not "Done" and task is not archived
-        done_status_subq = (
-            select(TaskStatus.id)
-            .where(
-                TaskStatus.project_id == proj_uuid,
-                TaskStatus.name == "Done",
-            )
+        done_status_subq = select(TaskStatus.id).where(
+            TaskStatus.project_id == proj_uuid,
+            TaskStatus.name == "Done",
         )
         active_task_count_result = await db.execute(
             select(func.count(Task.id)).where(
@@ -589,9 +530,7 @@ async def remove_project_member(
                 )
             )
             app_member_check = app_member_result.scalar_one_or_none()
-            is_app_owner_check = (
-                app_member_check is not None and app_member_check.role == "owner"
-            )
+            is_app_owner_check = app_member_check is not None and app_member_check.role == "owner"
 
             proj_member_result = await db.execute(
                 select(ProjectMember).where(
@@ -600,9 +539,7 @@ async def remove_project_member(
                 )
             )
             proj_member_check = proj_member_result.scalar_one_or_none()
-            is_project_admin_check = (
-                proj_member_check is not None and proj_member_check.role == "admin"
-            )
+            is_project_admin_check = proj_member_check is not None and proj_member_check.role == "admin"
 
             if not is_app_owner_check and not is_project_admin_check:
                 return "Access denied: you no longer have permission to manage project members."
@@ -616,10 +553,7 @@ async def remove_project_member(
             )
             target_pm = target_pm_result.scalar_one_or_none()
             if not target_pm:
-                return (
-                    f"Error: User '{target_name}' is no longer a member of "
-                    f"project '{project_name}'."
-                )
+                return f"Error: User '{target_name}' is no longer a member of project '{project_name}'."
 
             await db.delete(target_pm)
             await db.flush()

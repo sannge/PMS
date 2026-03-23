@@ -47,7 +47,8 @@ def route_after_understand(state: AgentState) -> str:
     if confidence >= get_confidence_fast_path() and intent == "greeting":
         logger.info(
             "route_after_understand: fast path (intent=%s, confidence=%.2f)",
-            intent, confidence,
+            intent,
+            confidence,
         )
         return "respond"
 
@@ -56,19 +57,22 @@ def route_after_understand(state: AgentState) -> str:
         if clarify_count >= get_max_clarify_rounds():
             logger.info(
                 "route_after_understand: clarify limit reached (%d/%d), forcing explore",
-                clarify_count, get_max_clarify_rounds(),
+                clarify_count,
+                get_max_clarify_rounds(),
             )
             return "explore"
         logger.info(
             "route_after_understand: clarify (intent=%s, confidence=%.2f)",
-            intent, confidence,
+            intent,
+            confidence,
         )
         return "clarify"
 
     # Everything else -> explore
     logger.info(
         "route_after_understand: explore (intent=%s, confidence=%.2f)",
-        intent, confidence,
+        intent,
+        confidence,
     )
     return "explore"
 
@@ -160,7 +164,8 @@ def route_after_synthesize(state: AgentState) -> str:
     if state.get("synthesize_count", 0) >= max_rounds:
         logger.info(
             "route_after_synthesize: synthesize limit reached (%d/%d), forcing respond",
-            state.get("synthesize_count", 0), max_rounds,
+            state.get("synthesize_count", 0),
+            max_rounds,
         )
         return "respond"
 

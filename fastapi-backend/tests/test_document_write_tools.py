@@ -30,6 +30,7 @@ from app.ai.agent.tools.context import clear_tool_context, set_tool_context
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _setup_context(**overrides):
     """Populate tool context with sensible defaults + overrides."""
     ctx = {
@@ -40,10 +41,18 @@ def _setup_context(**overrides):
         "provider_registry": MagicMock(),
     }
     ctx.update(overrides)
-    set_tool_context(**{k: ctx[k] for k in (
-        "user_id", "accessible_app_ids", "accessible_project_ids",
-        "db_session_factory", "provider_registry",
-    )})
+    set_tool_context(
+        **{
+            k: ctx[k]
+            for k in (
+                "user_id",
+                "accessible_app_ids",
+                "accessible_project_ids",
+                "db_session_factory",
+                "provider_registry",
+            )
+        }
+    )
     return ctx
 
 
@@ -94,7 +103,6 @@ def _make_mock_document(
 
 
 class TestWriteToolsRegistryUpdated:
-
     def test_has_11_tools(self):
         assert len(WRITE_TOOLS) == 11
 
@@ -111,7 +119,6 @@ class TestWriteToolsRegistryUpdated:
 
 
 class TestUpdateDocument:
-
     async def test_no_fields_provided(self):
         """update_document errors when neither title nor content provided."""
         _setup_context()
@@ -122,10 +129,12 @@ class TestUpdateDocument:
     async def test_title_too_long(self):
         """update_document errors when title exceeds 200 chars."""
         _setup_context()
-        result = await update_document.ainvoke({
-            "doc": "some-doc",
-            "title": "x" * 201,
-        })
+        result = await update_document.ainvoke(
+            {
+                "doc": "some-doc",
+                "title": "x" * 201,
+            }
+        )
         assert "200 characters" in result
         _clear()
 
@@ -189,10 +198,12 @@ class TestUpdateDocument:
         ):
             mock_interrupt.return_value = {"approved": True}
 
-            result = await update_document.ainvoke({
-                "doc": str(doc_id),
-                "title": "New Title",
-            })
+            result = await update_document.ainvoke(
+                {
+                    "doc": str(doc_id),
+                    "title": "New Title",
+                }
+            )
 
         assert "Updated document" in result
         assert write_doc.title == "New Title"
@@ -237,10 +248,12 @@ class TestUpdateDocument:
             "app.ai.agent.tools.write_tools._resolve_document",
             return_value=(str(doc_id), None),
         ):
-            result = await update_document.ainvoke({
-                "doc": str(doc_id),
-                "content": "New content here",
-            })
+            result = await update_document.ainvoke(
+                {
+                    "doc": str(doc_id),
+                    "content": "New content here",
+                }
+            )
 
         assert "Updated document" in result
         assert mock_doc.embedding_status == "stale"
@@ -271,17 +284,22 @@ class TestUpdateDocument:
         async def mock_session_cm():
             yield session
 
-        with patch(
-            "app.ai.agent.tools.write_tools._resolve_document",
-            return_value=(str(doc_id), None),
-        ), patch(
-            "app.ai.agent.tools.write_tools._get_tool_session",
-            side_effect=lambda: mock_session_cm(),
+        with (
+            patch(
+                "app.ai.agent.tools.write_tools._resolve_document",
+                return_value=(str(doc_id), None),
+            ),
+            patch(
+                "app.ai.agent.tools.write_tools._get_tool_session",
+                side_effect=lambda: mock_session_cm(),
+            ),
         ):
-            result = await update_document.ainvoke({
-                "doc": str(doc_id),
-                "title": "Hacked Title",
-            })
+            result = await update_document.ainvoke(
+                {
+                    "doc": str(doc_id),
+                    "title": "Hacked Title",
+                }
+            )
 
         assert "Access denied" in result
         _clear()
@@ -314,20 +332,26 @@ class TestUpdateDocument:
         async def mock_session_cm():
             yield session
 
-        with patch(
-            "app.ai.agent.tools.write_tools._resolve_document",
-            return_value=(str(doc_id), None),
-        ), patch(
-            "app.ai.agent.tools.write_tools._get_tool_session",
-            side_effect=lambda: mock_session_cm(),
-        ), patch(
-            "app.ai.agent.tools.write_tools.interrupt",
-            return_value={"approved": True},
+        with (
+            patch(
+                "app.ai.agent.tools.write_tools._resolve_document",
+                return_value=(str(doc_id), None),
+            ),
+            patch(
+                "app.ai.agent.tools.write_tools._get_tool_session",
+                side_effect=lambda: mock_session_cm(),
+            ),
+            patch(
+                "app.ai.agent.tools.write_tools.interrupt",
+                return_value={"approved": True},
+            ),
         ):
-            result = await update_document.ainvoke({
-                "doc": str(doc_id),
-                "title": "Updated Title",
-            })
+            result = await update_document.ainvoke(
+                {
+                    "doc": str(doc_id),
+                    "title": "Updated Title",
+                }
+            )
 
         assert "Updated document" in result
         _clear()
@@ -339,7 +363,6 @@ class TestUpdateDocument:
 
 
 class TestDeleteDocument:
-
     @patch("app.ai.agent.tools.write_tools.interrupt")
     @patch("app.ai.agent.tools.write_tools._get_tool_session")
     async def test_soft_delete_sets_deleted_at(self, mock_tool_session, mock_interrupt):
@@ -371,12 +394,15 @@ class TestDeleteDocument:
         mock_tool_session.side_effect = lambda: mock_session_cm()
         mock_interrupt.return_value = {"approved": True}
 
-        with patch(
-            "app.ai.agent.tools.write_tools._resolve_document",
-            return_value=(str(doc_id), None),
-        ), patch(
-            "app.services.search_service.index_document_soft_delete",
-            new_callable=AsyncMock,
+        with (
+            patch(
+                "app.ai.agent.tools.write_tools._resolve_document",
+                return_value=(str(doc_id), None),
+            ),
+            patch(
+                "app.services.search_service.index_document_soft_delete",
+                new_callable=AsyncMock,
+            ),
         ):
             result = await delete_document.ainvoke({"doc": str(doc_id)})
 
@@ -409,12 +435,15 @@ class TestDeleteDocument:
         async def mock_session_cm():
             yield session
 
-        with patch(
-            "app.ai.agent.tools.write_tools._resolve_document",
-            return_value=(str(doc_id), None),
-        ), patch(
-            "app.ai.agent.tools.write_tools._get_tool_session",
-            side_effect=lambda: mock_session_cm(),
+        with (
+            patch(
+                "app.ai.agent.tools.write_tools._resolve_document",
+                return_value=(str(doc_id), None),
+            ),
+            patch(
+                "app.ai.agent.tools.write_tools._get_tool_session",
+                side_effect=lambda: mock_session_cm(),
+            ),
         ):
             result = await delete_document.ainvoke({"doc": str(doc_id)})
 
@@ -429,18 +458,19 @@ class TestDeleteDocument:
 
 
 class TestCreateDocumentDocType:
-
     async def test_doc_type_parameter_accepted(self):
         """create_document accepts doc_type without error when scope is invalid."""
         _setup_context()
         # With invalid scope, it should error on scope -- but doc_type should not cause issues
-        result = await create_document.ainvoke({
-            "title": "Training Guide",
-            "content": "Step 1: Do this",
-            "scope": "invalid_scope",
-            "scope_id": str(uuid4()),
-            "doc_type": "training",
-        })
+        result = await create_document.ainvoke(
+            {
+                "title": "Training Guide",
+                "content": "Step 1: Do this",
+                "scope": "invalid_scope",
+                "scope_id": str(uuid4()),
+                "doc_type": "training",
+            }
+        )
         # Should get scope error, not a doc_type error
         assert "Scope must be" in result
         _clear()
@@ -448,12 +478,14 @@ class TestCreateDocumentDocType:
     async def test_doc_type_defaults_to_general(self):
         """create_document works without explicit doc_type."""
         _setup_context()
-        result = await create_document.ainvoke({
-            "title": "Just a Doc",
-            "content": "Some content",
-            "scope": "invalid_scope",
-            "scope_id": str(uuid4()),
-        })
+        result = await create_document.ainvoke(
+            {
+                "title": "Just a Doc",
+                "content": "Some content",
+                "scope": "invalid_scope",
+                "scope_id": str(uuid4()),
+            }
+        )
         assert "Scope must be" in result
         _clear()
 
@@ -464,7 +496,6 @@ class TestCreateDocumentDocType:
 
 
 class TestExportDocumentPdf:
-
     def test_pdf_generation(self):
         """generate_pdf produces non-empty bytes."""
         from app.ai.pdf_export import generate_pdf

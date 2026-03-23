@@ -27,10 +27,10 @@ from ..database import get_db
 from ..utils.tasks import fire_and_forget
 
 
-
 async def _should_run_auto_archive(app_id: str) -> bool:
     """Check if auto-archive should run (Redis-based cross-worker throttle)."""
     from ..services.redis_service import redis_service
+
     if not redis_service.is_connected:
         return True  # Allow if Redis down (fail open for non-critical operation)
     try:
@@ -60,8 +60,11 @@ from ..schemas.project import (
     ProjectUpdate,
     ProjectWithTasks,
 )
+from ..schemas.project_member import ProjectMemberWithUser, UserSummary
+from ..schemas.task import TaskUserInfo, TaskWithSubtasks
 from ..services.auth_service import get_current_user
 from ..services.notification_service import NotificationService
+from ..services.task_helpers import get_task_status_info
 from ..websocket.manager import MessageType, manager
 
 logger = logging.getLogger(__name__)
@@ -168,9 +171,7 @@ async def verify_application_access(
     Raises:
         HTTPException: If application not found or user doesn't have appropriate access
     """
-    result = await db.execute(
-        select(Application).where(Application.id == application_id)
-    )
+    result = await db.execute(select(Application).where(Application.id == application_id))
     application = result.scalar_one_or_none()
 
     if not application:
@@ -228,9 +229,7 @@ async def verify_project_access(
     """
     # Fetch project with application in single query using selectinload
     result = await db.execute(
-        select(Project)
-        .options(selectinload(Project.application))
-        .where(Project.id == project_id)
+        select(Project).options(selectinload(Project.application)).where(Project.id == project_id)
     )
     project = result.scalar_one_or_none()
 
@@ -312,11 +311,7 @@ async def list_projects(
     if not include_archived:
         conditions.append(Project.archived_at.is_(None))  # Exclude archived projects
 
-    query = (
-        select(Project)
-        .options(lazyload(Project.application))
-        .where(*conditions)
-    )
+    query = select(Project).options(lazyload(Project.application)).where(*conditions)
 
     # Apply search filter if provided
     if search:
@@ -374,9 +369,7 @@ async def list_projects(
     status_names_map: dict[str, str] = {}
     if derived_status_ids:
         status_result = await db.execute(
-            select(TaskStatus.id, TaskStatus.name).where(
-                TaskStatus.id.in_(derived_status_ids)
-            )
+            select(TaskStatus.id, TaskStatus.name).where(TaskStatus.id.in_(derived_status_ids))
         )
         status_records = status_result.all()
         status_names_map = {str(s.id): s.name for s in status_records}
@@ -395,7 +388,6 @@ async def list_projects(
             description=project.description,
             project_type=project.project_type,
             due_date=project.due_date,
-
             application_id=project.application_id,
             created_by=project.created_by,
             project_owner_user_id=project.project_owner_user_id,
@@ -493,6 +485,7 @@ async def create_project(
 
     # Auto-add creator as a project admin
     from ..models.project_member import ProjectMemberRole
+
     project_member = ProjectMember(
         project_id=project.id,
         user_id=current_user.id,
@@ -590,8 +583,7 @@ async def get_project(
 
     # Get total task count (all tasks including archived) for display
     result = await db.execute(
-        select(func.count(Task.id))
-        .where(
+        select(func.count(Task.id)).where(
             Task.project_id == project_id,
         )
     )
@@ -599,8 +591,7 @@ async def get_project(
 
     # Get active task count (excluding archived) for aggregation sync check
     result = await db.execute(
-        select(func.count(Task.id))
-        .where(
+        select(func.count(Task.id)).where(
             Task.project_id == project_id,
             Task.archived_at.is_(None),
         )
@@ -608,9 +599,7 @@ async def get_project(
     active_tasks_count = result.scalar() or 0
 
     # Check if aggregation exists and is in sync (compare against active tasks only)
-    result = await db.execute(
-        select(ProjectTaskStatusAgg).where(ProjectTaskStatusAgg.project_id == project_id)
-    )
+    result = await db.execute(select(ProjectTaskStatusAgg).where(ProjectTaskStatusAgg.project_id == project_id))
     agg = result.scalar_one_or_none()
 
     # Check if aggregation needs recalculation:
@@ -619,20 +608,16 @@ async def get_project(
     # 3. Sum of individual counters doesn't equal total_tasks (distribution is stale)
     if agg is not None:
         counter_sum = (
-            (agg.todo_tasks or 0) +
-            (agg.active_tasks or 0) +
-            (agg.review_tasks or 0) +
-            (agg.issue_tasks or 0) +
-            (agg.done_tasks or 0)
+            (agg.todo_tasks or 0)
+            + (agg.active_tasks or 0)
+            + (agg.review_tasks or 0)
+            + (agg.issue_tasks or 0)
+            + (agg.done_tasks or 0)
         )
     else:
         counter_sum = -1  # Force recalculation
 
-    needs_recalculation = (
-        agg is None or
-        agg.total_tasks != active_tasks_count or
-        counter_sum != (agg.total_tasks or 0)
-    )
+    needs_recalculation = agg is None or agg.total_tasks != active_tasks_count or counter_sum != (agg.total_tasks or 0)
 
     derived_status_name: Optional[str] = None
 
@@ -665,9 +650,7 @@ async def get_project(
         derived_status_name = recalculate_aggregation_from_tasks(agg, tasks)
 
         # Ensure TaskStatuses exist for this project (handles legacy projects)
-        result = await db.execute(
-            select(func.count(TaskStatus.id)).where(TaskStatus.project_id == project_id)
-        )
+        result = await db.execute(select(func.count(TaskStatus.id)).where(TaskStatus.project_id == project_id))
         existing_statuses_count = result.scalar() or 0
 
         if existing_statuses_count == 0:
@@ -696,9 +679,7 @@ async def get_project(
     else:
         # Get status name from existing derived_status_id
         if project.derived_status_id:
-            result = await db.execute(
-                select(TaskStatus).where(TaskStatus.id == project.derived_status_id)
-            )
+            result = await db.execute(select(TaskStatus).where(TaskStatus.id == project.derived_status_id))
             task_status = result.scalar_one_or_none()
             derived_status_name = task_status.name if task_status else None
 
@@ -727,6 +708,216 @@ async def get_project(
 
 
 @router.get(
+    "/api/projects/{project_id}/full",
+    summary="Get project with all related data for board view",
+    description="Returns project, statuses, members, tasks, and archived count in one request.",
+    responses={
+        200: {"description": "Full project data retrieved successfully"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "Access denied - not a member"},
+        404: {"description": "Project not found"},
+    },
+)
+async def get_project_full(
+    project_id: UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Get a project with all related data needed for the board view.
+
+    Returns project details, task statuses, members, active tasks,
+    and archived task count in a single response. Replaces 5 separate
+    API calls with one round-trip.
+
+    All queries run sequentially on a single DB session (~25ms total).
+    """
+    # 1. Verify project access and fetch project with application
+    project = await verify_project_access(project_id, current_user, db)
+
+    # 2. Fetch derived status name for the project response
+    derived_status_name: Optional[str] = None
+    if project.derived_status_id:
+        result = await db.execute(
+            select(TaskStatus).where(TaskStatus.id == project.derived_status_id)
+        )
+        ds = result.scalar_one_or_none()
+        derived_status_name = ds.name if ds else None
+
+    # 3. Task statuses ordered by rank
+    result = await db.execute(
+        select(TaskStatus)
+        .where(TaskStatus.project_id == project_id)
+        .order_by(TaskStatus.rank)
+    )
+    statuses = result.scalars().all()
+
+    # 4. Project members with user info
+    result = await db.execute(
+        select(ProjectMember)
+        .options(selectinload(ProjectMember.user))
+        .where(ProjectMember.project_id == project_id)
+        .order_by(ProjectMember.created_at.asc())
+    )
+    members_rows = result.scalars().all()
+
+    # 5. Active tasks with subtask counts, assignee, reporter, status
+    subtask_count_subquery = (
+        select(
+            Task.parent_id,
+            func.count(Task.id).label("subtasks_count"),
+        )
+        .where(Task.parent_id.isnot(None))
+        .group_by(Task.parent_id)
+        .subquery()
+    )
+
+    result = await db.execute(
+        select(
+            Task,
+            func.coalesce(subtask_count_subquery.c.subtasks_count, 0).label(
+                "subtasks_count"
+            ),
+        )
+        .options(
+            selectinload(Task.assignee),
+            selectinload(Task.reporter),
+            selectinload(Task.task_status),
+        )
+        .outerjoin(
+            subtask_count_subquery,
+            Task.id == subtask_count_subquery.c.parent_id,
+        )
+        .where(
+            Task.project_id == project_id,
+            Task.archived_at.is_(None),
+        )
+        .order_by(Task.updated_at.desc())
+    )
+    task_rows = result.all()
+
+    # 6. Archived task count
+    result = await db.execute(
+        select(func.count(Task.id)).where(
+            Task.project_id == project_id,
+            Task.archived_at.isnot(None),
+        )
+    )
+    archived_count: int = result.scalar() or 0
+
+    # ---------- serialise ----------
+
+    def _user_info(user: Optional[User]) -> Optional[TaskUserInfo]:
+        if user is None:
+            return None
+        return TaskUserInfo(
+            id=user.id,
+            email=user.email,
+            display_name=user.display_name,
+            avatar_url=user.avatar_url,
+        )
+
+    project_response = ProjectWithTasks(
+        id=project.id,
+        name=project.name,
+        key=project.key,
+        description=project.description,
+        project_type=project.project_type,
+        due_date=project.due_date,
+        application_id=project.application_id,
+        created_by=project.created_by,
+        project_owner_user_id=project.project_owner_user_id,
+        derived_status_id=project.derived_status_id,
+        derived_status=derived_status_name,
+        override_status_id=project.override_status_id,
+        override_reason=project.override_reason,
+        override_by_user_id=project.override_by_user_id,
+        override_expires_at=project.override_expires_at,
+        row_version=project.row_version,
+        created_at=project.created_at,
+        updated_at=project.updated_at,
+        archived_at=project.archived_at,
+        tasks_count=len(task_rows) + archived_count,
+    )
+
+    statuses_response = [
+        {
+            "id": str(s.id),
+            "project_id": str(s.project_id),
+            "name": s.name,
+            "category": s.category,
+            "rank": s.rank,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+        }
+        for s in statuses
+    ]
+
+    members_response: list[ProjectMemberWithUser] = []
+    for member in members_rows:
+        user_summary = None
+        if member.user:
+            user_summary = UserSummary(
+                id=member.user.id,
+                email=member.user.email,
+                display_name=member.user.display_name,
+                avatar_url=member.user.avatar_url,
+            )
+        members_response.append(
+            ProjectMemberWithUser(
+                id=member.id,
+                project_id=member.project_id,
+                user_id=member.user_id,
+                role=member.role,
+                added_by_user_id=member.added_by_user_id,
+                created_at=member.created_at,
+                updated_at=member.updated_at,
+                user=user_summary,
+            )
+        )
+
+    tasks_response: list[TaskWithSubtasks] = []
+    for task, subtasks_count in task_rows:
+        tasks_response.append(
+            TaskWithSubtasks(
+                id=task.id,
+                project_id=task.project_id,
+                task_key=task.task_key,
+                title=task.title,
+                description=task.description,
+                task_type=task.task_type,
+                priority=task.priority,
+                story_points=task.story_points,
+                due_date=task.due_date,
+                assignee_id=task.assignee_id,
+                assignee=_user_info(task.assignee),
+                reporter_id=task.reporter_id,
+                reporter=_user_info(task.reporter),
+                parent_id=task.parent_id,
+                sprint_id=task.sprint_id,
+                task_status_id=task.task_status_id,
+                task_status=get_task_status_info(task),
+                task_rank=task.task_rank,
+                row_version=task.row_version,
+                checklist_total=task.checklist_total,
+                checklist_done=task.checklist_done,
+                created_at=task.created_at,
+                updated_at=task.updated_at,
+                completed_at=task.completed_at,
+                archived_at=task.archived_at,
+                subtasks_count=subtasks_count,
+            )
+        )
+
+    return {
+        "project": project_response,
+        "statuses": statuses_response,
+        "members": members_response,
+        "tasks": tasks_response,
+        "archived_count": archived_count,
+    }
+
+
+@router.get(
     "/api/projects/{project_id}/statuses",
     summary="List task statuses for a project",
     description="Get all task statuses defined for a project, ordered by rank.",
@@ -750,11 +941,7 @@ async def list_project_statuses(
     # Verify access (any member can view)
     await verify_project_access(project_id, current_user, db)
 
-    result = await db.execute(
-        select(TaskStatus)
-        .where(TaskStatus.project_id == project_id)
-        .order_by(TaskStatus.rank)
-    )
+    result = await db.execute(select(TaskStatus).where(TaskStatus.project_id == project_id).order_by(TaskStatus.rank))
     statuses = result.scalars().all()
 
     return [
@@ -857,9 +1044,7 @@ async def update_project(
     # Get the derived status name for the response
     derived_status_name = None
     if project.derived_status_id:
-        result = await db.execute(
-            select(TaskStatus).where(TaskStatus.id == project.derived_status_id)
-        )
+        result = await db.execute(select(TaskStatus).where(TaskStatus.id == project.derived_status_id))
         task_status = result.scalar_one_or_none()
         derived_status_name = task_status.name if task_status else None
 
@@ -967,9 +1152,7 @@ async def delete_project(
     project_key = project.key
 
     # Get all project members' user IDs
-    result = await db.execute(
-        select(ProjectMember.user_id).where(ProjectMember.project_id == project_id)
-    )
+    result = await db.execute(select(ProjectMember.user_id).where(ProjectMember.project_id == project_id))
     project_member_ids = [row[0] for row in result.all()]
 
     # Get all application owners' user IDs (they should also be notified)
@@ -1008,9 +1191,7 @@ async def delete_project(
     minio_files_to_delete: list[tuple[str, str]] = []
 
     # Task attachments (linked via task_id FK)
-    task_ids_result = await db.execute(
-        select(Task.id).where(Task.project_id == project_id)
-    )
+    task_ids_result = await db.execute(select(Task.id).where(Task.project_id == project_id))
     task_ids = [row[0] for row in task_ids_result.all()]
 
     if task_ids:
@@ -1024,9 +1205,7 @@ async def delete_project(
         minio_files_to_delete.extend(attach_result.all())
 
     # Document attachments (linked via polymorphic entity_type/entity_id)
-    doc_ids_result = await db.execute(
-        select(Document.id).where(Document.project_id == project_id)
-    )
+    doc_ids_result = await db.execute(select(Document.id).where(Document.project_id == project_id))
     doc_ids = [row[0] for row in doc_ids_result.all()]
 
     if doc_ids:
@@ -1041,14 +1220,10 @@ async def delete_project(
         minio_files_to_delete.extend(doc_attach_result.all())
 
     # Delete Tasks first (their task_status_id FK is RESTRICT)
-    await db.execute(
-        sql_delete(TaskModel).where(TaskModel.project_id == project_id)
-    )
+    await db.execute(sql_delete(TaskModel).where(TaskModel.project_id == project_id))
 
     # Now safe to delete TaskStatuses
-    await db.execute(
-        sql_delete(TaskStatusModel).where(TaskStatusModel.project_id == project_id)
-    )
+    await db.execute(sql_delete(TaskStatusModel).where(TaskStatusModel.project_id == project_id))
 
     # Expire the project to clear cached relationships for already-deleted rows
     # Otherwise ORM will try to cascade-delete already-deleted Tasks/TaskStatuses
@@ -1063,14 +1238,16 @@ async def delete_project(
     # broken DB references (files deleted but records remain) are not.
     if minio_files_to_delete:
         from ..services.minio_service import MinIOService, MinIOServiceError
+
         minio = MinIOService()
         for bucket, key in minio_files_to_delete:
             try:
-                minio.delete_file(bucket=bucket, object_name=key)
+                await minio.delete_file(bucket=bucket, object_name=key)
             except MinIOServiceError:
                 logger.warning(
                     "Failed to delete MinIO file %s/%s during project deletion",
-                    bucket, key,
+                    bucket,
+                    key,
                 )
 
     # Broadcast project deletion to application room for real-time updates
@@ -1208,9 +1385,7 @@ async def override_project_status(
     # Get the derived status name for the response
     derived_status_name = None
     if project.derived_status_id:
-        result = await db.execute(
-            select(TaskStatus).where(TaskStatus.id == project.derived_status_id)
-        )
+        result = await db.execute(select(TaskStatus).where(TaskStatus.id == project.derived_status_id))
         derived_task_status = result.scalar_one_or_none()
         derived_status_name = derived_task_status.name if derived_task_status else None
 
@@ -1290,9 +1465,7 @@ async def clear_project_status_override(
     # Get the derived status name for the response
     derived_status_name = None
     if project.derived_status_id:
-        result = await db.execute(
-            select(TaskStatus).where(TaskStatus.id == project.derived_status_id)
-        )
+        result = await db.execute(select(TaskStatus).where(TaskStatus.id == project.derived_status_id))
         task_status = result.scalar_one_or_none()
         derived_status_name = task_status.name if task_status else None
 
@@ -1345,12 +1518,7 @@ async def auto_archive_eligible_projects(
     now = utc_now()
 
     # Subquery: projects that have at least one task
-    has_tasks = (
-        select(Task.project_id)
-        .where(Task.project_id == Project.id)
-        .correlate(Project)
-        .exists()
-    )
+    has_tasks = select(Task.project_id).where(Task.project_id == Project.id).correlate(Project).exists()
 
     # Subquery: projects that have at least one non-archived task
     has_active_tasks = (
@@ -1368,14 +1536,11 @@ async def auto_archive_eligible_projects(
     # - Not already archived
     # - Has at least one task
     # - Has NO non-archived tasks (all tasks are archived)
-    query = (
-        select(Project)
-        .where(
-            Project.application_id == application_id,
-            Project.archived_at.is_(None),
-            has_tasks,
-            ~has_active_tasks,  # NOT has_active_tasks
-        )
+    query = select(Project).where(
+        Project.application_id == application_id,
+        Project.archived_at.is_(None),
+        has_tasks,
+        ~has_active_tasks,  # NOT has_active_tasks
     )
 
     result = await db.execute(query)
@@ -1453,22 +1618,17 @@ async def list_archived_projects(
     total = result.scalar() or 0
 
     # Build main query
-    query = (
-        select(Project)
-        .options(lazyload(Project.application))
-        .where(*base_conditions)
-    )
+    query = select(Project).options(lazyload(Project.application)).where(*base_conditions)
 
     # Apply cursor pagination
     if cursor:
         try:
             from uuid import UUID as UUIDType
+
             cursor_uuid = UUIDType(cursor)
 
             # Get cursor project's archived_at
-            cursor_result = await db.execute(
-                select(Project.archived_at).where(Project.id == cursor_uuid)
-            )
+            cursor_result = await db.execute(select(Project.archived_at).where(Project.id == cursor_uuid))
             cursor_archived_at = cursor_result.scalar_one_or_none()
 
             if cursor_archived_at:
@@ -1519,9 +1679,7 @@ async def list_archived_projects(
     status_names_map: dict[str, str] = {}
     if derived_status_ids:
         status_result = await db.execute(
-            select(TaskStatus.id, TaskStatus.name).where(
-                TaskStatus.id.in_(derived_status_ids)
-            )
+            select(TaskStatus.id, TaskStatus.name).where(TaskStatus.id.in_(derived_status_ids))
         )
         status_records = status_result.all()
         status_names_map = {str(s.id): s.name for s in status_records}
@@ -1541,7 +1699,6 @@ async def list_archived_projects(
                 description=project.description,
                 project_type=project.project_type,
                 due_date=project.due_date,
-    
                 application_id=project.application_id,
                 created_by=project.created_by,
                 project_owner_user_id=project.project_owner_user_id,
@@ -1590,7 +1747,9 @@ async def list_my_projects_cross_app(
     search: Optional[str] = Query(None, description="Search term to filter by name or key"),
     sort_by: str = Query("due_date", description="Sort field: due_date, name, updated_at"),
     sort_order: str = Query("asc", description="Sort order: asc or desc"),
-    status_filter: Optional[str] = Query(None, alias="status", description="Filter by derived status: Todo, In Progress, Issue, Done"),
+    status_filter: Optional[str] = Query(
+        None, alias="status", description="Filter by derived status: Todo, In Progress, Issue, Done"
+    ),
 ) -> ProjectCursorPage:
     """
     List all active projects the current user has access to across all applications.
@@ -1602,9 +1761,7 @@ async def list_my_projects_cross_app(
     """
     # Find all application IDs the user has access to
     # 1. Applications owned by user
-    owned_apps = select(Application.id.label("app_id")).where(
-        Application.owner_id == current_user.id
-    )
+    owned_apps = select(Application.id.label("app_id")).where(Application.owner_id == current_user.id)
     # 2. Applications where user is a member
     member_apps = select(ApplicationMember.application_id.label("app_id")).where(
         ApplicationMember.user_id == current_user.id
@@ -1613,12 +1770,9 @@ async def list_my_projects_cross_app(
     all_app_ids = owned_apps.union(member_apps).subquery()
 
     # Build query: active projects in any of user's applications
-    query = (
-        select(Project)
-        .where(
-            Project.application_id.in_(select(all_app_ids.c.app_id)),
-            Project.archived_at.is_(None),
-        )
+    query = select(Project).where(
+        Project.application_id.in_(select(all_app_ids.c.app_id)),
+        Project.archived_at.is_(None),
     )
 
     # Apply search filter
@@ -1662,43 +1816,41 @@ async def list_my_projects_cross_app(
     if cursor:
         try:
             cursor_uuid = UUID(cursor)
-            cursor_result = await db.execute(
-                select(Project).where(Project.id == cursor_uuid)
-            )
+            cursor_result = await db.execute(select(Project).where(Project.id == cursor_uuid))
             cursor_project = cursor_result.scalar_one_or_none()
             if cursor_project:
                 if sort_by == "due_date" or sort_by not in ("name", "updated_at"):
                     if sort_order == "desc":
                         query = query.where(
-                            (Project.due_date < cursor_project.due_date) |
-                            ((Project.due_date == cursor_project.due_date) & (Project.id < cursor_uuid))
+                            (Project.due_date < cursor_project.due_date)
+                            | ((Project.due_date == cursor_project.due_date) & (Project.id < cursor_uuid))
                         )
                     else:
                         query = query.where(
-                            (Project.due_date > cursor_project.due_date) |
-                            ((Project.due_date == cursor_project.due_date) & (Project.id > cursor_uuid))
+                            (Project.due_date > cursor_project.due_date)
+                            | ((Project.due_date == cursor_project.due_date) & (Project.id > cursor_uuid))
                         )
                 elif sort_by == "updated_at":
                     if sort_order == "desc":
                         query = query.where(
-                            (Project.updated_at < cursor_project.updated_at) |
-                            ((Project.updated_at == cursor_project.updated_at) & (Project.id < cursor_uuid))
+                            (Project.updated_at < cursor_project.updated_at)
+                            | ((Project.updated_at == cursor_project.updated_at) & (Project.id < cursor_uuid))
                         )
                     else:
                         query = query.where(
-                            (Project.updated_at > cursor_project.updated_at) |
-                            ((Project.updated_at == cursor_project.updated_at) & (Project.id > cursor_uuid))
+                            (Project.updated_at > cursor_project.updated_at)
+                            | ((Project.updated_at == cursor_project.updated_at) & (Project.id > cursor_uuid))
                         )
                 elif sort_by == "name":
                     if sort_order == "desc":
                         query = query.where(
-                            (Project.name < cursor_project.name) |
-                            ((Project.name == cursor_project.name) & (Project.id < cursor_uuid))
+                            (Project.name < cursor_project.name)
+                            | ((Project.name == cursor_project.name) & (Project.id < cursor_uuid))
                         )
                     else:
                         query = query.where(
-                            (Project.name > cursor_project.name) |
-                            ((Project.name == cursor_project.name) & (Project.id > cursor_uuid))
+                            (Project.name > cursor_project.name)
+                            | ((Project.name == cursor_project.name) & (Project.id > cursor_uuid))
                         )
         except ValueError:
             pass
@@ -1737,9 +1889,7 @@ async def list_my_projects_cross_app(
 
         # Fetch application names
         app_ids = list({p.application_id for p in projects})
-        app_result = await db.execute(
-            select(Application.id, Application.name).where(Application.id.in_(app_ids))
-        )
+        app_result = await db.execute(select(Application.id, Application.name).where(Application.id.in_(app_ids)))
         app_names_map = {str(row[0]): row[1] for row in app_result.all()}
     else:
         counts_map = {}
@@ -1785,4 +1935,3 @@ async def list_my_projects_cross_app(
         items=project_responses,
         next_cursor=next_cursor,
     )
-

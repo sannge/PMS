@@ -237,9 +237,8 @@ class TestUploadAndImport:
 
         # Query the ImportJob directly to check temp_file_path
         from sqlalchemy import select
-        result = await db_session.execute(
-            select(ImportJob).where(ImportJob.id == job_id)
-        )
+
+        result = await db_session.execute(select(ImportJob).where(ImportJob.id == job_id))
         job = result.scalar_one_or_none()
         assert job is not None
         assert job.temp_file_path is not None

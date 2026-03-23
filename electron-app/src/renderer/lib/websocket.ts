@@ -416,6 +416,9 @@ export class WebSocketClient {
   private readonly MESSAGE_DEDUP_TTL_MS = 60000 // 1 minute TTL
   private readonly MAX_DEDUP_CACHE_SIZE = 1000
 
+  // Server ping tracking — client ping is only a fallback when server stops pinging
+  private lastServerPingAt: number = 0
+
   // Visibility and network state tracking
   private isPageVisible: boolean = true
   private wasConnectedBeforeHidden: boolean = false
@@ -666,7 +669,7 @@ export class WebSocketClient {
   /**
    * Disconnect from WebSocket server
    */
-  disconnect(): void {
+  disconnect(clearRooms = true): void {
     this.clearTimers()
     this.reconnectAttempts = 0
 
@@ -681,8 +684,13 @@ export class WebSocketClient {
     }
 
     this.setState(WebSocketState.CLOSED)
-    this.rooms.clear()
-    this.roomRefs.clear()
+
+    // Only clear rooms on full disconnect (e.g. logout).
+    // For refresh/reconnect, preserve rooms so rejoinRooms() works on reconnect.
+    if (clearRooms) {
+      this.rooms.clear()
+      this.roomRefs.clear()
+    }
 
     // Restore autoReconnect setting so future connections work
     this.config.autoReconnect = wasAutoReconnect
@@ -908,6 +916,14 @@ export class WebSocketClient {
     console.log('[WebSocket] Connection closed:', event.code, event.reason)
     this.clearTimers()
     this.processedMessageIds.clear()
+
+    // If a new connection is already being established (e.g. disconnect+connect
+    // refresh cycle), don't interfere — the new connection will handle state.
+    if (this.state === WebSocketState.CONNECTING) {
+      console.log('[WebSocket] Close event from old connection — new connection in progress, ignoring')
+      return
+    }
+
     this.ws = null
 
     // Check if we should reconnect
@@ -942,8 +958,9 @@ export class WebSocketClient {
         return
       }
 
-      // Handle ping from server - respond with pong
+      // Handle ping from server - respond with pong and record timestamp
       if (message.type === MessageType.PING) {
+        this.lastServerPingAt = Date.now()
         this.send(MessageType.PONG, {})
         return
       }
@@ -1126,11 +1143,13 @@ export class WebSocketClient {
     this.setState(WebSocketState.RECONNECTING)
     this.reconnectAttempts++
 
-    // Calculate delay with exponential backoff
-    const delay = Math.min(
+    // Calculate delay with exponential backoff + jitter to prevent thundering herd
+    const baseDelay = Math.min(
       this.config.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1),
       this.config.maxReconnectDelay
     )
+    const jitter = baseDelay * 0.3 * Math.random() // +0-30% jitter
+    const delay = Math.min(baseDelay + jitter, this.config.maxReconnectDelay)
 
     this.reconnectTimer = setTimeout(() => {
       this.connect()
@@ -1138,8 +1157,14 @@ export class WebSocketClient {
   }
 
   private startPingInterval(): void {
+    this.lastServerPingAt = Date.now()
     this.pingTimer = setInterval(() => {
-      if (this.isConnected()) {
+      if (!this.isConnected()) return
+      // Only send client-initiated ping as a fallback when the server has
+      // stopped pinging (no server ping received in 2x the expected interval).
+      // The server already pings every 30s; duplicating it wastes bandwidth.
+      const serverPingOverdue = Date.now() - this.lastServerPingAt > this.config.pingInterval * 2
+      if (serverPingOverdue) {
         this.sendPing()
       }
     }, this.config.pingInterval)

@@ -43,7 +43,6 @@ def _make_tool_node(result_messages=None):
 
 
 class TestExecuteTools:
-
     async def test_tool_node_invoked_with_state(self):
         """tool_node.ainvoke is called with the correct state."""
         tool_node = _make_tool_node()
@@ -66,9 +65,7 @@ class TestExecuteTools:
                 {"name": "get_project_details", "args": {}, "id": "tc2"},
             ],
         )
-        tool_msg = ToolMessage(
-            content="result", tool_call_id="tc1", name="list_tasks"
-        )
+        tool_msg = ToolMessage(content="result", tool_call_id="tc1", name="list_tasks")
         tool_node = _make_tool_node(result_messages=[tool_msg])
 
         state = {"messages": [ai_msg], "total_tool_calls": 5}
@@ -103,7 +100,6 @@ class TestExecuteTools:
 
 
 class TestExecuteToolsLimitPreCheck:
-
     async def test_tool_calls_exceed_limit_skips_execution(self):
         """State with total_tool_calls=49 + 3 tool_calls (>50) -> tool_node NOT called."""
         ai_msg = AIMessage(
@@ -137,7 +133,6 @@ class TestExecuteToolsLimitPreCheck:
 
 
 class TestExecuteToolsExceptionHandling:
-
     async def test_tool_node_runtime_error_returns_graceful_message(self):
         """When tool_node.ainvoke raises RuntimeError, returns ToolMessages with error."""
         ai_msg = AIMessage(
@@ -169,7 +164,6 @@ class TestExecuteToolsExceptionHandling:
 
 
 class TestExecuteToolsHITL:
-
     async def test_graph_interrupt_propagates_not_caught(self):
         """GraphInterrupt from tools (e.g. request_clarification) propagates."""
         import pytest as _pytest
@@ -182,7 +176,9 @@ class TestExecuteToolsHITL:
         )
         tool_node = AsyncMock()
         tool_node.ainvoke = AsyncMock(
-            side_effect=GraphInterrupt(interrupts=(Interrupt(value={"type": "clarification"}, resumable=True, ns=(), when="during"),))
+            side_effect=GraphInterrupt(
+                interrupts=(Interrupt(value={"type": "clarification"}, resumable=True, ns=(), when="during"),)
+            )
         )
         state = {"messages": [ai_msg], "total_tool_calls": 0}
 
@@ -212,7 +208,6 @@ class TestExecuteToolsHITL:
 
 
 class TestExecuteToolsSourceDrain:
-
     async def test_sources_populated_when_tool_results_empty(self):
         """DA2-F6: drain_accumulated_sources populates research["sources"]
         even when tool_results is empty (no ToolMessages returned)."""

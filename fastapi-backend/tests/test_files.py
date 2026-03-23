@@ -83,9 +83,7 @@ class TestListFiles:
             db_session.add(attachment)
         await db_session.commit()
 
-        response = await client.get(
-            "/api/files", headers=auth_headers, params={"limit": 2}
-        )
+        response = await client.get("/api/files", headers=auth_headers, params={"limit": 2})
         assert response.status_code == 200
         assert len(response.json()) == 2
 
@@ -158,9 +156,7 @@ class TestGetFileInfo:
         db_session.add(attachment)
         await db_session.commit()
 
-        response = await client.get(
-            f"/api/files/{attachment.id}/info", headers=auth_headers
-        )
+        response = await client.get(f"/api/files/{attachment.id}/info", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert data["file_name"] == "test.txt"
@@ -192,9 +188,7 @@ class TestGetFileInfo:
         db_session.add(attachment)
         await db_session.commit()
 
-        response = await client.get(
-            f"/api/files/{attachment.id}/info", headers=auth_headers_2
-        )
+        response = await client.get(f"/api/files/{attachment.id}/info", headers=auth_headers_2)
         assert response.status_code == 403
 
 
@@ -239,23 +233,17 @@ class TestDeleteFile:
         fastapi_app.dependency_overrides[get_minio_service] = override_minio
 
         try:
-            response = await client.delete(
-                f"/api/files/{attachment_id}", headers=auth_headers
-            )
+            response = await client.delete(f"/api/files/{attachment_id}", headers=auth_headers)
             assert response.status_code == 204
 
             # Verify deleted from database
-            result = await db_session.execute(
-                select(Attachment).filter(Attachment.id == attachment_id)
-            )
+            result = await db_session.execute(select(Attachment).filter(Attachment.id == attachment_id))
             deleted = result.scalar_one_or_none()
             assert deleted is None
         finally:
             fastapi_app.dependency_overrides.pop(get_minio_service, None)
 
-    async def test_delete_file_not_found(
-        self, client: AsyncClient, auth_headers: dict
-    ):
+    async def test_delete_file_not_found(self, client: AsyncClient, auth_headers: dict):
         """Test deleting non-existent file."""
         fake_id = uuid4()
         response = await client.delete(f"/api/files/{fake_id}", headers=auth_headers)
@@ -281,9 +269,7 @@ class TestDeleteFile:
         db_session.add(attachment)
         await db_session.commit()
 
-        response = await client.delete(
-            f"/api/files/{attachment.id}", headers=auth_headers_2
-        )
+        response = await client.delete(f"/api/files/{attachment.id}", headers=auth_headers_2)
         assert response.status_code == 403
 
 
@@ -316,9 +302,7 @@ class TestEntityAttachments:
             db_session.add(attachment)
         await db_session.commit()
 
-        response = await client.get(
-            f"/api/files/entity/task/{test_task.id}", headers=auth_headers
-        )
+        response = await client.get(f"/api/files/entity/task/{test_task.id}", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 3
@@ -330,9 +314,7 @@ class TestEntityAttachments:
         test_task: Task,
     ):
         """Test getting attachments for entity with none."""
-        response = await client.get(
-            f"/api/files/entity/task/{test_task.id}", headers=auth_headers
-        )
+        response = await client.get(f"/api/files/entity/task/{test_task.id}", headers=auth_headers)
         assert response.status_code == 200
         assert response.json() == []
 
@@ -341,9 +323,7 @@ class TestEntityAttachments:
 class TestAuthTest:
     """Tests for GET /api/files/test endpoint."""
 
-    async def test_auth_test_authenticated(
-        self, client: AsyncClient, auth_headers: dict, test_user: User
-    ):
+    async def test_auth_test_authenticated(self, client: AsyncClient, auth_headers: dict, test_user: User):
         """Test auth test endpoint with valid token."""
         response = await client.get("/api/files/test", headers=auth_headers)
         assert response.status_code == 200
@@ -394,9 +374,7 @@ class TestGetFile:
         fastapi_app.dependency_overrides[get_minio_service] = override_minio
 
         try:
-            response = await client.get(
-                f"/api/files/{attachment.id}", headers=auth_headers
-            )
+            response = await client.get(f"/api/files/{attachment.id}", headers=auth_headers)
             assert response.status_code == 200
             data = response.json()
             # Response is FileDownloadResponse with nested attachment
@@ -431,9 +409,7 @@ class TestGetFile:
         db_session.add(attachment)
         await db_session.commit()
 
-        response = await client.get(
-            f"/api/files/{attachment.id}", headers=auth_headers_2
-        )
+        response = await client.get(f"/api/files/{attachment.id}", headers=auth_headers_2)
         assert response.status_code == 403
 
 
@@ -473,9 +449,7 @@ class TestGetDownloadUrl:
         fastapi_app.dependency_overrides[get_minio_service] = override_minio
 
         try:
-            response = await client.get(
-                f"/api/files/{attachment.id}/download-url", headers=auth_headers
-            )
+            response = await client.get(f"/api/files/{attachment.id}/download-url", headers=auth_headers)
             assert response.status_code == 200
             data = response.json()
             assert data["download_url"] == "http://example.com/fresh-url"
@@ -508,7 +482,5 @@ class TestGetDownloadUrl:
         db_session.add(attachment)
         await db_session.commit()
 
-        response = await client.get(
-            f"/api/files/{attachment.id}/download-url", headers=auth_headers_2
-        )
+        response = await client.get(f"/api/files/{attachment.id}/download-url", headers=auth_headers_2)
         assert response.status_code == 403

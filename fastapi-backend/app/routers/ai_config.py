@@ -51,7 +51,6 @@ from ..utils.timezone import utc_now
 logger = logging.getLogger(__name__)
 
 
-
 # ---------------------------------------------------------------------------
 # URL validation helper (SSRF prevention for Ollama)
 # ---------------------------------------------------------------------------
@@ -88,9 +87,7 @@ def _validate_base_url(base_url: str | None, provider_type: str) -> None:
 
         # Enforce http/https scheme only
         if parsed.scheme not in ("http", "https"):
-            raise ValueError(
-                f"base_url must use http or https scheme, got: {parsed.scheme}"
-            )
+            raise ValueError(f"base_url must use http or https scheme, got: {parsed.scheme}")
 
         # Block dangerous IPs for ALL provider types
         def _check_dangerous(ip_str: str) -> None:
@@ -145,10 +142,7 @@ def _validate_base_url(base_url: str | None, provider_type: str) -> None:
             # Ollama: DNS resolution failed — fall through to reject
 
         if provider_type == "ollama":
-            raise ValueError(
-                f"Ollama base_url must be localhost or a private network address, "
-                f"got: {hostname}"
-            )
+            raise ValueError(f"Ollama base_url must be localhost or a private network address, got: {hostname}")
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -185,14 +179,14 @@ async def require_developer(
     if current_user.is_developer is None:
         # Stale cache entry from before the is_developer field was added.
         # Invalidate the cache so the next request re-fetches from DB.
-        from ..services.user_cache_service import invalidate_user, publish_user_cache_invalidation
+        from ..services.user_cache_service import invalidate_user_with_l2, publish_user_cache_invalidation
         from ..utils.tasks import fire_and_forget
 
         logger.warning(
             "User %s has is_developer=None (stale cache); invalidating",
             current_user.id,
         )
-        invalidate_user(current_user.id)
+        await invalidate_user_with_l2(current_user.id)
         fire_and_forget(
             publish_user_cache_invalidation(user_id=str(current_user.id)),
             name="ai-config-stale-cache-invalidation",
@@ -402,10 +396,7 @@ async def delete_provider(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     """Delete a global AI provider. Cascades to its models."""
-    result = await db.execute(
-        select(AiProvider)
-        .where(AiProvider.id == provider_id, AiProvider.scope == "global")
-    )
+    result = await db.execute(select(AiProvider).where(AiProvider.id == provider_id, AiProvider.scope == "global"))
     provider = result.scalar_one_or_none()
     if provider is None:
         raise HTTPException(
@@ -424,10 +415,7 @@ async def test_provider(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, object]:
     """Test connectivity for a global AI provider."""
-    result = await db.execute(
-        select(AiProvider)
-        .where(AiProvider.id == provider_id, AiProvider.scope == "global")
-    )
+    result = await db.execute(select(AiProvider).where(AiProvider.id == provider_id, AiProvider.scope == "global"))
     provider = result.scalar_one_or_none()
     if provider is None:
         raise HTTPException(
@@ -483,8 +471,7 @@ async def create_model(
     """Register a new AI model under a global provider."""
     # Verify provider exists and is global
     prov_result = await db.execute(
-        select(AiProvider)
-        .where(AiProvider.id == body.provider_id, AiProvider.scope == "global")
+        select(AiProvider).where(AiProvider.id == body.provider_id, AiProvider.scope == "global")
     )
     prov = prov_result.scalar_one_or_none()
     if prov is None:
@@ -522,11 +509,7 @@ async def create_model(
     await db.commit()
 
     # Reload with provider relationship for response
-    result = await db.execute(
-        select(AiModel)
-        .where(AiModel.id == model.id)
-        .options(selectinload(AiModel.provider))
-    )
+    result = await db.execute(select(AiModel).where(AiModel.id == model.id).options(selectinload(AiModel.provider)))
     model = result.scalar_one()
     return AiModelResponse.model_validate(model)
 
@@ -559,11 +542,7 @@ async def update_model(
     model.updated_at = utc_now()
     await db.commit()
     # Re-query with selectinload to ensure provider relationship is available
-    result = await db.execute(
-        select(AiModel)
-        .where(AiModel.id == model.id)
-        .options(selectinload(AiModel.provider))
-    )
+    result = await db.execute(select(AiModel).where(AiModel.id == model.id).options(selectinload(AiModel.provider)))
     model = result.scalar_one()
     return AiModelResponse.model_validate(model)
 
@@ -579,9 +558,7 @@ async def delete_model(
 ) -> None:
     """Delete an AI model entry (global scope only)."""
     result = await db.execute(
-        select(AiModel)
-        .join(AiProvider)
-        .where(AiModel.id == model_id, AiProvider.scope == "global")
+        select(AiModel).join(AiProvider).where(AiModel.id == model_id, AiProvider.scope == "global")
     )
     model = result.scalar_one_or_none()
     if model is None:
@@ -748,15 +725,21 @@ async def save_capability_config(
         await db.flush()
 
     # Clear any existing default for this capability (across all providers)
-    existing_defaults = (await db.execute(
-        select(AiModel)
-        .join(AiProvider, AiModel.provider_id == AiProvider.id)
-        .where(
-            AiProvider.scope == "global",
-            AiModel.capability == capability,
-            AiModel.is_default.is_(True),
+    existing_defaults = (
+        (
+            await db.execute(
+                select(AiModel)
+                .join(AiProvider, AiModel.provider_id == AiProvider.id)
+                .where(
+                    AiProvider.scope == "global",
+                    AiModel.capability == capability,
+                    AiModel.is_default.is_(True),
+                )
+            )
         )
-    )).scalars().all()
+        .scalars()
+        .all()
+    )
     for m in existing_defaults:
         m.is_default = False
 
@@ -789,9 +772,7 @@ async def save_capability_config(
 
     # Reload with models for response
     reload_result = await db.execute(
-        select(AiProvider)
-        .where(AiProvider.id == provider.id)
-        .options(selectinload(AiProvider.models))
+        select(AiProvider).where(AiProvider.id == provider.id).options(selectinload(AiProvider.models))
     )
     provider = reload_result.scalar_one()
     await refresh_provider_cache()
@@ -849,9 +830,7 @@ async def test_capability(
                 request_url = (body.base_url or "").rstrip("/")
                 if saved_url == request_url or not body.base_url:
                     try:
-                        api_key = _get_encryption().decrypt(
-                            existing_provider.api_key_encrypted
-                        )
+                        api_key = _get_encryption().decrypt(existing_provider.api_key_encrypted)
                     except Exception:
                         decrypt_failed = True
                 elif body.base_url:
@@ -872,7 +851,11 @@ async def test_capability(
             )
 
         return await _test_inline_capability(
-            body.provider_type, api_key, body.base_url, body.model_id, capability,
+            body.provider_type,
+            api_key,
+            body.base_url,
+            body.model_id,
+            capability,
         )
 
     # Fallback: test the saved default configuration
@@ -1078,9 +1061,7 @@ async def create_user_override(
 
     # Reload with models relationship for response
     result = await db.execute(
-        select(AiProvider)
-        .where(AiProvider.id == provider.id)
-        .options(selectinload(AiProvider.models))
+        select(AiProvider).where(AiProvider.id == provider.id).options(selectinload(AiProvider.models))
     )
     provider = result.scalar_one()
     await refresh_provider_cache()
@@ -1148,9 +1129,7 @@ async def update_user_override(
 
     # Reload with models relationship for response
     reload_result = await db.execute(
-        select(AiProvider)
-        .where(AiProvider.id == provider.id)
-        .options(selectinload(AiProvider.models))
+        select(AiProvider).where(AiProvider.id == provider.id).options(selectinload(AiProvider.models))
     )
     provider = reload_result.scalar_one()
     await refresh_provider_cache()
@@ -1397,20 +1376,27 @@ async def _test_inline_capability(
     try:
         if capability == "chat":
             result = await _test_chat_capability(
-                provider_type, api_key, base_url, model_id,
+                provider_type,
+                api_key,
+                base_url,
+                model_id,
             )
         elif capability == "embedding":
             result = await _test_embedding_capability(
-                provider_type, api_key, base_url, model_id,
+                provider_type,
+                api_key,
+                base_url,
+                model_id,
             )
         elif capability == "vision":
             result = await _test_vision_capability(
-                provider_type, api_key, base_url, model_id,
+                provider_type,
+                api_key,
+                base_url,
+                model_id,
             )
         else:
-            return CapabilityTestResult(
-                success=False, message=f"Unknown capability: {capability}"
-            )
+            return CapabilityTestResult(success=False, message=f"Unknown capability: {capability}")
 
         latency_ms = int((time.monotonic() - start) * 1000)
         result.latency_ms = latency_ms
@@ -1419,7 +1405,9 @@ async def _test_inline_capability(
         latency_ms = int((time.monotonic() - start) * 1000)
         logger.warning(
             "Inline capability test failed for %s: %s: %s",
-            capability, type(exc).__name__, exc,
+            capability,
+            type(exc).__name__,
+            exc,
         )
         exc_type = type(exc).__name__.lower()
         exc_msg = str(exc).lower()
@@ -1442,7 +1430,9 @@ async def _test_inline_capability(
         else:
             error_msg = "Provider test failed — check your configuration"
         return CapabilityTestResult(
-            success=False, message=error_msg, latency_ms=latency_ms,
+            success=False,
+            message=error_msg,
+            latency_ms=latency_ms,
         )
 
 
@@ -1466,7 +1456,11 @@ async def _test_capability_provider(
             )
 
     return await _test_inline_capability(
-        provider.provider_type, api_key, provider.base_url, model.model_id, capability,
+        provider.provider_type,
+        api_key,
+        provider.base_url,
+        model.model_id,
+        capability,
     )
 
 
@@ -1564,7 +1558,8 @@ async def _test_embedding_capability(
             )
             dims = len(resp.data[0].embedding)
             return CapabilityTestResult(
-                success=True, message=f"{dims} dimensions",
+                success=True,
+                message=f"{dims} dimensions",
             )
         finally:
             await client.close()
@@ -1582,7 +1577,8 @@ async def _test_embedding_capability(
             embeddings = resp.json().get("embeddings", [[]])
             dims = len(embeddings[0]) if embeddings else 0
             return CapabilityTestResult(
-                success=True, message=f"{dims} dimensions",
+                success=True,
+                message=f"{dims} dimensions",
             )
 
     return CapabilityTestResult(
@@ -1621,16 +1617,18 @@ async def _test_vision_capability(
         try:
             resp = await client.chat.completions.create(
                 model=model_id,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Describe this image in 10 words or less."},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{b64_pixel}"},
-                        },
-                    ],
-                }],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Describe this image in 10 words or less."},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/png;base64,{b64_pixel}"},
+                            },
+                        ],
+                    }
+                ],
                 max_completion_tokens=30,
             )
             text = resp.choices[0].message.content or ""
@@ -1651,20 +1649,22 @@ async def _test_vision_capability(
             resp = await client.messages.create(
                 model=model_id,
                 max_tokens=30,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/png",
-                                "data": b64_pixel,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": b64_pixel,
+                                },
                             },
-                        },
-                        {"type": "text", "text": "Describe this image in 10 words or less."},
-                    ],
-                }],
+                            {"type": "text", "text": "Describe this image in 10 words or less."},
+                        ],
+                    }
+                ],
             )
             text = resp.content[0].text if resp.content else ""
             return CapabilityTestResult(success=True, message=text.strip())
@@ -1680,11 +1680,13 @@ async def _test_vision_capability(
                 f"{url}/api/chat",
                 json={
                     "model": model_id,
-                    "messages": [{
-                        "role": "user",
-                        "content": "Describe this image in 10 words or less.",
-                        "images": [b64_pixel],
-                    }],
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Describe this image in 10 words or less.",
+                            "images": [b64_pixel],
+                        }
+                    ],
                     "stream": False,
                 },
             )
@@ -1693,5 +1695,6 @@ async def _test_vision_capability(
             return CapabilityTestResult(success=True, message=text.strip())
 
     return CapabilityTestResult(
-        success=False, message=f"Vision not supported for provider: {provider_type}",
+        success=False,
+        message=f"Vision not supported for provider: {provider_type}",
     )

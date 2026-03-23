@@ -70,14 +70,15 @@ async def send_email(to_email: str, subject: str, html_body: str) -> bool:
             return True
         except Exception:
             if attempt == _MAX_RETRIES:
-                logger.exception(
-                    "Failed to send email to %s after %d attempts", to_email, _MAX_RETRIES
-                )
+                logger.exception("Failed to send email to %s after %d attempts", to_email, _MAX_RETRIES)
                 return False
             delay = _BACKOFF_BASE * (2 ** (attempt - 1))
             logger.warning(
                 "Email send attempt %d/%d to %s failed, retrying in %.1fs",
-                attempt, _MAX_RETRIES, to_email, delay,
+                attempt,
+                _MAX_RETRIES,
+                to_email,
+                delay,
             )
             await asyncio.sleep(delay)
     return False

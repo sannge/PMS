@@ -87,13 +87,9 @@ async def list_projects(
 
             # Fetch aggregation data in one query
             agg_result = await db.execute(
-                select(ProjectTaskStatusAgg).where(
-                    ProjectTaskStatusAgg.project_id.in_([p.id for p in projects])
-                )
+                select(ProjectTaskStatusAgg).where(ProjectTaskStatusAgg.project_id.in_([p.id for p in projects]))
             )
-            agg_map: dict[UUID, ProjectTaskStatusAgg] = {
-                a.project_id: a for a in agg_result.scalars().all()
-            }
+            agg_map: dict[UUID, ProjectTaskStatusAgg] = {a.project_id: a for a in agg_result.scalars().all()}
 
             # Fetch member counts
             mem_counts = await db.execute(
@@ -108,9 +104,7 @@ async def list_projects(
 
         # Format
         lines: list[str] = []
-        lines.append(
-            "| Project | Key | Status | Tasks (done/total) | % | Members | Due | Created |"
-        )
+        lines.append("| Project | Key | Status | Tasks (done/total) | % | Members | Due | Created |")
         lines.append("| --- | --- | --- | --- | --- | --- | --- | --- |")
 
         for proj in projects:
@@ -156,9 +150,7 @@ async def get_project_details(project: str) -> str:
 
             # Project
             result = await db.execute(
-                select(Project)
-                .options(selectinload(Project.derived_status))
-                .where(Project.id == proj_uuid)
+                select(Project).options(selectinload(Project.derived_status)).where(Project.id == proj_uuid)
             )
             proj = result.scalar_one_or_none()
             if not proj:
@@ -166,9 +158,7 @@ async def get_project_details(project: str) -> str:
 
             # Aggregation
             agg_result = await db.execute(
-                select(ProjectTaskStatusAgg).where(
-                    ProjectTaskStatusAgg.project_id == proj_uuid
-                )
+                select(ProjectTaskStatusAgg).where(ProjectTaskStatusAgg.project_id == proj_uuid)
             )
             agg = agg_result.scalar_one_or_none()
 
@@ -256,18 +246,13 @@ async def get_project_details(project: str) -> str:
             for t in recent_tasks:
                 assignee = t.assignee.display_name if t.assignee else "Unassigned"
                 st = t.task_status.name if t.task_status else "\u2014"
-                lines.append(
-                    f"| {t.task_key} | {t.title} | {st} | "
-                    f"{assignee} | {_format_date(t.updated_at)} |"
-                )
+                lines.append(f"| {t.task_key} | {t.title} | {st} | {assignee} | {_format_date(t.updated_at)} |")
             lines.append("")
 
         return _truncate("\n".join(lines))
 
     except Exception as exc:
-        logger.warning(
-            "get_project_details failed: %s: %s", type(exc).__name__, exc
-        )
+        logger.warning("get_project_details failed: %s: %s", type(exc).__name__, exc)
         return "Error retrieving project details. Please try again."
 
 
@@ -286,9 +271,7 @@ async def get_project_members(project: str) -> str:
             proj_uuid = UUID(resolved_id)  # type: ignore[arg-type]
 
             # Project name
-            proj_result = await db.execute(
-                select(Project.name).where(Project.id == proj_uuid)
-            )
+            proj_result = await db.execute(select(Project.name).where(Project.id == proj_uuid))
             proj_name = proj_result.scalar_one_or_none()
             if not proj_name:
                 return f"Project '{project}' not found."
@@ -309,9 +292,7 @@ async def get_project_members(project: str) -> str:
                 select(
                     Task.assignee_id,
                     func.count(Task.id).label("total"),
-                    func.count(Task.id).filter(
-                        TaskStatus.category == "Done"
-                    ).label("done"),
+                    func.count(Task.id).filter(TaskStatus.category == "Done").label("done"),
                 )
                 .join(TaskStatus, Task.task_status_id == TaskStatus.id)
                 .where(
@@ -342,18 +323,13 @@ async def get_project_members(project: str) -> str:
             uid = str(m.user_id)
             total, done = stats_map.get(uid, (0, 0))
             pct = int((done / total) * 100) if total > 0 else 0
-            lines.append(
-                f"| {name} | {email} | {m.role} | "
-                f"{done}/{total} | {pct}% |"
-            )
+            lines.append(f"| {name} | {email} | {m.role} | {done}/{total} | {pct}% |")
 
         lines.append("")
         return _truncate("\n".join(lines))
 
     except Exception as exc:
-        logger.warning(
-            "get_project_members failed: %s: %s", type(exc).__name__, exc
-        )
+        logger.warning("get_project_members failed: %s: %s", type(exc).__name__, exc)
         return "Error retrieving project members. Please try again."
 
 
@@ -375,9 +351,7 @@ async def get_project_timeline(project: str) -> str:
             proj_uuid = UUID(resolved_id)  # type: ignore[arg-type]
 
             # Project name
-            proj_result = await db.execute(
-                select(Project.name).where(Project.id == proj_uuid)
-            )
+            proj_result = await db.execute(select(Project.name).where(Project.id == proj_uuid))
             proj_name = proj_result.scalar_one_or_none()
             if not proj_name:
                 return f"Project '{project}' not found."
@@ -399,9 +373,7 @@ async def get_project_timeline(project: str) -> str:
             tasks = task_result.scalars().all()
 
             # Tasks created per week (last 8 weeks)
-            eight_weeks_ago = datetime.now(timezone.utc).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
+            eight_weeks_ago = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             from datetime import timedelta
 
             eight_weeks_ago -= timedelta(weeks=8)
@@ -450,10 +422,7 @@ async def get_project_timeline(project: str) -> str:
             for t in tasks:
                 assignee = t.assignee.display_name if t.assignee else "Unassigned"
                 st = t.task_status.name if t.task_status else "\u2014"
-                lines.append(
-                    f"| {t.task_key} | {t.title} | {st} | "
-                    f"{assignee} | {_format_date(t.updated_at)} |"
-                )
+                lines.append(f"| {t.task_key} | {t.title} | {st} | {assignee} | {_format_date(t.updated_at)} |")
             lines.append("")
 
         # Weekly creation trend
@@ -476,9 +445,7 @@ async def get_project_timeline(project: str) -> str:
         return _truncate("\n".join(lines))
 
     except Exception as exc:
-        logger.warning(
-            "get_project_timeline failed: %s: %s", type(exc).__name__, exc
-        )
+        logger.warning("get_project_timeline failed: %s: %s", type(exc).__name__, exc)
         return "Error retrieving project timeline. Please try again."
 
 
@@ -531,9 +498,7 @@ async def get_overdue_tasks(scope: str = "") -> str:
 
             # Narrow to specific application if requested
             if application_id:
-                query = query.where(
-                    Project.application_id == UUID(application_id)
-                )
+                query = query.where(Project.application_id == UUID(application_id))
 
             result = await db.execute(query)
             tasks = result.scalars().unique().all()
@@ -558,14 +523,10 @@ async def get_overdue_tasks(scope: str = "") -> str:
             parts.append("| --- | --- | --- | --- | --- |")
 
             for t in proj_tasks:
-                assignee_name = (
-                    t.assignee.display_name if t.assignee else "Unassigned"
-                )
+                assignee_name = t.assignee.display_name if t.assignee else "Unassigned"
                 overdue_days = _days_overdue(t.due_date) or 0
                 parts.append(
-                    f"| {t.task_key} | {t.title} "
-                    f"| {_format_date(t.due_date)} | {overdue_days} "
-                    f"| {assignee_name} |"
+                    f"| {t.task_key} | {t.title} | {_format_date(t.due_date)} | {overdue_days} | {assignee_name} |"
                 )
             parts.append("")
 
@@ -575,7 +536,5 @@ async def get_overdue_tasks(scope: str = "") -> str:
         return _truncate("\n".join(parts))
 
     except Exception as exc:
-        logger.warning(
-            "get_overdue_tasks failed: %s: %s", type(exc).__name__, exc
-        )
+        logger.warning("get_overdue_tasks failed: %s: %s", type(exc).__name__, exc)
         return "Error retrieving overdue tasks. Please try again."

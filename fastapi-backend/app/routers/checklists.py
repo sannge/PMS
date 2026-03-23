@@ -99,7 +99,10 @@ async def verify_task_access(
 
     result = await db.execute(
         select(Task)
-        .options(selectinload(Task.project).selectinload(Project.application))
+        .options(
+            selectinload(Task.project).selectinload(Project.application),
+            selectinload(Task.task_status),
+        )
         .where(Task.id == task_id)
     )
     task = result.scalar_one_or_none()
@@ -440,9 +443,8 @@ async def update_item_endpoint(
     """Update a checklist item."""
     # Get item to find checklist and task
     from ..models.checklist_item import ChecklistItem
-    result = await db.execute(
-        select(ChecklistItem).where(ChecklistItem.id == item_id)
-    )
+
+    result = await db.execute(select(ChecklistItem).where(ChecklistItem.id == item_id))
     item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(
@@ -498,9 +500,8 @@ async def toggle_item_endpoint(
     """Toggle a checklist item's done status."""
     # Get item to find checklist and task
     from ..models.checklist_item import ChecklistItem
-    result = await db.execute(
-        select(ChecklistItem).where(ChecklistItem.id == item_id)
-    )
+
+    result = await db.execute(select(ChecklistItem).where(ChecklistItem.id == item_id))
     item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(
@@ -559,9 +560,8 @@ async def delete_item_endpoint(
     """Delete a checklist item."""
     # Get item to find checklist and task
     from ..models.checklist_item import ChecklistItem
-    result = await db.execute(
-        select(ChecklistItem).where(ChecklistItem.id == item_id)
-    )
+
+    result = await db.execute(select(ChecklistItem).where(ChecklistItem.id == item_id))
     item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(

@@ -56,7 +56,9 @@ class EmbeddingNormalizer:
                 )
             logger.warning(
                 "Embedding dimension %d < target %d (%.1f%% gap), zero-padding",
-                current_len, self.target_dimensions, gap_ratio * 100,
+                current_len,
+                self.target_dimensions,
+                gap_ratio * 100,
             )
             adjusted = embedding + [0.0] * (self.target_dimensions - current_len)
         elif current_len > self.target_dimensions:
@@ -67,9 +69,7 @@ class EmbeddingNormalizer:
 
         # Reject NaN/Inf values (would produce invalid pgvector input)
         if any(math.isnan(x) or math.isinf(x) for x in adjusted):
-            raise ValueError(
-                "Embedding contains NaN or Inf values. Check provider output."
-            )
+            raise ValueError("Embedding contains NaN or Inf values. Check provider output.")
 
         # L2-normalize
         norm = math.sqrt(sum(x * x for x in adjusted))

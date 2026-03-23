@@ -38,9 +38,7 @@ def pm():
 @pytest.fixture
 def mock_redis_disconnected():
     """Ensure redis_service.is_connected returns False."""
-    with patch(
-        "app.websocket.presence.redis_service"
-    ) as mock_rs:
+    with patch("app.websocket.presence.redis_service") as mock_rs:
         type(mock_rs).is_connected = PropertyMock(return_value=False)
         yield mock_rs
 

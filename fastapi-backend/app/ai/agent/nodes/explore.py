@@ -15,7 +15,7 @@ import re
 from typing import Any
 from uuid import uuid4
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 from langgraph.prebuilt import ToolNode
 
 from ..constants import (
@@ -25,8 +25,9 @@ from ..constants import (
     get_max_llm_calls,
     get_max_tool_calls,
 )
-from ..source_references import drain_accumulated_sources
+from ..graph_context import bound_model_var, chat_model_var, system_prompt_var
 from ..prompts import EXPLORE_SUFFIX_TEMPLATE
+from ..source_references import drain_accumulated_sources
 from ..state import AgentState
 
 logger = logging.getLogger(__name__)
@@ -79,9 +80,7 @@ def _extract_clarification(text: str) -> tuple[str, list[str]]:
     other: list[str] = []
     for line in text.split("\n"):
         stripped = line.strip()
-        m = re.match(r"^[-*\u2022]\s+(.+)$", stripped) or re.match(
-            r"^\d+[.)]\s+(.+)$", stripped
-        )
+        m = re.match(r"^[-*\u2022]\s+(.+)$", stripped) or re.match(r"^\d+[.)]\s+(.+)$", stripped)
         if m:
             opt = m.group(1).strip()
             # Skip very short (<4 chars) or very long (120+ chars) option text
@@ -97,6 +96,7 @@ def _extract_clarification(text: str) -> tuple[str, list[str]]:
 # Explore suffix builder
 # ---------------------------------------------------------------------------
 
+
 def _build_explore_suffix(state: AgentState) -> str:
     """Build an explore-phase suffix from the classification context."""
     classification = state.get("classification")
@@ -108,14 +108,17 @@ def _build_explore_suffix(state: AgentState) -> str:
     data_sources = ", ".join(classification.get("data_sources", [])) or "none specified"
     entities = classification.get("entities", [])
     # S5: Sanitize entity values to prevent injection via classification output
-    entities_str = ", ".join(
-        '{safe_type}: {safe_val}'.format(
-            safe_type=str(e.get("type", "?"))[:20].replace("\n", " ").replace("\r", " "),
-            safe_val=str(e.get("value", "?"))[:50].replace("\n", " ").replace("\r", " "),
+    entities_str = (
+        ", ".join(
+            "{safe_type}: {safe_val}".format(
+                safe_type=str(e.get("type", "?"))[:20].replace("\n", " ").replace("\r", " "),
+                safe_val=str(e.get("value", "?"))[:50].replace("\n", " ").replace("\r", " "),
+            )
+            for e in entities
+            if isinstance(e, dict)
         )
-        for e in entities
-        if isinstance(e, dict)
-    ) or "none identified"
+        or "none identified"
+    )
 
     suffix = EXPLORE_SUFFIX_TEMPLATE.format(
         intent=intent,
@@ -146,12 +149,13 @@ def _build_explore_suffix(state: AgentState) -> str:
 # Explore node
 # ---------------------------------------------------------------------------
 
+
 async def explore_node(
     state: AgentState,
     *,
-    bound_model_cache: list[Any],
-    chat_model_cache: list[Any],
-    system_prompt_cache: list[str],
+    bound_model_cache: list[Any] | None = None,
+    chat_model_cache: list[Any] | None = None,
+    system_prompt_cache: list[str] | None = None,
 ) -> dict:
     """Single LLM call with all tools bound -- the core of the ReAct loop.
 
@@ -161,12 +165,25 @@ async def explore_node(
     Args:
         state: Current pipeline state.
         bound_model_cache: Mutable list containing the tool-bound model.
-        chat_model_cache: Mutable list containing the raw model (for summarization).
+            Falls back to ``bound_model_var`` ContextVar when ``None``.
+        chat_model_cache: Mutable list containing the raw model (for
+            summarization).  Falls back to ``chat_model_var`` ContextVar
+            when ``None``.
         system_prompt_cache: Mutable list containing the system prompt.
+            Falls back to ``system_prompt_var`` ContextVar when ``None``.
 
     Returns:
         State update with LLM response and incremented counters.
     """
+    bound_model_cache = bound_model_cache or bound_model_var.get()
+    if bound_model_cache is None:
+        bound_model_cache = []
+    chat_model_cache = chat_model_cache or chat_model_var.get()
+    if chat_model_cache is None:
+        chat_model_cache = []
+    system_prompt_cache = system_prompt_cache or system_prompt_var.get()
+    if system_prompt_cache is None:
+        system_prompt_cache = []
     # Deferred import to avoid circular dependency
     from ..graph import (
         _maybe_summarize,
@@ -180,10 +197,14 @@ async def explore_node(
     # Safety limits
     if total_llm_calls >= get_max_llm_calls() or iteration_count >= get_max_iterations():
         return {
-            "messages": [AIMessage(content=(
-                "I've reached my processing limit for this request. "
-                "Here's what I found so far based on the data I gathered above."
-            ))],
+            "messages": [
+                AIMessage(
+                    content=(
+                        "I've reached my processing limit for this request. "
+                        "Here's what I found so far based on the data I gathered above."
+                    )
+                )
+            ],
             "current_phase": "explore",
         }
 
@@ -244,11 +265,13 @@ async def explore_node(
             args["options"] = options
         response = AIMessage(
             content="",
-            tool_calls=[{
-                "name": "request_clarification",
-                "args": args,
-                "id": f"auto_clarify_{uuid4().hex[:8]}",
-            }],
+            tool_calls=[
+                {
+                    "name": "request_clarification",
+                    "args": args,
+                    "id": f"auto_clarify_{uuid4().hex[:8]}",
+                }
+            ],
         )
         logger.info("Auto-converted text question to request_clarification tool call")
         result: dict[str, Any] = {
@@ -277,6 +300,7 @@ async def explore_node(
 # Execute tools (explore_tools node)
 # ---------------------------------------------------------------------------
 
+
 async def execute_tools(
     state: AgentState,
     *,
@@ -304,10 +328,7 @@ async def execute_tools(
     if current_total + new_calls > max_tool_calls:
         # DA-R4-004: Return ToolMessages (not AIMessage) to satisfy provider
         # message protocol -- tool_calls must be followed by ToolMessages.
-        limit_msg = (
-            "Tool call limit reached. Skipped to avoid exceeding "
-            "the maximum number of operations."
-        )
+        limit_msg = "Tool call limit reached. Skipped to avoid exceeding the maximum number of operations."
         tool_results = [
             ToolMessage(
                 content=limit_msg,
@@ -354,10 +375,12 @@ async def execute_tools(
     tool_results = []
     for msg in result_messages:
         if isinstance(msg, ToolMessage):
-            tool_results.append({
-                "tool": getattr(msg, "name", "unknown"),
-                "result": str(msg.content)[:_TOOL_RESULT_CHARS],
-            })
+            tool_results.append(
+                {
+                    "tool": getattr(msg, "name", "unknown"),
+                    "result": str(msg.content)[:_TOOL_RESULT_CHARS],
+                }
+            )
 
     return_dict: dict[str, Any] = {
         "messages": result_messages,

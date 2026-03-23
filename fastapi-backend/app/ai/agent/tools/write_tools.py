@@ -116,6 +116,7 @@ async def _broadcast_doc_event(
     elif user_id:
         await manager.broadcast_to_room(f"user:{user_id}", message)
 
+
 # ---------------------------------------------------------------------------
 # Status name mapping: tool input (lowercase/snake_case) -> DB value
 # ---------------------------------------------------------------------------
@@ -176,9 +177,7 @@ async def create_task(
         proj_uuid = UUID(resolved_id)  # type: ignore[arg-type]
         project_id = resolved_id
 
-        result = await db.execute(
-            select(Project).where(Project.id == proj_uuid)
-        )
+        result = await db.execute(select(Project).where(Project.id == proj_uuid))
         proj = result.scalar_one_or_none()
         if not proj:
             return f"Error: Project '{project}' not found."
@@ -190,16 +189,12 @@ async def create_task(
         assignee_name: str | None = None
         assignee_uuid: UUID | None = None
         if assignee and assignee.strip():
-            user_id_str, user_err = await _resolve_user(
-                assignee, db, scope_project_id=resolved_id
-            )
+            user_id_str, user_err = await _resolve_user(assignee, db, scope_project_id=resolved_id)
             if user_err:
                 return user_err
 
             assignee_uuid = UUID(user_id_str)  # type: ignore[arg-type]
-            assignee_result = await db.execute(
-                select(User).where(User.id == assignee_uuid)
-            )
+            assignee_result = await db.execute(select(User).where(User.id == assignee_uuid))
             assignee_user = assignee_result.scalar_one_or_none()
             if not assignee_user:
                 return f"Error: Assignee user '{assignee}' not found."
@@ -255,18 +250,18 @@ async def create_task(
         try:
             user_uuid_check = _get_user_id()
             membership = await db.execute(
-                select(ProjectMember.id).where(
+                select(ProjectMember.id)
+                .where(
                     ProjectMember.project_id == UUID(project_id),
                     ProjectMember.user_id == user_uuid_check,
-                ).limit(1)
+                )
+                .limit(1)
             )
             if membership.scalar_one_or_none() is None:
                 return "Access denied: you no longer have access to this project."
 
             # Re-fetch project to get current key (may have changed during HITL pause)
-            proj_row = await db.execute(
-                select(Project.key).where(Project.id == UUID(project_id))
-            )
+            proj_row = await db.execute(select(Project.key).where(Project.id == UUID(project_id)))
             project_key = proj_row.scalar_one_or_none()
             if project_key is None:
                 return "Error: Project no longer exists."
@@ -336,13 +331,15 @@ async def create_task(
 
     # Broadcast AFTER commit (block exit committed)
     if _broadcast_data:
-        fire_and_forget(handle_task_update(
-            project_id=_broadcast_data["project_id"],
-            task_id=_broadcast_data["task_id"],
-            action=UpdateAction.CREATED,
-            task_data=_broadcast_data,
-            user_id=_broadcast_data["user_id"],
-        ))
+        fire_and_forget(
+            handle_task_update(
+                project_id=_broadcast_data["project_id"],
+                task_id=_broadcast_data["task_id"],
+                action=UpdateAction.CREATED,
+                task_data=_broadcast_data,
+                user_id=_broadcast_data["user_id"],
+            )
+        )
     return result_msg
 
 
@@ -378,9 +375,7 @@ async def update_task_status(
             return error
         task_uuid = UUID(resolved_id)  # type: ignore[arg-type]
 
-        result = await db.execute(
-            select(Task).where(Task.id == task_uuid)
-        )
+        result = await db.execute(select(Task).where(Task.id == task_uuid))
         task_obj = result.scalar_one_or_none()
         if not task_obj:
             return f"Error: Task '{task}' not found."
@@ -394,9 +389,7 @@ async def update_task_status(
         project_id = task_obj.project_id
 
         # Get current status name
-        current_status_result = await db.execute(
-            select(TaskStatus).where(TaskStatus.id == task_obj.task_status_id)
-        )
+        current_status_result = await db.execute(select(TaskStatus).where(TaskStatus.id == task_obj.task_status_id))
         current_status = current_status_result.scalar_one_or_none()
         current_status_name = current_status.name if current_status else "Unknown"
 
@@ -409,25 +402,17 @@ async def update_task_status(
         )
         target_status = target_status_result.scalar_one_or_none()
         if not target_status:
-            return (
-                f"Error: Status '{target_status_name}' not found for this project."
-            )
+            return f"Error: Status '{target_status_name}' not found for this project."
 
         # Check if already in the target status
         if task_obj.task_status_id == target_status.id:
-            return (
-                f"Task {task_key} is already in '{current_status_name}' status. "
-                "No change needed."
-            )
+            return f"Task {task_key} is already in '{current_status_name}' status. No change needed."
 
     # Build confirmation
     confirmation: dict[str, Any] = {
         "type": "confirmation",
         "action": "update_task_status",
-        "summary": (
-            f"Move '{task_key}: {task_title}' "
-            f"from {current_status_name} to {target_status_name}"
-        ),
+        "summary": (f"Move '{task_key}: {task_title}' from {current_status_name} to {target_status_name}"),
         "details": {
             "task_id": str(task_uuid),
             "task_key": task_key,
@@ -450,18 +435,18 @@ async def update_task_status(
         try:
             user_uuid_check = _get_user_id()
             membership = await db.execute(
-                select(ProjectMember.id).where(
+                select(ProjectMember.id)
+                .where(
                     ProjectMember.project_id == UUID(str(project_id)),
                     ProjectMember.user_id == user_uuid_check,
-                ).limit(1)
+                )
+                .limit(1)
             )
             if membership.scalar_one_or_none() is None:
                 return "Access denied: you no longer have access to this task's project."
 
             # Re-load task to get fresh state
-            result = await db.execute(
-                select(Task).where(Task.id == task_uuid)
-            )
+            result = await db.execute(select(Task).where(Task.id == task_uuid))
             task_obj = result.scalar_one_or_none()
             if not task_obj:
                 return f"Error: Task '{task}' no longer exists."
@@ -486,6 +471,7 @@ async def update_task_status(
 
             # Update completed_at based on status change (mirrors tasks.py logic)
             from ....utils.timezone import utc_now as _utc_now
+
             new_is_done = target_status.category == "Done"
             old_was_done = current_status_fresh.category == "Done" if current_status_fresh else False
             if new_is_done and not old_was_done:
@@ -503,10 +489,7 @@ async def update_task_status(
                 "task_status_id": str(target_status.id),
                 "user_id": str(user_uuid_check),
             }
-            result_msg = (
-                f"Task {task_key} status updated: "
-                f"{current_status_name} -> {target_status_name}."
-            )
+            result_msg = f"Task {task_key} status updated: {current_status_name} -> {target_status_name}."
 
         except Exception as e:
             logger.exception("update_task_status failed: %s", e)
@@ -514,15 +497,17 @@ async def update_task_status(
 
     # Broadcast AFTER commit (block exit committed)
     if _broadcast_data:
-        fire_and_forget(handle_task_update(
-            project_id=_broadcast_data["project_id"],
-            task_id=_broadcast_data["task_id"],
-            action=UpdateAction.STATUS_CHANGED,
-            task_data=_broadcast_data,
-            user_id=_broadcast_data["user_id"],
-            old_status=current_status_name,
-            new_status=target_status_name,
-        ))
+        fire_and_forget(
+            handle_task_update(
+                project_id=_broadcast_data["project_id"],
+                task_id=_broadcast_data["task_id"],
+                action=UpdateAction.STATUS_CHANGED,
+                task_data=_broadcast_data,
+                user_id=_broadcast_data["user_id"],
+                old_status=current_status_name,
+                new_status=target_status_name,
+            )
+        )
     return result_msg
 
 
@@ -553,9 +538,7 @@ async def assign_task(
         task_uuid = UUID(resolved_task_id)  # type: ignore[arg-type]
 
         # Load task
-        result = await db.execute(
-            select(Task).where(Task.id == task_uuid)
-        )
+        result = await db.execute(select(Task).where(Task.id == task_uuid))
         task_obj = result.scalar_one_or_none()
         if not task_obj:
             return f"Error: Task '{task}' not found."
@@ -569,17 +552,13 @@ async def assign_task(
         project_id = task_obj.project_id
 
         # Resolve assignee
-        resolved_user_id, user_err = await _resolve_user(
-            user, db, scope_project_id=str(project_id)
-        )
+        resolved_user_id, user_err = await _resolve_user(user, db, scope_project_id=str(project_id))
         if user_err:
             return user_err
         assignee_uuid = UUID(resolved_user_id)  # type: ignore[arg-type]
 
         # Load assignee user
-        assignee_result = await db.execute(
-            select(User).where(User.id == assignee_uuid)
-        )
+        assignee_result = await db.execute(select(User).where(User.id == assignee_uuid))
         assignee_user = assignee_result.scalar_one_or_none()
         if not assignee_user:
             return f"Error: User '{user}' not found."
@@ -593,9 +572,7 @@ async def assign_task(
             )
         )
         if not member_result.scalar_one_or_none():
-            proj_result = await db.execute(
-                select(Project.name).where(Project.id == project_id)
-            )
+            proj_result = await db.execute(select(Project.name).where(Project.id == project_id))
             proj_name = proj_result.scalar_one_or_none() or "this project"
             return (
                 f"Error: User '{assignee_name}' is not a member of project "
@@ -605,28 +582,18 @@ async def assign_task(
         # Get current assignee name
         current_assignee_name: str | None = None
         if task_obj.assignee_id:
-            current_result = await db.execute(
-                select(User).where(User.id == task_obj.assignee_id)
-            )
+            current_result = await db.execute(select(User).where(User.id == task_obj.assignee_id))
             current_assignee = current_result.scalar_one_or_none()
             if current_assignee:
-                current_assignee_name = (
-                    current_assignee.display_name or current_assignee.email
-                )
+                current_assignee_name = current_assignee.display_name or current_assignee.email
 
         # Check if already assigned to this person
         if task_obj.assignee_id == assignee_uuid:
-            return (
-                f"Task {task_key} is already assigned to {assignee_name}. "
-                "No change needed."
-            )
+            return f"Task {task_key} is already assigned to {assignee_name}. No change needed."
 
     # Build confirmation
     if current_assignee_name:
-        summary = (
-            f"Reassign '{task_key}: {task_title}' "
-            f"from {current_assignee_name} to {assignee_name}"
-        )
+        summary = f"Reassign '{task_key}: {task_title}' from {current_assignee_name} to {assignee_name}"
     else:
         summary = f"Assign '{task_key}: {task_title}' to {assignee_name}"
 
@@ -657,18 +624,18 @@ async def assign_task(
         try:
             user_uuid_check = _get_user_id()
             membership = await db.execute(
-                select(ProjectMember.id).where(
+                select(ProjectMember.id)
+                .where(
                     ProjectMember.project_id == UUID(str(project_id)),
                     ProjectMember.user_id == user_uuid_check,
-                ).limit(1)
+                )
+                .limit(1)
             )
             if membership.scalar_one_or_none() is None:
                 return "Access denied: you no longer have access to this task's project."
 
             # Re-load task to get fresh state
-            result = await db.execute(
-                select(Task).where(Task.id == task_uuid)
-            )
+            result = await db.execute(select(Task).where(Task.id == task_uuid))
             task_obj = result.scalar_one_or_none()
             if not task_obj:
                 return f"Error: Task '{task}' no longer exists."
@@ -692,13 +659,15 @@ async def assign_task(
 
     # Broadcast AFTER commit (block exit committed)
     if _broadcast_data:
-        fire_and_forget(handle_task_update(
-            project_id=_broadcast_data["project_id"],
-            task_id=_broadcast_data["task_id"],
-            action=UpdateAction.UPDATED,
-            task_data=_broadcast_data,
-            user_id=_broadcast_data["user_id"],
-        ))
+        fire_and_forget(
+            handle_task_update(
+                project_id=_broadcast_data["project_id"],
+                task_id=_broadcast_data["task_id"],
+                action=UpdateAction.UPDATED,
+                task_data=_broadcast_data,
+                user_id=_broadcast_data["user_id"],
+            )
+        )
     return result_msg
 
 
@@ -771,9 +740,7 @@ async def create_document(
             if error:
                 return error
             scope_uuid = UUID(resolved_id)  # type: ignore[arg-type]
-            app_result = await db.execute(
-                select(Application).where(Application.id == scope_uuid)
-            )
+            app_result = await db.execute(select(Application).where(Application.id == scope_uuid))
             app = app_result.scalar_one_or_none()
             if not app:
                 return f"Error: Application '{scope_id}' not found."
@@ -784,9 +751,7 @@ async def create_document(
             if error:
                 return error
             scope_uuid = UUID(resolved_id)  # type: ignore[arg-type]
-            proj_result = await db.execute(
-                select(Project).where(Project.id == scope_uuid)
-            )
+            proj_result = await db.execute(select(Project).where(Project.id == scope_uuid))
             proj = proj_result.scalar_one_or_none()
             if not proj:
                 return f"Error: Project '{scope_id}' not found."
@@ -812,9 +777,7 @@ async def create_document(
             elif scope_lower == "personal":
                 folder_where.append(DocumentFolder.user_id == scope_uuid)
 
-            folder_result = await db.execute(
-                select(DocumentFolder).where(*folder_where)
-            )
+            folder_result = await db.execute(select(DocumentFolder).where(*folder_where))
             folder = folder_result.scalar_one_or_none()
             if not folder:
                 return f"Error: Folder '{folder_id}' not found in this scope."
@@ -857,19 +820,23 @@ async def create_document(
 
             if scope_lower == "project":
                 membership = await db.execute(
-                    select(ProjectMember.id).where(
+                    select(ProjectMember.id)
+                    .where(
                         ProjectMember.project_id == scope_uuid,
                         ProjectMember.user_id == user_uuid_check,
-                    ).limit(1)
+                    )
+                    .limit(1)
                 )
                 if membership.scalar_one_or_none() is None:
                     return "Access denied: you no longer have access to this project."
             elif scope_lower == "application":
                 membership = await db.execute(
-                    select(ApplicationMember.id).where(
+                    select(ApplicationMember.id)
+                    .where(
                         ApplicationMember.application_id == scope_uuid,
                         ApplicationMember.user_id == user_uuid_check,
-                    ).limit(1)
+                    )
+                    .limit(1)
                 )
                 if membership.scalar_one_or_none() is None:
                     return "Access denied: you no longer have access to this application."
@@ -936,10 +903,7 @@ async def create_document(
                 "actor_id": user_uuid,
                 "title": title.strip(),
             }
-            result_msg = (
-                f"Document '{title}' created in {scope_display}{folder_display} "
-                f"(id: {doc_id})."
-            )
+            result_msg = f"Document '{title}' created in {scope_display}{folder_display} (id: {doc_id})."
 
         except Exception as e:
             logger.exception("create_document failed: %s", e)
@@ -947,15 +911,17 @@ async def create_document(
 
     # Broadcast AFTER commit (block exit committed)
     if _doc_broadcast:
-        fire_and_forget(_broadcast_doc_event(
-            message_type=MessageType.DOCUMENT_CREATED,
-            doc_id=_doc_broadcast["doc_id"],
-            application_id=_doc_broadcast["application_id"],
-            project_id=_doc_broadcast["project_id"],
-            user_id=_doc_broadcast["user_id"],
-            actor_id=_doc_broadcast["actor_id"],
-            extra={"title": _doc_broadcast["title"]},
-        ))
+        fire_and_forget(
+            _broadcast_doc_event(
+                message_type=MessageType.DOCUMENT_CREATED,
+                doc_id=_doc_broadcast["doc_id"],
+                application_id=_doc_broadcast["application_id"],
+                project_id=_doc_broadcast["project_id"],
+                user_id=_doc_broadcast["user_id"],
+                actor_id=_doc_broadcast["actor_id"],
+                extra={"title": _doc_broadcast["title"]},
+            )
+        )
     return result_msg
 
 
@@ -991,7 +957,6 @@ async def export_to_excel(
     # RBAC: resolve scope BEFORE interrupt (never confirm then deny)
     resolved_scope_id: str | None = None
     resolved_scope_type: str | None = None  # "project" or "application"
-
 
     async with _get_tool_session() as db:
         if data_type_lower == "tasks":
@@ -1041,19 +1006,23 @@ async def export_to_excel(
             user_uuid_check = _get_user_id()
             if resolved_scope_type == "project":
                 membership = await db.execute(
-                    select(ProjectMember.id).where(
+                    select(ProjectMember.id)
+                    .where(
                         ProjectMember.project_id == UUID(resolved_scope_id),
                         ProjectMember.user_id == user_uuid_check,
-                    ).limit(1)
+                    )
+                    .limit(1)
                 )
                 if membership.scalar_one_or_none() is None:
                     return "Access denied: you no longer have access to this project."
             elif resolved_scope_type == "application":
                 membership = await db.execute(
-                    select(ApplicationMember.id).where(
+                    select(ApplicationMember.id)
+                    .where(
                         ApplicationMember.application_id == UUID(resolved_scope_id),
                         ApplicationMember.user_id == user_uuid_check,
-                    ).limit(1)
+                    )
+                    .limit(1)
                 )
                 if membership.scalar_one_or_none() is None:
                     return "Access denied: you no longer have access to this application."
@@ -1145,9 +1114,7 @@ async def export_to_excel(
                 mem_result = await db.execute(
                     select(ApplicationMember)
                     .options(selectinload(ApplicationMember.user))
-                    .where(
-                        ApplicationMember.application_id == scope_uuid
-                    )
+                    .where(ApplicationMember.application_id == scope_uuid)
                 )
                 members = mem_result.scalars().all()
                 columns = ["Name", "Email", "Role"]
@@ -1209,10 +1176,7 @@ async def update_document(
     if has_title and (len(title.strip()) < 1 or len(title.strip()) > 200):
         return "Error: Document title must be between 1 and 200 characters."
     if has_content and len(content) > 100_000:
-        return (
-            f"Error: Document content too large ({len(content):,} chars). "
-            "Maximum is 100,000 characters."
-        )
+        return f"Error: Document content too large ({len(content):,} chars). Maximum is 100,000 characters."
 
     user_uuid = _get_user_id()
 
@@ -1332,9 +1296,7 @@ async def update_document(
                 from ....worker import markdown_to_tiptap_json
 
                 content_plain = _strip_markdown(content)
-                document.content_json = _json.dumps(
-                    markdown_to_tiptap_json(content)
-                )
+                document.content_json = _json.dumps(markdown_to_tiptap_json(content))
                 document.content_markdown = content
                 document.content_plain = content_plain
                 document.embedding_status = "stale"
@@ -1381,15 +1343,17 @@ async def update_document(
 
     # Broadcast AFTER commit (block exit committed)
     if _doc_broadcast:
-        fire_and_forget(_broadcast_doc_event(
-            message_type=MessageType.DOCUMENT_UPDATED,
-            doc_id=_doc_broadcast["doc_id"],
-            application_id=_doc_broadcast["application_id"],
-            project_id=_doc_broadcast["project_id"],
-            user_id=_doc_broadcast["user_id"],
-            actor_id=_doc_broadcast["actor_id"],
-            extra={"title": _doc_broadcast["title"]},
-        ))
+        fire_and_forget(
+            _broadcast_doc_event(
+                message_type=MessageType.DOCUMENT_UPDATED,
+                doc_id=_doc_broadcast["doc_id"],
+                application_id=_doc_broadcast["application_id"],
+                project_id=_doc_broadcast["project_id"],
+                user_id=_doc_broadcast["user_id"],
+                actor_id=_doc_broadcast["actor_id"],
+                extra={"title": _doc_broadcast["title"]},
+            )
+        )
     return result_msg
 
 
@@ -1525,15 +1489,17 @@ async def delete_document(
 
     # Broadcast AFTER commit (block exit committed)
     if _doc_broadcast:
-        fire_and_forget(_broadcast_doc_event(
-            message_type=MessageType.DOCUMENT_DELETED,
-            doc_id=_doc_broadcast["doc_id"],
-            application_id=_doc_broadcast["application_id"],
-            project_id=_doc_broadcast["project_id"],
-            user_id=_doc_broadcast["user_id"],
-            actor_id=_doc_broadcast["actor_id"],
-            extra={"title": _doc_broadcast["title"]},
-        ))
+        fire_and_forget(
+            _broadcast_doc_event(
+                message_type=MessageType.DOCUMENT_DELETED,
+                doc_id=_doc_broadcast["doc_id"],
+                application_id=_doc_broadcast["application_id"],
+                project_id=_doc_broadcast["project_id"],
+                user_id=_doc_broadcast["user_id"],
+                actor_id=_doc_broadcast["actor_id"],
+                extra={"title": _doc_broadcast["title"]},
+            )
+        )
     return result_msg
 
 
@@ -1608,6 +1574,7 @@ async def export_document_pdf(
         from ....ai.pdf_export import generate_pdf, save_pdf_export
 
         import asyncio as _asyncio
+
         pdf_bytes = await _asyncio.to_thread(generate_pdf, doc_title, doc_content_md or doc_content_plain)
         export_result = await save_pdf_export(
             pdf_bytes=pdf_bytes,
@@ -1654,7 +1621,9 @@ async def update_task(
     """
     # Validate at least one field provided
     if not any([title, description, priority, due_date, task_type]):
-        return "Error: At least one field must be provided to update (title, description, priority, due_date, task_type)."
+        return (
+            "Error: At least one field must be provided to update (title, description, priority, due_date, task_type)."
+        )
 
     # Validate individual fields
     if title and len(title.strip()) == 0:
@@ -1686,9 +1655,7 @@ async def update_task(
             return error
         task_uuid = UUID(resolved_id)  # type: ignore[arg-type]
 
-        result = await db.execute(
-            select(Task).where(Task.id == task_uuid)
-        )
+        result = await db.execute(select(Task).where(Task.id == task_uuid))
         task_obj = result.scalar_one_or_none()
         if not task_obj:
             return f"Error: Task '{task}' not found."
@@ -1742,17 +1709,17 @@ async def update_task(
         try:
             user_uuid_check = _get_user_id()
             membership = await db.execute(
-                select(ProjectMember.id).where(
+                select(ProjectMember.id)
+                .where(
                     ProjectMember.project_id == UUID(str(project_id)),
                     ProjectMember.user_id == user_uuid_check,
-                ).limit(1)
+                )
+                .limit(1)
             )
             if membership.scalar_one_or_none() is None:
                 return "Access denied: you no longer have access to this task's project."
 
-            result = await db.execute(
-                select(Task).where(Task.id == task_uuid)
-            )
+            result = await db.execute(select(Task).where(Task.id == task_uuid))
             task_obj = result.scalar_one_or_none()
             if not task_obj:
                 return f"Error: Task '{task}' no longer exists."
@@ -1789,13 +1756,15 @@ async def update_task(
 
     # Broadcast AFTER commit (block exit committed)
     if _broadcast_data:
-        fire_and_forget(handle_task_update(
-            project_id=_broadcast_data["project_id"],
-            task_id=_broadcast_data["task_id"],
-            action=UpdateAction.UPDATED,
-            task_data=_broadcast_data,
-            user_id=_broadcast_data["user_id"],
-        ))
+        fire_and_forget(
+            handle_task_update(
+                project_id=_broadcast_data["project_id"],
+                task_id=_broadcast_data["task_id"],
+                action=UpdateAction.UPDATED,
+                task_data=_broadcast_data,
+                user_id=_broadcast_data["user_id"],
+            )
+        )
     return result_msg
 
 
@@ -1833,9 +1802,7 @@ async def add_task_comment(
             return error
         task_uuid = UUID(resolved_id)  # type: ignore[arg-type]
 
-        result = await db.execute(
-            select(Task).where(Task.id == task_uuid)
-        )
+        result = await db.execute(select(Task).where(Task.id == task_uuid))
         task_obj = result.scalar_one_or_none()
         if not task_obj:
             return f"Error: Task '{task}' not found."
@@ -1855,9 +1822,7 @@ async def add_task_comment(
                 mention_str = mention_str.strip()
                 if not mention_str:
                     continue
-                user_id_str, user_err = await _resolve_user(
-                    mention_str, db, scope_project_id=str(project_id)
-                )
+                user_id_str, user_err = await _resolve_user(mention_str, db, scope_project_id=str(project_id))
                 if user_err:
                     return f"Error resolving mention '{mention_str}': {user_err}"
 
@@ -1905,16 +1870,16 @@ async def add_task_comment(
             user_id = _get_user_id()
 
             # TOCTOU re-check: verify user still has access after interrupt
-            proj_result = await db.execute(
-                select(Project.application_id).where(Project.id == project_id).limit(1)
-            )
+            proj_result = await db.execute(select(Project.application_id).where(Project.id == project_id).limit(1))
             app_id = proj_result.scalar_one_or_none()
             if app_id is not None:
                 membership = await db.execute(
-                    select(ApplicationMember.id).where(
+                    select(ApplicationMember.id)
+                    .where(
                         ApplicationMember.application_id == app_id,
                         ApplicationMember.user_id == user_id,
-                    ).limit(1)
+                    )
+                    .limit(1)
                 )
                 if not membership.scalar_one_or_none():
                     return "Access denied: your permissions have changed since confirmation."
@@ -1968,11 +1933,13 @@ async def add_task_comment(
             "author_id": _comment_broadcast["author_id"],
             "body_text": _comment_broadcast["body_text"],
         }
-        fire_and_forget(handle_comment_added(
-            task_id=_comment_broadcast["task_id"],
-            comment_data=comment_data,
-            mentioned_user_ids=_comment_broadcast["mentioned_user_ids"],
-        ))
+        fire_and_forget(
+            handle_comment_added(
+                task_id=_comment_broadcast["task_id"],
+                comment_data=comment_data,
+                mentioned_user_ids=_comment_broadcast["mentioned_user_ids"],
+            )
+        )
     return result_msg
 
 
@@ -2000,9 +1967,7 @@ async def delete_task(
             return error
         task_uuid = UUID(resolved_id)  # type: ignore[arg-type]
 
-        result = await db.execute(
-            select(Task).where(Task.id == task_uuid)
-        )
+        result = await db.execute(select(Task).where(Task.id == task_uuid))
         task_obj = result.scalar_one_or_none()
         if not task_obj:
             return f"Error: Task '{task}' not found."
@@ -2017,9 +1982,7 @@ async def delete_task(
         task_status_id = task_obj.task_status_id
 
         # Get status name for agg counter update
-        status_result = await db.execute(
-            select(TaskStatus).where(TaskStatus.id == task_status_id)
-        )
+        status_result = await db.execute(select(TaskStatus).where(TaskStatus.id == task_status_id))
         status_obj = status_result.scalar_one_or_none()
         task_status_name = status_obj.name if status_obj else None
 
@@ -2052,18 +2015,18 @@ async def delete_task(
         try:
             user_uuid_check = _get_user_id()
             membership = await db.execute(
-                select(ProjectMember.id).where(
+                select(ProjectMember.id)
+                .where(
                     ProjectMember.project_id == UUID(str(project_id)),
                     ProjectMember.user_id == user_uuid_check,
-                ).limit(1)
+                )
+                .limit(1)
             )
             if membership.scalar_one_or_none() is None:
                 return "Access denied: you no longer have access to this task's project."
 
             # Re-load task to get fresh state
-            result = await db.execute(
-                select(Task).where(Task.id == task_uuid)
-            )
+            result = await db.execute(select(Task).where(Task.id == task_uuid))
             task_obj = result.scalar_one_or_none()
             if not task_obj:
                 return f"Error: Task '{task}' no longer exists."
@@ -2075,9 +2038,7 @@ async def delete_task(
                 )
 
                 agg_result = await db.execute(
-                    select(ProjectTaskStatusAgg).where(
-                        ProjectTaskStatusAgg.project_id == project_id
-                    )
+                    select(ProjectTaskStatusAgg).where(ProjectTaskStatusAgg.project_id == project_id)
                 )
                 agg = agg_result.scalar_one_or_none()
                 if agg:
@@ -2102,13 +2063,15 @@ async def delete_task(
 
     # Broadcast AFTER commit (block exit committed)
     if _broadcast_data:
-        fire_and_forget(handle_task_update(
-            project_id=_broadcast_data["project_id"],
-            task_id=_broadcast_data["task_id"],
-            action=UpdateAction.DELETED,
-            task_data=_broadcast_data,
-            user_id=_broadcast_data["user_id"],
-        ))
+        fire_and_forget(
+            handle_task_update(
+                project_id=_broadcast_data["project_id"],
+                task_id=_broadcast_data["task_id"],
+                action=UpdateAction.DELETED,
+                task_data=_broadcast_data,
+                user_id=_broadcast_data["user_id"],
+            )
+        )
     return result_msg
 
 

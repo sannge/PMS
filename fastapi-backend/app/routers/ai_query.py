@@ -29,9 +29,7 @@ from ..services.auth_service import get_current_user
 logger = logging.getLogger(__name__)
 
 
-async def _user_can_access_document(
-    doc: Document, user: User, db: AsyncSession
-) -> bool:
+async def _user_can_access_document(doc: Document, user: User, db: AsyncSession) -> bool:
     """Check whether the user has access to a document based on its scope.
 
     Personal docs: only the owner.
@@ -48,10 +46,12 @@ async def _user_can_access_document(
     # App-scoped: verify user is a member of the application
     if doc.application_id is not None:
         result = await db.execute(
-            select(ApplicationMember.id).where(
+            select(ApplicationMember.id)
+            .where(
                 ApplicationMember.application_id == doc.application_id,
                 ApplicationMember.user_id == user.id,
-            ).limit(1)
+            )
+            .limit(1)
         )
         return result.scalar_one_or_none() is not None
 
@@ -63,7 +63,8 @@ async def _user_can_access_document(
             .where(
                 Project.id == doc.project_id,
                 ApplicationMember.user_id == user.id,
-            ).limit(1)
+            )
+            .limit(1)
         )
         return result.scalar_one_or_none() is not None
 
@@ -236,7 +237,11 @@ async def download_export(
             detail="Export file not found or expired",
         )
 
-    media_type = "application/pdf" if filename.endswith(".pdf") else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    media_type = (
+        "application/pdf"
+        if filename.endswith(".pdf")
+        else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
     return FileResponse(
         path=str(file_path),
         filename=filename,

@@ -28,6 +28,7 @@ from app.ai.agent.tools.context import clear_tool_context, set_tool_context
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _setup_context(**overrides):
     """Populate tool context with sensible defaults + overrides."""
     ctx = {
@@ -38,10 +39,18 @@ def _setup_context(**overrides):
         "provider_registry": MagicMock(),
     }
     ctx.update(overrides)
-    set_tool_context(**{k: ctx[k] for k in (
-        "user_id", "accessible_app_ids", "accessible_project_ids",
-        "db_session_factory", "provider_registry",
-    )})
+    set_tool_context(
+        **{
+            k: ctx[k]
+            for k in (
+                "user_id",
+                "accessible_app_ids",
+                "accessible_project_ids",
+                "db_session_factory",
+                "provider_registry",
+            )
+        }
+    )
     return ctx
 
 
@@ -65,8 +74,8 @@ def _mock_db_session():
 # PROJECT_WRITE_TOOLS registry
 # ---------------------------------------------------------------------------
 
-class TestProjectWriteToolsRegistry:
 
+class TestProjectWriteToolsRegistry:
     def test_has_3_tools(self):
         assert len(PROJECT_WRITE_TOOLS) == 3
 
@@ -79,8 +88,8 @@ class TestProjectWriteToolsRegistry:
 # create_project tool
 # ---------------------------------------------------------------------------
 
-class TestCreateProject:
 
+class TestCreateProject:
     @pytest.fixture(autouse=True)
     def _teardown(self):
         yield
@@ -88,33 +97,49 @@ class TestCreateProject:
 
     async def test_empty_name_rejected(self):
         _setup_context()
-        result = await create_project.ainvoke({
-            "app": "My App", "name": "", "key": "SP",
-        })
+        result = await create_project.ainvoke(
+            {
+                "app": "My App",
+                "name": "",
+                "key": "SP",
+            }
+        )
         assert "Error" in result
         assert "name is required" in result
 
     async def test_name_too_long_rejected(self):
         _setup_context()
-        result = await create_project.ainvoke({
-            "app": "My App", "name": "x" * 101, "key": "SP",
-        })
+        result = await create_project.ainvoke(
+            {
+                "app": "My App",
+                "name": "x" * 101,
+                "key": "SP",
+            }
+        )
         assert "Error" in result
         assert "100 characters" in result
 
     async def test_invalid_key_rejected(self):
         _setup_context()
-        result = await create_project.ainvoke({
-            "app": "My App", "name": "Sprint 1", "key": "1bad",
-        })
+        result = await create_project.ainvoke(
+            {
+                "app": "My App",
+                "name": "Sprint 1",
+                "key": "1bad",
+            }
+        )
         assert "Error" in result
         assert "Invalid project key" in result
 
     async def test_single_char_key_rejected(self):
         _setup_context()
-        result = await create_project.ainvoke({
-            "app": "My App", "name": "Sprint 1", "key": "S",
-        })
+        result = await create_project.ainvoke(
+            {
+                "app": "My App",
+                "name": "Sprint 1",
+                "key": "S",
+            }
+        )
         assert "Error" in result
         assert "Invalid project key" in result
 
@@ -122,9 +147,13 @@ class TestCreateProject:
         """create_project returns not-found when app is not accessible."""
         app_id = str(uuid4())
         _setup_context(accessible_app_ids=[])
-        result = await create_project.ainvoke({
-            "app": app_id, "name": "Sprint 1", "key": "SP",
-        })
+        result = await create_project.ainvoke(
+            {
+                "app": app_id,
+                "name": "Sprint 1",
+                "key": "SP",
+            }
+        )
         assert "No application found" in result
 
     @patch("app.ai.agent.tools.project_write_tools.interrupt")
@@ -164,9 +193,13 @@ class TestCreateProject:
         mock_tool_session.return_value.__aenter__ = AsyncMock(return_value=session)
         mock_tool_session.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        result = await create_project.ainvoke({
-            "app": app_id, "name": "Sprint 1", "key": "SP",
-        })
+        result = await create_project.ainvoke(
+            {
+                "app": app_id,
+                "name": "Sprint 1",
+                "key": "SP",
+            }
+        )
         assert "Access denied" in result
         assert "Owner or Editor" in result
         mock_interrupt.assert_not_called()
@@ -208,9 +241,13 @@ class TestCreateProject:
         mock_tool_session.return_value.__aenter__ = AsyncMock(return_value=session)
         mock_tool_session.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        result = await create_project.ainvoke({
-            "app": app_id, "name": "Sprint 1", "key": "SP",
-        })
+        result = await create_project.ainvoke(
+            {
+                "app": app_id,
+                "name": "Sprint 1",
+                "key": "SP",
+            }
+        )
         assert "already exists" in result
         mock_interrupt.assert_not_called()
 
@@ -253,9 +290,13 @@ class TestCreateProject:
 
         mock_interrupt.return_value = {"approved": False}
 
-        result = await create_project.ainvoke({
-            "app": app_id, "name": "Sprint 1", "key": "SP",
-        })
+        result = await create_project.ainvoke(
+            {
+                "app": app_id,
+                "name": "Sprint 1",
+                "key": "SP",
+            }
+        )
         assert "cancelled" in result.lower()
 
 
@@ -263,8 +304,8 @@ class TestCreateProject:
 # update_project tool
 # ---------------------------------------------------------------------------
 
-class TestUpdateProject:
 
+class TestUpdateProject:
     @pytest.fixture(autouse=True)
     def _teardown(self):
         yield
@@ -272,9 +313,11 @@ class TestUpdateProject:
 
     async def test_no_fields_provided(self):
         _setup_context()
-        result = await update_project.ainvoke({
-            "project": "Sprint 1",
-        })
+        result = await update_project.ainvoke(
+            {
+                "project": "Sprint 1",
+            }
+        )
         assert "Error" in result
         assert "at least one field" in result.lower()
 
@@ -282,16 +325,22 @@ class TestUpdateProject:
         """update_project returns not-found when project is not accessible."""
         proj_id = str(uuid4())
         _setup_context(accessible_project_ids=[])
-        result = await update_project.ainvoke({
-            "project": proj_id, "name": "New Name",
-        })
+        result = await update_project.ainvoke(
+            {
+                "project": proj_id,
+                "name": "New Name",
+            }
+        )
         assert "No project found" in result
 
     async def test_invalid_due_date(self):
         _setup_context()
-        result = await update_project.ainvoke({
-            "project": "Sprint 1", "due_date": "not-a-date",
-        })
+        result = await update_project.ainvoke(
+            {
+                "project": "Sprint 1",
+                "due_date": "not-a-date",
+            }
+        )
         assert "Error" in result
         assert "Invalid due_date" in result
 
@@ -300,8 +349,8 @@ class TestUpdateProject:
 # delete_project tool
 # ---------------------------------------------------------------------------
 
-class TestDeleteProject:
 
+class TestDeleteProject:
     @pytest.fixture(autouse=True)
     def _teardown(self):
         yield
@@ -311,9 +360,11 @@ class TestDeleteProject:
         """delete_project returns not-found when project is not accessible."""
         proj_id = str(uuid4())
         _setup_context(accessible_project_ids=[])
-        result = await delete_project.ainvoke({
-            "project": proj_id,
-        })
+        result = await delete_project.ainvoke(
+            {
+                "project": proj_id,
+            }
+        )
         assert "No project found" in result
 
     @patch("app.ai.agent.tools.project_write_tools.interrupt")

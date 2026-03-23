@@ -4,6 +4,7 @@ Revision ID: 20260302_add_embedding_status
 Revises: 20260301_add_chunk_type
 Create Date: 2026-03-02
 """
+
 from alembic import op
 import sqlalchemy as sa
 
@@ -29,9 +30,7 @@ def upgrade() -> None:
         "embedding_status IN ('none', 'stale', 'syncing', 'synced')",
     )
     # Backfill existing rows
-    op.execute(
-        "UPDATE \"Documents\" SET embedding_status = 'synced' WHERE embedding_updated_at IS NOT NULL"
-    )
+    op.execute("UPDATE \"Documents\" SET embedding_status = 'synced' WHERE embedding_updated_at IS NOT NULL")
     op.execute(
         "UPDATE \"Documents\" SET embedding_status = 'stale' WHERE embedding_updated_at IS NULL AND content_json IS NOT NULL"
     )

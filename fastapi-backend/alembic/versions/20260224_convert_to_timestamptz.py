@@ -8,6 +8,7 @@ Revision ID: 20260224_timestamptz
 Revises: 20260223_dashboard_indexes
 Create Date: 2026-02-24
 """
+
 from typing import Sequence, Union
 
 from alembic import op
@@ -65,8 +66,4 @@ def downgrade() -> None:
     """Convert all TIMESTAMP WITH TIME ZONE columns back to TIMESTAMP WITHOUT TIME ZONE."""
     for table, columns in _TABLES_COLUMNS:
         for col in columns:
-            op.execute(
-                f'ALTER TABLE "{table}" '
-                f"ALTER COLUMN {col} "
-                f"TYPE TIMESTAMP WITHOUT TIME ZONE"
-            )
+            op.execute(f'ALTER TABLE "{table}" ALTER COLUMN {col} TYPE TIMESTAMP WITHOUT TIME ZONE')

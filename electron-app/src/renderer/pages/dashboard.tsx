@@ -19,6 +19,7 @@ import { ApplicationDetailPage } from '@/pages/applications/[id]'
 import { ProjectsPage } from '@/pages/projects/index'
 import { ProjectDetailPage } from '@/pages/projects/[id]'
 import { NotesPage } from '@/pages/notes/index'
+import { TeamActivityPage } from '@/pages/team-activity-page'
 import { AiSettingsPanel, AiToggleButton, AiSidebar } from '@/components/ai'
 import { checkScreenGuard } from '@/lib/screen-navigation-guard'
 import { setScreenSwitcher, clearScreenSwitcher } from '@/lib/ai-navigation'
@@ -864,6 +865,13 @@ export function DashboardPage({}: DashboardProps): JSX.Element {
   const token = useAuthStore((state) => state.token)
   const currentUser = useAuthStore((state) => state.user)
 
+  // Applications data (for Team Activity visibility)
+  const { data: allApplications } = useApplications()
+  const showTeamActivity = useMemo(() => {
+    if (!allApplications || !currentUser) return false
+    return allApplications.some((app) => app.owner_id === currentUser.id)
+  }, [allApplications, currentUser])
+
   // TanStack Query client for cache invalidation
   const queryClient = useQueryClient()
 
@@ -944,7 +952,7 @@ export function DashboardPage({}: DashboardProps): JSX.Element {
       }
 
       fetchTimeoutRef.current = setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: queryKeys.notifications })
+        queryClient.invalidateQueries({ queryKey: queryKeys.unreadCount })
         queryClient.invalidateQueries({ queryKey: queryKeys.dashboard })
         fetchTimeoutRef.current = null
       }, 500) // 500ms debounce
@@ -960,12 +968,12 @@ export function DashboardPage({}: DashboardProps): JSX.Element {
   // Listen for invitation-related WebSocket events
   useInvitationNotifications({
     onInvitationReceived: (_data) => {
-      // Invalidate notifications to refetch from backend
-      queryClient.invalidateQueries({ queryKey: queryKeys.notifications })
+      // Invalidate unread count; full list refreshes when notification panel opens
+      queryClient.invalidateQueries({ queryKey: queryKeys.unreadCount })
     },
     onInvitationResponse: (_data) => {
-      // Invalidate notifications to refetch from backend
-      queryClient.invalidateQueries({ queryKey: queryKeys.notifications })
+      // Invalidate unread count; full list refreshes when notification panel opens
+      queryClient.invalidateQueries({ queryKey: queryKeys.unreadCount })
     },
     onMemberAdded: (data) => {
       console.log('[Dashboard] onMemberAdded triggered:', data)
@@ -974,8 +982,8 @@ export function DashboardPage({}: DashboardProps): JSX.Element {
       const currentUserId = currentUser?.id
       const isCurrentUserAdded = currentUserId === data.user_id
 
-      // Invalidate notifications
-      queryClient.invalidateQueries({ queryKey: queryKeys.notifications })
+      // Invalidate unread count; full list refreshes when notification panel opens
+      queryClient.invalidateQueries({ queryKey: queryKeys.unreadCount })
 
       // If current user just joined, invalidate applications list to show the new application
       if (isCurrentUserAdded) {
@@ -990,11 +998,11 @@ export function DashboardPage({}: DashboardProps): JSX.Element {
       // Note: Cache invalidation and redirect are handled by useWebSocketCacheInvalidation
       // This handler is kept for notification invalidation (different from NOTIFICATION event)
       console.log('[Dashboard] onMemberRemoved from useInvitationNotifications:', data)
-      queryClient.invalidateQueries({ queryKey: queryKeys.notifications })
+      queryClient.invalidateQueries({ queryKey: queryKeys.unreadCount })
     },
     onRoleUpdated: (data) => {
-      // Invalidate notifications
-      queryClient.invalidateQueries({ queryKey: queryKeys.notifications })
+      // Invalidate unread count; full list refreshes when notification panel opens
+      queryClient.invalidateQueries({ queryKey: queryKeys.unreadCount })
 
       // Invalidate members for this application (will show updated role)
       queryClient.invalidateQueries({ queryKey: queryKeys.appMembers(data.application_id) })
@@ -1003,9 +1011,8 @@ export function DashboardPage({}: DashboardProps): JSX.Element {
 
   // Listen for generic notification messages (project role changes, task assignments, etc.)
   useNotifications((_data) => {
-    // Invalidate notifications when any notification is received
-    // This ensures project-level notifications (role changes, etc.) are captured
-    queryClient.invalidateQueries({ queryKey: queryKeys.notifications })
+    // Invalidate unread count; full notification list refreshes when panel opens
+    queryClient.invalidateQueries({ queryKey: queryKeys.unreadCount })
   })
 
   useEffect(() => {
@@ -1215,6 +1222,10 @@ export function DashboardPage({}: DashboardProps): JSX.Element {
         return (
           <NotesPage />
         )
+      case 'team-activity':
+        return (
+          <TeamActivityPage />
+        )
       case 'settings':
         return currentUser?.is_developer ? (
           <AiSettingsPanel />
@@ -1242,10 +1253,11 @@ export function DashboardPage({}: DashboardProps): JSX.Element {
           isCollapsed={isCollapsed}
           onCollapsedChange={handleCollapsedChange}
           onQuickCreate={() => setShowQuickCreate(true)}
+          showTeamActivity={showTeamActivity}
         />
 
         {/* Main Content Area - reduced padding for space efficiency */}
-        <main className={cn("flex-1 overflow-auto p-4 lg:p-5", activeItem === 'tasks' && "relative", activeItem === 'notes' && "p-0 overflow-hidden")}>
+        <main className={cn("flex-1 overflow-auto p-4 lg:p-5", activeItem === 'tasks' && "relative", (activeItem === 'notes' || activeItem === 'team-activity') && "p-0 overflow-hidden")}>
           {renderContent()}
         </main>
 

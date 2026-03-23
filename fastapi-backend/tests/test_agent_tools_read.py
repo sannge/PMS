@@ -49,6 +49,7 @@ from app.ai.agent_tools import MAX_TOOL_OUTPUT_CHARS
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _setup_context(**overrides):
     """Populate tool context with sensible defaults + overrides."""
     ctx = {
@@ -59,10 +60,18 @@ def _setup_context(**overrides):
         "provider_registry": MagicMock(),
     }
     ctx.update(overrides)
-    set_tool_context(**{k: ctx[k] for k in (
-        "user_id", "accessible_app_ids", "accessible_project_ids",
-        "db_session_factory", "provider_registry",
-    )})
+    set_tool_context(
+        **{
+            k: ctx[k]
+            for k in (
+                "user_id",
+                "accessible_app_ids",
+                "accessible_project_ids",
+                "db_session_factory",
+                "provider_registry",
+            )
+        }
+    )
     return ctx
 
 
@@ -74,8 +83,8 @@ def _clear():
 # Context lifecycle
 # ---------------------------------------------------------------------------
 
-class TestToolContext:
 
+class TestToolContext:
     def test_set_tool_context_populates_dict(self):
         _clear()
         uid = str(uuid4())
@@ -108,8 +117,8 @@ class TestToolContext:
 # RBAC helpers
 # ---------------------------------------------------------------------------
 
-class TestRBACHelpers:
 
+class TestRBACHelpers:
     def test_check_app_access_granted(self):
         app_id = str(uuid4())
         _setup_context(accessible_app_ids=[app_id])
@@ -137,8 +146,8 @@ class TestRBACHelpers:
 # Formatting helpers
 # ---------------------------------------------------------------------------
 
-class TestTruncate:
 
+class TestTruncate:
     def test_short_text_unchanged(self):
         text = "hello"
         assert _truncate(text) == text
@@ -159,18 +168,22 @@ class TestEstimateWords:
 
     def test_none_returns_zero(self):
         from app.ai.agent.tools.knowledge_tools import _estimate_words
+
         assert _estimate_words(None) == 0
 
     def test_zero_chars_returns_zero(self):
         from app.ai.agent.tools.knowledge_tools import _estimate_words
+
         assert _estimate_words(0) == 0
 
     def test_typical_chars(self):
         from app.ai.agent.tools.knowledge_tools import _estimate_words
+
         assert _estimate_words(500) == 100
 
     def test_small_count_rounds_down(self):
         from app.ai.agent.tools.knowledge_tools import _estimate_words
+
         assert _estimate_words(3) == 0
 
 
@@ -179,31 +192,36 @@ class TestEscapeMd:
 
     def test_no_special_chars_unchanged(self):
         from app.ai.agent.tools.knowledge_tools import _escape_md
+
         assert _escape_md("hello world") == "hello world"
 
     def test_pipe_escaped(self):
         from app.ai.agent.tools.knowledge_tools import _escape_md
+
         assert _escape_md("col1 | col2") == "col1 \\| col2"
 
     def test_multiple_pipes_escaped(self):
         from app.ai.agent.tools.knowledge_tools import _escape_md
+
         assert _escape_md("a|b|c") == "a\\|b\\|c"
 
     def test_newlines_replaced_with_space(self):
         from app.ai.agent.tools.knowledge_tools import _escape_md
+
         assert _escape_md("line1\nline2") == "line1 line2"
 
     def test_carriage_return_stripped(self):
         from app.ai.agent.tools.knowledge_tools import _escape_md
+
         assert _escape_md("line1\r\nline2") == "line1 line2"
 
     def test_combined_pipe_and_newline(self):
         from app.ai.agent.tools.knowledge_tools import _escape_md
+
         assert _escape_md("a|b\nc|d") == "a\\|b c\\|d"
 
 
 class TestFormatDate:
-
     def test_none_returns_dash(self):
         assert _format_date(None) == "\u2014"
 
@@ -217,7 +235,6 @@ class TestFormatDate:
 
 
 class TestDaysOverdue:
-
     def test_none_due_date_returns_none(self):
         assert _days_overdue(None) is None
 
@@ -236,8 +253,8 @@ class TestDaysOverdue:
 # create_read_tools factory
 # ---------------------------------------------------------------------------
 
-class TestAllReadTools:
 
+class TestAllReadTools:
     def test_returns_25_tools(self):
         assert len(ALL_READ_TOOLS) == 25
 
@@ -285,8 +302,8 @@ class TestAllReadTools:
 # query_knowledge tool
 # ---------------------------------------------------------------------------
 
-class TestSearchKnowledge:
 
+class TestSearchKnowledge:
     async def test_access_denied_on_invalid_app_id(self):
         """search_knowledge returns not-found when app_id is not accessible."""
         from app.ai.agent.tools.knowledge_tools import search_knowledge
@@ -300,9 +317,7 @@ class TestSearchKnowledge:
 
         _setup_context(accessible_app_ids=[], db_session_factory=mock_db_factory)
 
-        result = await search_knowledge.ainvoke(
-            {"query": "test", "application": app_id}
-        )
+        result = await search_knowledge.ainvoke({"query": "test", "application": app_id})
         assert "No application found" in result
         _clear()
 
@@ -319,9 +334,7 @@ class TestSearchKnowledge:
 
         _setup_context(accessible_project_ids=[], db_session_factory=mock_db_factory)
 
-        result = await search_knowledge.ainvoke(
-            {"query": "test", "project": proj_id}
-        )
+        result = await search_knowledge.ainvoke({"query": "test", "project": proj_id})
         assert "No project found" in result
         _clear()
 
@@ -596,7 +609,9 @@ class TestSearchKnowledge:
 
         docs = self._make_docs_meta(6)
         mock_rag.return_value = ToolResult(
-            success=True, data="formatted", metadata={"documents": docs},
+            success=True,
+            data="formatted",
+            metadata={"documents": docs},
         )
 
         mock_session = AsyncMock()
@@ -621,7 +636,9 @@ class TestSearchKnowledge:
 
         docs = self._make_docs_meta(6)
         mock_rag.return_value = ToolResult(
-            success=True, data="formatted", metadata={"documents": docs},
+            success=True,
+            data="formatted",
+            metadata={"documents": docs},
         )
         # Only index 2 is valid; "foo", None, 3.5 should be skipped or cast
         mock_interrupt.return_value = {"selected_indices": ["foo", None, 2]}
@@ -649,7 +666,9 @@ class TestSearchKnowledge:
 
         docs = self._make_docs_meta(5)
         mock_rag.return_value = ToolResult(
-            success=True, data="formatted", metadata={"documents": docs},
+            success=True,
+            data="formatted",
+            metadata={"documents": docs},
         )
         # Valid range is 1..5; 0, -1, 99 are all out of range; only 3 is valid
         mock_interrupt.return_value = {"selected_indices": [0, -1, 99, 3]}
@@ -677,7 +696,9 @@ class TestSearchKnowledge:
 
         docs = self._make_docs_meta(6)
         mock_rag.return_value = ToolResult(
-            success=True, data="formatted", metadata={"documents": docs},
+            success=True,
+            data="formatted",
+            metadata={"documents": docs},
         )
         mock_interrupt.return_value = {"selected_indices": [2, 4, 6]}
 
@@ -711,7 +732,9 @@ class TestSearchKnowledge:
 
         docs = self._make_docs_meta(6)
         mock_rag.return_value = ToolResult(
-            success=True, data="formatted", metadata={"documents": docs},
+            success=True,
+            data="formatted",
+            metadata={"documents": docs},
         )
         mock_interrupt.return_value = {"selected_indices": []}
 
@@ -766,7 +789,9 @@ class TestSearchKnowledge:
         docs = self._make_docs_meta(6)
         mock_interrupt.return_value = {"selected_indices": [1]}
         mock_rag.return_value = ToolResult(
-            success=True, data="formatted", metadata={"documents": docs},
+            success=True,
+            data="formatted",
+            metadata={"documents": docs},
         )
 
         long_query = "a" * 150
@@ -798,7 +823,9 @@ class TestSearchKnowledge:
         docs = self._make_docs_meta(6)
         mock_interrupt.return_value = {"selected_indices": [1]}
         mock_rag.return_value = ToolResult(
-            success=True, data="formatted", metadata={"documents": docs},
+            success=True,
+            data="formatted",
+            metadata={"documents": docs},
         )
 
         short_query = "find authentication docs"
@@ -828,7 +855,9 @@ class TestSearchKnowledge:
         docs = self._make_docs_meta(6)
         mock_interrupt.return_value = "unexpected string response"
         mock_rag.return_value = ToolResult(
-            success=True, data="formatted", metadata={"documents": docs},
+            success=True,
+            data="formatted",
+            metadata={"documents": docs},
         )
 
         mock_session = AsyncMock()
@@ -852,7 +881,9 @@ class TestSearchKnowledge:
         docs = self._make_docs_meta(6)
         mock_interrupt.return_value = {"something_else": True}
         mock_rag.return_value = ToolResult(
-            success=True, data="formatted", metadata={"documents": docs},
+            success=True,
+            data="formatted",
+            metadata={"documents": docs},
         )
 
         mock_session = AsyncMock()
@@ -871,8 +902,8 @@ class TestSearchKnowledge:
 # _build_sources helper
 # ---------------------------------------------------------------------------
 
-class TestBuildSources:
 
+class TestBuildSources:
     def test_basic_source_reference_fields(self):
         """_build_sources produces SourceReference objects with correct fields."""
         from app.ai.agent.tools.knowledge_tools import _build_sources
@@ -943,10 +974,7 @@ class TestBuildSources:
         """_build_sources maps each dict to a corresponding SourceReference."""
         from app.ai.agent.tools.knowledge_tools import _build_sources
 
-        docs_meta = [
-            {"document_id": str(uuid4()), "title": f"Doc {i}", "score": 0.9 - i * 0.1}
-            for i in range(4)
-        ]
+        docs_meta = [{"document_id": str(uuid4()), "title": f"Doc {i}", "score": 0.9 - i * 0.1} for i in range(4)]
         sources = _build_sources(docs_meta)
         assert len(sources) == 4
         assert sources[0].document_title == "Doc 0"
@@ -973,8 +1001,8 @@ class TestBuildSources:
 # sql_query tool
 # ---------------------------------------------------------------------------
 
-class TestSqlQueryTool:
 
+class TestSqlQueryTool:
     @patch("app.ai.agent_tools.sql_query_tool", new_callable=AsyncMock)
     async def test_sql_query_wraps_sql_query_tool(self, mock_sql):
         """sql_query delegates to agent_tools.sql_query_tool."""
@@ -994,9 +1022,7 @@ class TestSqlQueryTool:
         mock_result.data = "col1\n---\nval1"
         mock_sql.return_value = mock_result
 
-        result = await sql_query.ainvoke(
-            {"question": "How many users?"}
-        )
+        result = await sql_query.ainvoke({"question": "How many users?"})
 
         mock_sql.assert_awaited_once()
         assert "val1" in result
@@ -1007,8 +1033,8 @@ class TestSqlQueryTool:
 # get_projects tool
 # ---------------------------------------------------------------------------
 
-class TestListProjects:
 
+class TestListProjects:
     async def test_access_denied_on_invalid_app_id(self):
         """list_projects returns not-found when app_id is not accessible."""
         from app.ai.agent.tools.project_tools import list_projects
@@ -1021,9 +1047,7 @@ class TestListProjects:
 
         _setup_context(accessible_app_ids=[], db_session_factory=mock_db_factory)
 
-        result = await list_projects.ainvoke(
-            {"app": str(uuid4())}
-        )
+        result = await list_projects.ainvoke({"app": str(uuid4())})
         assert "No application found" in result
         _clear()
 
@@ -1032,8 +1056,8 @@ class TestListProjects:
 # get_tasks tool
 # ---------------------------------------------------------------------------
 
-class TestListTasks:
 
+class TestListTasks:
     async def test_access_denied_on_invalid_project_id(self):
         """list_tasks returns not-found when project_id is not accessible."""
         from app.ai.agent.tools.task_tools import list_tasks
@@ -1046,9 +1070,7 @@ class TestListTasks:
 
         _setup_context(accessible_project_ids=[], db_session_factory=mock_db_factory)
 
-        result = await list_tasks.ainvoke(
-            {"project": str(uuid4())}
-        )
+        result = await list_tasks.ainvoke({"project": str(uuid4())})
         assert "No project found" in result
         _clear()
 
@@ -1057,8 +1079,8 @@ class TestListTasks:
 # get_task_detail tool
 # ---------------------------------------------------------------------------
 
-class TestGetTaskDetail:
 
+class TestGetTaskDetail:
     async def test_task_not_found(self):
         """get_task_detail returns not-found message for missing task."""
         from app.ai.agent.tools.task_tools import get_task_detail
@@ -1087,9 +1109,7 @@ class TestGetTaskDetail:
         # "No task found matching ..." immediately.
         _setup_context(accessible_project_ids=[])
 
-        result = await get_task_detail.ainvoke(
-            {"task": str(uuid4())}
-        )
+        result = await get_task_detail.ainvoke({"task": str(uuid4())})
         assert "no task found" in result.lower()
         _clear()
 
@@ -1098,8 +1118,8 @@ class TestGetTaskDetail:
 # request_clarification tool
 # ---------------------------------------------------------------------------
 
-class TestRequestClarification:
 
+class TestRequestClarification:
     @patch("app.ai.agent.tools.utility_tools.interrupt")
     async def test_calls_interrupt_and_returns_answer(self, mock_interrupt):
         """request_clarification calls interrupt() and extracts the answer."""
@@ -1108,9 +1128,7 @@ class TestRequestClarification:
         mock_interrupt.return_value = {"answer": "Option B"}
 
         _setup_context()
-        result = await request_clarification.ainvoke(
-            {"question": "Which option?", "options": ["A", "B"]}
-        )
+        result = await request_clarification.ainvoke({"question": "Which option?", "options": ["A", "B"]})
 
         mock_interrupt.assert_called_once()
         payload = mock_interrupt.call_args[0][0]
@@ -1129,9 +1147,7 @@ class TestRequestClarification:
         mock_interrupt.return_value = "plain text answer"
 
         _setup_context()
-        result = await request_clarification.ainvoke(
-            {"question": "What?"}
-        )
+        result = await request_clarification.ainvoke({"question": "What?"})
         assert "[USER CONTENT START]" in result
         assert "plain text answer" in result
         assert "[USER CONTENT END]" in result
@@ -1142,8 +1158,8 @@ class TestRequestClarification:
 # get_project_status tool
 # ---------------------------------------------------------------------------
 
-class TestGetProjectDetails:
 
+class TestGetProjectDetails:
     async def test_access_denied(self):
         """get_project_details returns not-found when project is not accessible."""
         from app.ai.agent.tools.project_tools import get_project_details
@@ -1156,9 +1172,7 @@ class TestGetProjectDetails:
 
         _setup_context(accessible_project_ids=[], db_session_factory=mock_db_factory)
 
-        result = await get_project_details.ainvoke(
-            {"project": str(uuid4())}
-        )
+        result = await get_project_details.ainvoke({"project": str(uuid4())})
         assert "No project found" in result
         _clear()
 
@@ -1167,8 +1181,8 @@ class TestGetProjectDetails:
 # get_overdue_tasks tool
 # ---------------------------------------------------------------------------
 
-class TestGetOverdueTasks:
 
+class TestGetOverdueTasks:
     async def test_returns_no_accessible_projects_message(self):
         """get_overdue_tasks returns message when user has no accessible projects."""
         from app.ai.agent.tools.project_tools import get_overdue_tasks
@@ -1201,9 +1215,7 @@ class TestGetOverdueTasks:
             db_session_factory=mock_db_factory,
         )
 
-        result = await get_overdue_tasks.ainvoke(
-            {"scope": str(uuid4())}
-        )
+        result = await get_overdue_tasks.ainvoke({"scope": str(uuid4())})
         assert "No application found" in result
         _clear()
 
@@ -1212,8 +1224,8 @@ class TestGetOverdueTasks:
 # get_team_members tool
 # ---------------------------------------------------------------------------
 
-class TestGetApplicationMembers:
 
+class TestGetApplicationMembers:
     async def test_access_denied(self):
         """get_application_members returns not-found when app is not accessible."""
         from app.ai.agent.tools.application_tools import get_application_members
@@ -1226,9 +1238,7 @@ class TestGetApplicationMembers:
 
         _setup_context(accessible_app_ids=[], db_session_factory=mock_db_factory)
 
-        result = await get_application_members.ainvoke(
-            {"app": str(uuid4())}
-        )
+        result = await get_application_members.ainvoke({"app": str(uuid4())})
         assert "No application found" in result
         _clear()
 
@@ -1237,8 +1247,8 @@ class TestGetApplicationMembers:
 # understand_image tool
 # ---------------------------------------------------------------------------
 
-class TestUnderstandImage:
 
+class TestUnderstandImage:
     async def test_attachment_not_found(self):
         """understand_image returns not-found when attachment doesn't exist."""
         from app.ai.agent.tools.utility_tools import understand_image
@@ -1301,12 +1311,8 @@ class TestUnderstandImage:
 
         mock_registry = MagicMock()
         mock_vision_provider = AsyncMock()
-        mock_vision_provider.describe_image = AsyncMock(
-            return_value="A flowchart showing the deployment process."
-        )
-        mock_registry.get_vision_provider = AsyncMock(
-            return_value=(mock_vision_provider, "gpt-4o")
-        )
+        mock_vision_provider.describe_image = AsyncMock(return_value="A flowchart showing the deployment process.")
+        mock_registry.get_vision_provider = AsyncMock(return_value=(mock_vision_provider, "gpt-4o"))
 
         _setup_context(
             user_id=str(uuid4()),
@@ -1320,9 +1326,7 @@ class TestUnderstandImage:
             mock_minio_svc.download_file.return_value = b"\x89PNG\x00"
             mock_minio_cls.return_value = mock_minio_svc
 
-            result = await understand_image.ainvoke(
-                {"attachment_id": str(att_id), "question": "What is this diagram?"}
-            )
+            result = await understand_image.ainvoke({"attachment_id": str(att_id), "question": "What is this diagram?"})
 
         assert "flowchart" in result.lower()
         _clear()
@@ -1332,8 +1336,8 @@ class TestUnderstandImage:
 # get_projects — happy-path data formatting
 # ---------------------------------------------------------------------------
 
-class TestListProjectsHappyPath:
 
+class TestListProjectsHappyPath:
     async def test_returns_project_data(self):
         """list_projects returns project names in results."""
         from app.ai.agent.tools.project_tools import list_projects
@@ -1396,8 +1400,8 @@ class TestListProjectsHappyPath:
 # get_task_detail — happy-path data formatting
 # ---------------------------------------------------------------------------
 
-class TestGetTaskDetailHappyPath:
 
+class TestGetTaskDetailHappyPath:
     async def test_returns_formatted_task_with_metadata(self):
         """get_task_detail returns a formatted task with title and status."""
         from app.ai.agent.tools.task_tools import get_task_detail
@@ -1468,10 +1472,12 @@ class TestGetTaskDetailHappyPath:
         detail_result = MagicMock()
         detail_result.scalar_one_or_none.return_value = mock_task
 
-        mock_session.execute = AsyncMock(side_effect=[
-            resolve_result,  # _resolve_task UUID lookup
-            detail_result,   # get_task_detail full load
-        ])
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                resolve_result,  # _resolve_task UUID lookup
+                detail_result,  # get_task_detail full load
+            ]
+        )
 
         @asynccontextmanager
         async def mock_db_factory():
@@ -1495,8 +1501,8 @@ class TestGetTaskDetailHappyPath:
 # _relative_time helper
 # ---------------------------------------------------------------------------
 
-class TestRelativeTime:
 
+class TestRelativeTime:
     def test_none_returns_unknown(self):
         assert _relative_time(None) == "unknown"
 
@@ -1506,21 +1512,25 @@ class TestRelativeTime:
 
     def test_yesterday(self):
         from datetime import timedelta
+
         yesterday = datetime.now(timezone.utc) - timedelta(days=1)
         assert _relative_time(yesterday) == "yesterday"
 
     def test_days_ago(self):
         from datetime import timedelta
+
         three_days = datetime.now(timezone.utc) - timedelta(days=3)
         assert _relative_time(three_days) == "3 days ago"
 
     def test_weeks_ago(self):
         from datetime import timedelta
+
         two_weeks = datetime.now(timezone.utc) - timedelta(days=14)
         assert _relative_time(two_weeks) == "2 weeks ago"
 
     def test_old_date_falls_back_to_format_date(self):
         from datetime import timedelta
+
         old = datetime.now(timezone.utc) - timedelta(days=60)
         result = _relative_time(old)
         # Should fall back to _format_date which returns YYYY-MM-DD HH:MM
@@ -1532,8 +1542,8 @@ class TestRelativeTime:
 # _resolve_application tests
 # ---------------------------------------------------------------------------
 
-class TestResolveApplication:
 
+class TestResolveApplication:
     async def test_valid_uuid_with_access(self):
         """Resolves immediately when identifier is a valid UUID with access."""
         app_id = str(uuid4())
@@ -1630,8 +1640,8 @@ class TestResolveApplication:
 # _resolve_project tests
 # ---------------------------------------------------------------------------
 
-class TestResolveProject:
 
+class TestResolveProject:
     async def test_valid_uuid_with_access(self):
         """Resolves immediately when identifier is a valid UUID with access."""
         proj_id = str(uuid4())
@@ -1717,8 +1727,8 @@ class TestResolveProject:
 # get_applications tool
 # ---------------------------------------------------------------------------
 
-class TestListApplications:
 
+class TestListApplications:
     async def test_no_accessible_apps(self):
         """list_applications returns message when user has no apps."""
         from app.ai.agent.tools.application_tools import list_applications
@@ -1768,8 +1778,8 @@ class TestListApplications:
 # browse_knowledge tool
 # ---------------------------------------------------------------------------
 
-class TestBrowseFolders:
 
+class TestBrowseFolders:
     async def test_invalid_scope(self):
         """browse_folders rejects invalid scope values."""
         from app.ai.agent.tools.knowledge_tools import browse_folders
@@ -1809,10 +1819,12 @@ class TestBrowseFolders:
 
         _setup_context(accessible_app_ids=[], db_session_factory=mock_db_factory)
 
-        result = await browse_folders.ainvoke({
-            "scope": "application",
-            "scope_id": app_id,
-        })
+        result = await browse_folders.ainvoke(
+            {
+                "scope": "application",
+                "scope_id": app_id,
+            }
+        )
         assert "No application found" in result
         _clear()
 
@@ -1839,12 +1851,14 @@ class TestBrowseFolders:
         total_folders_result = MagicMock()
         total_folders_result.scalar.return_value = 0
 
-        mock_session.execute = AsyncMock(side_effect=[
-            folder_result,
-            doc_result,
-            total_docs_result,
-            total_folders_result,
-        ])
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                folder_result,
+                doc_result,
+                total_docs_result,
+                total_folders_result,
+            ]
+        )
 
         @asynccontextmanager
         async def mock_db_factory():
@@ -1861,8 +1875,8 @@ class TestBrowseFolders:
 # get_projects with name resolution
 # ---------------------------------------------------------------------------
 
-class TestGetProjectsNameResolution:
 
+class TestGetProjectsNameResolution:
     async def test_resolves_app_by_name(self):
         """list_projects resolves application name and returns projects."""
         from app.ai.agent.tools.project_tools import list_projects
@@ -1911,12 +1925,14 @@ class TestGetProjectsNameResolution:
         mem_result.all.return_value = []
 
         mock_session = AsyncMock()
-        mock_session.execute = AsyncMock(side_effect=[
-            resolver_result,
-            proj_result,
-            agg_result,
-            mem_result,
-        ])
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                resolver_result,
+                proj_result,
+                agg_result,
+                mem_result,
+            ]
+        )
 
         @asynccontextmanager
         async def mock_db_factory():
@@ -1934,8 +1950,8 @@ class TestGetProjectsNameResolution:
 # get_tasks with name resolution
 # ---------------------------------------------------------------------------
 
-class TestGetTasksNameResolution:
 
+class TestGetTasksNameResolution:
     async def test_resolves_project_by_name(self):
         """list_tasks resolves project name and returns tasks."""
         from app.ai.agent.tools.task_tools import list_tasks
@@ -1970,10 +1986,12 @@ class TestGetTasksNameResolution:
         task_result.scalars.return_value = task_scalars
 
         mock_session = AsyncMock()
-        mock_session.execute = AsyncMock(side_effect=[
-            resolver_result,
-            task_result,
-        ])
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                resolver_result,
+                task_result,
+            ]
+        )
 
         @asynccontextmanager
         async def mock_db_factory():
@@ -1991,8 +2009,8 @@ class TestGetTasksNameResolution:
 # Resolver edge case tests (Round 1 review gaps)
 # ---------------------------------------------------------------------------
 
-class TestResolverEdgeCases:
 
+class TestResolverEdgeCases:
     async def test_resolve_application_empty_string(self):
         """Empty string identifier is rejected."""
         _setup_context(accessible_app_ids=[str(uuid4())])
@@ -2068,8 +2086,8 @@ class TestResolverEdgeCases:
 # get_task_detail — invalid UUID
 # ---------------------------------------------------------------------------
 
-class TestGetTaskDetailInvalidUuid:
 
+class TestGetTaskDetailInvalidUuid:
     async def test_invalid_uuid_returns_error(self):
         """get_task_detail returns user-friendly error for non-UUID identifier."""
         from app.ai.agent.tools.task_tools import get_task_detail
@@ -2104,8 +2122,8 @@ class TestGetTaskDetailInvalidUuid:
 # browse_knowledge — with folders and documents
 # ---------------------------------------------------------------------------
 
-class TestBrowseKnowledgeFormatting:
 
+class TestBrowseKnowledgeFormatting:
     async def test_with_folders_and_documents(self):
         """browse_folders formats folders and documents correctly."""
         from app.ai.agent.tools.knowledge_tools import browse_folders
@@ -2160,16 +2178,18 @@ class TestBrowseKnowledgeFormatting:
         total_folders_result = MagicMock()
         total_folders_result.scalar.return_value = 1
 
-        mock_session.execute = AsyncMock(side_effect=[
-            resolver_result,      # resolver
-            app_name_result,      # app name
-            folder_check_result,  # folder scope check
-            folder_result,        # subfolder list
-            doc_count_result,     # doc counts
-            doc_result,           # document list
-            total_docs_result,    # total docs
-            total_folders_result, # total folders
-        ])
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                resolver_result,  # resolver
+                app_name_result,  # app name
+                folder_check_result,  # folder scope check
+                folder_result,  # subfolder list
+                doc_count_result,  # doc counts
+                doc_result,  # document list
+                total_docs_result,  # total docs
+                total_folders_result,  # total folders
+            ]
+        )
 
         @asynccontextmanager
         async def mock_db_factory():
@@ -2177,11 +2197,13 @@ class TestBrowseKnowledgeFormatting:
 
         _setup_context(accessible_app_ids=[str(app_id)], db_session_factory=mock_db_factory)
 
-        result = await browse_folders.ainvoke({
-            "scope": "application",
-            "scope_id": "Test App",
-            "folder_id": str(folder_id),
-        })
+        result = await browse_folders.ainvoke(
+            {
+                "scope": "application",
+                "scope_id": "Test App",
+                "folder_id": str(folder_id),
+            }
+        )
         assert "Test App" in result
         assert "Architecture" in result
         assert "Setup Guide" in result
@@ -2206,11 +2228,13 @@ class TestBrowseKnowledgeFormatting:
         app_id = str(uuid4())
         _setup_context(accessible_app_ids=[app_id], db_session_factory=mock_db_factory)
 
-        result = await browse_folders.ainvoke({
-            "scope": "application",
-            "scope_id": app_id,
-            "folder_id": "not-a-uuid",
-        })
+        result = await browse_folders.ainvoke(
+            {
+                "scope": "application",
+                "scope_id": app_id,
+                "folder_id": "not-a-uuid",
+            }
+        )
         assert "Invalid folder_id" in result
         _clear()
 
@@ -2228,10 +2252,12 @@ class TestBrowseKnowledgeFormatting:
 
         _setup_context(user_id=user_id, db_session_factory=mock_db_factory)
 
-        result = await browse_folders.ainvoke({
-            "scope": "personal",
-            "scope_id": other_user,
-        })
+        result = await browse_folders.ainvoke(
+            {
+                "scope": "personal",
+                "scope_id": other_user,
+            }
+        )
         assert "Access denied" in result
         _clear()
 
@@ -2240,8 +2266,8 @@ class TestBrowseKnowledgeFormatting:
 # get_applications — owner role
 # ---------------------------------------------------------------------------
 
-class TestGetApplicationsOwnerRole:
 
+class TestGetApplicationsOwnerRole:
     async def test_shows_owner_role(self):
         """list_applications shows 'owner' role when user is the app owner."""
         from app.ai.agent.tools.application_tools import list_applications
@@ -2282,8 +2308,8 @@ class TestGetApplicationsOwnerRole:
 # understand_image — error branch tests (TE R2 gaps 1 & 2)
 # ---------------------------------------------------------------------------
 
-class TestUnderstandImageErrorBranches:
 
+class TestUnderstandImageErrorBranches:
     async def test_non_image_file_rejected(self):
         """understand_image rejects non-image file types."""
         from app.ai.agent.tools.utility_tools import understand_image
@@ -2430,7 +2456,6 @@ class TestUnderstandImageErrorBranches:
 
 
 class TestGetTasksAssigneeEmailFallback:
-
     async def test_assignee_name_search_includes_email(self):
         """list_tasks assignee filter resolves user by name/email."""
         from app.ai.agent.tools.task_tools import list_tasks
@@ -2440,9 +2465,7 @@ class TestGetTasksAssigneeEmailFallback:
 
         # DB-007: _resolve_user combined email OR display_name query (single execute)
         user_result = MagicMock()
-        user_result.all.return_value = [
-            MagicMock(id=user_id, display_name="John Doe", email="john@example.com")
-        ]
+        user_result.all.return_value = [MagicMock(id=user_id, display_name="John Doe", email="john@example.com")]
 
         # Task query returns empty (no matching tasks)
         task_result = MagicMock()
@@ -2453,10 +2476,12 @@ class TestGetTasksAssigneeEmailFallback:
         task_result.scalars.return_value = task_scalars
 
         mock_session = AsyncMock()
-        mock_session.execute = AsyncMock(side_effect=[
-            user_result,    # _resolve_user combined query
-            task_result,    # list_tasks query
-        ])
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                user_result,  # _resolve_user combined query
+                task_result,  # list_tasks query
+            ]
+        )
 
         @asynccontextmanager
         async def mock_db_factory():
@@ -2467,10 +2492,12 @@ class TestGetTasksAssigneeEmailFallback:
             db_session_factory=mock_db_factory,
         )
 
-        result = await list_tasks.ainvoke({
-            "project": proj_id,
-            "assignee": "john",
-        })
+        result = await list_tasks.ainvoke(
+            {
+                "project": proj_id,
+                "assignee": "john",
+            }
+        )
 
         assert "no tasks found" in result.lower()
         _clear()

@@ -4,17 +4,20 @@ This module provides high-performance caching for frequently accessed user data
 to reduce database queries and support 5000+ concurrent users per instance.
 
 Cache Strategy:
-- User profile cache: 5 minute TTL, max 10,000 entries
+- L1 (in-memory): Zero-latency hot path, per-process, 5 minute TTL
+- L2 (Redis): Shared across workers, 5 minute TTL, populated on L1 miss
 - Application role cache: 5 minute TTL, max 10,000 entries
 - Project role cache: 5 minute TTL, max 10,000 entries
 
 Invalidation:
-- User cache: On profile update, password change
+- User cache: On profile update, password change (both L1 + L2)
 - App role cache: On role change, member removal
 - Project role cache: On role change, member removal
 - Cross-worker: Redis pub/sub on ws:user_cache_invalidate channel
 """
 
+import json
+import logging
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -23,6 +26,10 @@ from uuid import UUID
 
 # Cache configuration — runtime getter functions (never freeze at import time)
 from ..ai.config_service import get_agent_config
+
+logger = logging.getLogger(__name__)
+
+_USER_CACHE_REDIS_PREFIX = "user_cache:"
 
 
 def _get_cache_ttl() -> int:
@@ -57,7 +64,10 @@ _user_cache: OrderedDict[str, Tuple[CachedUser, float, float]] = OrderedDict()
 
 def get_cached_user(user_id: UUID) -> Optional[CachedUser]:
     """
-    Get user from cache if present and not expired.
+    Get user from L1 (in-memory) cache if present and not expired.
+
+    For L2 (Redis) lookups on L1 miss, use the async variant
+    ``get_cached_user_with_l2()``.
 
     Args:
         user_id: The user's UUID
@@ -76,9 +86,75 @@ def get_cached_user(user_id: UUID) -> Optional[CachedUser]:
     return None
 
 
+async def get_cached_user_with_l2(user_id: UUID) -> Optional[CachedUser]:
+    """
+    Get user from L1 cache, falling back to Redis L2 on miss.
+
+    On L2 hit, populates L1 and returns the user.
+
+    Args:
+        user_id: The user's UUID
+
+    Returns:
+        CachedUser if found in L1 or L2, None otherwise
+    """
+    # L1 check
+    result = get_cached_user(user_id)
+    if result is not None:
+        return result
+
+    # L2 check (Redis)
+    from .redis_service import redis_service
+
+    if not redis_service.is_connected:
+        return None
+
+    redis_key = f"{_USER_CACHE_REDIS_PREFIX}{user_id}"
+    try:
+        raw = await redis_service.get(redis_key)
+    except Exception:
+        return None
+
+    if raw is None:
+        return None
+
+    try:
+        data = json.loads(raw)
+        cached_user = CachedUser(
+            id=UUID(data["id"]),
+            email=data["email"],
+            display_name=data.get("display_name"),
+            avatar_url=data.get("avatar_url"),
+            email_verified=data.get("email_verified", True),
+            is_developer=data.get("is_developer", False),
+        )
+    except (json.JSONDecodeError, KeyError, ValueError):
+        return None
+
+    # Populate L1 from L2 hit
+    _set_l1_cached_user(cached_user)
+    return cached_user
+
+
+def _set_l1_cached_user(cached_user: CachedUser) -> None:
+    """Store a CachedUser in L1 only."""
+    if len(_user_cache) >= _get_max_size():
+        _evict_oldest(_user_cache)
+
+    now = time.time()
+    _user_cache[str(cached_user.id)] = (
+        cached_user,
+        now + _get_cache_ttl(),
+        now,
+    )
+
+
 def set_cached_user(user) -> None:
     """
-    Store user in cache.
+    Store user in L1 (in-memory) cache.
+
+    For L1 + L2 (Redis) population, use the async variant
+    ``set_cached_user_with_l2()``.
 
     Args:
         user: User model instance with id, email, display_name, avatar_url
@@ -101,14 +177,71 @@ def set_cached_user(user) -> None:
     )
 
 
+async def set_cached_user_with_l2(user) -> None:
+    """
+    Store user in both L1 (in-memory) and L2 (Redis) caches.
+
+    Args:
+        user: User model instance with id, email, display_name, avatar_url
+    """
+    # Populate L1
+    set_cached_user(user)
+
+    # Populate L2 (best-effort)
+    from .redis_service import redis_service
+
+    if not redis_service.is_connected:
+        return
+
+    redis_key = f"{_USER_CACHE_REDIS_PREFIX}{user.id}"
+    payload = json.dumps(
+        {
+            "id": str(user.id),
+            "email": user.email,
+            "display_name": user.display_name,
+            "avatar_url": getattr(user, "avatar_url", None),
+            "email_verified": getattr(user, "email_verified", True),
+            "is_developer": getattr(user, "is_developer", False),
+        }
+    )
+    try:
+        await redis_service.set(redis_key, payload, ttl=_get_cache_ttl())
+    except Exception:
+        logger.debug("Failed to set user cache L2 for %s", user.id)
+
+
 def invalidate_user(user_id: UUID) -> None:
     """
-    Remove user from cache.
+    Remove user from L1 cache.
+
+    For L1 + L2 invalidation, use the async variant
+    ``invalidate_user_with_l2()``.
 
     Args:
         user_id: The user's UUID to invalidate
     """
     _user_cache.pop(str(user_id), None)
+
+
+async def invalidate_user_with_l2(user_id: UUID) -> None:
+    """
+    Remove user from both L1 and L2 (Redis) caches.
+
+    Args:
+        user_id: The user's UUID to invalidate
+    """
+    invalidate_user(user_id)
+
+    from .redis_service import redis_service
+
+    if not redis_service.is_connected:
+        return
+
+    redis_key = f"{_USER_CACHE_REDIS_PREFIX}{user_id}"
+    try:
+        await redis_service.delete(redis_key)
+    except Exception:
+        logger.debug("Failed to invalidate user cache L2 for %s", user_id)
 
 
 def clear_user_cache() -> None:
@@ -169,9 +302,7 @@ def has_cached_app_role(user_id: UUID, app_id: UUID) -> bool:
     return False
 
 
-def set_cached_app_role(
-    user_id: UUID, app_id: UUID, role: Optional[str]
-) -> None:
+def set_cached_app_role(user_id: UUID, app_id: UUID, role: Optional[str]) -> None:
     """
     Store application role in cache.
 
@@ -285,9 +416,7 @@ def has_cached_project_role(user_id: UUID, project_id: UUID) -> bool:
     return False
 
 
-def set_cached_project_role(
-    user_id: UUID, project_id: UUID, role: Optional[str]
-) -> None:
+def set_cached_project_role(user_id: UUID, project_id: UUID, role: Optional[str]) -> None:
     """
     Store project role in cache.
 
@@ -381,10 +510,12 @@ def clear_all_caches() -> None:
 
     # Clear WebSocket room authorization cache
     from ..websocket.room_auth import _auth_cache
+
     _auth_cache.clear()
 
     # Clear AI health check cache (keyed by fixed strings "embedding"/"chat")
     from ..main import _ai_health_cache
+
     _ai_health_cache.clear()
 
     # Note: auto-archive throttle is now Redis-based (no in-memory dict to clear)
@@ -406,11 +537,18 @@ async def publish_user_cache_invalidation(
     Best-effort: silently ignores errors (same pattern as room_auth.py).
     """
     from ..services.redis_service import redis_service
+
     if redis_service.is_connected:
         try:
-            payload = {k: v for k, v in {
-                "user_id": user_id, "app_id": app_id, "project_id": project_id,
-            }.items() if v is not None}
+            payload = {
+                k: v
+                for k, v in {
+                    "user_id": user_id,
+                    "app_id": app_id,
+                    "project_id": project_id,
+                }.items()
+                if v is not None
+            }
             await redis_service.publish(
                 _USER_CACHE_INVALIDATE_CHANNEL,
                 payload,
@@ -460,10 +598,9 @@ async def _handle_user_cache_invalidation(data: dict) -> None:
 async def setup_user_cache_pubsub() -> None:
     """Subscribe to user cache invalidation channel (call at startup)."""
     from ..services.redis_service import redis_service
+
     if redis_service.is_connected:
-        await redis_service.subscribe(
-            _USER_CACHE_INVALIDATE_CHANNEL, _handle_user_cache_invalidation
-        )
+        await redis_service.subscribe(_USER_CACHE_INVALIDATE_CHANNEL, _handle_user_cache_invalidation)
 
 
 def get_cache_stats() -> dict:

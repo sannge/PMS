@@ -30,6 +30,7 @@ import app.ai.sql_executor  # noqa: F401
 # Mock helpers
 # ---------------------------------------------------------------------------
 
+
 def _mock_db() -> AsyncMock:
     return AsyncMock()
 
@@ -52,6 +53,8 @@ class MockRetrievalResult:
     chunk_type: str = "text"
     chunk_index: int | None = 0
     application_id: UUID | None = None
+    source_type: str = "document"
+    file_id: UUID | None = None
 
 
 @dataclass
@@ -86,8 +89,8 @@ class MockQueryResult:
 # Tests: sql_query_tool
 # ---------------------------------------------------------------------------
 
-class TestSqlQueryTool:
 
+class TestSqlQueryTool:
     @patch("app.ai.sql_executor.execute")
     @patch("app.ai.sql_generator.generate_query")
     async def test_success_returns_tool_result(self, mock_gen, mock_exec):
@@ -139,7 +142,10 @@ class TestSqlQueryTool:
     @patch("app.ai.sql_generator.generate_query")
     async def test_execution_failure_returns_error(self, mock_gen, _mock_exec):
         mock_gen.return_value = MockGeneratedQuery(
-            sql="SELECT 1", explanation="test", tables_used=[], duration_ms=5,
+            sql="SELECT 1",
+            explanation="test",
+            tables_used=[],
+            duration_ms=5,
         )
 
         result = await sql_query_tool(
@@ -157,8 +163,8 @@ class TestSqlQueryTool:
 # Tests: rag_search_tool
 # ---------------------------------------------------------------------------
 
-class TestRagSearchTool:
 
+class TestRagSearchTool:
     @patch("app.ai.agent_tools.HybridRetrievalService")
     @patch("app.ai.agent_tools.EmbeddingNormalizer")
     async def test_returns_formatted_results(self, _mock_norm, mock_svc_cls):
@@ -253,8 +259,8 @@ class TestRagSearchTool:
 # Tests: export_to_excel_tool
 # ---------------------------------------------------------------------------
 
-class TestExportToExcelTool:
 
+class TestExportToExcelTool:
     @patch("app.ai.excel_export.export_to_excel")
     async def test_success_returns_download_url(self, mock_export):
         from app.ai.excel_export import ExportResult as _ER
@@ -296,17 +302,23 @@ class TestExportToExcelTool:
 # Cross-cutting: success flag consistency
 # ---------------------------------------------------------------------------
 
-class TestToolResultConsistency:
 
+class TestToolResultConsistency:
     @patch("app.ai.sql_executor.execute")
     @patch("app.ai.sql_generator.generate_query")
     async def test_sql_tool_success_flag(self, mock_gen, mock_exec):
         mock_gen.return_value = MockGeneratedQuery(
-            sql="SELECT 1", explanation="", tables_used=[], duration_ms=1,
+            sql="SELECT 1",
+            explanation="",
+            tables_used=[],
+            duration_ms=1,
         )
         mock_exec.return_value = MockQueryResult(
-            columns=["x"], rows=[{"x": 1}], row_count=1,
-            truncated=False, execution_ms=1,
+            columns=["x"],
+            rows=[{"x": 1}],
+            row_count=1,
+            truncated=False,
+            execution_ms=1,
         )
 
         result = await sql_query_tool("q", uuid4(), _mock_db(), _mock_registry())
@@ -326,7 +338,9 @@ class TestToolResultConsistency:
         from app.ai.excel_export import ExportResult as _ER
 
         mock_exp.return_value = _ER(
-            filename="f.xlsx", download_url="/api/ai/export/f.xlsx", row_count=0,
+            filename="f.xlsx",
+            download_url="/api/ai/export/f.xlsx",
+            row_count=0,
         )
         result = await export_to_excel_tool([], [], "t", uuid4())
         assert result.success is True

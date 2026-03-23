@@ -5,6 +5,7 @@ Revises: b0c1d2e3f4g5
 Create Date: 2026-02-01 18:00:00.000000
 
 """
+
 from typing import Sequence, Union
 
 from alembic import op
@@ -28,7 +29,8 @@ def upgrade() -> None:
     conn = op.get_bind()
 
     # Step 1: Recalculate all existing aggregation rows from actual task data.
-    conn.execute(sa.text("""
+    conn.execute(
+        sa.text("""
         UPDATE "ProjectTaskStatusAgg" AS agg
         SET
             total_tasks = COALESCE(counts.total_tasks, 0),
@@ -53,10 +55,12 @@ def upgrade() -> None:
             GROUP BY t.project_id
         ) counts
         WHERE agg.project_id = counts.project_id
-    """))
+    """)
+    )
 
     # Step 1b: Zero out aggregations for projects with no active tasks
-    conn.execute(sa.text("""
+    conn.execute(
+        sa.text("""
         UPDATE "ProjectTaskStatusAgg" AS agg
         SET
             total_tasks = 0,
@@ -71,10 +75,12 @@ def upgrade() -> None:
             WHERE t.project_id = agg.project_id
               AND t.archived_at IS NULL
         )
-    """))
+    """)
+    )
 
     # Step 2: Insert aggregation rows for projects that don't have one yet
-    conn.execute(sa.text("""
+    conn.execute(
+        sa.text("""
         INSERT INTO "ProjectTaskStatusAgg"
             (project_id, total_tasks, todo_tasks, active_tasks, review_tasks, issue_tasks, done_tasks, updated_at)
         SELECT
@@ -104,13 +110,15 @@ def upgrade() -> None:
         ) counts ON p.id = counts.project_id
         WHERE agg.project_id IS NULL
           AND p.archived_at IS NULL
-    """))
+    """)
+    )
 
     # Step 3: Update derived_status_id for all projects based on recalculated aggregation.
     # Priority: Done > Issue > In Progress > Todo
 
     # 3a: Projects where all tasks are done
-    conn.execute(sa.text("""
+    conn.execute(
+        sa.text("""
         UPDATE "Projects" AS p
         SET derived_status_id = ts.id
         FROM "ProjectTaskStatusAgg" agg, "TaskStatuses" ts
@@ -119,10 +127,12 @@ def upgrade() -> None:
           AND ts.name = 'Done'
           AND agg.total_tasks > 0
           AND agg.done_tasks = agg.total_tasks
-    """))
+    """)
+    )
 
     # 3b: Projects with any issue tasks (and not all done)
-    conn.execute(sa.text("""
+    conn.execute(
+        sa.text("""
         UPDATE "Projects" AS p
         SET derived_status_id = ts.id
         FROM "ProjectTaskStatusAgg" agg, "TaskStatuses" ts
@@ -131,10 +141,12 @@ def upgrade() -> None:
           AND ts.name = 'Issue'
           AND agg.issue_tasks > 0
           AND NOT (agg.total_tasks > 0 AND agg.done_tasks = agg.total_tasks)
-    """))
+    """)
+    )
 
     # 3c: Projects with active or review tasks (no issues, not all done)
-    conn.execute(sa.text("""
+    conn.execute(
+        sa.text("""
         UPDATE "Projects" AS p
         SET derived_status_id = ts.id
         FROM "ProjectTaskStatusAgg" agg, "TaskStatuses" ts
@@ -144,10 +156,12 @@ def upgrade() -> None:
           AND (agg.active_tasks > 0 OR agg.review_tasks > 0)
           AND agg.issue_tasks = 0
           AND NOT (agg.total_tasks > 0 AND agg.done_tasks = agg.total_tasks)
-    """))
+    """)
+    )
 
     # 3d: Projects with only todo tasks (or empty)
-    conn.execute(sa.text("""
+    conn.execute(
+        sa.text("""
         UPDATE "Projects" AS p
         SET derived_status_id = ts.id
         FROM "ProjectTaskStatusAgg" agg, "TaskStatuses" ts
@@ -158,7 +172,8 @@ def upgrade() -> None:
           AND agg.review_tasks = 0
           AND agg.issue_tasks = 0
           AND NOT (agg.total_tasks > 0 AND agg.done_tasks = agg.total_tasks)
-    """))
+    """)
+    )
 
 
 def downgrade() -> None:

@@ -31,6 +31,7 @@ from .models.folder_file import FolderFile
 
 logger = logging.getLogger(__name__)
 
+
 # Parse Redis URL into components for ARQ
 # Format: redis://host:port/db or redis://:password@host:port/db
 def parse_redis_url(url: str) -> RedisSettings:
@@ -75,9 +76,7 @@ async def run_archive_jobs(ctx: dict[str, Any]) -> dict[str, Any]:
             projects_archived = await archive_eligible_projects(db)
             await db.commit()
 
-            logger.info(
-                f"Archive jobs complete: {tasks_archived} tasks, {projects_archived} projects archived"
-            )
+            logger.info(f"Archive jobs complete: {tasks_archived} tasks, {projects_archived} projects archived")
     except Exception as e:
         logger.error(f"Error running archive jobs: {e}", exc_info=True)
 
@@ -99,9 +98,7 @@ async def archive_stale_done_tasks(db: AsyncSession) -> int:
     cutoff_date = now - timedelta(days=archive_after_days)
 
     # Find all "Done" status IDs
-    done_status_result = await db.execute(
-        select(TaskStatus.id).where(TaskStatus.name == StatusName.DONE)
-    )
+    done_status_result = await db.execute(select(TaskStatus.id).where(TaskStatus.name == StatusName.DONE))
     done_status_ids = [row[0] for row in done_status_result.all()]
 
     if not done_status_ids:
@@ -158,12 +155,7 @@ async def archive_eligible_projects(db: AsyncSession) -> int:
     now = utc_now()
 
     # Subquery: projects with at least one task
-    has_tasks = (
-        select(Task.project_id)
-        .where(Task.project_id == Project.id)
-        .correlate(Project)
-        .exists()
-    )
+    has_tasks = select(Task.project_id).where(Task.project_id == Project.id).correlate(Project).exists()
 
     # Subquery: projects with at least one non-archived task
     has_active_tasks = (
@@ -177,13 +169,10 @@ async def archive_eligible_projects(db: AsyncSession) -> int:
     )
 
     # Find projects to archive
-    query = (
-        select(Project.id, Project.key, Project.name)
-        .where(
-            Project.archived_at.is_(None),
-            has_tasks,
-            ~has_active_tasks,
-        )
+    query = select(Project.id, Project.key, Project.name).where(
+        Project.archived_at.is_(None),
+        has_tasks,
+        ~has_active_tasks,
     )
 
     result = await db.execute(query)
@@ -201,9 +190,7 @@ async def archive_eligible_projects(db: AsyncSession) -> int:
 
     # Archive the projects
     await db.execute(
-        update(Project)
-        .where(Project.id.in_(project_ids_to_archive))
-        .values(archived_at=now, updated_at=now)
+        update(Project).where(Project.id.in_(project_ids_to_archive)).values(archived_at=now, updated_at=now)
     )
 
     return len(project_ids_to_archive)
@@ -221,9 +208,7 @@ async def _recalculate_project_aggregation(db: AsyncSession, project_id: Any) ->
         derive_project_status_from_model,
     )
 
-    result = await db.execute(
-        select(ProjectTaskStatusAgg).where(ProjectTaskStatusAgg.project_id == project_id)
-    )
+    result = await db.execute(select(ProjectTaskStatusAgg).where(ProjectTaskStatusAgg.project_id == project_id))
     agg = result.scalar_one_or_none()
 
     if agg is None:
@@ -270,9 +255,7 @@ async def _recalculate_project_aggregation(db: AsyncSession, project_id: Any) ->
     derived_status_name = derive_project_status_from_model(agg)
 
     # Update project's derived status
-    result = await db.execute(
-        select(Project).where(Project.id == project_id)
-    )
+    result = await db.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
 
     if project:
@@ -321,7 +304,7 @@ async def cleanup_stale_presence(ctx: dict[str, Any]) -> dict[str, int]:
             _SCAN_BATCH_LIMIT = 200
             room_ids = []
             for batch_start in range(0, len(keys), _SCAN_BATCH_LIMIT):
-                batch_keys = keys[batch_start:batch_start + _SCAN_BATCH_LIMIT]
+                batch_keys = keys[batch_start : batch_start + _SCAN_BATCH_LIMIT]
                 pipe = redis_service.client.pipeline(transaction=False)
                 batch_room_ids = []
                 for key in batch_keys:
@@ -377,6 +360,7 @@ async def _broadcast_embedding_status(
                 room_id = f"application:{app_id}"
             else:
                 from .models.project import Project
+
                 async with async_session_maker() as ws_db:
                     proj = await ws_db.get(Project, doc_scope["project_id"])
                 room_id = f"application:{proj.application_id}" if proj and proj.application_id else None
@@ -389,7 +373,9 @@ async def _broadcast_embedding_status(
     except Exception as ws_err:
         logger.warning(
             "Failed to broadcast embedding_status=%s for document %s: %s",
-            embedding_status, document_id, ws_err,
+            embedding_status,
+            document_id,
+            ws_err,
         )
 
 
@@ -430,15 +416,20 @@ async def embed_document_job(ctx: dict[str, Any], document_id: str) -> dict[str,
             if retry_count >= MAX_EMBED_RETRIES:
                 logger.error(
                     "embed_document_job: max retries (%d) reached for %s, setting failed",
-                    MAX_EMBED_RETRIES, document_id,
+                    MAX_EMBED_RETRIES,
+                    document_id,
                 )
                 async with async_session_maker() as err_db:
                     from sqlalchemy import select as sa_select, update as sa_update
+
                     # Fetch scope before update for WS broadcast
-                    doc_row = (await err_db.execute(
-                        sa_select(Document.application_id, Document.project_id, Document.user_id)
-                        .where(Document.id == doc_uuid)
-                    )).one_or_none()
+                    doc_row = (
+                        await err_db.execute(
+                            sa_select(Document.application_id, Document.project_id, Document.user_id).where(
+                                Document.id == doc_uuid
+                            )
+                        )
+                    ).one_or_none()
                     await err_db.execute(
                         sa_update(Document)
                         .where(Document.id == doc_uuid)
@@ -477,6 +468,7 @@ async def embed_document_job(ctx: dict[str, Any], document_id: str) -> dict[str,
             # FIX-6: Pre-resolve project's application_id to avoid second DB session in broadcast
             if doc.project_id and not doc.application_id:
                 from .models.project import Project
+
                 proj_row = await db.get(Project, doc.project_id)
                 if proj_row and proj_row.application_id:
                     doc_scope["_application_id"] = proj_row.application_id
@@ -503,7 +495,11 @@ async def embed_document_job(ctx: dict[str, Any], document_id: str) -> dict[str,
             if not isinstance(content, dict):
                 doc.embedding_status = "failed"
                 await db.commit()
-                logger.warning("embed_document_job: document %s has non-dict content_json (type=%s), marked failed", document_id, type(content).__name__)
+                logger.warning(
+                    "embed_document_job: document %s has non-dict content_json (type=%s), marked failed",
+                    document_id,
+                    type(content).__name__,
+                )
                 await _broadcast_embedding_status(doc_scope, document_id, "failed")
                 return {"status": "error", "error": "invalid_content_format"}
 
@@ -560,7 +556,8 @@ async def embed_document_job(ctx: dict[str, Any], document_id: str) -> dict[str,
             except Exception as img_err:
                 logger.warning(
                     "embed_document_job: image processing failed for %s (non-fatal): %s",
-                    document_id, img_err,
+                    document_id,
+                    img_err,
                 )
 
             await db.commit()
@@ -568,7 +565,11 @@ async def embed_document_job(ctx: dict[str, Any], document_id: str) -> dict[str,
             total_chunks = embed_result.chunk_count + image_count
             logger.info(
                 "embed_document_job: document %s embedded — %d text chunks, %d image chunks, %d tokens, %dms",
-                document_id, embed_result.chunk_count, image_count, embed_result.token_count, embed_result.duration_ms,
+                document_id,
+                embed_result.chunk_count,
+                image_count,
+                embed_result.token_count,
+                embed_result.duration_ms,
             )
 
             await _broadcast_embedding_status(doc_scope, document_id, "synced", total_chunks)
@@ -598,6 +599,7 @@ async def embed_document_job(ctx: dict[str, Any], document_id: str) -> dict[str,
         try:
             async with async_session_maker() as err_db:
                 from sqlalchemy import update as sa_update
+
                 # FIX-5: Atomic UPDATE...WHERE guards against TOCTOU race
                 err_result = await err_db.execute(
                     sa_update(Document)
@@ -668,7 +670,8 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
             if retry_count >= MAX_EXTRACT_RETRIES:
                 logger.error(
                     "extract_and_embed_file_job: max retries (%d) reached for %s",
-                    MAX_EXTRACT_RETRIES, file_id,
+                    MAX_EXTRACT_RETRIES,
+                    file_id,
                 )
                 async with async_session_maker() as err_db:
                     await err_db.execute(
@@ -722,9 +725,7 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
             )
             if not atomic_result.scalar_one_or_none():
                 # Either not found, deleted, or already being processed
-                check_result = await db.execute(
-                    select(FolderFile.extraction_status).where(FolderFile.id == file_uuid)
-                )
+                check_result = await db.execute(select(FolderFile.extraction_status).where(FolderFile.id == file_uuid))
                 current_status = check_result.scalar_one_or_none()
                 if current_status is None:
                     logger.warning("extract_and_embed_file_job: file %s not found or deleted", file_id)
@@ -735,9 +736,7 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
             await db.commit()
 
             # Re-fetch to cache fields needed after session close
-            result = await db.execute(
-                select(FolderFile).where(FolderFile.id == file_uuid)
-            )
+            result = await db.execute(select(FolderFile).where(FolderFile.id == file_uuid))
             ff = result.scalar_one()
 
             # Save scope for WS broadcast
@@ -751,6 +750,7 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
             project_application_id = None
             if ff.project_id and not ff.application_id:
                 from .models.project import Project
+
                 proj_row = await db.get(Project, ff.project_id)
                 if proj_row and proj_row.application_id:
                     file_scope["_application_id"] = proj_row.application_id
@@ -778,10 +778,8 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
             tmp_path = Path(tmp_dir) / f"file{ext}"
 
             # QE-NEW-2: Stream download to temp file instead of buffering in memory
-            # FIX-3: Wrap synchronous MinIO call in asyncio.to_thread to avoid blocking event loop
             try:
-                await asyncio.to_thread(
-                    minio_service.download_to_file,
+                await minio_service.download_to_file(
                     bucket=file_storage_bucket,
                     object_name=file_storage_key,
                     file_path=str(tmp_path),
@@ -831,7 +829,9 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
                 logger.warning("File %s status already changed by reaper, skipping error broadcast", file_id)
             else:
                 await _broadcast_file_event(
-                    file_scope, file_id, "file_extraction_failed",
+                    file_scope,
+                    file_id,
+                    "file_extraction_failed",
                     {"error": error_category, "folder_id": str(file_folder_id) if file_folder_id else None},
                 )
             return {"status": "error", "error": error_category}
@@ -871,7 +871,8 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
             except Exception as ms_err:
                 logger.warning(
                     "extract_and_embed_file_job: Meilisearch indexing failed for %s: %s",
-                    file_id, ms_err,
+                    file_id,
+                    ms_err,
                 )
 
             # Embed content
@@ -922,7 +923,8 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
                 except Exception as embed_err:
                     logger.warning(
                         "extract_and_embed_file_job: embedding failed for %s (non-fatal): %s",
-                        file_id, embed_err,
+                        file_id,
+                        embed_err,
                     )
                     ff3.embedding_status = "failed"
 
@@ -942,6 +944,7 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
                         from .ai.chunking_service import SemanticChunker
                         from .ai.embedding_normalizer import EmbeddingNormalizer
                         from .ai.embedding_service import EmbeddingService
+
                         registry = ProviderRegistry()
                         chunker = SemanticChunker()
                         normalizer = EmbeddingNormalizer()
@@ -974,25 +977,30 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
                         if img_size > _MAX_IMAGE_BYTES:
                             logger.warning(
                                 "Skipping oversized image (%d bytes > %d limit)",
-                                img_size, _MAX_IMAGE_BYTES,
+                                img_size,
+                                _MAX_IMAGE_BYTES,
                             )
                             continue
                         if total_image_bytes + img_size > _MAX_TOTAL_IMAGE_BYTES:
                             logger.warning(
                                 "Total image bytes cap reached (%d + %d > %d), skipping remaining",
-                                total_image_bytes, img_size, _MAX_TOTAL_IMAGE_BYTES,
+                                total_image_bytes,
+                                img_size,
+                                _MAX_TOTAL_IMAGE_BYTES,
                             )
                             break
                         total_image_bytes += img_size
                         content_type = f"image/{'jpeg' if fmt in ('jpg', 'jpeg') else fmt}"
                         filename = f"page{img.page_number or 0}_pos{img.position}.{fmt}"
-                        ius_images.append(IUSExtractedImage(
-                            data=img.image_bytes,
-                            content_type=content_type,
-                            filename=filename,
-                            caption=img.caption or "",
-                            page_number=img.page_number or 0,
-                        ))
+                        ius_images.append(
+                            IUSExtractedImage(
+                                data=img.image_bytes,
+                                content_type=content_type,
+                                filename=filename,
+                                caption=img.caption or "",
+                                page_number=img.page_number or 0,
+                            )
+                        )
 
                     descriptions = await image_svc.process_file_images(
                         images=ius_images,
@@ -1007,12 +1015,14 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
                     if image_chunk_count > 0:
                         logger.info(
                             "extract_and_embed_file_job: processed %d images for file %s",
-                            image_chunk_count, file_id,
+                            image_chunk_count,
+                            file_id,
                         )
                 except Exception as img_err:
                     logger.warning(
                         "extract_and_embed_file_job: image processing failed for %s (non-fatal): %s",
-                        file_id, img_err,
+                        file_id,
+                        img_err,
                     )
 
             await db3.commit()
@@ -1020,13 +1030,19 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
             logger.info(
                 "extract_and_embed_file_job: file %s processed — extraction=%s, "
                 "%d text chunks, %d image chunks, %d tokens, %dms",
-                file_id, ff3.extraction_status,
-                embed_chunk_count, image_chunk_count, embed_token_count, embed_duration_ms,
+                file_id,
+                ff3.extraction_status,
+                embed_chunk_count,
+                image_chunk_count,
+                embed_token_count,
+                embed_duration_ms,
             )
 
             # CRIT-2: Include folder_id in broadcast payload
             await _broadcast_file_event(
-                file_scope, file_id, "file_extraction_completed",
+                file_scope,
+                file_id,
+                "file_extraction_completed",
                 {
                     "folder_id": str(file_folder_id) if file_folder_id else None,
                     "extraction_status": "completed",
@@ -1038,7 +1054,10 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
             # Broadcast embedding status so the frontend updates the file's
             # embedding badge without a full refetch (mirrors embed_document_job).
             await _broadcast_embedding_status(
-                file_scope, file_id, ff3.embedding_status or "none", embed_chunk_count,
+                file_scope,
+                file_id,
+                ff3.embedding_status or "none",
+                embed_chunk_count,
             )
 
             # Clear retry counter on success
@@ -1088,7 +1107,9 @@ async def extract_and_embed_file_job(ctx: dict[str, Any], file_id: str) -> dict[
                 else:
                     if file_scope is not None:
                         await _broadcast_file_event(
-                            file_scope, file_id, "file_extraction_failed",
+                            file_scope,
+                            file_id,
+                            "file_extraction_failed",
                             {"error": error_category, "folder_id": str(file_folder_id) if file_folder_id else None},
                         )
         except Exception as reset_err:
@@ -1169,6 +1190,7 @@ async def _broadcast_file_event(
                 room_id = f"application:{app_id}"
             else:
                 from .models.project import Project
+
                 async with async_session_maker() as _db:
                     proj = await _db.get(Project, scope["project_id"])
                     if proj and proj.application_id:
@@ -1188,6 +1210,7 @@ async def _broadcast_file_event(
 # =============================================================================
 # Nightly Batch Embedding Job (Phase 9.6)
 # =============================================================================
+
 
 async def batch_embed_stale_documents(ctx: dict[str, Any]) -> dict[str, Any]:
     """Nightly cron job: embed all documents with stale or missing embeddings.
@@ -1210,11 +1233,13 @@ async def batch_embed_stale_documents(ctx: dict[str, Any]) -> dict[str, Any]:
     try:
         async with async_session_maker() as db:
             result = await db.execute(
-                select(Document.id).where(
+                select(Document.id)
+                .where(
                     Document.deleted_at.is_(None),
                     Document.content_json.isnot(None),
                     Document.embedding_status.in_(["stale", "none"]),
-                ).limit(MAX_NIGHTLY_EMBED)
+                )
+                .limit(MAX_NIGHTLY_EMBED)
             )
             stale_ids = [row[0] for row in result.all()]
 
@@ -1246,9 +1271,7 @@ async def batch_embed_stale_documents(ctx: dict[str, Any]) -> dict[str, Any]:
                         )
                         queued += 1
                     except Exception as e:
-                        logger.warning(
-                            "Failed to enqueue embed for doc %s: %s", doc_id, e
-                        )
+                        logger.warning("Failed to enqueue embed for doc %s: %s", doc_id, e)
 
                 # Pause between batches to avoid overwhelming the API
                 if i + NIGHTLY_EMBED_BATCH_SIZE < len(stale_ids):
@@ -1289,9 +1312,7 @@ async def _update_import_progress(session: AsyncSession, job_id, pct: int) -> No
     from .models.import_job import ImportJob
 
     async with async_session_maker() as progress_db:
-        await progress_db.execute(
-            sa_update(ImportJob).where(ImportJob.id == job_id).values(progress_pct=pct)
-        )
+        await progress_db.execute(sa_update(ImportJob).where(ImportJob.id == job_id).values(progress_pct=pct))
         await progress_db.commit()
 
 
@@ -1315,43 +1336,51 @@ def _parse_inline_marks(text: str) -> list[dict]:
 
     nodes: list[dict] = []
     pattern = re.compile(
-        r'\[([^\]]+)\]\(([^)]+)\)'  # [text](url)
-        r'|\*\*(.+?)\*\*'           # **bold**
-        r'|\*(.+?)\*'               # *italic*
-        r'|`(.+?)`'                 # `code`
-        r'|([^*`\[]+)'              # plain text
+        r"\[([^\]]+)\]\(([^)]+)\)"  # [text](url)
+        r"|\*\*(.+?)\*\*"  # **bold**
+        r"|\*(.+?)\*"  # *italic*
+        r"|`(.+?)`"  # `code`
+        r"|([^*`\[]+)"  # plain text
     )
     for match in pattern.finditer(text):
         if match.group(1):  # link
             href = match.group(2)
             # Only allow safe URL protocols
-            if href.lower().startswith(('http://', 'https://', 'mailto:')):
-                nodes.append({
-                    "type": "text",
-                    "marks": [{"type": "link", "attrs": {"href": href}}],
-                    "text": match.group(1),
-                })
+            if href.lower().startswith(("http://", "https://", "mailto:")):
+                nodes.append(
+                    {
+                        "type": "text",
+                        "marks": [{"type": "link", "attrs": {"href": href}}],
+                        "text": match.group(1),
+                    }
+                )
             else:
                 # Unsafe protocol - render as plain text
                 nodes.append({"type": "text", "text": match.group(1)})
         elif match.group(3):  # bold
-            nodes.append({
-                "type": "text",
-                "marks": [{"type": "bold"}],
-                "text": match.group(3),
-            })
+            nodes.append(
+                {
+                    "type": "text",
+                    "marks": [{"type": "bold"}],
+                    "text": match.group(3),
+                }
+            )
         elif match.group(4):  # italic
-            nodes.append({
-                "type": "text",
-                "marks": [{"type": "italic"}],
-                "text": match.group(4),
-            })
+            nodes.append(
+                {
+                    "type": "text",
+                    "marks": [{"type": "italic"}],
+                    "text": match.group(4),
+                }
+            )
         elif match.group(5):  # code
-            nodes.append({
-                "type": "text",
-                "marks": [{"type": "code"}],
-                "text": match.group(5),
-            })
+            nodes.append(
+                {
+                    "type": "text",
+                    "marks": [{"type": "code"}],
+                    "text": match.group(5),
+                }
+            )
         elif match.group(6):  # plain
             nodes.append({"type": "text", "text": match.group(6)})
     return nodes or [{"type": "text", "text": text}]
@@ -1415,16 +1444,18 @@ def _parse_table_block(lines: list[str], start: int) -> tuple[dict | None, int]:
         if not row_line.startswith("|"):
             break
         cells = parse_row(row_line)
-        rows.append({
-            "type": "tableRow",
-            "content": [
-                {
-                    "type": "tableCell",
-                    "content": [{"type": "paragraph", "content": _parse_inline_marks(cell)}],
-                }
-                for cell in cells
-            ],
-        })
+        rows.append(
+            {
+                "type": "tableRow",
+                "content": [
+                    {
+                        "type": "tableCell",
+                        "content": [{"type": "paragraph", "content": _parse_inline_marks(cell)}],
+                    }
+                    for cell in cells
+                ],
+            }
+        )
         i += 1
 
     return {"type": "table", "content": rows}, i
@@ -1467,10 +1498,12 @@ def markdown_to_tiptap_json(markdown: str) -> dict:
                 i += 1
             i += 1  # skip closing ```
             code_text = "\n".join(code_lines)
-            content.append({
-                "type": "codeBlock",
-                "content": [{"type": "text", "text": code_text}] if code_text else [],
-            })
+            content.append(
+                {
+                    "type": "codeBlock",
+                    "content": [{"type": "text", "text": code_text}] if code_text else [],
+                }
+            )
             continue
 
         # --- Horizontal rule ---
@@ -1484,11 +1517,13 @@ def markdown_to_tiptap_json(markdown: str) -> dict:
         if heading_match:
             level = len(heading_match.group(1))
             text = heading_match.group(2).strip()
-            content.append({
-                "type": "heading",
-                "attrs": {"level": level},
-                "content": _parse_inline_marks(text),
-            })
+            content.append(
+                {
+                    "type": "heading",
+                    "attrs": {"level": level},
+                    "content": _parse_inline_marks(text),
+                }
+            )
             i += 1
             continue
 
@@ -1503,10 +1538,12 @@ def markdown_to_tiptap_json(markdown: str) -> dict:
             inner_paras = [p.strip() for p in bq_text.split("\n") if p.strip()]
             bq_content: list[dict] = []
             for para in inner_paras:
-                bq_content.append({
-                    "type": "paragraph",
-                    "content": _parse_inline_marks(para),
-                })
+                bq_content.append(
+                    {
+                        "type": "paragraph",
+                        "content": _parse_inline_marks(para),
+                    }
+                )
             if not bq_content:
                 bq_content = [{"type": "paragraph", "content": []}]
             content.append({"type": "blockquote", "content": bq_content})
@@ -1528,13 +1565,17 @@ def markdown_to_tiptap_json(markdown: str) -> dict:
                 bm = re.match(r"^[\s]*[-*]\s+(.+)$", lines[i])
                 if not bm:
                     break
-                items.append({
-                    "type": "listItem",
-                    "content": [{
-                        "type": "paragraph",
-                        "content": _parse_inline_marks(bm.group(1).strip()),
-                    }],
-                })
+                items.append(
+                    {
+                        "type": "listItem",
+                        "content": [
+                            {
+                                "type": "paragraph",
+                                "content": _parse_inline_marks(bm.group(1).strip()),
+                            }
+                        ],
+                    }
+                )
                 i += 1
             content.append({"type": "bulletList", "content": items})
             continue
@@ -1547,13 +1588,17 @@ def markdown_to_tiptap_json(markdown: str) -> dict:
                 om = re.match(r"^[\s]*\d+[.)]\s+(.+)$", lines[i])
                 if not om:
                     break
-                items.append({
-                    "type": "listItem",
-                    "content": [{
-                        "type": "paragraph",
-                        "content": _parse_inline_marks(om.group(1).strip()),
-                    }],
-                })
+                items.append(
+                    {
+                        "type": "listItem",
+                        "content": [
+                            {
+                                "type": "paragraph",
+                                "content": _parse_inline_marks(om.group(1).strip()),
+                            }
+                        ],
+                    }
+                )
                 i += 1
             content.append({"type": "orderedList", "content": items})
             continue
@@ -1564,10 +1609,12 @@ def markdown_to_tiptap_json(markdown: str) -> dict:
             continue
 
         # --- Paragraph (default) ---
-        content.append({
-            "type": "paragraph",
-            "content": _parse_inline_marks(line.strip()),
-        })
+        content.append(
+            {
+                "type": "paragraph",
+                "content": _parse_inline_marks(line.strip()),
+            }
+        )
         i += 1
 
     # Ensure at least one empty paragraph for TipTap compatibility
@@ -1623,9 +1670,7 @@ async def process_document_import(ctx: dict[str, Any], job_id: str, _retry_count
             # ----------------------------------------------------------------
             # 1. Load job and mark as processing (10%)
             # ----------------------------------------------------------------
-            result = await db.execute(
-                select(ImportJob).where(ImportJob.id == job_uuid)
-            )
+            result = await db.execute(select(ImportJob).where(ImportJob.id == job_uuid))
             job = result.scalar_one_or_none()
             if job is None:
                 logger.warning("process_document_import: job %s not found", job_id)
@@ -1660,8 +1705,7 @@ async def process_document_import(ctx: dict[str, Any], job_id: str, _retry_count
                             # Mark job as failed
                             job.status = "failed"
                             job.error_message = (
-                                "Import deferred too many times due to high server load. "
-                                "Please try again later."
+                                "Import deferred too many times due to high server load. Please try again later."
                             )
                             job.completed_at = utc_now()
                             await db.commit()
@@ -1677,10 +1721,12 @@ async def process_document_import(ctx: dict[str, Any], job_id: str, _retry_count
                         )
                         # M4: Reuse shared ARQ pool instead of creating a fresh one
                         from .services.arq_helper import get_arq_redis
+
                         _arq_pool = await get_arq_redis()
                         # M6: Exponential backoff with jitter to prevent thundering herd
                         import random as _rnd
-                        _retry_delay = 15 * (2 ** _retry_count) + _rnd.uniform(0, 5)
+
+                        _retry_delay = 15 * (2**_retry_count) + _rnd.uniform(0, 5)
                         await _arq_pool.enqueue_job(
                             "process_document_import",
                             job_id,
@@ -1697,9 +1743,7 @@ async def process_document_import(ctx: dict[str, Any], job_id: str, _retry_count
                     )
             except Exception as redis_err:
                 # Fail-open: if Redis is down, allow the import
-                logger.warning(
-                    "Redis concurrency check failed (fail-open): %s", redis_err
-                )
+                logger.warning("Redis concurrency check failed (fail-open): %s", redis_err)
 
             job.status = "processing"
             job.progress_pct = 10
@@ -1709,9 +1753,7 @@ async def process_document_import(ctx: dict[str, Any], job_id: str, _retry_count
             # 2. Read the uploaded file
             # ----------------------------------------------------------------
             if not temp_path or not os.path.exists(temp_path):
-                raise FileNotFoundError(
-                    f"Temp file not found: {temp_path}"
-                )
+                raise FileNotFoundError(f"Temp file not found: {temp_path}")
 
             # ----------------------------------------------------------------
             # 2b. Set restrictive permissions on temp file
@@ -1725,9 +1767,7 @@ async def process_document_import(ctx: dict[str, Any], job_id: str, _retry_count
 
             docling = DoclingService()
 
-            conversion_result = await docling.process_file(
-                temp_path, job.file_type
-            )
+            conversion_result = await docling.process_file(temp_path, job.file_type)
             markdown_content = conversion_result.markdown
             extracted_images = conversion_result.images
 
@@ -1747,8 +1787,8 @@ async def process_document_import(ctx: dict[str, Any], job_id: str, _retry_count
             import re as _re
 
             # Strip markdown formatting for plain text version
-            plain_text = _re.sub(r'[#*`\[\]()>|_~-]', '', markdown_content)
-            plain_text = _re.sub(r'\n{3,}', '\n\n', plain_text).strip()
+            plain_text = _re.sub(r"[#*`\[\]()>|_~-]", "", markdown_content)
+            plain_text = _re.sub(r"\n{3,}", "\n\n", plain_text).strip()
 
             doc = Document(
                 title=doc_title,
@@ -1809,18 +1849,21 @@ async def process_document_import(ctx: dict[str, Any], job_id: str, _retry_count
                         if len(img.image_bytes) > _MAX_IMAGE_BYTES_IMP:
                             logger.warning(
                                 "Import: skipping oversized image (%d bytes > %d limit)",
-                                len(img.image_bytes), _MAX_IMAGE_BYTES_IMP,
+                                len(img.image_bytes),
+                                _MAX_IMAGE_BYTES_IMP,
                             )
                             continue
                         content_type = f"image/{'jpeg' if fmt in ('jpg', 'jpeg') else fmt}"
                         filename = f"page{img.page_number or 0}_pos{img.position}.{fmt}"
-                        ius_images.append(IUSExtractedImage(
-                            data=img.image_bytes,
-                            content_type=content_type,
-                            filename=filename,
-                            caption=img.caption or "",
-                            page_number=img.page_number or 0,
-                        ))
+                        ius_images.append(
+                            IUSExtractedImage(
+                                data=img.image_bytes,
+                                content_type=content_type,
+                                filename=filename,
+                                caption=img.caption or "",
+                                page_number=img.page_number or 0,
+                            )
+                        )
 
                     await _update_import_progress(db, job_uuid, 60)
 
@@ -1842,7 +1885,8 @@ async def process_document_import(ctx: dict[str, Any], job_id: str, _retry_count
                 except Exception as img_err:
                     logger.warning(
                         "Image processing failed for job %s (non-fatal): %s",
-                        job_id, img_err,
+                        job_id,
+                        img_err,
                     )
             else:
                 await _update_import_progress(db, job_uuid, 60)
@@ -1853,20 +1897,20 @@ async def process_document_import(ctx: dict[str, Any], job_id: str, _retry_count
             # 7. Trigger embed_document_job (90%)
             # ----------------------------------------------------------------
             try:
-                from arq.connections import create_pool
+                from .services.arq_helper import get_arq_redis
 
-                redis_pool = await create_pool(parse_redis_url(settings.redis_url))
-                await redis_pool.enqueue_job(
+                _arq_pool = await get_arq_redis()
+                await _arq_pool.enqueue_job(
                     "embed_document_job",
                     str(doc.id),
                     _job_id=f"embed:{doc.id}",
                     _defer_by=timedelta(seconds=120),
                 )
-                await redis_pool.aclose()
             except Exception as embed_err:
                 logger.warning(
                     "Failed to enqueue embedding for doc %s (non-fatal): %s",
-                    doc.id, embed_err,
+                    doc.id,
+                    embed_err,
                 )
 
             await _update_import_progress(db, job_uuid, 90)
@@ -1899,7 +1943,8 @@ async def process_document_import(ctx: dict[str, Any], job_id: str, _retry_count
             except Exception as ws_err:
                 logger.warning(
                     "Failed to broadcast IMPORT_COMPLETED for job %s: %s",
-                    job_id, ws_err,
+                    job_id,
+                    ws_err,
                 )
 
             # Clean up temp file
@@ -1909,9 +1954,11 @@ async def process_document_import(ctx: dict[str, Any], job_id: str, _retry_count
             try:
                 from .ai.telemetry import AITelemetry
 
-                _import_elapsed = int(
-                    (job.completed_at - job.created_at).total_seconds() * 1000
-                ) if job.completed_at and job.created_at else 0
+                _import_elapsed = (
+                    int((job.completed_at - job.created_at).total_seconds() * 1000)
+                    if job.completed_at and job.created_at
+                    else 0
+                )
                 AITelemetry.log_import(
                     user_id=job.user_id,
                     file_type=job.file_type,
@@ -1924,7 +1971,8 @@ async def process_document_import(ctx: dict[str, Any], job_id: str, _retry_count
 
             logger.info(
                 "process_document_import: job %s completed — document %s created",
-                job_id, doc.id,
+                job_id,
+                doc.id,
             )
 
             # Decrement concurrency counter on success
@@ -1956,9 +2004,7 @@ async def process_document_import(ctx: dict[str, Any], job_id: str, _retry_count
         # Mark job as failed
         try:
             async with async_session_maker() as db:
-                result = await db.execute(
-                    select(ImportJob).where(ImportJob.id == job_uuid)
-                )
+                result = await db.execute(select(ImportJob).where(ImportJob.id == job_uuid))
                 job = result.scalar_one_or_none()
                 if job:
                     job.status = "failed"
@@ -1985,7 +2031,8 @@ async def process_document_import(ctx: dict[str, Any], job_id: str, _retry_count
         except Exception as db_err:
             logger.error(
                 "Failed to update job %s status to failed: %s",
-                job_id, db_err,
+                job_id,
+                db_err,
             )
 
         # Telemetry: log failed import
@@ -2028,10 +2075,10 @@ def _parse_slide_titles(markdown: str) -> dict[int, str]:
     import re
 
     titles: dict[int, str] = {}
-    for m in re.finditer(r'^#{1,3}\s+(Slide\s+\d+.*)', markdown, re.MULTILINE):
+    for m in re.finditer(r"^#{1,3}\s+(Slide\s+\d+.*)", markdown, re.MULTILINE):
         full = m.group(1).strip()
         # Extract page number and optional title after colon
-        num_match = re.match(r'Slide\s+(\d+)(?::\s*(.*))?', full)
+        num_match = re.match(r"Slide\s+(\d+)(?::\s*(.*))?", full)
         if num_match:
             page = int(num_match.group(1))
             title = (num_match.group(2) or "").strip() or full
@@ -2178,6 +2225,7 @@ async def cleanup_checkpoints(ctx: dict[str, Any]) -> None:
 # Startup/Shutdown Hooks
 # =============================================================================
 
+
 async def startup(ctx: dict[str, Any]) -> None:
     """Initialize resources when worker starts."""
     logger.info("ARQ worker starting up...")
@@ -2192,6 +2240,7 @@ async def startup(ctx: dict[str, Any]) -> None:
     # Initialize Meilisearch (for search index consistency checker)
     try:
         from .services.search_service import init_meilisearch
+
         await init_meilisearch()
         logger.info("Meilisearch initialized for ARQ worker")
     except Exception as e:
@@ -2200,6 +2249,7 @@ async def startup(ctx: dict[str, Any]) -> None:
     # Crash recovery: reset stuck 'syncing' documents back to 'stale'
     try:
         from sqlalchemy import update as sa_update
+
         async with async_session_maker() as db:
             result = await db.execute(
                 sa_update(Document)
@@ -2215,6 +2265,7 @@ async def startup(ctx: dict[str, Any]) -> None:
     # Crash recovery: reset stuck 'syncing' folder files back to 'stale'
     try:
         from sqlalchemy import update as sa_update
+
         async with async_session_maker() as db:
             result = await db.execute(
                 sa_update(FolderFile)
@@ -2239,6 +2290,7 @@ async def shutdown(ctx: dict[str, Any]) -> None:
 # =============================================================================
 # Schedule Parsing
 # =============================================================================
+
 
 def parse_schedule_set(value: str) -> set[int]:
     """
@@ -2278,9 +2330,7 @@ async def generate_session_title(ctx: dict[str, Any], session_id: str, first_mes
     from .models.chat_session import ChatSession
 
     async with async_session_maker() as db:
-        result = await db.execute(
-            select(ChatSession).where(ChatSession.id == session_id)
-        )
+        result = await db.execute(select(ChatSession).where(ChatSession.id == session_id))
         session = result.scalar_one_or_none()
         if not session:
             return {"status": "skipped", "reason": "session deleted"}
@@ -2293,12 +2343,14 @@ async def generate_session_title(ctx: dict[str, Any], session_id: str, first_mes
 
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        response = await llm.ainvoke([
-            SystemMessage(
-                content="Generate a concise 3-6 word title for this conversation. Reply with only the title, no quotes."
-            ),
-            HumanMessage(content=first_message[:500]),
-        ])
+        response = await llm.ainvoke(
+            [
+                SystemMessage(
+                    content="Generate a concise 3-6 word title for this conversation. Reply with only the title, no quotes."
+                ),
+                HumanMessage(content=first_message[:500]),
+            ]
+        )
         new_title = str(response.content).strip()[:200]
         if new_title:
             session.title = new_title
@@ -2377,6 +2429,7 @@ def build_archive_cron():
 # Worker Settings
 # =============================================================================
 
+
 class WorkerSettings:
     """ARQ worker configuration."""
 
@@ -2419,7 +2472,7 @@ class WorkerSettings:
     on_shutdown = shutdown
 
     # Worker behavior
-    max_jobs = 10  # Max concurrent jobs
+    max_jobs = 50  # Max concurrent jobs (raised from 10 for throughput)
     job_timeout = 300  # 5 minutes max per job
     keep_result = 3600  # Keep results for 1 hour
 

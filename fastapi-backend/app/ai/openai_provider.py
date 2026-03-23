@@ -33,12 +33,14 @@ def _convert_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 if isinstance(part, dict) and part.get("type") == "image":
                     media_type = part.get("media_type", "image/png")
                     data = part["data"]
-                    new_parts.append({
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{media_type};base64,{data}",
-                        },
-                    })
+                    new_parts.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{media_type};base64,{data}",
+                            },
+                        }
+                    )
                 else:
                     new_parts.append(part)
             converted.append({**msg, "content": new_parts})

@@ -35,9 +35,7 @@ async def _get_status_id(db_session: AsyncSession, project_id, name: str):
 class TestListTasks:
     """Tests for listing tasks."""
 
-    async def test_list_tasks_empty(
-        self, client: AsyncClient, auth_headers: dict, test_project: Project
-    ):
+    async def test_list_tasks_empty(self, client: AsyncClient, auth_headers: dict, test_project: Project):
         """Test listing tasks when none exist."""
         response = await client.get(
             f"/api/projects/{test_project.id}/tasks",
@@ -64,8 +62,7 @@ class TestListTasks:
         assert "subtasks_count" in data[0]
 
     async def test_list_tasks_pagination(
-        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession,
-        test_project: Project, test_user: User
+        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession, test_project: Project, test_user: User
     ):
         """Test pagination of tasks list."""
         todo_id = await _get_status_id(db_session, test_project.id, StatusName.TODO.value)
@@ -73,7 +70,7 @@ class TestListTasks:
         for i in range(5):
             task = Task(
                 title=f"Task {i}",
-                task_key=f"TEST-{i+10}",
+                task_key=f"TEST-{i + 10}",
                 project_id=test_project.id,
                 reporter_id=test_user.id,
                 task_status_id=todo_id,
@@ -92,13 +89,14 @@ class TestListTasks:
         assert len(data) == 2
 
     async def test_list_tasks_search(
-        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession,
-        test_project: Project, test_user: User
+        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession, test_project: Project, test_user: User
     ):
         """Test searching tasks by title."""
         todo_id = await _get_status_id(db_session, test_project.id, StatusName.TODO.value)
         for title, key in [("Login Feature", "T1"), ("Logout Feature", "T2"), ("Profile Page", "T3")]:
-            task = Task(title=title, task_key=key, project_id=test_project.id, reporter_id=test_user.id, task_status_id=todo_id)
+            task = Task(
+                title=title, task_key=key, project_id=test_project.id, reporter_id=test_user.id, task_status_id=todo_id
+            )
             db_session.add(task)
         await db_session.commit()
 
@@ -112,14 +110,15 @@ class TestListTasks:
         assert len(data) == 2
 
     async def test_list_tasks_filter_by_status(
-        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession,
-        test_project: Project, test_user: User
+        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession, test_project: Project, test_user: User
     ):
         """Test filtering tasks by status (task_status_id)."""
         todo_id = await _get_status_id(db_session, test_project.id, StatusName.TODO.value)
         in_progress_id = await _get_status_id(db_session, test_project.id, StatusName.IN_PROGRESS.value)
         for title, key, sid in [("T1", "K1", todo_id), ("T2", "K2", in_progress_id), ("T3", "K3", todo_id)]:
-            task = Task(title=title, task_key=key, task_status_id=sid, project_id=test_project.id, reporter_id=test_user.id)
+            task = Task(
+                title=title, task_key=key, task_status_id=sid, project_id=test_project.id, reporter_id=test_user.id
+            )
             db_session.add(task)
         await db_session.commit()
 
@@ -134,13 +133,19 @@ class TestListTasks:
         assert all(t["task_status"]["name"] == "Todo" for t in data)
 
     async def test_list_tasks_filter_by_priority(
-        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession,
-        test_project: Project, test_user: User
+        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession, test_project: Project, test_user: User
     ):
         """Test filtering tasks by priority."""
         todo_id = await _get_status_id(db_session, test_project.id, StatusName.TODO.value)
         for title, key, priority in [("T1", "K1", "high"), ("T2", "K2", "low"), ("T3", "K3", "high")]:
-            task = Task(title=title, task_key=key, priority=priority, project_id=test_project.id, reporter_id=test_user.id, task_status_id=todo_id)
+            task = Task(
+                title=title,
+                task_key=key,
+                priority=priority,
+                project_id=test_project.id,
+                reporter_id=test_user.id,
+                task_status_id=todo_id,
+            )
             db_session.add(task)
         await db_session.commit()
 
@@ -155,13 +160,19 @@ class TestListTasks:
         assert all(t["priority"] == "high" for t in data)
 
     async def test_list_tasks_filter_by_type(
-        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession,
-        test_project: Project, test_user: User
+        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession, test_project: Project, test_user: User
     ):
         """Test filtering tasks by type."""
         todo_id = await _get_status_id(db_session, test_project.id, StatusName.TODO.value)
         for title, key, task_type in [("T1", "K1", "bug"), ("T2", "K2", "story"), ("T3", "K3", "bug")]:
-            task = Task(title=title, task_key=key, task_type=task_type, project_id=test_project.id, reporter_id=test_user.id, task_status_id=todo_id)
+            task = Task(
+                title=title,
+                task_key=key,
+                task_type=task_type,
+                project_id=test_project.id,
+                reporter_id=test_user.id,
+                task_status_id=todo_id,
+            )
             db_session.add(task)
         await db_session.commit()
 
@@ -184,9 +195,7 @@ class TestListTasks:
 
         assert response.status_code == 404
 
-    async def test_list_tasks_wrong_owner(
-        self, client: AsyncClient, auth_headers_2: dict, test_project: Project
-    ):
+    async def test_list_tasks_wrong_owner(self, client: AsyncClient, auth_headers_2: dict, test_project: Project):
         """Test listing tasks for project owned by another user."""
         response = await client.get(
             f"/api/projects/{test_project.id}/tasks",
@@ -200,9 +209,7 @@ class TestListTasks:
 class TestCreateTask:
     """Tests for creating tasks."""
 
-    async def test_create_task_success(
-        self, client: AsyncClient, auth_headers: dict, test_project: Project
-    ):
+    async def test_create_task_success(self, client: AsyncClient, auth_headers: dict, test_project: Project):
         """Test successful task creation."""
         response = await client.post(
             f"/api/projects/{test_project.id}/tasks",
@@ -225,9 +232,7 @@ class TestCreateTask:
         assert "task_key" in data
         assert data["task_key"].startswith(test_project.key + "-")
 
-    async def test_create_task_minimal(
-        self, client: AsyncClient, auth_headers: dict, test_project: Project
-    ):
+    async def test_create_task_minimal(self, client: AsyncClient, auth_headers: dict, test_project: Project):
         """Test creating a task with minimal data."""
         response = await client.post(
             f"/api/projects/{test_project.id}/tasks",
@@ -244,9 +249,7 @@ class TestCreateTask:
         assert data["task_status"]["name"] == "Todo"  # Default
         assert data["priority"] == "medium"  # Default
 
-    async def test_create_task_with_story_points(
-        self, client: AsyncClient, auth_headers: dict, test_project: Project
-    ):
+    async def test_create_task_with_story_points(self, client: AsyncClient, auth_headers: dict, test_project: Project):
         """Test creating a task with story points."""
         response = await client.post(
             f"/api/projects/{test_project.id}/tasks",
@@ -262,9 +265,7 @@ class TestCreateTask:
         data = response.json()
         assert data["story_points"] == 5
 
-    async def test_create_task_missing_title(
-        self, client: AsyncClient, auth_headers: dict, test_project: Project
-    ):
+    async def test_create_task_missing_title(self, client: AsyncClient, auth_headers: dict, test_project: Project):
         """Test creating a task without title fails."""
         response = await client.post(
             f"/api/projects/{test_project.id}/tasks",
@@ -303,9 +304,7 @@ class TestCreateTask:
 
         assert response.status_code == 404
 
-    async def test_create_task_wrong_owner(
-        self, client: AsyncClient, auth_headers_2: dict, test_project: Project
-    ):
+    async def test_create_task_wrong_owner(self, client: AsyncClient, auth_headers_2: dict, test_project: Project):
         """Test creating task in project owned by another user."""
         response = await client.post(
             f"/api/projects/{test_project.id}/tasks",
@@ -341,9 +340,7 @@ class TestCreateTask:
 class TestGetTask:
     """Tests for getting a single task."""
 
-    async def test_get_task_success(
-        self, client: AsyncClient, auth_headers: dict, test_task: Task
-    ):
+    async def test_get_task_success(self, client: AsyncClient, auth_headers: dict, test_task: Task):
         """Test getting a task by ID."""
         response = await client.get(
             f"/api/tasks/{test_task.id}",
@@ -366,9 +363,7 @@ class TestGetTask:
 
         assert response.status_code == 404
 
-    async def test_get_task_wrong_owner(
-        self, client: AsyncClient, auth_headers_2: dict, test_task: Task
-    ):
+    async def test_get_task_wrong_owner(self, client: AsyncClient, auth_headers_2: dict, test_task: Task):
         """Test getting task owned by another user."""
         response = await client.get(
             f"/api/tasks/{test_task.id}",
@@ -383,8 +378,13 @@ class TestUpdateTask:
     """Tests for updating tasks."""
 
     async def test_update_task_success(
-        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession,
-        test_task: Task, test_project: Project, test_user: User
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db_session: AsyncSession,
+        test_task: Task,
+        test_project: Project,
+        test_user: User,
     ):
         """Test successful task update."""
         in_progress_id = await _get_status_id(db_session, test_project.id, StatusName.IN_PROGRESS.value)
@@ -410,8 +410,13 @@ class TestUpdateTask:
         assert data["priority"] == "high"
 
     async def test_update_task_partial(
-        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession,
-        test_task: Task, test_project: Project, test_user: User
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db_session: AsyncSession,
+        test_task: Task,
+        test_project: Project,
+        test_user: User,
     ):
         """Test partial task update (status change requires assignee)."""
         done_id = await _get_status_id(db_session, test_project.id, StatusName.DONE.value)
@@ -431,8 +436,13 @@ class TestUpdateTask:
         assert data["title"] == test_task.title  # Unchanged
 
     async def test_update_task_status_transition(
-        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession,
-        test_task: Task, test_project: Project, test_user: User
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db_session: AsyncSession,
+        test_task: Task,
+        test_project: Project,
+        test_user: User,
     ):
         """Test task status transitions (requires assignee for non-Todo statuses)."""
         in_progress_id = await _get_status_id(db_session, test_project.id, StatusName.IN_PROGRESS.value)
@@ -470,9 +480,7 @@ class TestUpdateTask:
         assert response.status_code == 200
         assert response.json()["task_status"]["name"] == "Done"
 
-    async def test_update_task_empty_body(
-        self, client: AsyncClient, auth_headers: dict, test_task: Task
-    ):
+    async def test_update_task_empty_body(self, client: AsyncClient, auth_headers: dict, test_task: Task):
         """Test updating task with empty body fails."""
         response = await client.put(
             f"/api/tasks/{test_task.id}",
@@ -492,9 +500,7 @@ class TestUpdateTask:
 
         assert response.status_code == 404
 
-    async def test_update_task_wrong_owner(
-        self, client: AsyncClient, auth_headers_2: dict, test_task: Task
-    ):
+    async def test_update_task_wrong_owner(self, client: AsyncClient, auth_headers_2: dict, test_task: Task):
         """Test updating task owned by another user."""
         response = await client.put(
             f"/api/tasks/{test_task.id}",
@@ -504,9 +510,7 @@ class TestUpdateTask:
 
         assert response.status_code == 403
 
-    async def test_update_task_self_parent_fails(
-        self, client: AsyncClient, auth_headers: dict, test_task: Task
-    ):
+    async def test_update_task_self_parent_fails(self, client: AsyncClient, auth_headers: dict, test_task: Task):
         """Test setting task as its own parent fails."""
         response = await client.put(
             f"/api/tasks/{test_task.id}",
@@ -521,9 +525,7 @@ class TestUpdateTask:
 class TestDeleteTask:
     """Tests for deleting tasks."""
 
-    async def test_delete_task_success(
-        self, client: AsyncClient, auth_headers: dict, test_task: Task
-    ):
+    async def test_delete_task_success(self, client: AsyncClient, auth_headers: dict, test_task: Task):
         """Test successful task deletion."""
         response = await client.delete(
             f"/api/tasks/{test_task.id}",
@@ -548,9 +550,7 @@ class TestDeleteTask:
 
         assert response.status_code == 404
 
-    async def test_delete_task_wrong_owner(
-        self, client: AsyncClient, auth_headers_2: dict, test_task: Task
-    ):
+    async def test_delete_task_wrong_owner(self, client: AsyncClient, auth_headers_2: dict, test_task: Task):
         """Test deleting task owned by another user."""
         response = await client.delete(
             f"/api/tasks/{test_task.id}",
@@ -560,8 +560,13 @@ class TestDeleteTask:
         assert response.status_code == 403
 
     async def test_delete_task_with_subtasks(
-        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession,
-        test_project: Project, test_task: Task, test_user: User
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db_session: AsyncSession,
+        test_project: Project,
+        test_task: Task,
+        test_user: User,
     ):
         """Test deleting task with subtasks cascades deletion."""
         todo_id = await _get_status_id(db_session, test_project.id, StatusName.TODO.value)

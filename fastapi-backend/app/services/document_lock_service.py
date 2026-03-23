@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Lock configuration
 LOCK_KEY_PREFIX = "doc_lock:"
+LOCK_INDEX_KEY = "doc_lock_index"
 
 
 def _get_lock_ttl() -> int:
@@ -35,12 +36,14 @@ def _lock_key(document_id: str) -> str:
 
 
 # Lua script: Acquire lock with same-user re-acquisition support
-# KEYS[1] = lock key, ARGV[1] = new value JSON, ARGV[2] = ttl, ARGV[3] = user_id
+# KEYS[1] = lock key, KEYS[2] = index set key
+# ARGV[1] = new value JSON, ARGV[2] = ttl, ARGV[3] = user_id, ARGV[4] = document_id
 # Returns JSON: {status: "acquired"} | {status: "renewed", holder: <data>} | {status: "conflict"}
 _ACQUIRE_LOCK_SCRIPT = """
 local data = redis.call('GET', KEYS[1])
 if data == false then
     redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))
+    redis.call('SADD', KEYS[2], ARGV[4])
     return cjson.encode({status = "acquired"})
 end
 local holder = cjson.decode(data)
@@ -52,16 +55,18 @@ return cjson.encode({status = "conflict"})
 """
 
 # Lua script: Release lock only if caller owns it
-# KEYS[1] = lock key, ARGV[1] = user_id
+# KEYS[1] = lock key, KEYS[2] = index set key, ARGV[1] = user_id, ARGV[2] = document_id
 # Returns 1 if released, 0 if not owner or not found
 _RELEASE_LOCK_SCRIPT = """
 local data = redis.call('GET', KEYS[1])
 if data == false then
+    redis.call('SREM', KEYS[2], ARGV[2])
     return 0
 end
 local holder = cjson.decode(data)
 if holder.user_id == ARGV[1] then
     redis.call('DEL', KEYS[1])
+    redis.call('SREM', KEYS[2], ARGV[2])
     return 1
 end
 return 0
@@ -84,11 +89,13 @@ return 0
 """
 
 # Lua script: Force-take lock regardless of current owner
-# KEYS[1] = lock key, ARGV[1] = new value JSON, ARGV[2] = ttl seconds
+# KEYS[1] = lock key, KEYS[2] = index set key
+# ARGV[1] = new value JSON, ARGV[2] = ttl seconds, ARGV[3] = document_id
 # Returns old holder JSON string or nil if no previous lock
 _FORCE_TAKE_SCRIPT = """
 local old_data = redis.call('GET', KEYS[1])
 redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))
+redis.call('SADD', KEYS[2], ARGV[3])
 if old_data == false then
     return nil
 end
@@ -98,6 +105,7 @@ return old_data
 
 class DocumentLockUnavailableError(Exception):
     """Raised when the document lock service cannot reach Redis."""
+
     pass
 
 
@@ -145,7 +153,14 @@ class DocumentLockService:
 
         try:
             result_str = await redis_service.client.eval(
-                _ACQUIRE_LOCK_SCRIPT, 1, key, value, str(_get_lock_ttl()), user_id
+                _ACQUIRE_LOCK_SCRIPT,
+                2,
+                key,
+                LOCK_INDEX_KEY,
+                value,
+                str(_get_lock_ttl()),
+                user_id,
+                document_id,
             )
         except Exception as exc:
             logger.error("Redis error during lock acquire for document %s: %s", document_id, exc)
@@ -154,21 +169,15 @@ class DocumentLockService:
         result = json.loads(result_str)
 
         if result["status"] == "acquired":
-            logger.info(
-                f"Lock acquired: document={document_id}, user={user_id}"
-            )
+            logger.info(f"Lock acquired: document={document_id}, user={user_id}")
             return lock_data
 
         if result["status"] == "renewed":
-            logger.info(
-                f"Lock renewed (same user): document={document_id}, user={user_id}"
-            )
+            logger.info(f"Lock renewed (same user): document={document_id}, user={user_id}")
             # Return the existing lock data from Redis
             return json.loads(result["holder"])
 
-        logger.debug(
-            f"Lock acquisition failed (already locked): document={document_id}, user={user_id}"
-        )
+        logger.debug(f"Lock acquisition failed (already locked): document={document_id}, user={user_id}")
         return None
 
     async def release_lock(
@@ -189,7 +198,12 @@ class DocumentLockService:
         key = _lock_key(document_id)
         try:
             result = await redis_service.client.eval(
-                _RELEASE_LOCK_SCRIPT, 1, key, user_id
+                _RELEASE_LOCK_SCRIPT,
+                2,
+                key,
+                LOCK_INDEX_KEY,
+                user_id,
+                document_id,
             )
         except Exception as exc:
             logger.error("Redis error during lock release for document %s: %s", document_id, exc)
@@ -197,14 +211,9 @@ class DocumentLockService:
 
         released = result == 1
         if released:
-            logger.info(
-                f"Lock released: document={document_id}, user={user_id}"
-            )
+            logger.info(f"Lock released: document={document_id}, user={user_id}")
         else:
-            logger.debug(
-                f"Lock release failed (not owner or not found): "
-                f"document={document_id}, user={user_id}"
-            )
+            logger.debug(f"Lock release failed (not owner or not found): document={document_id}, user={user_id}")
         return released
 
     async def heartbeat(
@@ -224,23 +233,16 @@ class DocumentLockService:
         """
         key = _lock_key(document_id)
         try:
-            result = await redis_service.client.eval(
-                _HEARTBEAT_SCRIPT, 1, key, user_id, str(_get_lock_ttl())
-            )
+            result = await redis_service.client.eval(_HEARTBEAT_SCRIPT, 1, key, user_id, str(_get_lock_ttl()))
         except Exception as exc:
             logger.error("Redis error during lock heartbeat for document %s: %s", document_id, exc)
             raise DocumentLockUnavailableError(f"Lock service unavailable: {exc}") from exc
 
         extended = result == 1
         if extended:
-            logger.debug(
-                f"Lock heartbeat: document={document_id}, user={user_id}"
-            )
+            logger.debug(f"Lock heartbeat: document={document_id}, user={user_id}")
         else:
-            logger.debug(
-                f"Lock heartbeat failed (not owner or not found): "
-                f"document={document_id}, user={user_id}"
-            )
+            logger.debug(f"Lock heartbeat failed (not owner or not found): document={document_id}, user={user_id}")
         return extended
 
     async def force_take_lock(
@@ -272,7 +274,13 @@ class DocumentLockService:
 
         try:
             old_holder_str = await redis_service.client.eval(
-                _FORCE_TAKE_SCRIPT, 1, key, new_value, str(_get_lock_ttl())
+                _FORCE_TAKE_SCRIPT,
+                2,
+                key,
+                LOCK_INDEX_KEY,
+                new_value,
+                str(_get_lock_ttl()),
+                document_id,
             )
         except Exception as exc:
             logger.error("Redis error during force-take lock for document %s: %s", document_id, exc)
@@ -322,22 +330,26 @@ class DocumentLockService:
 
     async def scan_all_active_locks(self) -> dict[str, dict]:
         """
-        Scan all active document locks from Redis.
+        Get all active document locks using a Redis Set index.
 
-        Uses SCAN with pattern matching to find all doc_lock:* keys.
-        Efficient because the total number of active locks is typically
-        very small (0-50 system-wide).
+        Uses SMEMBERS on the index set then pipeline-fetches lock data.
+        Stale entries (lock expired but index not cleaned) are removed
+        from the set during the fetch.
 
         Returns:
             Dict mapping document_id -> lock holder data for all locked documents.
         """
         try:
-            keys = await redis_service.scan_keys(f"{LOCK_KEY_PREFIX}*", count=200)
+            members: set[str] = await redis_service.client.smembers(LOCK_INDEX_KEY)
         except Exception as exc:
-            logger.error("Redis error during scan active locks: %s", exc)
+            logger.error("Redis error during smembers active locks: %s", exc)
             return {}
-        if not keys:
+
+        if not members:
             return {}
+
+        doc_ids = list(members)
+        keys = [_lock_key(doc_id) for doc_id in doc_ids]
 
         try:
             values = await redis_service.client.mget(keys)
@@ -346,11 +358,20 @@ class DocumentLockService:
             return {}
 
         result: dict[str, dict] = {}
-        prefix_len = len(LOCK_KEY_PREFIX)
-        for key, value in zip(keys, values):
+        stale_ids: list[str] = []
+        for doc_id, value in zip(doc_ids, values):
             if value:
-                doc_id = key[prefix_len:]
                 result[doc_id] = json.loads(value)
+            else:
+                # Lock key expired but index entry remains -- mark for cleanup
+                stale_ids.append(doc_id)
+
+        # Remove stale entries from the index (best-effort)
+        if stale_ids:
+            try:
+                await redis_service.client.srem(LOCK_INDEX_KEY, *stale_ids)
+            except Exception:
+                logger.debug("Failed to clean stale lock index entries")
 
         return result
 

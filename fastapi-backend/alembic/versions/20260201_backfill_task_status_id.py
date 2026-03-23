@@ -5,6 +5,7 @@ Revises: e3440224ad17
 Create Date: 2026-02-01 10:00:00.000000
 
 """
+
 from typing import Sequence, Union
 
 from alembic import op
@@ -13,8 +14,8 @@ from sqlalchemy.dialects.postgresql import UUID
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'f1a2b3c4d5e6'
-down_revision: Union[str, None] = 'e3440224ad17'
+revision: str = "f1a2b3c4d5e6"
+down_revision: Union[str, None] = "e3440224ad17"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -34,9 +35,7 @@ def upgrade() -> None:
     conn = op.get_bind()
 
     # Get all projects that have TaskStatuses
-    projects = conn.execute(
-        sa.text('SELECT DISTINCT id FROM "Projects"')
-    ).fetchall()
+    projects = conn.execute(sa.text('SELECT DISTINCT id FROM "Projects"')).fetchall()
 
     for (project_id,) in projects:
         # Get TaskStatuses for this project
@@ -53,10 +52,7 @@ def upgrade() -> None:
 
         # Backfill tasks that have NULL task_status_id
         tasks = conn.execute(
-            sa.text(
-                'SELECT id, status FROM "Tasks" '
-                'WHERE project_id = :pid AND task_status_id IS NULL'
-            ),
+            sa.text('SELECT id, status FROM "Tasks" WHERE project_id = :pid AND task_status_id IS NULL'),
             {"pid": project_id},
         ).fetchall()
 
@@ -70,48 +66,46 @@ def upgrade() -> None:
 
             if target_status_id is not None:
                 conn.execute(
-                    sa.text(
-                        'UPDATE "Tasks" SET task_status_id = :sid WHERE id = :tid'
-                    ),
+                    sa.text('UPDATE "Tasks" SET task_status_id = :sid WHERE id = :tid'),
                     {"sid": target_status_id, "tid": task_id},
                 )
 
     # Now make task_status_id NOT NULL
     op.alter_column(
-        'Tasks',
-        'task_status_id',
+        "Tasks",
+        "task_status_id",
         existing_type=sa.dialects.postgresql.UUID(),
         nullable=False,
     )
 
     # Change ondelete from SET NULL to RESTRICT
-    op.drop_constraint('Tasks_task_status_id_fkey', 'Tasks', type_='foreignkey')
+    op.drop_constraint("Tasks_task_status_id_fkey", "Tasks", type_="foreignkey")
     op.create_foreign_key(
-        'Tasks_task_status_id_fkey',
-        'Tasks',
-        'TaskStatuses',
-        ['task_status_id'],
-        ['id'],
-        ondelete='RESTRICT',
+        "Tasks_task_status_id_fkey",
+        "Tasks",
+        "TaskStatuses",
+        ["task_status_id"],
+        ["id"],
+        ondelete="RESTRICT",
     )
 
 
 def downgrade() -> None:
     # Revert FK to SET NULL
-    op.drop_constraint('Tasks_task_status_id_fkey', 'Tasks', type_='foreignkey')
+    op.drop_constraint("Tasks_task_status_id_fkey", "Tasks", type_="foreignkey")
     op.create_foreign_key(
-        'Tasks_task_status_id_fkey',
-        'Tasks',
-        'TaskStatuses',
-        ['task_status_id'],
-        ['id'],
-        ondelete='SET NULL',
+        "Tasks_task_status_id_fkey",
+        "Tasks",
+        "TaskStatuses",
+        ["task_status_id"],
+        ["id"],
+        ondelete="SET NULL",
     )
 
     # Revert to nullable
     op.alter_column(
-        'Tasks',
-        'task_status_id',
+        "Tasks",
+        "task_status_id",
         existing_type=sa.dialects.postgresql.UUID(),
         nullable=True,
     )

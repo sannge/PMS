@@ -4,6 +4,7 @@ Revision ID: 20260223_dashboard_indexes
 Revises: dash_completed_idx
 Create Date: 2026-02-23
 """
+
 from typing import Sequence, Union
 
 from alembic import op
@@ -22,28 +23,28 @@ def upgrade() -> None:
 
     # Composite index for active tasks query (assignee + project + archived)
     op.execute(
-        'CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_Tasks_assignee_project_archived '
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_Tasks_assignee_project_archived "
         'ON "Tasks" (assignee_id, project_id) '
-        'WHERE archived_at IS NULL'
+        "WHERE archived_at IS NULL"
     )
 
     # Composite partial index for due date queries (overdue/upcoming)
     op.execute(
-        'CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_Tasks_project_duedate '
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_Tasks_project_duedate "
         'ON "Tasks" (project_id, due_date) '
-        'WHERE due_date IS NOT NULL AND archived_at IS NULL'
+        "WHERE due_date IS NOT NULL AND archived_at IS NULL"
     )
 
     # Composite index for project health query ordering
     op.execute(
-        'CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_Projects_app_updated '
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_Projects_app_updated "
         'ON "Projects" (application_id, updated_at DESC) '
-        'WHERE archived_at IS NULL'
+        "WHERE archived_at IS NULL"
     )
 
 
 def downgrade() -> None:
     op.execute("COMMIT")
-    op.execute('DROP INDEX CONCURRENTLY IF EXISTS ix_Tasks_assignee_project_archived')
-    op.execute('DROP INDEX CONCURRENTLY IF EXISTS ix_Tasks_project_duedate')
-    op.execute('DROP INDEX CONCURRENTLY IF EXISTS ix_Projects_app_updated')
+    op.execute("DROP INDEX CONCURRENTLY IF EXISTS ix_Tasks_assignee_project_archived")
+    op.execute("DROP INDEX CONCURRENTLY IF EXISTS ix_Tasks_project_duedate")
+    op.execute("DROP INDEX CONCURRENTLY IF EXISTS ix_Projects_app_updated")

@@ -20,9 +20,7 @@ from app.utils.timezone import utc_now
 class TestListProjects:
     """Tests for listing projects."""
 
-    async def test_list_projects_empty(
-        self, client: AsyncClient, auth_headers: dict, test_application: Application
-    ):
+    async def test_list_projects_empty(self, client: AsyncClient, auth_headers: dict, test_application: Application):
         """Test listing projects when none exist."""
         response = await client.get(
             f"/api/applications/{test_application.id}/projects",
@@ -50,8 +48,12 @@ class TestListProjects:
         assert data[0]["tasks_count"] == 0
 
     async def test_list_projects_with_tasks_count(
-        self, client: AsyncClient, auth_headers: dict, test_application: Application,
-        test_project: Project, test_task: Task
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        test_application: Application,
+        test_project: Project,
+        test_task: Task,
     ):
         """Test that projects include correct task count."""
         response = await client.get(
@@ -94,7 +96,9 @@ class TestListProjects:
     ):
         """Test searching projects by name."""
         for name, key in [("Alpha Project", "ALPHA"), ("Beta Project", "BETA"), ("Gamma Task", "GAMMA")]:
-            project = Project(name=name, key=key, application_id=test_application.id, due_date=date.today() + timedelta(days=30))
+            project = Project(
+                name=name, key=key, application_id=test_application.id, due_date=date.today() + timedelta(days=30)
+            )
             db_session.add(project)
         await db_session.commit()
 
@@ -112,7 +116,13 @@ class TestListProjects:
     ):
         """Test filtering projects by type."""
         for name, key, ptype in [("P1", "P1", "scrum"), ("P2", "P2", "kanban"), ("P3", "P3", "scrum")]:
-            project = Project(name=name, key=key, project_type=ptype, application_id=test_application.id, due_date=date.today() + timedelta(days=30))
+            project = Project(
+                name=name,
+                key=key,
+                project_type=ptype,
+                application_id=test_application.id,
+                due_date=date.today() + timedelta(days=30),
+            )
             db_session.add(project)
         await db_session.commit()
 
@@ -157,9 +167,7 @@ class TestListProjects:
 class TestCreateProject:
     """Tests for creating projects."""
 
-    async def test_create_project_success(
-        self, client: AsyncClient, auth_headers: dict, test_application: Application
-    ):
+    async def test_create_project_success(self, client: AsyncClient, auth_headers: dict, test_application: Application):
         """Test successful project creation."""
         response = await client.post(
             f"/api/applications/{test_application.id}/projects",
@@ -180,9 +188,7 @@ class TestCreateProject:
         assert data["project_type"] == "scrum"
         assert "id" in data
 
-    async def test_create_project_minimal(
-        self, client: AsyncClient, auth_headers: dict, test_application: Application
-    ):
+    async def test_create_project_minimal(self, client: AsyncClient, auth_headers: dict, test_application: Application):
         """Test creating a project with minimal data."""
         response = await client.post(
             f"/api/applications/{test_application.id}/projects",
@@ -203,7 +209,11 @@ class TestCreateProject:
         response = await client.post(
             f"/api/applications/{test_application.id}/projects",
             headers=auth_headers,
-            json={"name": "Another Project", "key": test_project.key, "due_date": str(date.today() + timedelta(days=30))},
+            json={
+                "name": "Another Project",
+                "key": test_project.key,
+                "due_date": str(date.today() + timedelta(days=30)),
+            },
         )
 
         assert response.status_code == 400
@@ -260,9 +270,7 @@ class TestCreateProject:
 class TestGetProject:
     """Tests for getting a single project."""
 
-    async def test_get_project_success(
-        self, client: AsyncClient, auth_headers: dict, test_project: Project
-    ):
+    async def test_get_project_success(self, client: AsyncClient, auth_headers: dict, test_project: Project):
         """Test getting a project by ID."""
         response = await client.get(
             f"/api/projects/{test_project.id}",
@@ -285,9 +293,7 @@ class TestGetProject:
 
         assert response.status_code == 404
 
-    async def test_get_project_wrong_owner(
-        self, client: AsyncClient, auth_headers_2: dict, test_project: Project
-    ):
+    async def test_get_project_wrong_owner(self, client: AsyncClient, auth_headers_2: dict, test_project: Project):
         """Test getting project owned by another user."""
         response = await client.get(
             f"/api/projects/{test_project.id}",
@@ -307,9 +313,7 @@ class TestGetProject:
 class TestUpdateProject:
     """Tests for updating projects."""
 
-    async def test_update_project_success(
-        self, client: AsyncClient, auth_headers: dict, test_project: Project
-    ):
+    async def test_update_project_success(self, client: AsyncClient, auth_headers: dict, test_project: Project):
         """Test successful project update."""
         response = await client.put(
             f"/api/projects/{test_project.id}",
@@ -329,9 +333,7 @@ class TestUpdateProject:
         # Key should remain unchanged
         assert data["key"] == test_project.key
 
-    async def test_update_project_partial(
-        self, client: AsyncClient, auth_headers: dict, test_project: Project
-    ):
+    async def test_update_project_partial(self, client: AsyncClient, auth_headers: dict, test_project: Project):
         """Test partial project update."""
         response = await client.put(
             f"/api/projects/{test_project.id}",
@@ -344,9 +346,7 @@ class TestUpdateProject:
         assert data["name"] == "Only Name Updated"
         assert data["description"] == test_project.description
 
-    async def test_update_project_empty_body(
-        self, client: AsyncClient, auth_headers: dict, test_project: Project
-    ):
+    async def test_update_project_empty_body(self, client: AsyncClient, auth_headers: dict, test_project: Project):
         """Test updating project with empty body fails."""
         response = await client.put(
             f"/api/projects/{test_project.id}",
@@ -366,9 +366,7 @@ class TestUpdateProject:
 
         assert response.status_code == 404
 
-    async def test_update_project_wrong_owner(
-        self, client: AsyncClient, auth_headers_2: dict, test_project: Project
-    ):
+    async def test_update_project_wrong_owner(self, client: AsyncClient, auth_headers_2: dict, test_project: Project):
         """Test updating project owned by another user."""
         response = await client.put(
             f"/api/projects/{test_project.id}",
@@ -383,9 +381,7 @@ class TestUpdateProject:
 class TestDeleteProject:
     """Tests for deleting projects."""
 
-    async def test_delete_project_success(
-        self, client: AsyncClient, auth_headers: dict, test_project: Project
-    ):
+    async def test_delete_project_success(self, client: AsyncClient, auth_headers: dict, test_project: Project):
         """Test successful project deletion."""
         response = await client.delete(
             f"/api/projects/{test_project.id}",
@@ -410,9 +406,7 @@ class TestDeleteProject:
 
         assert response.status_code == 404
 
-    async def test_delete_project_wrong_owner(
-        self, client: AsyncClient, auth_headers_2: dict, test_project: Project
-    ):
+    async def test_delete_project_wrong_owner(self, client: AsyncClient, auth_headers_2: dict, test_project: Project):
         """Test deleting project owned by another user."""
         response = await client.delete(
             f"/api/projects/{test_project.id}",
@@ -422,8 +416,7 @@ class TestDeleteProject:
         assert response.status_code == 403
 
     async def test_delete_project_cascades_to_tasks(
-        self, client: AsyncClient, auth_headers: dict, test_project: Project,
-        test_task: Task, db_session: AsyncSession
+        self, client: AsyncClient, auth_headers: dict, test_project: Project, test_task: Task, db_session: AsyncSession
     ):
         """Test deleting a project cascades to its tasks.
 
@@ -443,9 +436,8 @@ class TestDeleteProject:
         # Verify tasks were actually deleted from the database
         from app.models.task import Task as TaskModel
         from app.models.task_status import TaskStatus as TaskStatusModel
-        task_result = await db_session.execute(
-            select(TaskModel).where(TaskModel.project_id == project_id)
-        )
+
+        task_result = await db_session.execute(select(TaskModel).where(TaskModel.project_id == project_id))
         assert task_result.scalars().all() == [], "Tasks should be deleted when project is deleted"
 
         # Verify task statuses were also deleted
@@ -532,9 +524,7 @@ class TestShouldRunAutoArchive:
         mock_redis = MagicMock()
         mock_redis.is_connected = False
 
-        with patch(
-            "app.services.redis_service.redis_service", mock_redis
-        ):
+        with patch("app.services.redis_service.redis_service", mock_redis):
             result = await _should_run_auto_archive("some-app-id")
 
         assert result is True
@@ -549,15 +539,11 @@ class TestShouldRunAutoArchive:
         mock_redis.is_connected = True
         mock_redis.client = mock_client
 
-        with patch(
-            "app.services.redis_service.redis_service", mock_redis
-        ):
+        with patch("app.services.redis_service.redis_service", mock_redis):
             result = await _should_run_auto_archive("app-123")
 
         assert result is True
-        mock_client.set.assert_awaited_once_with(
-            "auto_archive_throttle:app-123", "1", nx=True, ex=60
-        )
+        mock_client.set.assert_awaited_once_with("auto_archive_throttle:app-123", "1", nx=True, ex=60)
 
     @pytest.mark.asyncio
     async def test_returns_false_when_key_exists(self):
@@ -569,9 +555,7 @@ class TestShouldRunAutoArchive:
         mock_redis.is_connected = True
         mock_redis.client = mock_client
 
-        with patch(
-            "app.services.redis_service.redis_service", mock_redis
-        ):
+        with patch("app.services.redis_service.redis_service", mock_redis):
             result = await _should_run_auto_archive("app-456")
 
         assert result is False
@@ -582,13 +566,9 @@ class TestShouldRunAutoArchive:
         mock_redis = MagicMock()
         mock_redis.is_connected = True
         mock_redis.client = MagicMock()
-        mock_redis.client.set = AsyncMock(
-            side_effect=ConnectionError("Redis connection lost")
-        )
+        mock_redis.client.set = AsyncMock(side_effect=ConnectionError("Redis connection lost"))
 
-        with patch(
-            "app.services.redis_service.redis_service", mock_redis
-        ):
+        with patch("app.services.redis_service.redis_service", mock_redis):
             # The function wraps the SET call in try/except Exception
             # and returns True on failure (fail-open for non-critical op).
             result = await _should_run_auto_archive("app-789")

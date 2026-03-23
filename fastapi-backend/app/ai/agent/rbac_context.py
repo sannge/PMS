@@ -85,20 +85,14 @@ class AgentRBACContext:
         user_uuid = UUID(user_id_str) if isinstance(user_id, str) else user_id
 
         # Get applications where user is the owner
-        owner_query = select(Application.id).where(
-            Application.owner_id == user_uuid
-        )
+        owner_query = select(Application.id).where(Application.owner_id == user_uuid)
 
         # Get applications where user is a member (any role)
-        member_query = select(ApplicationMember.application_id).where(
-            ApplicationMember.user_id == user_uuid
-        )
+        member_query = select(ApplicationMember.application_id).where(ApplicationMember.user_id == user_uuid)
 
         # Union both sets of application IDs
         combined_app_query = union_all(owner_query, member_query).subquery()
-        app_result = await db.execute(
-            select(combined_app_query.c.id)
-        )
+        app_result = await db.execute(select(combined_app_query.c.id))
         accessible_app_ids = [str(row[0]) for row in app_result.all()]
 
         # Get all active projects in accessible applications

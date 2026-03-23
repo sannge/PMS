@@ -104,22 +104,32 @@ class TestTableBoundaryAwareness:
         # Build a large table that exceeds MAX_TOKENS (800)
         rows = []
         # Header row
-        rows.append({
-            "type": "tableRow",
-            "content": [
-                {"type": "tableCell", "content": [{"type": "text", "text": "Header1"}]},
-                {"type": "tableCell", "content": [{"type": "text", "text": "Header2"}]},
-            ],
-        })
-        # Many data rows to exceed MAX_TOKENS
-        for i in range(200):
-            rows.append({
+        rows.append(
+            {
                 "type": "tableRow",
                 "content": [
-                    {"type": "tableCell", "content": [{"type": "text", "text": f"Row {i} column 1 with some extra text"}]},
-                    {"type": "tableCell", "content": [{"type": "text", "text": f"Row {i} column 2 with some extra text"}]},
+                    {"type": "tableCell", "content": [{"type": "text", "text": "Header1"}]},
+                    {"type": "tableCell", "content": [{"type": "text", "text": "Header2"}]},
                 ],
-            })
+            }
+        )
+        # Many data rows to exceed MAX_TOKENS
+        for i in range(200):
+            rows.append(
+                {
+                    "type": "tableRow",
+                    "content": [
+                        {
+                            "type": "tableCell",
+                            "content": [{"type": "text", "text": f"Row {i} column 1 with some extra text"}],
+                        },
+                        {
+                            "type": "tableCell",
+                            "content": [{"type": "text", "text": f"Row {i} column 2 with some extra text"}],
+                        },
+                    ],
+                }
+            )
 
         content_json = {
             "type": "doc",
@@ -167,7 +177,6 @@ class TestTableBoundaryAwareness:
         assert len(merged) >= 2
         assert "preceding paragraph" in merged[0].text
         assert merged[1].text.startswith("Table")
-
 
     def test_two_adjacent_tables_separate_chunks(self):
         """Two adjacent tables should produce 2 separate table chunks, never merged."""
@@ -574,10 +583,17 @@ class TestSlideBoundaryEnforcement:
         ]
         # Add enough paragraphs to exceed MAX_TOKENS (800)
         for i in range(50):
-            nodes.append({
-                "type": "paragraph",
-                "content": [{"type": "text", "text": f"Sentence number {i}. This is additional text to pad the paragraph content further and further. "}],
-            })
+            nodes.append(
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"Sentence number {i}. This is additional text to pad the paragraph content further and further. ",
+                        }
+                    ],
+                }
+            )
         content_json = {"type": "doc", "content": nodes}
         chunks = chunker._chunk_tiptap(content_json, "Pres")
         # Should produce multiple chunks
@@ -591,18 +607,22 @@ class TestSlideBoundaryEnforcement:
         chunker = SemanticChunker()
         nodes = []
         for slide_num in range(1, 4):
-            nodes.append({
-                "type": "heading",
-                "attrs": {"level": 2},
-                "content": [{"type": "text", "text": f"Slide {slide_num}: Title{slide_num}"}],
-            })
+            nodes.append(
+                {
+                    "type": "heading",
+                    "attrs": {"level": 2},
+                    "content": [{"type": "text", "text": f"Slide {slide_num}: Title{slide_num}"}],
+                }
+            )
             # Add unique text per slide
             word_count = 100 + slide_num * 50
             text = f"Content for slide {slide_num}. " + ("word " * word_count)
-            nodes.append({
-                "type": "paragraph",
-                "content": [{"type": "text", "text": text}],
-            })
+            nodes.append(
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": text}],
+                }
+            )
 
         content_json = {"type": "doc", "content": nodes}
         # Use merge_and_split directly to avoid overlap complicating checks
@@ -783,23 +803,30 @@ class TestOversizedTableSplitting:
         chunker = SemanticChunker()
         # Build a table with 200 data rows
         rows = []
-        rows.append({
-            "type": "tableRow",
-            "content": [
-                {"type": "tableCell", "content": [{"type": "text", "text": "Name"}]},
-                {"type": "tableCell", "content": [{"type": "text", "text": "Value"}]},
-                {"type": "tableCell", "content": [{"type": "text", "text": "Description"}]},
-            ],
-        })
-        for i in range(200):
-            rows.append({
+        rows.append(
+            {
                 "type": "tableRow",
                 "content": [
-                    {"type": "tableCell", "content": [{"type": "text", "text": f"Item {i}"}]},
-                    {"type": "tableCell", "content": [{"type": "text", "text": f"${i * 100}"}]},
-                    {"type": "tableCell", "content": [{"type": "text", "text": f"Description for item {i} with details"}]},
+                    {"type": "tableCell", "content": [{"type": "text", "text": "Name"}]},
+                    {"type": "tableCell", "content": [{"type": "text", "text": "Value"}]},
+                    {"type": "tableCell", "content": [{"type": "text", "text": "Description"}]},
                 ],
-            })
+            }
+        )
+        for i in range(200):
+            rows.append(
+                {
+                    "type": "tableRow",
+                    "content": [
+                        {"type": "tableCell", "content": [{"type": "text", "text": f"Item {i}"}]},
+                        {"type": "tableCell", "content": [{"type": "text", "text": f"${i * 100}"}]},
+                        {
+                            "type": "tableCell",
+                            "content": [{"type": "text", "text": f"Description for item {i} with details"}],
+                        },
+                    ],
+                }
+            )
 
         content_json = {
             "type": "doc",
@@ -823,21 +850,25 @@ class TestOversizedTableSplitting:
         """Table with 10 rows (<MAX_TOKENS) should remain a single chunk (no split)."""
         chunker = SemanticChunker()
         rows = []
-        rows.append({
-            "type": "tableRow",
-            "content": [
-                {"type": "tableCell", "content": [{"type": "text", "text": "Col1"}]},
-                {"type": "tableCell", "content": [{"type": "text", "text": "Col2"}]},
-            ],
-        })
-        for i in range(10):
-            rows.append({
+        rows.append(
+            {
                 "type": "tableRow",
                 "content": [
-                    {"type": "tableCell", "content": [{"type": "text", "text": f"A{i}"}]},
-                    {"type": "tableCell", "content": [{"type": "text", "text": f"B{i}"}]},
+                    {"type": "tableCell", "content": [{"type": "text", "text": "Col1"}]},
+                    {"type": "tableCell", "content": [{"type": "text", "text": "Col2"}]},
                 ],
-            })
+            }
+        )
+        for i in range(10):
+            rows.append(
+                {
+                    "type": "tableRow",
+                    "content": [
+                        {"type": "tableCell", "content": [{"type": "text", "text": f"A{i}"}]},
+                        {"type": "tableCell", "content": [{"type": "text", "text": f"B{i}"}]},
+                    ],
+                }
+            )
 
         content_json = {
             "type": "doc",
@@ -895,16 +926,29 @@ class TestDrawioInListItems:
         chunker = SemanticChunker()
         content = {
             "type": "doc",
-            "content": [{
-                "type": "bulletList",
-                "content": [{
-                    "type": "listItem",
+            "content": [
+                {
+                    "type": "bulletList",
                     "content": [
-                        {"type": "paragraph", "attrs": {"indent": 0}, "content": [{"type": "text", "text": "Item text"}]},
-                        {"type": "drawio", "attrs": {"data": '<mxfile><diagram><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="2" parent="1" value="Step A" vertex="1"><mxGeometry/></mxCell></root></mxGraphModel></diagram></mxfile>'}}
-                    ]
-                }]
-            }]
+                        {
+                            "type": "listItem",
+                            "content": [
+                                {
+                                    "type": "paragraph",
+                                    "attrs": {"indent": 0},
+                                    "content": [{"type": "text", "text": "Item text"}],
+                                },
+                                {
+                                    "type": "drawio",
+                                    "attrs": {
+                                        "data": '<mxfile><diagram><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="2" parent="1" value="Step A" vertex="1"><mxGeometry/></mxCell></root></mxGraphModel></diagram></mxfile>'
+                                    },
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ],
         }
         chunks = chunker.chunk_document(content, "Test", "document")
         all_text = " ".join(c.text for c in chunks)
@@ -916,21 +960,51 @@ class TestDrawioInListItems:
         chunker = SemanticChunker()
         content = {
             "type": "doc",
-            "content": [{
-                "type": "bulletList",
-                "content": [{
-                    "type": "listItem",
+            "content": [
+                {
+                    "type": "bulletList",
                     "content": [
-                        {"type": "paragraph", "attrs": {"indent": 0}, "content": [{"type": "text", "text": "Data:"}]},
-                        {"type": "table", "content": [
-                            {"type": "tableRow", "content": [
-                                {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Col A"}]}]},
-                                {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Col B"}]}]},
-                            ]}
-                        ]}
-                    ]
-                }]
-            }]
+                        {
+                            "type": "listItem",
+                            "content": [
+                                {
+                                    "type": "paragraph",
+                                    "attrs": {"indent": 0},
+                                    "content": [{"type": "text", "text": "Data:"}],
+                                },
+                                {
+                                    "type": "table",
+                                    "content": [
+                                        {
+                                            "type": "tableRow",
+                                            "content": [
+                                                {
+                                                    "type": "tableCell",
+                                                    "content": [
+                                                        {
+                                                            "type": "paragraph",
+                                                            "content": [{"type": "text", "text": "Col A"}],
+                                                        }
+                                                    ],
+                                                },
+                                                {
+                                                    "type": "tableCell",
+                                                    "content": [
+                                                        {
+                                                            "type": "paragraph",
+                                                            "content": [{"type": "text", "text": "Col B"}],
+                                                        }
+                                                    ],
+                                                },
+                                            ],
+                                        }
+                                    ],
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ],
         }
         chunks = chunker.chunk_document(content, "Test", "document")
         all_text = " ".join(c.text for c in chunks)
@@ -962,7 +1036,5 @@ class TestCanvasFormatDetection:
     def test_empty_doc_content_handled_gracefully(self):
         """Document with empty content list should not crash the chunker."""
         chunker = SemanticChunker()
-        chunks = chunker.chunk_document(
-            {"type": "doc", "content": []}, "Empty", "document"
-        )
+        chunks = chunker.chunk_document({"type": "doc", "content": []}, "Empty", "document")
         assert isinstance(chunks, list)

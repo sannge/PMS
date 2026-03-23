@@ -8,6 +8,7 @@ Revision ID: 20260314_proj_name_trgm
 Revises: 20260314_folder_file_idx
 Create Date: 2026-03-14
 """
+
 from alembic import op
 
 revision = "20260314_proj_name_trgm"
@@ -20,10 +21,10 @@ def upgrade() -> None:
     # CONCURRENTLY requires running outside a transaction
     op.execute("COMMIT")
     op.execute(
-        'CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_projects_name_trgm '
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_projects_name_trgm "
         'ON "Projects" USING gin (lower(name) gin_trgm_ops)'
     )
 
 
 def downgrade() -> None:
-    op.execute('DROP INDEX IF EXISTS ix_projects_name_trgm')
+    op.execute("DROP INDEX IF EXISTS ix_projects_name_trgm")

@@ -22,6 +22,7 @@ import {
 import { useAuthToken } from '@/contexts/auth-context'
 import { authGet, authPost, authDelete } from '@/lib/api-client'
 import { queryKeys } from '@/lib/query-client'
+import { useWebSocketStatus } from '@/hooks/use-websocket'
 
 // ============================================================================
 // Types
@@ -181,6 +182,7 @@ export function useSentInvitations(
  */
 export function usePendingInvitationCount(): UseQueryResult<number, Error> {
   const token = useAuthToken()
+  const wsStatus = useWebSocketStatus()
 
   return useQuery({
     queryKey: queryKeys.pendingInvitationCount,
@@ -197,7 +199,8 @@ export function usePendingInvitationCount(): UseQueryResult<number, Error> {
     },
     enabled: !!token,
     staleTime: 60 * 1000, // 1 minute
-    refetchInterval: 60 * 1000, // Poll every minute
+    // Only poll when WebSocket is disconnected; WS pushes invalidation events
+    refetchInterval: wsStatus.isConnected ? false : 60 * 1000,
     refetchOnWindowFocus: true, // Invitations change externally (email links)
   })
 }

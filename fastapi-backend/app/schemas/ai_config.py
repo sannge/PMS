@@ -17,17 +17,13 @@ VALID_CAPABILITIES = {"chat", "embedding", "vision"}
 
 def _validate_provider_type(v: str) -> str:
     if v not in VALID_PROVIDER_TYPES:
-        raise ValueError(
-            f"provider_type must be one of: {', '.join(sorted(VALID_PROVIDER_TYPES))}"
-        )
+        raise ValueError(f"provider_type must be one of: {', '.join(sorted(VALID_PROVIDER_TYPES))}")
     return v
 
 
 def _validate_capability(v: str) -> str:
     if v not in VALID_CAPABILITIES:
-        raise ValueError(
-            f"capability must be one of: {', '.join(sorted(VALID_CAPABILITIES))}"
-        )
+        raise ValueError(f"capability must be one of: {', '.join(sorted(VALID_CAPABILITIES))}")
     return v
 
 
@@ -262,9 +258,7 @@ class UserProviderOverride(BaseModel):
     def validate_provider_type(cls, v: str) -> str:
         allowed = {"openai", "anthropic"}
         if v not in allowed:
-            raise ValueError(
-                f"User overrides only support: {', '.join(sorted(allowed))}"
-            )
+            raise ValueError(f"User overrides only support: {', '.join(sorted(allowed))}")
         return v
 
     @field_validator("api_key")

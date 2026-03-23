@@ -57,6 +57,7 @@ class ChatRequest(BaseModel):
         if len(v) > 50:
             return v[-50:]
         return v
+
     # TODO: Phase 5 — application_id will be used to scope agent context
     application_id: str | None = Field(
         None,
@@ -82,8 +83,7 @@ class ChatRequest(BaseModel):
         total = sum(len(e.content) for e in self.conversation_history)
         if total > max_total_chars:
             raise ValueError(
-                f"conversation_history total size ({total} chars) exceeds "
-                f"maximum ({max_total_chars} chars)"
+                f"conversation_history total size ({total} chars) exceeds maximum ({max_total_chars} chars)"
             )
         return self
 
@@ -137,10 +137,7 @@ class ResumeRequest(BaseModel):
         max_bytes = 10_000
         serialized = json.dumps(self.response, default=str)
         if len(serialized) > max_bytes:
-            raise ValueError(
-                f"response payload too large ({len(serialized)} bytes, "
-                f"max {max_bytes})"
-            )
+            raise ValueError(f"response payload too large ({len(serialized)} bytes, max {max_bytes})")
         return self
 
 

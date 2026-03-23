@@ -164,7 +164,9 @@ async def rag_search_tool(
             type_tag = " [image description]" if r.chunk_type == "image" else ""
             # Tag file results so the agent knows the source is an uploaded file
             source_tag = " [file]" if r.source_type == "file" else ""
-            lines.append(f"[{i}] {r.document_title}{heading} (score: {r.score:.4f}, source: {r.source}){type_tag}{source_tag}")
+            lines.append(
+                f"[{i}] {r.document_title}{heading} (score: {r.score:.4f}, source: {r.source}){type_tag}{source_tag}"
+            )
             lines.append(r.chunk_text.strip())
             lines.append("")
 

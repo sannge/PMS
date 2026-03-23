@@ -388,9 +388,7 @@ class TestProcessDocumentImport:
         mock_factory = MagicMock(side_effect=factory_side_effect)
 
         mock_docling_instance = AsyncMock()
-        mock_docling_instance.process_file = AsyncMock(
-            side_effect=ImportError("Password-protected PDF not supported")
-        )
+        mock_docling_instance.process_file = AsyncMock(side_effect=ImportError("Password-protected PDF not supported"))
 
         mock_redis_service = AsyncMock()
         mock_redis_service.publish = AsyncMock()
@@ -449,9 +447,7 @@ class TestProcessDocumentImport:
 
         # ImageUnderstandingService will raise inside the try/except
         mock_image_svc = MagicMock()
-        mock_image_svc.process_imported_images = AsyncMock(
-            side_effect=RuntimeError("Vision LLM unavailable")
-        )
+        mock_image_svc.process_imported_images = AsyncMock(side_effect=RuntimeError("Vision LLM unavailable"))
 
         with (
             patch("app.worker.async_session_maker", mock_factory),
@@ -706,9 +702,7 @@ class TestProcessDocumentImport:
         mock_factory = MagicMock(side_effect=factory_side_effect)
 
         mock_docling_instance = AsyncMock()
-        mock_docling_instance.process_file = AsyncMock(
-            side_effect=RuntimeError("Conversion crashed")
-        )
+        mock_docling_instance.process_file = AsyncMock(side_effect=RuntimeError("Conversion crashed"))
 
         mock_redis_service = AsyncMock()
         mock_redis_service.publish = AsyncMock()
@@ -793,9 +787,7 @@ class TestProcessDocumentImport:
         mock_factory = MagicMock(side_effect=factory_side_effect)
 
         mock_docling_instance = AsyncMock()
-        mock_docling_instance.process_file = AsyncMock(
-            side_effect=RuntimeError("Kaboom")
-        )
+        mock_docling_instance.process_file = AsyncMock(side_effect=RuntimeError("Kaboom"))
 
         with (
             patch("app.worker.async_session_maker", mock_factory),
@@ -906,9 +898,7 @@ class TestProcessDocumentImport:
 
         # Use a generic RuntimeError (not in safe_messages mapping)
         mock_docling_instance = AsyncMock()
-        mock_docling_instance.process_file = AsyncMock(
-            side_effect=RuntimeError("Internal details should not leak")
-        )
+        mock_docling_instance.process_file = AsyncMock(side_effect=RuntimeError("Internal details should not leak"))
 
         with (
             patch("app.worker.async_session_maker", mock_factory),

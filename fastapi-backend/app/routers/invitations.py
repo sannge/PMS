@@ -368,7 +368,7 @@ async def accept_invitation(
             Invitation.id == invitation_id,
             Invitation.invitee_id == current_user.id,  # Auth check in query
         )
-        .options(lazyload('*'))
+        .options(lazyload("*"))
         .with_for_update()
     )
     invitation = result.scalar_one_or_none()
@@ -402,7 +402,7 @@ async def accept_invitation(
             ApplicationMember.application_id == invitation.application_id,
             ApplicationMember.user_id == current_user.id,
         )
-        .options(lazyload('*'))
+        .options(lazyload("*"))
         .with_for_update()
     )
     existing_member = result.scalar_one_or_none()
@@ -414,9 +414,7 @@ async def accept_invitation(
         )
 
     # Fetch application name separately (can't eager load with FOR UPDATE)
-    app_result = await db.execute(
-        select(Application.name).where(Application.id == invitation.application_id)
-    )
+    app_result = await db.execute(select(Application.name).where(Application.id == invitation.application_id))
     app_name = app_result.scalar_one()
 
     # Update invitation status
@@ -438,7 +436,8 @@ async def accept_invitation(
     invalidate_app_role(current_user.id, invitation.application_id)
     fire_and_forget(
         publish_user_cache_invalidation(
-            user_id=str(current_user.id), app_id=str(invitation.application_id),
+            user_id=str(current_user.id),
+            app_id=str(invitation.application_id),
         ),
         name="invite-accept-user-cache-invalidation",
     )
@@ -525,7 +524,7 @@ async def reject_invitation(
             Invitation.id == invitation_id,
             Invitation.invitee_id == current_user.id,  # Auth check in query
         )
-        .options(lazyload('*'))
+        .options(lazyload("*"))
         .with_for_update()
     )
     invitation = result.scalar_one_or_none()
@@ -552,9 +551,7 @@ async def reject_invitation(
         )
 
     # Fetch application name separately (can't eager load with FOR UPDATE)
-    app_result = await db.execute(
-        select(Application.name).where(Application.id == invitation.application_id)
-    )
+    app_result = await db.execute(select(Application.name).where(Application.id == invitation.application_id))
     app_name = app_result.scalar_one()
 
     # Update invitation status
@@ -626,7 +623,7 @@ async def cancel_invitation(
             Invitation.id == invitation_id,
             Invitation.inviter_id == current_user.id,  # Auth check in query
         )
-        .options(lazyload('*'))
+        .options(lazyload("*"))
         .with_for_update()
     )
     invitation = result.scalar_one_or_none()

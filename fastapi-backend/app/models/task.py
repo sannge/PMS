@@ -187,53 +187,53 @@ class Task(Base):
     project = relationship(
         "Project",
         back_populates="tasks",
-        lazy="joined",
+        lazy="select",
     )
     task_status = relationship(
         "TaskStatus",
         back_populates="tasks",
-        lazy="joined",
+        lazy="select",
     )
     assignee = relationship(
         "User",
         foreign_keys=[assignee_id],
         back_populates="assigned_tasks",
-        lazy="joined",
+        lazy="select",
     )
     reporter = relationship(
         "User",
         foreign_keys=[reporter_id],
         back_populates="reported_tasks",
-        lazy="joined",
+        lazy="select",
     )
     parent = relationship(
         "Task",
         remote_side=[id],
         back_populates="subtasks",
-        lazy="joined",
+        lazy="select",
     )
     subtasks = relationship(
         "Task",
         back_populates="parent",
-        lazy="dynamic",
+        lazy="write_only",
     )
     attachments = relationship(
         "Attachment",
         back_populates="task",
         cascade="all, delete-orphan",
-        lazy="dynamic",
+        lazy="write_only",
     )
     comments = relationship(
         "Comment",
         back_populates="task",
         cascade="all, delete-orphan",
-        lazy="dynamic",
+        lazy="write_only",
     )
     checklists = relationship(
         "Checklist",
         back_populates="task",
         cascade="all, delete-orphan",
-        lazy="dynamic",
+        lazy="write_only",
     )
 
     def __repr__(self) -> str:

@@ -22,6 +22,7 @@ from app.ai.agent.nodes.intake import intake_node
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_state(**overrides):
     """Build a minimal AgentState dict with defaults."""
     state = {
@@ -64,9 +65,7 @@ def _make_mock_db(prompt_text=None, prompt_raises=False):
         mock_session.execute = AsyncMock(side_effect=RuntimeError("DB error"))
     else:
         mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = (
-            mock_prompt_row if prompt_text is not None else None
-        )
+        mock_result.scalar_one_or_none.return_value = mock_prompt_row if prompt_text is not None else None
         mock_session.execute = AsyncMock(return_value=mock_result)
 
     def factory():
@@ -79,8 +78,8 @@ def _make_mock_db(prompt_text=None, prompt_raises=False):
 # Tests: Counter initialisation
 # ---------------------------------------------------------------------------
 
-class TestCounterInit:
 
+class TestCounterInit:
     async def test_counters_reset_to_zero_each_turn(self):
         """intake_node resets counters to 0 for each new user message turn."""
         chat_model_cache = [MagicMock()]  # already populated
@@ -166,8 +165,8 @@ class TestCounterInit:
 # Tests: System prompt loading
 # ---------------------------------------------------------------------------
 
-class TestSystemPromptLoad:
 
+class TestSystemPromptLoad:
     @patch("app.ai.config_service.get_agent_config")
     @patch("app.ai.agent.graph._get_langchain_chat_model")
     async def test_loads_custom_prompt_from_db(self, mock_get_model, mock_cfg):
@@ -269,8 +268,8 @@ class TestSystemPromptLoad:
 # Tests: Model caching
 # ---------------------------------------------------------------------------
 
-class TestModelCaching:
 
+class TestModelCaching:
     async def test_skips_db_when_cache_populated(self):
         """When chat_model_cache already has a model, skip DB call."""
         existing_model = MagicMock()

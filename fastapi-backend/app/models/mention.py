@@ -31,9 +31,7 @@ class Mention(Base):
     """
 
     __tablename__ = "Mentions"
-    __table_args__ = (
-        UniqueConstraint("comment_id", "user_id", name="UX_Mentions_Comment_User"),
-    )
+    __table_args__ = (UniqueConstraint("comment_id", "user_id", name="UX_Mentions_Comment_User"),)
     __allow_unmapped__ = True
 
     # Primary key - UUID

@@ -27,8 +27,8 @@ from app.ai.agent.rbac_context import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_mock_db(app_ids: list[str] | None = None,
-                  project_ids: list[str] | None = None) -> AsyncMock:
+
+def _make_mock_db(app_ids: list[str] | None = None, project_ids: list[str] | None = None) -> AsyncMock:
     """Build a mock AsyncSession that returns given app and project IDs.
 
     The first db.execute() call returns app IDs (union_all query).
@@ -52,8 +52,8 @@ def _make_mock_db(app_ids: list[str] | None = None,
 # Tests: Constants
 # ---------------------------------------------------------------------------
 
-class TestRBACConstants:
 
+class TestRBACConstants:
     def test_cache_ttl_seconds_is_30(self):
         assert CACHE_TTL_SECONDS == 30
 
@@ -65,8 +65,8 @@ class TestRBACConstants:
 # Tests: build_agent_context
 # ---------------------------------------------------------------------------
 
-class TestBuildAgentContext:
 
+class TestBuildAgentContext:
     @patch("app.ai.agent.rbac_context.redis_service")
     async def test_cache_hit_returns_cached_context(self, mock_redis):
         user_id = str(uuid4())
@@ -165,8 +165,8 @@ class TestBuildAgentContext:
 # Tests: validate_app_access
 # ---------------------------------------------------------------------------
 
-class TestValidateAppAccess:
 
+class TestValidateAppAccess:
     def test_returns_true_for_accessible_app(self):
         app_id = str(uuid4())
         context = {"accessible_app_ids": [app_id]}
@@ -190,8 +190,8 @@ class TestValidateAppAccess:
 # Tests: validate_project_access
 # ---------------------------------------------------------------------------
 
-class TestValidateProjectAccess:
 
+class TestValidateProjectAccess:
     def test_returns_true_for_accessible_project(self):
         proj_id = str(uuid4())
         context = {"accessible_project_ids": [proj_id]}
@@ -215,8 +215,8 @@ class TestValidateProjectAccess:
 # Tests: invalidate_cache
 # ---------------------------------------------------------------------------
 
-class TestInvalidateCache:
 
+class TestInvalidateCache:
     @patch("app.ai.agent.rbac_context.redis_service")
     async def test_deletes_correct_key(self, mock_redis):
         user_id = str(uuid4())

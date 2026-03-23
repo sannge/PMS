@@ -147,7 +147,7 @@ export function useAppMembers(
     enabled: !!token && !!applicationId,
     staleTime: 30 * 1000, // 30 seconds - refetch when stale for add member dialogs
     gcTime: 24 * 60 * 60 * 1000,
-    refetchOnMount: 'always', // Always refetch when query mounts (dialog opens)
+    refetchOnMount: true, // Refetch only if stale; WS MEMBER_ADDED/REMOVED events invalidate cache
     refetchOnWindowFocus: false, // WS real-time invalidation handles freshness
   })
 }

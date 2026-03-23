@@ -22,6 +22,7 @@ import app.ai.config_service as _config_svc
 # Getter functions -- read from AgentConfigService at call time
 # ---------------------------------------------------------------------------
 
+
 def get_max_iterations() -> int:
     """Agent per-request maximum iterations."""
     return max(1, _config_svc.get_agent_config().get_int("agent.max_iterations", 25))

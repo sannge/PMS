@@ -101,18 +101,13 @@ async def list_notifications(
     # Enrich notifications with entity status (e.g., invitation status)
     # Collect invitation entity IDs
     invitation_ids = [
-        n.entity_id for n in notifications
-        if n.entity_type == EntityType.INVITATION.value and n.entity_id is not None
+        n.entity_id for n in notifications if n.entity_type == EntityType.INVITATION.value and n.entity_id is not None
     ]
 
     # Fetch invitation statuses in bulk if there are any
     invitation_status_map: dict[UUID, str] = {}
     if invitation_ids:
-        result = await db.execute(
-            select(Invitation.id, Invitation.status).where(
-                Invitation.id.in_(invitation_ids)
-            )
-        )
+        result = await db.execute(select(Invitation.id, Invitation.status).where(Invitation.id.in_(invitation_ids)))
         invitations = result.all()
         invitation_status_map = {inv.id: inv.status for inv in invitations}
 
@@ -353,6 +348,7 @@ async def mark_notifications_read(
     # Broadcast bulk read event via WebSocket (single message instead of N)
     if bulk_data.is_read:
         from ..websocket.manager import manager, MessageType
+
         await manager.broadcast_to_user(
             current_user.id,
             {

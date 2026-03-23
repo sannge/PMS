@@ -83,11 +83,13 @@ class OAuthService:
         from ..services.redis_service import redis_service
 
         state = secrets.token_urlsafe(32)
-        state_data = json.dumps({
-            "user_id": str(user_id),
-            "code_verifier": code_verifier,
-            "provider_type": provider_type,
-        })
+        state_data = json.dumps(
+            {
+                "user_id": str(user_id),
+                "code_verifier": code_verifier,
+                "provider_type": provider_type,
+            }
+        )
 
         await redis_service.set(
             f"oauth_state:{state}",
@@ -313,9 +315,7 @@ class OAuthService:
             data = response.json()
             access_token = data["access_token"]
         except (ValueError, KeyError) as exc:
-            raise OAuthError(
-                "Invalid refresh response from provider", provider_type
-            ) from exc
+            raise OAuthError("Invalid refresh response from provider", provider_type) from exc
 
         return {
             "access_token": access_token,

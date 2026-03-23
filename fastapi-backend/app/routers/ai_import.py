@@ -95,7 +95,7 @@ async def upload_and_import(
     # --- Validate file extension ---
     file_name = file.filename or "unknown"
     # Sanitize filename: strip control characters and limit length
-    file_name = "".join(c for c in file_name if unicodedata.category(c)[0] != 'C')[:500]
+    file_name = "".join(c for c in file_name if unicodedata.category(c)[0] != "C")[:500]
     ext = Path(file_name).suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
@@ -217,6 +217,7 @@ async def upload_and_import(
     # --- Validate folder_id belongs to target scope ---
     if folder_id:
         from ..models.document_folder import DocumentFolder
+
         folder_result = await db.execute(
             select(DocumentFolder).where(
                 DocumentFolder.id == folder_id,
@@ -301,7 +302,11 @@ async def upload_and_import(
 
     logger.info(
         "Import job %s created for file '%s' (%s, %d bytes) by user %s",
-        job_id, file_name, file_type, file_size, current_user.id,
+        job_id,
+        file_name,
+        file_type,
+        file_size,
+        current_user.id,
     )
 
     return {
@@ -347,11 +352,7 @@ async def list_jobs(
 
     # Fetch paginated results
     items_query = (
-        select(ImportJob)
-        .where(*base_filter)
-        .order_by(ImportJob.created_at.desc())
-        .limit(limit)
-        .offset(offset)
+        select(ImportJob).where(*base_filter).order_by(ImportJob.created_at.desc()).limit(limit).offset(offset)
     )
     items_result = await db.execute(items_query)
     jobs = items_result.scalars().all()

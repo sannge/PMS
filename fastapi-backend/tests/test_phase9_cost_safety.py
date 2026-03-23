@@ -100,14 +100,14 @@ class TestStreamingLimits:
 
     def test_streaming_constants_exist(self):
         from app.routers.ai_chat import (
-            MAX_CHUNKS_PER_RESPONSE,
-            STREAM_IDLE_TIMEOUT_S,
-            STREAM_OVERALL_TIMEOUT_S,
+            get_max_chunks_per_response,
+            get_stream_idle_timeout_s,
+            get_stream_overall_timeout_s,
         )
 
-        assert STREAM_OVERALL_TIMEOUT_S == 300
-        assert STREAM_IDLE_TIMEOUT_S == 60
-        assert MAX_CHUNKS_PER_RESPONSE == 2000
+        assert get_stream_overall_timeout_s() == 300
+        assert get_stream_idle_timeout_s() == 60
+        assert get_max_chunks_per_response() == 2000
 
 
 # ---------------------------------------------------------------------------
@@ -173,9 +173,11 @@ class TestImportConcurrency:
             IMPORT_CONCURRENCY_KEY,
             IMPORT_CONCURRENCY_TTL,
         )
+
         # MAX_CONCURRENT_IMPORTS is now read at call time inside
         # process_document_import via get_agent_config().
         from app.ai.config_service import get_agent_config
+
         max_concurrent = get_agent_config().get_int("worker.max_concurrent_imports", 5)
 
         assert max_concurrent == 5
@@ -409,6 +411,7 @@ class TestStreamingTimeoutBehavior:
     @pytest.mark.asyncio
     async def test_overall_timeout_fires(self, client, test_user, auth_headers):
         """Overall timeout fires and emits an error event near the limit."""
+
         # Mock _stream_agent to yield chunks slowly (one per second)
         async def slow_stream(graph, state, config, thread_id="", **kwargs):
             for i in range(200):
@@ -421,14 +424,19 @@ class TestStreamingTimeoutBehavior:
             "accessible_project_ids": [],
         }
 
-        with patch("app.routers.ai_chat._setup_agent_context", new_callable=AsyncMock, return_value=(mock_graph, mock_context)), \
-             patch("app.routers.ai_chat._stream_agent", slow_stream), \
-             patch("app.routers.ai_chat.STREAM_OVERALL_TIMEOUT_S", 0.3), \
-             patch("app.routers.ai_chat.STREAM_IDLE_TIMEOUT_S", 600), \
-             patch("app.routers.ai_chat.check_chat_rate_limit", return_value=None), \
-             patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock), \
-             patch("app.routers.ai_chat._register_thread", new_callable=AsyncMock):
-
+        with (
+            patch(
+                "app.routers.ai_chat._setup_agent_context",
+                new_callable=AsyncMock,
+                return_value=(mock_graph, mock_context),
+            ),
+            patch("app.routers.ai_chat._stream_agent", slow_stream),
+            patch("app.routers.ai_chat.get_stream_overall_timeout_s", lambda: 0.3),
+            patch("app.routers.ai_chat.get_stream_idle_timeout_s", lambda: 600),
+            patch("app.routers.ai_chat.check_chat_rate_limit", return_value=None),
+            patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock),
+            patch("app.routers.ai_chat._register_thread", new_callable=AsyncMock),
+        ):
             resp = await client.post(
                 "/api/ai/chat/stream",
                 json={"message": "hello", "conversation_history": [], "images": []},
@@ -443,6 +451,7 @@ class TestStreamingTimeoutBehavior:
     @pytest.mark.asyncio
     async def test_idle_timeout_fires(self, client, test_user, auth_headers):
         """Idle timeout fires when gap between chunks exceeds STREAM_IDLE_TIMEOUT_S."""
+
         async def stalling_stream(graph, state, config, thread_id="", **kwargs):
             yield {"event": "text_delta", "data": json.dumps({"content": "first chunk"})}
             # Pause longer than idle timeout
@@ -455,14 +464,19 @@ class TestStreamingTimeoutBehavior:
             "accessible_project_ids": [],
         }
 
-        with patch("app.routers.ai_chat._setup_agent_context", new_callable=AsyncMock, return_value=(mock_graph, mock_context)), \
-             patch("app.routers.ai_chat._stream_agent", stalling_stream), \
-             patch("app.routers.ai_chat.STREAM_OVERALL_TIMEOUT_S", 60), \
-             patch("app.routers.ai_chat.STREAM_IDLE_TIMEOUT_S", 0.1), \
-             patch("app.routers.ai_chat.check_chat_rate_limit", return_value=None), \
-             patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock), \
-             patch("app.routers.ai_chat._register_thread", new_callable=AsyncMock):
-
+        with (
+            patch(
+                "app.routers.ai_chat._setup_agent_context",
+                new_callable=AsyncMock,
+                return_value=(mock_graph, mock_context),
+            ),
+            patch("app.routers.ai_chat._stream_agent", stalling_stream),
+            patch("app.routers.ai_chat.get_stream_overall_timeout_s", lambda: 60),
+            patch("app.routers.ai_chat.get_stream_idle_timeout_s", lambda: 0.1),
+            patch("app.routers.ai_chat.check_chat_rate_limit", return_value=None),
+            patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock),
+            patch("app.routers.ai_chat._register_thread", new_callable=AsyncMock),
+        ):
             resp = await client.post(
                 "/api/ai/chat/stream",
                 json={"message": "hello", "conversation_history": [], "images": []},
@@ -476,6 +490,7 @@ class TestStreamingTimeoutBehavior:
     @pytest.mark.asyncio
     async def test_chunk_limit_fires(self, client, test_user, auth_headers):
         """Chunk limit fires when stream produces more than MAX_CHUNKS_PER_RESPONSE."""
+
         async def verbose_stream(graph, state, config, thread_id="", **kwargs):
             for i in range(50):
                 yield {"event": "text_delta", "data": json.dumps({"content": f"c{i}"})}
@@ -486,13 +501,18 @@ class TestStreamingTimeoutBehavior:
             "accessible_project_ids": [],
         }
 
-        with patch("app.routers.ai_chat._setup_agent_context", new_callable=AsyncMock, return_value=(mock_graph, mock_context)), \
-             patch("app.routers.ai_chat._stream_agent", verbose_stream), \
-             patch("app.routers.ai_chat.MAX_CHUNKS_PER_RESPONSE", 20), \
-             patch("app.routers.ai_chat.check_chat_rate_limit", return_value=None), \
-             patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock), \
-             patch("app.routers.ai_chat._register_thread", new_callable=AsyncMock):
-
+        with (
+            patch(
+                "app.routers.ai_chat._setup_agent_context",
+                new_callable=AsyncMock,
+                return_value=(mock_graph, mock_context),
+            ),
+            patch("app.routers.ai_chat._stream_agent", verbose_stream),
+            patch("app.routers.ai_chat.get_max_chunks_per_response", lambda: 20),
+            patch("app.routers.ai_chat.check_chat_rate_limit", return_value=None),
+            patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock),
+            patch("app.routers.ai_chat._register_thread", new_callable=AsyncMock),
+        ):
             resp = await client.post(
                 "/api/ai/chat/stream",
                 json={"message": "hello", "conversation_history": [], "images": []},
@@ -506,6 +526,7 @@ class TestStreamingTimeoutBehavior:
     @pytest.mark.asyncio
     async def test_normal_stream_no_timeout(self, client, test_user, auth_headers):
         """Normal stream with 10 chunks in ~0s completes without timeout or errors."""
+
         async def fast_stream(graph, state, config, thread_id="", **kwargs):
             for i in range(10):
                 yield {"event": "text_delta", "data": json.dumps({"content": f"chunk {i}"})}
@@ -517,12 +538,17 @@ class TestStreamingTimeoutBehavior:
             "accessible_project_ids": [],
         }
 
-        with patch("app.routers.ai_chat._setup_agent_context", new_callable=AsyncMock, return_value=(mock_graph, mock_context)), \
-             patch("app.routers.ai_chat._stream_agent", fast_stream), \
-             patch("app.routers.ai_chat.check_chat_rate_limit", return_value=None), \
-             patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock), \
-             patch("app.routers.ai_chat._register_thread", new_callable=AsyncMock):
-
+        with (
+            patch(
+                "app.routers.ai_chat._setup_agent_context",
+                new_callable=AsyncMock,
+                return_value=(mock_graph, mock_context),
+            ),
+            patch("app.routers.ai_chat._stream_agent", fast_stream),
+            patch("app.routers.ai_chat.check_chat_rate_limit", return_value=None),
+            patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock),
+            patch("app.routers.ai_chat._register_thread", new_callable=AsyncMock),
+        ):
             resp = await client.post(
                 "/api/ai/chat/stream",
                 json={"message": "hello", "conversation_history": [], "images": []},
@@ -791,8 +817,10 @@ class TestImportConcurrencyLimiter:
         mock_redis_svc.is_connected = True
         mock_redis_svc.client = mock_redis_client
 
-        with patch("app.worker.async_session_maker", return_value=mock_session_ctx), \
-             patch("app.worker.redis_service", mock_redis_svc):
+        with (
+            patch("app.worker.async_session_maker", return_value=mock_session_ctx),
+            patch("app.worker.redis_service", mock_redis_svc),
+        ):
             # temp file doesn't exist, so FileNotFoundError fires AFTER concurrency OK
             result = await process_document_import({}, job_id)
 
@@ -809,6 +837,7 @@ class TestImportConcurrencyLimiter:
         """Redis eval returns 6 (> 5), verify job is deferred with DECR."""
         from app.worker import process_document_import
         from app.ai.config_service import get_agent_config
+
         MAX_CONCURRENT_IMPORTS = get_agent_config().get_int("worker.max_concurrent_imports", 5)
 
         job_id = str(uuid4())
@@ -845,10 +874,11 @@ class TestImportConcurrencyLimiter:
         mock_arq_pool.enqueue_job = AsyncMock()
         mock_arq_pool.aclose = AsyncMock()
 
-        with patch("app.worker.async_session_maker", return_value=mock_session_ctx), \
-             patch("app.worker.redis_service", mock_redis_svc), \
-             patch("app.services.arq_helper.get_arq_redis", AsyncMock(return_value=mock_arq_pool)):
-
+        with (
+            patch("app.worker.async_session_maker", return_value=mock_session_ctx),
+            patch("app.worker.redis_service", mock_redis_svc),
+            patch("app.services.arq_helper.get_arq_redis", AsyncMock(return_value=mock_arq_pool)),
+        ):
             result = await process_document_import({}, job_id)
 
         # Job should be deferred due to concurrency limit
@@ -909,8 +939,10 @@ class TestImportConcurrencyLimiter:
         mock_redis_svc.is_connected = True
         mock_redis_svc.client = mock_redis_client
 
-        with patch("app.worker.async_session_maker", return_value=mock_session_ctx), \
-             patch("app.worker.redis_service", mock_redis_svc):
+        with (
+            patch("app.worker.async_session_maker", return_value=mock_session_ctx),
+            patch("app.worker.redis_service", mock_redis_svc),
+        ):
             # temp file doesn't exist -> FileNotFoundError after concurrency (fail-open)
             result = await process_document_import({}, job_id)
 
@@ -966,9 +998,11 @@ class TestImportConcurrencyLimiter:
         mock_redis_svc.is_connected = True
         mock_redis_svc.client = mock_redis_client
 
-        with patch("app.worker.async_session_maker", return_value=mock_session_ctx), \
-             patch("app.worker.redis_service", mock_redis_svc), \
-             patch("os.path.exists", return_value=False):
+        with (
+            patch("app.worker.async_session_maker", return_value=mock_session_ctx),
+            patch("app.worker.redis_service", mock_redis_svc),
+            patch("os.path.exists", return_value=False),
+        ):
             # File doesn't exist -> FileNotFoundError, but AFTER concurrency acquired
 
             result = await process_document_import({}, job_id)
@@ -1063,14 +1097,19 @@ class TestResumeChatEndpoint:
             "accessible_project_ids": [],
         }
 
-        with patch("app.routers.ai_chat._setup_agent_context", new_callable=AsyncMock, return_value=(mock_graph, mock_context)), \
-             patch("app.routers.ai_chat.STREAM_OVERALL_TIMEOUT_S", 0.1), \
-             patch("app.routers.ai_chat.check_chat_rate_limit", return_value=None), \
-             patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock), \
-             patch("app.ai.agent.graph.get_checkpointer", return_value=MagicMock()), \
-             patch("app.routers.ai_chat.AITelemetry") as mock_telemetry, \
-             patch("app.ai.agent.tools.clear_tool_context") as mock_clear:
-
+        with (
+            patch(
+                "app.routers.ai_chat._setup_agent_context",
+                new_callable=AsyncMock,
+                return_value=(mock_graph, mock_context),
+            ),
+            patch("app.routers.ai_chat.get_stream_overall_timeout_s", lambda: 0.1),
+            patch("app.routers.ai_chat.check_chat_rate_limit", return_value=None),
+            patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock),
+            patch("app.ai.agent.graph.get_checkpointer", return_value=MagicMock()),
+            patch("app.routers.ai_chat.AITelemetry") as mock_telemetry,
+            patch("app.ai.agent.tools.clear_tool_context") as mock_clear,
+        ):
             resp = await client.post(
                 "/api/ai/chat/resume",
                 json={"thread_id": "test-thread", "response": {"approved": True}},
@@ -1097,13 +1136,18 @@ class TestResumeChatEndpoint:
             "accessible_project_ids": [],
         }
 
-        with patch("app.routers.ai_chat._setup_agent_context", new_callable=AsyncMock, return_value=(mock_graph, mock_context)), \
-             patch("app.routers.ai_chat.check_chat_rate_limit", return_value=None), \
-             patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock), \
-             patch("app.ai.agent.graph.get_checkpointer", return_value=MagicMock()), \
-             patch("app.routers.ai_chat.AITelemetry") as mock_telemetry, \
-             patch("app.ai.agent.tools.clear_tool_context") as mock_clear:
-
+        with (
+            patch(
+                "app.routers.ai_chat._setup_agent_context",
+                new_callable=AsyncMock,
+                return_value=(mock_graph, mock_context),
+            ),
+            patch("app.routers.ai_chat.check_chat_rate_limit", return_value=None),
+            patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock),
+            patch("app.ai.agent.graph.get_checkpointer", return_value=MagicMock()),
+            patch("app.routers.ai_chat.AITelemetry") as mock_telemetry,
+            patch("app.ai.agent.tools.clear_tool_context") as mock_clear,
+        ):
             resp = await client.post(
                 "/api/ai/chat/resume",
                 json={"thread_id": "test-thread", "response": {"approved": True}},
@@ -1124,21 +1168,28 @@ class TestResumeChatEndpoint:
         from langchain_core.messages import AIMessage
 
         mock_graph = MagicMock()
-        mock_graph.ainvoke = AsyncMock(return_value={
-            "messages": [AIMessage(content="Here is the result")],
-        })
+        mock_graph.ainvoke = AsyncMock(
+            return_value={
+                "messages": [AIMessage(content="Here is the result")],
+            }
+        )
         mock_context = {
             "accessible_app_ids": [],
             "accessible_project_ids": [],
         }
 
-        with patch("app.routers.ai_chat._setup_agent_context", new_callable=AsyncMock, return_value=(mock_graph, mock_context)), \
-             patch("app.routers.ai_chat.check_chat_rate_limit", return_value=None), \
-             patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock), \
-             patch("app.ai.agent.graph.get_checkpointer", return_value=MagicMock()), \
-             patch("app.routers.ai_chat.AITelemetry") as mock_telemetry, \
-             patch("app.ai.agent.tools.clear_tool_context") as mock_clear:
-
+        with (
+            patch(
+                "app.routers.ai_chat._setup_agent_context",
+                new_callable=AsyncMock,
+                return_value=(mock_graph, mock_context),
+            ),
+            patch("app.routers.ai_chat.check_chat_rate_limit", return_value=None),
+            patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock),
+            patch("app.ai.agent.graph.get_checkpointer", return_value=MagicMock()),
+            patch("app.routers.ai_chat.AITelemetry") as mock_telemetry,
+            patch("app.ai.agent.tools.clear_tool_context") as mock_clear,
+        ):
             resp = await client.post(
                 "/api/ai/chat/resume",
                 json={"thread_id": "test-thread", "response": {"approved": True}},
@@ -1179,13 +1230,18 @@ class TestNonStreamingChatTimeout:
             "accessible_project_ids": [],
         }
 
-        with patch("app.routers.ai_chat._setup_agent_context", new_callable=AsyncMock, return_value=(mock_graph, mock_context)), \
-             patch("app.routers.ai_chat.STREAM_OVERALL_TIMEOUT_S", 0.1), \
-             patch("app.routers.ai_chat.check_chat_rate_limit", return_value=None), \
-             patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock), \
-             patch("app.routers.ai_chat._register_thread", new_callable=AsyncMock), \
-             patch("app.routers.ai_chat.AITelemetry") as mock_telemetry:
-
+        with (
+            patch(
+                "app.routers.ai_chat._setup_agent_context",
+                new_callable=AsyncMock,
+                return_value=(mock_graph, mock_context),
+            ),
+            patch("app.routers.ai_chat.get_stream_overall_timeout_s", lambda: 0.1),
+            patch("app.routers.ai_chat.check_chat_rate_limit", return_value=None),
+            patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock),
+            patch("app.routers.ai_chat._register_thread", new_callable=AsyncMock),
+            patch("app.routers.ai_chat.AITelemetry") as mock_telemetry,
+        ):
             resp = await client.post(
                 "/api/ai/chat",
                 json={"message": "hello", "conversation_history": [], "images": []},
@@ -1217,11 +1273,13 @@ class TestReplayConversationGuards:
         assert "_rate_limit" in sig.parameters
         param = sig.parameters["_rate_limit"]
         from app.ai.rate_limiter import check_chat_rate_limit
+
         assert param.default.dependency is check_chat_rate_limit
 
     @pytest.mark.asyncio
     async def test_guarded_replay_overall_timeout(self, client, test_user, auth_headers):
         """_guarded_replay emits error event on overall timeout."""
+
         async def slow_stream(graph, state, config, thread_id="", **kwargs):
             for i in range(200):
                 yield {"event": "text_delta", "data": json.dumps({"content": f"chunk {i}"})}
@@ -1233,15 +1291,20 @@ class TestReplayConversationGuards:
             "accessible_project_ids": [],
         }
 
-        with patch("app.routers.ai_chat._setup_agent_context", new_callable=AsyncMock, return_value=(mock_graph, mock_context)), \
-             patch("app.routers.ai_chat._stream_agent", slow_stream), \
-             patch("app.routers.ai_chat.STREAM_OVERALL_TIMEOUT_S", 0.3), \
-             patch("app.routers.ai_chat.STREAM_IDLE_TIMEOUT_S", 600), \
-             patch("app.routers.ai_chat.check_chat_rate_limit", return_value=None), \
-             patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock), \
-             patch("app.routers.ai_chat._register_thread", new_callable=AsyncMock), \
-             patch("app.ai.agent.graph.get_checkpointer", return_value=MagicMock()):
-
+        with (
+            patch(
+                "app.routers.ai_chat._setup_agent_context",
+                new_callable=AsyncMock,
+                return_value=(mock_graph, mock_context),
+            ),
+            patch("app.routers.ai_chat._stream_agent", slow_stream),
+            patch("app.routers.ai_chat.get_stream_overall_timeout_s", lambda: 0.3),
+            patch("app.routers.ai_chat.get_stream_idle_timeout_s", lambda: 600),
+            patch("app.routers.ai_chat.check_chat_rate_limit", return_value=None),
+            patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock),
+            patch("app.routers.ai_chat._register_thread", new_callable=AsyncMock),
+            patch("app.ai.agent.graph.get_checkpointer", return_value=MagicMock()),
+        ):
             resp = await client.post(
                 "/api/ai/chat/replay",
                 json={
@@ -1259,6 +1322,7 @@ class TestReplayConversationGuards:
     @pytest.mark.asyncio
     async def test_guarded_replay_chunk_limit(self, client, test_user, auth_headers):
         """_guarded_replay emits error event when chunk limit exceeded."""
+
         async def verbose_stream(graph, state, config, thread_id="", **kwargs):
             for i in range(50):
                 yield {"event": "text_delta", "data": json.dumps({"content": f"c{i}"})}
@@ -1269,14 +1333,19 @@ class TestReplayConversationGuards:
             "accessible_project_ids": [],
         }
 
-        with patch("app.routers.ai_chat._setup_agent_context", new_callable=AsyncMock, return_value=(mock_graph, mock_context)), \
-             patch("app.routers.ai_chat._stream_agent", verbose_stream), \
-             patch("app.routers.ai_chat.MAX_CHUNKS_PER_RESPONSE", 20), \
-             patch("app.routers.ai_chat.check_chat_rate_limit", return_value=None), \
-             patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock), \
-             patch("app.routers.ai_chat._register_thread", new_callable=AsyncMock), \
-             patch("app.ai.agent.graph.get_checkpointer", return_value=MagicMock()):
-
+        with (
+            patch(
+                "app.routers.ai_chat._setup_agent_context",
+                new_callable=AsyncMock,
+                return_value=(mock_graph, mock_context),
+            ),
+            patch("app.routers.ai_chat._stream_agent", verbose_stream),
+            patch("app.routers.ai_chat.get_max_chunks_per_response", lambda: 20),
+            patch("app.routers.ai_chat.check_chat_rate_limit", return_value=None),
+            patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock),
+            patch("app.routers.ai_chat._register_thread", new_callable=AsyncMock),
+            patch("app.ai.agent.graph.get_checkpointer", return_value=MagicMock()),
+        ):
             resp = await client.post(
                 "/api/ai/chat/replay",
                 json={
@@ -1294,6 +1363,7 @@ class TestReplayConversationGuards:
     @pytest.mark.asyncio
     async def test_guarded_replay_idle_timeout(self, client, test_user, auth_headers):
         """_guarded_replay emits error event when a single chunk takes too long."""
+
         async def stalling_stream(graph, state, config, thread_id="", **kwargs):
             yield {"event": "text_delta", "data": json.dumps({"content": "chunk 0"})}
             # Second chunk stalls longer than idle timeout
@@ -1306,15 +1376,20 @@ class TestReplayConversationGuards:
             "accessible_project_ids": [],
         }
 
-        with patch("app.routers.ai_chat._setup_agent_context", new_callable=AsyncMock, return_value=(mock_graph, mock_context)), \
-             patch("app.routers.ai_chat._stream_agent", stalling_stream), \
-             patch("app.routers.ai_chat.STREAM_OVERALL_TIMEOUT_S", 600), \
-             patch("app.routers.ai_chat.STREAM_IDLE_TIMEOUT_S", 0.2), \
-             patch("app.routers.ai_chat.check_chat_rate_limit", return_value=None), \
-             patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock), \
-             patch("app.routers.ai_chat._register_thread", new_callable=AsyncMock), \
-             patch("app.ai.agent.graph.get_checkpointer", return_value=MagicMock()):
-
+        with (
+            patch(
+                "app.routers.ai_chat._setup_agent_context",
+                new_callable=AsyncMock,
+                return_value=(mock_graph, mock_context),
+            ),
+            patch("app.routers.ai_chat._stream_agent", stalling_stream),
+            patch("app.routers.ai_chat.get_stream_overall_timeout_s", lambda: 600),
+            patch("app.routers.ai_chat.get_stream_idle_timeout_s", lambda: 0.2),
+            patch("app.routers.ai_chat.check_chat_rate_limit", return_value=None),
+            patch("app.routers.ai_chat._validate_thread_owner", new_callable=AsyncMock),
+            patch("app.routers.ai_chat._register_thread", new_callable=AsyncMock),
+            patch("app.ai.agent.graph.get_checkpointer", return_value=MagicMock()),
+        ):
             resp = await client.post(
                 "/api/ai/chat/replay",
                 json={

@@ -25,9 +25,7 @@ DASHBOARD_URL = "/api/me/dashboard"
 class TestDashboardEmpty:
     """Tests for dashboard with no data."""
 
-    async def test_dashboard_empty_user(
-        self, client: AsyncClient, db_session: AsyncSession
-    ):
+    async def test_dashboard_empty_user(self, client: AsyncClient, db_session: AsyncSession):
         """A user with no apps should get all zeros and empty arrays."""
         from tests.conftest import get_test_password_hash
         from app.services.auth_service import create_access_token
@@ -43,9 +41,7 @@ class TestDashboardEmpty:
         await db_session.commit()
         await db_session.refresh(user)
 
-        token = create_access_token(
-            data={"sub": str(user.id), "email": user.email}
-        )
+        token = create_access_token(data={"sub": str(user.id), "email": user.email})
         headers = {"Authorization": f"Bearer {token}"}
 
         response = await client.get(DASHBOARD_URL, headers=headers)
@@ -296,9 +292,7 @@ class TestDashboardCompletionTrend:
         trend = data["completion_trend"]
         # The last entry (today) should have count >= 1
         today_str = central_today().isoformat()
-        today_entry = next(
-            (p for p in trend if p["date"] == today_str), None
-        )
+        today_entry = next((p for p in trend if p["date"] == today_str), None)
         assert today_entry is not None
         assert today_entry["count"] == 1
 
@@ -1238,9 +1232,7 @@ class TestDashboardProjectHealthFields:
         data = response.json()
         assert len(data["project_health"]) >= 1
 
-        health = next(
-            h for h in data["project_health"] if h["key"] == test_project.key
-        )
+        health = next(h for h in data["project_health"] if h["key"] == test_project.key)
         assert health["completion_pct"] == 30
         assert health["total_tasks"] == 10
         assert health["done_tasks"] == 3

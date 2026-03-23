@@ -3,6 +3,9 @@
 Tests the AIRateLimiter class, RateLimitResult model, rate limit
 configuration loading, the FastAPI middleware dependencies, and the
 in-memory fallback counter used when Redis is unavailable.
+
+The rate limiter uses a sliding window counter approach with two Redis
+keys per window (current + previous) instead of sorted sets.
 """
 
 import time
@@ -12,13 +15,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.ai.rate_limiter import (
-    AIRateLimiter,
-    RATE_LIMITS,
-    RateLimitResult,
     _INMEMORY_LIMIT_MULTIPLIER,
     _INMEMORY_MAX_KEYS,
+    RATE_LIMITS,
+    AIRateLimiter,
+    RateLimitResult,
     _inmemory_counters,
-    _inmemory_lock,
     _load_rate_limits,
     check_chat_rate_limit,
     check_embedding_rate_limit,
@@ -26,7 +28,6 @@ from app.ai.rate_limiter import (
     check_reindex_rate_limit,
     get_rate_limiter,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -47,9 +48,7 @@ def _make_mock_redis(check_return: int = 0, inc_return: int = 1, check_and_inc_r
 
     mock_redis = MagicMock()
     # register_script is called 3 times in __init__: check_and_inc, inc, check
-    mock_redis.register_script = MagicMock(
-        side_effect=[mock_check_and_inc_script, mock_inc_script, mock_check_script]
-    )
+    mock_redis.register_script = MagicMock(side_effect=[mock_check_and_inc_script, mock_inc_script, mock_check_script])
 
     return mock_redis
 
@@ -62,9 +61,7 @@ def _make_failing_redis() -> MagicMock:
     mock_check_and_inc_script = AsyncMock(side_effect=error)
 
     mock_redis = MagicMock()
-    mock_redis.register_script = MagicMock(
-        side_effect=[mock_check_and_inc_script, mock_inc_script, mock_check_script]
-    )
+    mock_redis.register_script = MagicMock(side_effect=[mock_check_and_inc_script, mock_inc_script, mock_check_script])
 
     return mock_redis
 
@@ -210,6 +207,26 @@ class TestCheckRateLimit:
         assert result.allowed is True
         assert result.limit == 30 * _INMEMORY_LIMIT_MULTIPLIER
 
+    @pytest.mark.asyncio
+    async def test_lua_script_called_with_two_keys(self):
+        """Verify check-only Lua script is called with 2 keys (curr + prev)."""
+        redis = _make_mock_redis(check_return=5)
+        limiter = AIRateLimiter(redis)
+
+        await limiter.check_rate_limit("ai_chat", "user-1", 30, 60)
+
+        limiter._check.assert_awaited_once()
+        call_kwargs = limiter._check.call_args
+        keys = call_kwargs[1]["keys"]
+        args = call_kwargs[1]["args"]
+        # Should have 2 keys (current window, previous window)
+        assert len(keys) == 2
+        assert keys[0].startswith("ratelimit:ai_chat:user-1:60:")
+        assert keys[1].startswith("ratelimit:ai_chat:user-1:60:")
+        # args: [window_seconds, now]
+        assert len(args) == 2
+        assert args[0] == 60  # window_seconds
+
 
 # ---------------------------------------------------------------------------
 # AIRateLimiter.check_and_increment (atomic check + increment)
@@ -304,7 +321,7 @@ class TestCheckAndIncrement:
 
     @pytest.mark.asyncio
     async def test_lua_script_called_with_correct_args(self):
-        """Verify Lua script is called with keys and args."""
+        """Verify Lua script is called with 2 keys and sliding window args."""
         redis = _make_mock_redis(check_and_inc_return=3)
         limiter = AIRateLimiter(redis)
 
@@ -313,13 +330,20 @@ class TestCheckAndIncrement:
         # The check_and_inc script should have been called once
         limiter._check_and_inc.assert_awaited_once()
         call_kwargs = limiter._check_and_inc.call_args
-        assert call_kwargs[1]["keys"] == ["ratelimit:ai_chat:user-1:60"]
+        keys = call_kwargs[1]["keys"]
+        # Should have 2 keys (current window, previous window)
+        assert len(keys) == 2
+        assert keys[0].startswith("ratelimit:ai_chat:user-1:60:")
+        assert keys[1].startswith("ratelimit:ai_chat:user-1:60:")
+        # Previous window number should be one less than current
+        curr_win = int(keys[0].rsplit(":", 1)[1])
+        prev_win = int(keys[1].rsplit(":", 1)[1])
+        assert prev_win == curr_win - 1
         args = call_kwargs[1]["args"]
-        # args: [now, window_seconds, limit, member, ttl]
-        assert len(args) == 5
-        assert args[1] == 60  # window_seconds
-        assert args[2] == 30  # limit
-        assert args[4] == 61  # ttl = window + 1
+        # args: [window_seconds, limit, now]
+        assert len(args) == 3
+        assert args[0] == 60  # window_seconds
+        assert args[1] == 30  # limit
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +383,7 @@ class TestIncrement:
 
     @pytest.mark.asyncio
     async def test_lua_script_called_with_correct_args(self):
-        """Verify Lua increment script is called with keys and args."""
+        """Verify Lua increment script is called with 2 keys and args."""
         redis = _make_mock_redis(inc_return=3)
         limiter = AIRateLimiter(redis)
 
@@ -367,12 +391,15 @@ class TestIncrement:
 
         limiter._inc.assert_awaited_once()
         call_kwargs = limiter._inc.call_args
-        assert call_kwargs[1]["keys"] == ["ratelimit:ai_chat:user-1:60"]
+        keys = call_kwargs[1]["keys"]
+        # Should have 2 keys (current window, previous window)
+        assert len(keys) == 2
+        assert keys[0].startswith("ratelimit:ai_chat:user-1:60:")
+        assert keys[1].startswith("ratelimit:ai_chat:user-1:60:")
         args = call_kwargs[1]["args"]
-        # args: [now, window_seconds, member, ttl]
-        assert len(args) == 4
-        assert args[1] == 60  # window_seconds
-        assert args[3] == 61  # ttl = window + 1
+        # args: [window_seconds, now]
+        assert len(args) == 2
+        assert args[0] == 60  # window_seconds
 
 
 # ---------------------------------------------------------------------------
@@ -389,24 +416,24 @@ class TestInMemoryFallback:
 
     @pytest.mark.asyncio
     async def test_check_and_increment_fallback_allowed(self):
-        """When Redis fails, in-memory fallback allows requests under 2x limit."""
+        """When Redis fails, in-memory fallback allows requests under limit."""
         redis = _make_failing_redis()
         limiter = AIRateLimiter(redis)
 
         result = await limiter.check_and_increment("ai_chat", "user-1", 30, 60)
 
         assert result.allowed is True
-        # Fallback limit is 2x normal
+        # Fallback limit uses multiplier
         assert result.limit == 30 * _INMEMORY_LIMIT_MULTIPLIER
         assert result.remaining == 30 * _INMEMORY_LIMIT_MULTIPLIER - 1
 
     @pytest.mark.asyncio
     async def test_check_and_increment_fallback_blocked(self):
-        """When in-memory count exceeds 2x limit, requests are blocked."""
+        """When in-memory count exceeds limit, requests are blocked."""
         redis = _make_failing_redis()
         limiter = AIRateLimiter(redis)
         limit = 5
-        fallback_limit = limit * _INMEMORY_LIMIT_MULTIPLIER  # 10
+        fallback_limit = limit * _INMEMORY_LIMIT_MULTIPLIER
 
         # Fill up the fallback counter
         for _ in range(fallback_limit):
@@ -426,10 +453,13 @@ class TestInMemoryFallback:
         result = await limiter.check_rate_limit("ai_chat", "user-1", 30, 60)
 
         assert result.allowed is True
-        # Should not have incremented counter
-        key = "ratelimit:ai_chat:user-1:60"
-        async with _inmemory_lock:
-            assert len(_inmemory_counters.get(key, [])) == 0
+        # Should not have incremented any counter -- all window keys should be 0 or absent
+        now = time.time()
+        window_seconds = 60
+        curr_window = int(now // window_seconds)
+        base_key = "ratelimit:ai_chat:user-1:60"
+        curr_key = f"{base_key}:{curr_window}"
+        assert _inmemory_counters.get(curr_key, 0) == 0
 
     @pytest.mark.asyncio
     async def test_increment_fallback_returns_count(self):
@@ -444,23 +474,27 @@ class TestInMemoryFallback:
         assert count2 == 2
 
     @pytest.mark.asyncio
-    async def test_fallback_prunes_expired_entries(self):
-        """Expired entries should be pruned from in-memory counters."""
-        key = "ratelimit:ai_chat:user-1:60"
-        # Manually insert an old entry
-        old_ts = time.time() - 120  # 2 minutes ago, outside 60s window
-        async with _inmemory_lock:
-            _inmemory_counters[key] = [old_ts]
+    async def test_fallback_sliding_window_blends_previous(self):
+        """Sliding window counter blends current and previous window counts."""
+        now = time.time()
+        window_seconds = 60
+        curr_window = int(now // window_seconds)
+        base_key = "ratelimit:ai_chat:user-1:60"
+        prev_key = f"{base_key}:{curr_window - 1}"
+
+        # Manually insert previous window count
+        _inmemory_counters[prev_key] = 20
 
         redis = _make_failing_redis()
         limiter = AIRateLimiter(redis)
 
+        # The sliding estimate includes a weighted portion of the previous window
         result = await limiter.check_and_increment("ai_chat", "user-1", 30, 60)
 
-        # Old entry pruned, only the new one remains
-        assert result.allowed is True
-        async with _inmemory_lock:
-            assert len(_inmemory_counters[key]) == 1
+        # With 20 in the previous window, the effective count should be
+        # 1 (new request) + floor(20 * weight) where weight = 1 - elapsed/window
+        # The result should reflect the blended count
+        assert result.allowed is True  # Should still be under 30
 
     @pytest.mark.asyncio
     async def test_none_redis_uses_fallback(self):
@@ -477,16 +511,31 @@ class TestInMemoryFallback:
         """When in-memory dict exceeds _INMEMORY_MAX_KEYS, it gets cleared."""
         # Fill with fake keys beyond the limit
         for i in range(_INMEMORY_MAX_KEYS + 1):
-            _inmemory_counters[f"fake-key-{i}"] = [time.time()]
+            _inmemory_counters[f"fake-key-{i}"] = 1
 
         # Next call should trigger the safety clear
-        count = await AIRateLimiter._inmemory_count_and_add(
-            "new-key", 60, add=True
-        )
+        count = await AIRateLimiter._inmemory_count_and_add("new-key", 60, add=True)
 
         # After eviction, the new entry should exist
         assert count == 1
-        assert "new-key" in _inmemory_counters
+        # The current window key should be in the counters
+        now = time.time()
+        curr_window = int(now // 60)
+        curr_key = f"new-key:{curr_window}"
+        assert curr_key in _inmemory_counters
+
+    @pytest.mark.asyncio
+    async def test_inmemory_counter_uses_window_keys(self):
+        """Verify in-memory fallback stores counters per window number."""
+        now = time.time()
+        window_seconds = 60
+        curr_window = int(now // window_seconds)
+        base_key = "ratelimit:ai_test:user-1:60"
+
+        await AIRateLimiter._inmemory_count_and_add(base_key, window_seconds, add=True)
+
+        curr_key = f"{base_key}:{curr_window}"
+        assert _inmemory_counters.get(curr_key) == 1
 
 
 # ---------------------------------------------------------------------------

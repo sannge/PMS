@@ -42,6 +42,7 @@ class RedisService:
         self._handlers: dict[str, list[Callable]] = {}
         self._running = False
         self._connected = False
+        self._reconnect_delay: float = 1.0
         self._health_monitor_task: Optional[asyncio.Task] = None
         self._on_state_change: Optional[Callable[[bool], Any]] = None
 
@@ -154,7 +155,7 @@ class RedisService:
             Number of subscribers that received the message
         """
         try:
-            result = await self.client.publish(channel, json.dumps(message))
+            result = await self.client.publish(channel, json.dumps(message, default=str))
             self._connected = True
             return result
         except Exception:
@@ -192,16 +193,21 @@ class RedisService:
         logger.info("Redis pub/sub listener started")
 
     async def _listen_loop(self) -> None:
-        """Background task to receive and route pub/sub messages."""
+        """Background task to receive and route pub/sub messages.
+
+        Uses ``async for message in pubsub.listen()`` for push-based delivery
+        instead of polling with ``get_message(timeout=1.0)``, eliminating up to
+        1 second of latency per message.
+        """
         while self._running:
             try:
                 if self._pubsub is None:
                     break
-                message = await self._pubsub.get_message(
-                    ignore_subscribe_messages=True,
-                    timeout=1.0
-                )
-                if message and message["type"] == "message":
+                async for message in self._pubsub.listen():
+                    if not self._running:
+                        break
+                    if message["type"] != "message":
+                        continue
                     channel = message["channel"]
                     data = json.loads(message["data"])
 
@@ -217,9 +223,18 @@ class RedisService:
                 # Only log if we're still supposed to be running
                 if self._running:
                     logger.error(f"Pub/sub listener error: {e}")
+                    # Close dead pubsub and recreate
+                    try:
+                        if self._pubsub:
+                            await self._pubsub.close()
+                    except Exception:
+                        pass
+                    # Recreate pubsub and resubscribe all channels
+                    self._pubsub = self.client.pubsub()
+                    channels = list(self._handlers.keys())
+                    if channels:
+                        await self._pubsub.subscribe(*channels)
                     # L4: Exponential backoff to prevent tight-loop on Redis outage
-                    if not hasattr(self, "_reconnect_delay"):
-                        self._reconnect_delay = 1.0
                     await asyncio.sleep(self._reconnect_delay)
                     self._reconnect_delay = min(self._reconnect_delay * 2, 30.0)
                 else:
@@ -268,12 +283,7 @@ class RedisService:
             self._connected = False
             raise
 
-    async def set(
-        self,
-        key: str,
-        value: Any,
-        ttl: Optional[int] = None
-    ) -> None:
+    async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
         """
         Set a value in cache with optional TTL.
 
@@ -327,9 +337,7 @@ class RedisService:
             cursor = 0
             batch_size = 200
             while True:
-                cursor, keys = await self.client.scan(
-                    cursor=cursor, match=pattern, count=batch_size
-                )
+                cursor, keys = await self.client.scan(cursor=cursor, match=pattern, count=batch_size)
                 if keys:
                     total_deleted += await self.client.unlink(*keys)
                 if cursor == 0:
@@ -362,12 +370,7 @@ class RedisService:
     # Presence Methods (Sorted Sets)
     # =========================================================================
 
-    async def presence_set(
-        self,
-        room_id: str,
-        user_id: str,
-        timestamp: float
-    ) -> None:
+    async def presence_set(self, room_id: str, user_id: str, timestamp: float) -> None:
         """
         Set user presence in a room using sorted set.
 
@@ -388,11 +391,7 @@ class RedisService:
         """
         await self.client.zrem(f"presence:{room_id}", user_id)
 
-    async def presence_get_room(
-        self,
-        room_id: str,
-        since: float = 0
-    ) -> list[str]:
+    async def presence_get_room(self, room_id: str, since: float = 0) -> list[str]:
         """
         Get all users in a room with timestamp >= since.
 
@@ -403,11 +402,7 @@ class RedisService:
         Returns:
             List of user IDs present in the room
         """
-        return await self.client.zrangebyscore(
-            f"presence:{room_id}",
-            min=since,
-            max="+inf"
-        )
+        return await self.client.zrangebyscore(f"presence:{room_id}", min=since, max="+inf")
 
     async def presence_cleanup(self, room_id: str, cutoff: float) -> int:
         """
@@ -420,11 +415,7 @@ class RedisService:
         Returns:
             Number of entries removed
         """
-        return await self.client.zremrangebyscore(
-            f"presence:{room_id}",
-            min="-inf",
-            max=cutoff
-        )
+        return await self.client.zremrangebyscore(f"presence:{room_id}", min="-inf", max=cutoff)
 
     async def presence_get_score(self, room_id: str, user_id: str) -> Optional[float]:
         """
@@ -456,9 +447,7 @@ class RedisService:
         result: list[str] = []
         cursor = 0
         while True:
-            cursor, keys = await self.client.scan(
-                cursor=cursor, match=pattern, count=count
-            )
+            cursor, keys = await self.client.scan(cursor=cursor, match=pattern, count=count)
             result.extend(keys)
             if cursor == 0:
                 break
@@ -468,12 +457,7 @@ class RedisService:
     # Rate Limiting Methods
     # =========================================================================
 
-    async def rate_limit_check(
-        self,
-        key: str,
-        limit: int,
-        window: int
-    ) -> tuple[bool, int]:
+    async def rate_limit_check(self, key: str, limit: int, window: int) -> tuple[bool, int]:
         """
         Check rate limit using sliding window counter.
 
@@ -488,9 +472,7 @@ class RedisService:
         # H14: Atomic INCR + EXPIRE via Lua to prevent key leak if Redis
         # crashes between the two commands.
         _RATE_LIMIT_LUA = (
-            "local c = redis.call('INCR', KEYS[1]) "
-            "if c == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end "
-            "return c"
+            "local c = redis.call('INCR', KEYS[1]) if c == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end return c"
         )
         current = await self.client.eval(_RATE_LIMIT_LUA, 1, key, window)
         return current <= limit, current
@@ -513,9 +495,7 @@ class RedisService:
         if self._health_monitor_task is not None:
             return
         self._on_state_change = on_state_change
-        self._health_monitor_task = asyncio.create_task(
-            self._health_monitor_loop(interval)
-        )
+        self._health_monitor_task = asyncio.create_task(self._health_monitor_loop(interval))
         logger.info("Redis health monitor started (interval=%ds)", interval)
 
     async def stop_health_monitor(self) -> None:

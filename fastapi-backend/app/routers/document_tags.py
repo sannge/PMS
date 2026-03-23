@@ -40,9 +40,7 @@ def _resolve_tag_scope(tag: DocumentTag) -> tuple[str, UUID]:
 
 @router.get("", response_model=list[TagResponse])
 async def list_tags(
-    scope: Literal["application", "personal"] = Query(
-        ..., description="Scope type"
-    ),
+    scope: Literal["application", "personal"] = Query(..., description="Scope type"),
     scope_id: UUID = Query(..., description="Application ID or User ID"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -126,9 +124,7 @@ async def update_tag(
     """
     Update a tag's name and/or color.
     """
-    result = await db.execute(
-        select(DocumentTag).where(DocumentTag.id == tag_id)
-    )
+    result = await db.execute(select(DocumentTag).where(DocumentTag.id == tag_id))
     tag = result.scalar_one_or_none()
 
     if tag is None:
@@ -175,9 +171,7 @@ async def delete_tag(
     """
     Delete a tag. Cascades to remove all tag assignments.
     """
-    result = await db.execute(
-        select(DocumentTag).where(DocumentTag.id == tag_id)
-    )
+    result = await db.execute(select(DocumentTag).where(DocumentTag.id == tag_id))
     tag = result.scalar_one_or_none()
 
     if tag is None:

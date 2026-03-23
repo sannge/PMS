@@ -12,6 +12,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
+from ..graph_context import chat_model_var
 from ..prompts import SYNTHESIS_PROMPT
 from ..state import AgentState
 
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 async def synthesize_node(
     state: AgentState,
     *,
-    chat_model_cache: list[Any],
+    chat_model_cache: list[Any] | None = None,
 ) -> dict:
     """Synthesize accumulated research into a structured response.
 
@@ -30,11 +31,17 @@ async def synthesize_node(
 
     Args:
         state: Current pipeline state.
-        chat_model_cache: Mutable list containing the raw LangChain chat model.
+        chat_model_cache: Mutable list containing the raw LangChain chat
+            model.  Falls back to ``chat_model_var`` ContextVar when
+            ``None``.
 
     Returns:
         State update with synthesized response and incremented LLM counter.
     """
+    chat_model_cache = chat_model_cache or chat_model_var.get()
+    if chat_model_cache is None:
+        chat_model_cache = []
+
     total_llm_calls = state.get("total_llm_calls", 0)
 
     synthesize_count = state.get("synthesize_count", 0)
@@ -60,8 +67,7 @@ async def synthesize_node(
         # H3: entries are pre-truncated to 3000 chars each (in execute_tools),
         # so [-8:] ≈ 24,000 chars max — within context window budget.
         research_context = [
-            f"Tool result ({r.get('tool', 'unknown')}): {r.get('result', '')}"
-            for r in tool_results_acc[-8:]
+            f"Tool result ({r.get('tool', 'unknown')}): {r.get('result', '')}" for r in tool_results_acc[-8:]
         ]
     else:
         # Fallback: scan messages for tool and AI content.

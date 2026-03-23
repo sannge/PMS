@@ -148,9 +148,7 @@ async def update_application(
         app_uuid = UUID(resolved_id)  # type: ignore[arg-type]
 
         # Load application
-        result = await db.execute(
-            select(Application).where(Application.id == app_uuid)
-        )
+        result = await db.execute(select(Application).where(Application.id == app_uuid))
         app_obj = result.scalar_one_or_none()
         if not app_obj:
             return f"Error: Application '{app}' not found."
@@ -209,9 +207,7 @@ async def update_application(
             if not member or member.role not in ("owner", "editor"):
                 return "Access denied: you no longer have permission to update this application."
 
-            result = await db.execute(
-                select(Application).where(Application.id == app_uuid)
-            )
+            result = await db.execute(select(Application).where(Application.id == app_uuid))
             app_obj = result.scalar_one_or_none()
             if not app_obj:
                 return "Error: Application no longer exists."
@@ -257,9 +253,7 @@ async def delete_application(
         app_uuid = UUID(resolved_id)  # type: ignore[arg-type]
 
         # Load application
-        result = await db.execute(
-            select(Application).where(Application.id == app_uuid)
-        )
+        result = await db.execute(select(Application).where(Application.id == app_uuid))
         app_obj = result.scalar_one_or_none()
         if not app_obj:
             return f"Error: Application '{app}' not found."
@@ -281,9 +275,7 @@ async def delete_application(
     confirmation: dict[str, Any] = {
         "type": "confirmation",
         "action": "delete_application",
-        "summary": (
-            f"DELETE application '{app_name}' and all its contents (irreversible)"
-        ),
+        "summary": (f"DELETE application '{app_name}' and all its contents (irreversible)"),
         "details": {
             "application_id": str(app_uuid),
             "application_name": app_name,
@@ -311,9 +303,7 @@ async def delete_application(
             if not member or member.role != "owner":
                 return "Access denied: you are no longer the owner of this application."
 
-            result = await db.execute(
-                select(Application).where(Application.id == app_uuid)
-            )
+            result = await db.execute(select(Application).where(Application.id == app_uuid))
             app_obj = result.scalar_one_or_none()
             if not app_obj:
                 return "Error: Application no longer exists."

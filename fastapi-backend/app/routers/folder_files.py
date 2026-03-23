@@ -6,7 +6,6 @@ endpoints require authentication and use the same RBAC model as
 documents (application/project/personal scope).
 """
 
-import asyncio
 import hashlib
 import logging
 import os
@@ -50,26 +49,55 @@ router = APIRouter(prefix="/api/folder-files", tags=["FolderFiles"])
 
 # File extensions that support content extraction
 EXTRACTABLE_EXTENSIONS = {
-    ".pdf", ".docx", ".pptx",
-    ".xlsx", ".xls", ".xlsm", ".xlsb",
-    ".csv", ".tsv",
+    ".pdf",
+    ".docx",
+    ".pptx",
+    ".xlsx",
+    ".xls",
+    ".xlsm",
+    ".xlsb",
+    ".csv",
+    ".tsv",
     ".vsdx",
 }
 
 # Blocked executable/script extensions (HIGH-1)
 BLOCKED_EXTENSIONS = {
-    ".exe", ".bat", ".cmd", ".sh", ".ps1", ".msi", ".dll", ".com", ".scr",
-    ".pif", ".vbs", ".js", ".wsh", ".wsf", ".jar", ".cpl", ".inf", ".reg",
-    ".rgs", ".sct", ".hta", ".php",
+    ".exe",
+    ".bat",
+    ".cmd",
+    ".sh",
+    ".ps1",
+    ".msi",
+    ".dll",
+    ".com",
+    ".scr",
+    ".pif",
+    ".vbs",
+    ".js",
+    ".wsh",
+    ".wsf",
+    ".jar",
+    ".cpl",
+    ".inf",
+    ".reg",
+    ".rgs",
+    ".sct",
+    ".hta",
+    ".php",
 }
+
 
 # MinIO bucket for folder files — read from config at runtime
 def _folder_files_bucket() -> str:
     from ..config import settings
+
     return settings.minio_attachments_bucket
+
 
 # Sanitize filename: keep alphanumeric, dash, underscore, dot
 _SANITIZE_RE = re.compile(r"[^a-zA-Z0-9_.\-]")
+
 
 def _get_upload_rate_limit() -> int:
     """Get upload rate limit at runtime from config."""
@@ -103,7 +131,7 @@ def _sanitize_filename(filename: str) -> str:
 def _sanitize_original_name(name: str) -> str:
     """Strip null bytes and control chars from original_name before storage (MED-12)."""
     # Remove null bytes and C0 control characters (0x00-0x1F) except tab/newline
-    return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', name)
+    return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", name)
 
 
 def _sanitize_display_name(name: str) -> str:
@@ -156,19 +184,23 @@ def _detect_mime_type(content: bytes, filename: str) -> str:
         # (to avoid false positives from magic) but log a warning.
         try:
             import magic as _magic
+
             detected = _magic.from_buffer(content[:8192], mime=True)
             if detected:
                 ext_family = ext_mime.split("/")[0]
                 detected_family = detected.split("/")[0]
                 # ZIP-based formats (docx, xlsx, pptx, vsdx) will be
                 # detected as application/zip by magic, which is expected.
-                if (
-                    detected_family != ext_family
-                    and detected not in ("application/zip", "application/x-zip-compressed", "application/octet-stream")
+                if detected_family != ext_family and detected not in (
+                    "application/zip",
+                    "application/x-zip-compressed",
+                    "application/octet-stream",
                 ):
                     logger.warning(
                         "MIME mismatch for '%s': extension says %s but content detected as %s",
-                        filename, ext_mime, detected,
+                        filename,
+                        ext_mime,
+                        detected,
                     )
         except ImportError:
             pass
@@ -178,6 +210,7 @@ def _detect_mime_type(content: bytes, filename: str) -> str:
 
     try:
         import magic
+
         detected = magic.from_buffer(content[:8192], mime=True)
         if detected:
             return detected
@@ -296,9 +329,7 @@ def _resolve_file_scope(file: FolderFile) -> tuple[str, UUID]:
 
 async def _get_folder_or_404(folder_id: UUID, db: AsyncSession) -> DocumentFolder:
     """Fetch a DocumentFolder by ID or raise 404."""
-    result = await db.execute(
-        select(DocumentFolder).where(DocumentFolder.id == folder_id)
-    )
+    result = await db.execute(select(DocumentFolder).where(DocumentFolder.id == folder_id))
     folder = result.scalar_one_or_none()
     if not folder:
         raise HTTPException(
@@ -332,9 +363,7 @@ async def _resolve_scope_room(file: FolderFile, db: AsyncSession) -> str | None:
     elif file.project_id:
         from ..models.project import Project
 
-        result = await db.execute(
-            select(Project.application_id).where(Project.id == file.project_id)
-        )
+        result = await db.execute(select(Project.application_id).where(Project.id == file.project_id))
         app_id = result.scalar_one_or_none()
         return f"application:{app_id}" if app_id else None
     elif file.user_id:
@@ -344,9 +373,7 @@ async def _resolve_scope_room(file: FolderFile, db: AsyncSession) -> str | None:
 
 async def _delete_file_chunks(file_id: UUID, db: AsyncSession) -> None:
     """Delete all DocumentChunk rows for a given file. Errors propagate to caller."""
-    await db.execute(
-        sa_delete(DocumentChunk).where(DocumentChunk.file_id == file_id)
-    )
+    await db.execute(sa_delete(DocumentChunk).where(DocumentChunk.file_id == file_id))
 
 
 async def _enqueue_extraction_job(file_id: UUID) -> None:
@@ -392,11 +419,11 @@ async def _enqueue_extraction_job(file_id: UUID) -> None:
 async def upload_file(
     current_user: Annotated[User, Depends(get_current_user)],
     folder_id: Optional[UUID] = Query(None, description="Target folder ID (null for unfiled)"),
-    scope: Optional[Literal["application", "project", "personal"]] = Query(None, description="Scope type: application, project, personal"),
-    scope_id: Optional[UUID] = Query(None, description="Scope entity ID"),
-    display_name: Optional[str] = Query(
-        None, max_length=255, description="Display name (defaults to filename)"
+    scope: Optional[Literal["application", "project", "personal"]] = Query(
+        None, description="Scope type: application, project, personal"
     ),
+    scope_id: Optional[UUID] = Query(None, description="Scope entity ID"),
+    display_name: Optional[str] = Query(None, max_length=255, description="Display name (defaults to filename)"),
     db: AsyncSession = Depends(get_db),
     minio: MinIOService = Depends(get_minio_service),
     file: UploadFile = File(..., description="The file to upload"),
@@ -436,6 +463,7 @@ async def upload_file(
     # F-104: Block dangerous extensions — check ALL dot-separated parts
     # Sanitize null bytes and URL-decode before extension check
     import urllib.parse
+
     clean_filename = urllib.parse.unquote(file.filename or "").replace("\x00", "")
     if not clean_filename.strip():
         raise HTTPException(
@@ -533,9 +561,7 @@ async def upload_file(
         elif file_user_id:
             dup_where.append(FolderFile.user_id == file_user_id)
 
-    dup_result = await db.execute(
-        select(FolderFile.id).where(*dup_where)
-    )
+    dup_result = await db.execute(select(FolderFile.id).where(*dup_where))
     existing_id = dup_result.scalar_one_or_none()
     if existing_id:
         raise HTTPException(
@@ -560,7 +586,7 @@ async def upload_file(
 
     # Upload to MinIO
     try:
-        minio.upload_bytes(
+        await minio.upload_bytes(
             bucket=_folder_files_bucket(),
             object_name=storage_key,
             data=content,
@@ -593,9 +619,7 @@ async def upload_file(
         # NOTE: sort_order ties from concurrent uploads are non-critical
         # (files still appear, just with potentially duplicate sort_order).
         # A with_for_update() would serialize uploads unnecessarily.
-        max_sort_result = await db.execute(
-            select(func.coalesce(func.max(FolderFile.sort_order), 0)).where(*sort_where)
-        )
+        max_sort_result = await db.execute(select(func.coalesce(func.max(FolderFile.sort_order), 0)).where(*sort_where))
         max_sort = max_sort_result.scalar()
         next_sort = max_sort + 1
 
@@ -626,16 +650,15 @@ async def upload_file(
         await db.rollback()
         # Clean up orphaned MinIO object
         try:
-            minio.delete_file(bucket=_folder_files_bucket(), object_name=storage_key)
+            await minio.delete_file(bucket=_folder_files_bucket(), object_name=storage_key)
         except Exception as minio_err:
             logger.error(
                 "ORPHAN: Failed to delete MinIO object %s after error for upload: %s",
-                storage_key, minio_err,
+                storage_key,
+                minio_err,
             )
         # Re-query to find the conflicting file so frontend can offer "Replace"
-        conflict_result = await db.execute(
-            select(FolderFile.id).where(*dup_where)
-        )
+        conflict_result = await db.execute(select(FolderFile.id).where(*dup_where))
         existing_id = conflict_result.scalar_one_or_none()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -648,11 +671,12 @@ async def upload_file(
         await db.rollback()
         # Clean up orphaned MinIO object
         try:
-            minio.delete_file(bucket=_folder_files_bucket(), object_name=storage_key)
+            await minio.delete_file(bucket=_folder_files_bucket(), object_name=storage_key)
         except Exception as minio_err:
             logger.error(
                 "ORPHAN: Failed to delete MinIO object %s after error for upload: %s",
-                storage_key, minio_err,
+                storage_key,
+                minio_err,
             )
         raise
 
@@ -676,7 +700,11 @@ async def upload_file(
                         "extraction_status": folder_file.extraction_status,
                         "uploaded_by": str(current_user.id),
                         "actor_id": str(current_user.id),
-                        "scope": "application" if folder_file.application_id else "project" if folder_file.project_id else "personal",
+                        "scope": "application"
+                        if folder_file.application_id
+                        else "project"
+                        if folder_file.project_id
+                        else "personal",
                         "scope_id": str(folder_file.application_id or folder_file.project_id or folder_file.user_id),
                     },
                 },
@@ -701,7 +729,9 @@ async def upload_file(
 )
 async def list_files(
     folder_id: Optional[UUID] = Query(None, description="Folder ID to list files from"),
-    scope: Optional[Literal["application", "project", "personal"]] = Query(None, description="Scope type for unfiled listing"),
+    scope: Optional[Literal["application", "project", "personal"]] = Query(
+        None, description="Scope type for unfiled listing"
+    ),
     scope_id: Optional[UUID] = Query(None, description="Scope entity ID for unfiled listing"),
     limit: int = Query(100, ge=1, le=500, description="Maximum files to return"),
     cursor: Optional[UUID] = Query(None, description="Cursor for keyset pagination"),
@@ -776,10 +806,7 @@ async def list_files(
         if cursor_row:
             query = query.where(
                 (FolderFile.sort_order > cursor_row[0])
-                | (
-                    (FolderFile.sort_order == cursor_row[0])
-                    & (func.lower(FolderFile.display_name) > cursor_row[1])
-                )
+                | ((FolderFile.sort_order == cursor_row[0]) & (func.lower(FolderFile.display_name) > cursor_row[1]))
             )
 
     result = await db.execute(query)
@@ -834,7 +861,7 @@ async def get_download_url(
     await _check_file_view_permission(file, current_user.id, db)
 
     try:
-        download_url = minio.get_presigned_download_url(
+        download_url = await minio.get_presigned_download_url(
             bucket=file.storage_bucket,
             object_name=file.storage_key,
         )
@@ -933,9 +960,7 @@ async def update_file(
                 FolderFile.deleted_at.is_(None),
                 FolderFile.id != file_id,
             ]
-        dup_result = await db.execute(
-            select(FolderFile.id).where(*dup_where)
-        )
+        dup_result = await db.execute(select(FolderFile.id).where(*dup_where))
         if dup_result.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -994,6 +1019,7 @@ async def update_file(
     try:
         from ..services.search_service import build_search_file_data, index_file_from_data
         from ..models.project import Project
+
         _proj_app_id: UUID | None = None
         if file.project_id:
             _proj = await db.get(Project, file.project_id)
@@ -1064,9 +1090,7 @@ async def delete_file(
     _now = utc_now()
     file.deleted_at = _now
     file.updated_at = _now
-    await db.execute(
-        sa_delete(DocumentChunk).where(DocumentChunk.file_id == file_id)
-    )
+    await db.execute(sa_delete(DocumentChunk).where(DocumentChunk.file_id == file_id))
     # Delete image Attachments and collect MinIO refs for background cleanup
     # (query + delete in same transaction to avoid TOCTOU race)
     att_result = await db.execute(
@@ -1077,23 +1101,20 @@ async def delete_file(
         )
         .returning(Attachment.minio_bucket, Attachment.minio_key)
     )
-    image_minio_refs = [
-        (row[0], row[1]) for row in att_result.all()
-        if row[0] and row[1]
-    ]
+    image_minio_refs = [(row[0], row[1]) for row in att_result.all() if row[0] and row[1]]
     await db.commit()
 
     # FIX-13: Move MinIO cleanup to background task to avoid blocking async event loop
-    def _cleanup_minio() -> None:
+    async def _cleanup_minio() -> None:
         try:
             minio = get_minio_service()
-            minio.delete_file(bucket=storage_bucket, object_name=storage_key)
+            await minio.delete_file(bucket=storage_bucket, object_name=storage_key)
             if thumbnail_key:
-                minio.delete_file(bucket=storage_bucket, object_name=thumbnail_key)
+                await minio.delete_file(bucket=storage_bucket, object_name=thumbnail_key)
             # Clean up vision-processed image objects
             for img_bucket, img_key in image_minio_refs:
                 try:
-                    minio.delete_file(bucket=img_bucket, object_name=img_key)
+                    await minio.delete_file(bucket=img_bucket, object_name=img_key)
                 except Exception:
                     logger.warning("Failed to delete image %s/%s for file %s", img_bucket, img_key, file_id)
         except Exception as minio_err:
@@ -1104,12 +1125,17 @@ async def delete_file(
     # Soft-delete from search index (non-blocking, consistency checker is backstop)
     try:
         from ..services.search_service import get_meili_index, _meili_circuit_is_open
+
         if not _meili_circuit_is_open():
             _index = get_meili_index()
-            await _index.update_documents([{
-                "id": f"file_{file_id}",
-                "deleted_at": int(time.time()),
-            }])
+            await _index.update_documents(
+                [
+                    {
+                        "id": f"file_{file_id}",
+                        "deleted_at": int(time.time()),
+                    }
+                ]
+            )
     except Exception as ms_err:
         logger.warning("Failed to soft-delete file %s from search index: %s", file_id, ms_err)
 
@@ -1188,6 +1214,7 @@ async def replace_file(
     # F-104: Block dangerous extensions — check ALL dot-separated parts
     # Sanitize null bytes and URL-decode before extension check
     import urllib.parse
+
     clean_filename = urllib.parse.unquote(file.filename or "").replace("\x00", "")
     if not clean_filename.strip():
         raise HTTPException(
@@ -1241,7 +1268,7 @@ async def replace_file(
     mime_type = _detect_mime_type(content, file.filename)
 
     try:
-        minio.upload_bytes(
+        await minio.upload_bytes(
             bucket=_folder_files_bucket(),
             object_name=new_storage_key,
             data=content,
@@ -1264,7 +1291,9 @@ async def replace_file(
             file_extension=ext.lstrip(".") if ext else "",
             storage_key=new_storage_key,
             sha256_hash=hashlib.sha256(content).hexdigest(),
-            extraction_status="pending" if ext.lower().lstrip(".") in {e.lstrip(".") for e in EXTRACTABLE_EXTENSIONS} else "unsupported",
+            extraction_status="pending"
+            if ext.lower().lstrip(".") in {e.lstrip(".") for e in EXTRACTABLE_EXTENSIONS}
+            else "unsupported",
             extraction_error=None,
             content_plain=None,
             extracted_metadata={},
@@ -1278,9 +1307,7 @@ async def replace_file(
     if result.rowcount != 1:
         # Concurrent replace won the race — clean up our orphaned upload
         try:
-            await asyncio.to_thread(
-                minio.delete_file, bucket=_folder_files_bucket(), object_name=new_storage_key
-            )
+            await minio.delete_file(bucket=_folder_files_bucket(), object_name=new_storage_key)
         except Exception:
             logger.error("ORPHAN: concurrent replace cleanup failed for %s", new_storage_key)
         raise HTTPException(
@@ -1300,10 +1327,7 @@ async def replace_file(
         )
         .returning(Attachment.minio_bucket, Attachment.minio_key)
     )
-    old_image_refs = [
-        (row[0], row[1]) for row in old_att_result.all()
-        if row[0] and row[1]
-    ]
+    old_image_refs = [(row[0], row[1]) for row in old_att_result.all() if row[0] and row[1]]
 
     try:
         await db.commit()
@@ -1313,29 +1337,30 @@ async def replace_file(
         db.expire(folder_file)  # F8: discard in-memory mutations
         # HIGH-5: Clean up orphaned new MinIO object on commit failure
         try:
-            await asyncio.to_thread(
-                minio.delete_file,
+            await minio.delete_file(
                 bucket=_folder_files_bucket(),
                 object_name=new_storage_key,
             )
         except Exception as minio_err:
             logger.error(
                 "ORPHAN: Failed to delete MinIO object %s after rollback for file %s: %s",
-                new_storage_key, file_id, minio_err,
+                new_storage_key,
+                file_id,
+                minio_err,
             )
         raise
 
     # HIGH-4: Delete old MinIO objects in background task (matches delete_file pattern)
-    def _cleanup_old_minio() -> None:
+    async def _cleanup_old_minio() -> None:
         try:
             if old_storage_key:
-                minio.delete_file(bucket=old_storage_bucket, object_name=old_storage_key)
+                await minio.delete_file(bucket=old_storage_bucket, object_name=old_storage_key)
             if old_thumbnail_key:
-                minio.delete_file(bucket=old_storage_bucket, object_name=old_thumbnail_key)
+                await minio.delete_file(bucket=old_storage_bucket, object_name=old_thumbnail_key)
             # Clean up old vision-processed image objects
             for img_bucket, img_key in old_image_refs:
                 try:
-                    minio.delete_file(bucket=img_bucket, object_name=img_key)
+                    await minio.delete_file(bucket=img_bucket, object_name=img_key)
                 except Exception:
                     logger.warning("Failed to delete old image %s/%s", img_bucket, img_key)
         except Exception as e:
@@ -1360,7 +1385,11 @@ async def replace_file(
                         "sort_order": folder_file.sort_order,
                         "row_version": folder_file.row_version,
                         "actor_id": str(current_user.id),
-                        "scope": "application" if folder_file.application_id else "project" if folder_file.project_id else "personal",
+                        "scope": "application"
+                        if folder_file.application_id
+                        else "project"
+                        if folder_file.project_id
+                        else "personal",
                         "scope_id": str(folder_file.application_id or folder_file.project_id or folder_file.user_id),
                     },
                 },
@@ -1446,9 +1475,7 @@ async def sync_embeddings(
     except RuntimeError:
         # FIX-10: Use atomic UPDATE to avoid operating on stale ORM object
         await db.execute(
-            update(FolderFile)
-            .where(FolderFile.id == file.id)
-            .values(embedding_status="stale", updated_at=utc_now())
+            update(FolderFile).where(FolderFile.id == file.id).values(embedding_status="stale", updated_at=utc_now())
         )
         await db.commit()
         raise HTTPException(
@@ -1458,9 +1485,7 @@ async def sync_embeddings(
     except Exception:
         # FIX-10: Use atomic UPDATE to avoid operating on stale ORM object
         await db.execute(
-            update(FolderFile)
-            .where(FolderFile.id == file.id)
-            .values(embedding_status="stale", updated_at=utc_now())
+            update(FolderFile).where(FolderFile.id == file.id).values(embedding_status="stale", updated_at=utc_now())
         )
         await db.commit()
         logger.exception("Failed to enqueue extract_and_embed_file_job for file %s", file_id)

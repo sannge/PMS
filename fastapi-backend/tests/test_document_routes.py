@@ -33,9 +33,7 @@ from app.models.user import User
 
 
 @pytest_asyncio.fixture
-async def app_with_member(
-    db_session: AsyncSession, test_user: User, test_application: Application
-) -> Application:
+async def app_with_member(db_session: AsyncSession, test_user: User, test_application: Application) -> Application:
     """Ensure test_user is an ApplicationMember (for permission checks)."""
     member = ApplicationMember(
         application_id=test_application.id,
@@ -78,8 +76,10 @@ def mock_ws_manager_folders():
 @pytest.fixture
 def mock_search_index():
     """Mock search service to prevent Meilisearch calls."""
-    with patch("app.routers.documents.build_search_doc_data", return_value={}), \
-         patch("app.routers.documents.index_document_from_data", new_callable=AsyncMock):
+    with (
+        patch("app.routers.documents.build_search_doc_data", return_value={}),
+        patch("app.routers.documents.index_document_from_data", new_callable=AsyncMock),
+    ):
         yield
 
 
@@ -99,9 +99,7 @@ def mock_minio():
 
 class TestCreateDocument:
     @pytest.mark.asyncio
-    async def test_create_document_authorized(
-        self, client, auth_headers, app_with_member, mock_ws_manager
-    ):
+    async def test_create_document_authorized(self, client, auth_headers, app_with_member, mock_ws_manager):
         """Authenticated user with permission can create a document."""
         response = await client.post(
             "/api/documents",
@@ -131,9 +129,7 @@ class TestCreateDocument:
         assert response.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_create_document_forbidden(
-        self, client, auth_headers_2, app_with_member
-    ):
+    async def test_create_document_forbidden(self, client, auth_headers_2, app_with_member):
         """User who is not a member should get 403."""
         response = await client.post(
             "/api/documents",
@@ -154,9 +150,7 @@ class TestCreateDocument:
 
 class TestListDocuments:
     @pytest.mark.asyncio
-    async def test_list_documents(
-        self, client, auth_headers, app_with_member, db_session, test_user, mock_ws_manager
-    ):
+    async def test_list_documents(self, client, auth_headers, app_with_member, db_session, test_user, mock_ws_manager):
         """List documents returns items and supports pagination."""
         # Create a few documents
         for i in range(3):
@@ -183,9 +177,7 @@ class TestListDocuments:
         assert data["next_cursor"] is not None
 
     @pytest.mark.asyncio
-    async def test_list_documents_empty(
-        self, client, auth_headers, app_with_member
-    ):
+    async def test_list_documents_empty(self, client, auth_headers, app_with_member):
         """List documents for scope with no docs returns empty list."""
         response = await client.get(
             "/api/documents",
@@ -281,6 +273,7 @@ class TestDeleteAndRestore:
     ):
         """Restoring a soft-deleted document clears deleted_at."""
         from app.utils.timezone import utc_now
+
         doc = Document(
             title="To Restore",
             application_id=app_with_member.id,
@@ -307,9 +300,7 @@ class TestDeleteAndRestore:
 
 class TestCreateFolder:
     @pytest.mark.asyncio
-    async def test_create_folder_authorized(
-        self, client, auth_headers, app_with_member, mock_ws_manager_folders
-    ):
+    async def test_create_folder_authorized(self, client, auth_headers, app_with_member, mock_ws_manager_folders):
         """Authenticated user with permission can create a folder."""
         response = await client.post(
             "/api/document-folders",
@@ -376,9 +367,7 @@ class TestFolderTree:
         assert data[0]["name"] == "Root"
 
     @pytest.mark.asyncio
-    async def test_empty_folder_tree(
-        self, client, auth_headers, app_with_member
-    ):
+    async def test_empty_folder_tree(self, client, auth_headers, app_with_member):
         """Empty scope returns empty tree."""
         response = await client.get(
             "/api/document-folders/tree",
@@ -414,8 +403,7 @@ class TestDocumentLocks:
 
     @pytest.mark.asyncio
     async def test_acquire_lock(
-        self, client, auth_headers, app_with_member, db_session, test_user,
-        mock_redis_locks, mock_lock_broadcast
+        self, client, auth_headers, app_with_member, db_session, test_user, mock_redis_locks, mock_lock_broadcast
     ):
         """Acquiring a lock on an owned document returns locked=True."""
         doc = Document(
@@ -440,8 +428,7 @@ class TestDocumentLocks:
 
     @pytest.mark.asyncio
     async def test_release_lock(
-        self, client, auth_headers, app_with_member, db_session, test_user,
-        mock_redis_locks, mock_lock_broadcast
+        self, client, auth_headers, app_with_member, db_session, test_user, mock_redis_locks, mock_lock_broadcast
     ):
         """Releasing a lock returns locked=False."""
         doc = Document(
@@ -466,8 +453,7 @@ class TestDocumentLocks:
 
     @pytest.mark.asyncio
     async def test_lock_heartbeat(
-        self, client, auth_headers, app_with_member, db_session, test_user,
-        mock_redis_locks, mock_lock_broadcast
+        self, client, auth_headers, app_with_member, db_session, test_user, mock_redis_locks, mock_lock_broadcast
     ):
         """Heartbeat extends lock TTL."""
         doc = Document(
@@ -492,8 +478,7 @@ class TestDocumentLocks:
 
     @pytest.mark.asyncio
     async def test_heartbeat_not_owner(
-        self, client, auth_headers, app_with_member, db_session, test_user,
-        mock_redis_locks, mock_lock_broadcast
+        self, client, auth_headers, app_with_member, db_session, test_user, mock_redis_locks, mock_lock_broadcast
     ):
         """Heartbeat by non-owner returns 409."""
         doc = Document(

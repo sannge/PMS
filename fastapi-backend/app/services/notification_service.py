@@ -7,7 +7,7 @@ Provides business logic for notification management, including:
 """
 
 import logging
-from datetime import datetime
+
 from typing import Optional
 from uuid import UUID
 
@@ -70,8 +70,7 @@ class NotificationService:
         await db.flush()
 
         logger.info(
-            f"Notification created: id={notification.id}, "
-            f"user={notification.user_id}, type={notification.type}"
+            f"Notification created: id={notification.id}, user={notification.user_id}, type={notification.type}"
         )
 
         return notification
@@ -176,9 +175,7 @@ class NotificationService:
                 entity_id=task.id,
             )
 
-            notification = await NotificationService.create_notification(
-                db, notification_data
-            )
+            notification = await NotificationService.create_notification(db, notification_data)
             notifications.append(notification)
 
         return notifications
@@ -260,9 +257,7 @@ class NotificationService:
                 entity_id=task.id,
             )
 
-            notification = await NotificationService.create_notification(
-                db, notification_data
-            )
+            notification = await NotificationService.create_notification(db, notification_data)
             notifications.append(notification)
 
         return notifications
@@ -345,9 +340,7 @@ async def create_notification(
     notification_data: NotificationCreate,
 ) -> Notification:
     """Create a notification. Convenience wrapper for NotificationService."""
-    return await NotificationService.create_notification(
-        db, notification_data
-    )
+    return await NotificationService.create_notification(db, notification_data)
 
 
 async def notify_task_assigned(
@@ -357,9 +350,7 @@ async def notify_task_assigned(
     assigner: User,
 ) -> Optional[Notification]:
     """Notify user of task assignment. Convenience wrapper."""
-    return await NotificationService.notify_task_assigned(
-        db, task, assignee, assigner
-    )
+    return await NotificationService.notify_task_assigned(db, task, assignee, assigner)
 
 
 async def notify_task_status_changed(
@@ -399,9 +390,7 @@ async def notify_comment_added(
     comment_preview: str = "",
 ) -> list[Notification]:
     """Notify users of new comment. Convenience wrapper."""
-    return await NotificationService.notify_comment_added(
-        db, task, commenter, notify_users, comment_preview
-    )
+    return await NotificationService.notify_comment_added(db, task, commenter, notify_users, comment_preview)
 
 
 async def create_mention_notification(
@@ -410,6 +399,9 @@ async def create_mention_notification(
     mentioner_id: UUID,
     task_id: UUID,
     comment_id: UUID,
+    *,
+    task: Optional[Task] = None,
+    mentioner: Optional[User] = None,
 ) -> Optional[Notification]:
     """
     Create a mention notification for a user mentioned in a comment.
@@ -423,6 +415,8 @@ async def create_mention_notification(
         mentioner_id: ID of the user who mentioned them
         task_id: ID of the task the comment is on
         comment_id: ID of the comment containing the mention
+        task: Optional pre-loaded Task object (avoids redundant query)
+        mentioner: Optional pre-loaded User object (avoids redundant query)
 
     Returns:
         Optional[Notification]: The created notification, or None if self-mention
@@ -431,15 +425,17 @@ async def create_mention_notification(
     if mentioned_user_id == mentioner_id:
         return None
 
-    # Fetch required entities
+    # Fetch required entities only if not provided
     result = await db.execute(select(User).where(User.id == mentioned_user_id))
     mentioned_user = result.scalar_one_or_none()
 
-    result = await db.execute(select(User).where(User.id == mentioner_id))
-    mentioner = result.scalar_one_or_none()
+    if mentioner is None:
+        result = await db.execute(select(User).where(User.id == mentioner_id))
+        mentioner = result.scalar_one_or_none()
 
-    result = await db.execute(select(Task).where(Task.id == task_id))
-    task = result.scalar_one_or_none()
+    if task is None:
+        result = await db.execute(select(Task).where(Task.id == task_id))
+        task = result.scalar_one_or_none()
 
     if not mentioned_user or not mentioner or not task:
         logger.warning(

@@ -55,9 +55,7 @@ async def _resolve_lock_broadcast_ids(
     proj_id = str(project_id) if project_id else None
 
     if proj_id and not app_id:
-        result = await db.execute(
-            select(Project.application_id).where(Project.id == project_id)
-        )
+        result = await db.execute(select(Project.application_id).where(Project.id == project_id))
         parent_app_id = result.scalar_one_or_none()
         if parent_app_id:
             app_id = str(parent_app_id)
@@ -84,9 +82,7 @@ async def _resolve_lock_broadcast_ids(
     },
 )
 async def get_active_locks(
-    scope: Literal["application", "project", "personal"] = Query(
-        ..., description="Scope type"
-    ),
+    scope: Literal["application", "project", "personal"] = Query(..., description="Scope type"),
     scope_id: UUID = Query(..., description="Scope entity ID"),
     current_user: Annotated[User, Depends(get_current_user)] = ...,
     db: AsyncSession = Depends(get_db),
@@ -128,9 +124,7 @@ async def get_active_locks(
     if scope == "application":
         scope_filter = or_(
             Document.application_id == scope_id,
-            Document.project_id.in_(
-                select(Project.id).where(Project.application_id == scope_id)
-            ),
+            Document.project_id.in_(select(Project.id).where(Project.application_id == scope_id)),
         )
     else:
         scope_filter = get_scope_filter(Document, scope, scope_id)
@@ -407,9 +401,7 @@ async def force_take_lock(
 ) -> DocumentLockResponse:
     """Force-take a lock from another user (application owners only)."""
     # Look up the document (exclude soft-deleted documents)
-    result = await db.execute(
-        select(Document).where(Document.id == document_id).where(Document.deleted_at.is_(None))
-    )
+    result = await db.execute(select(Document).where(Document.id == document_id).where(Document.deleted_at.is_(None)))
     document = result.scalar_one_or_none()
 
     if not document:
@@ -429,9 +421,7 @@ async def force_take_lock(
     app_id = document.application_id
     if app_id is None and document.project_id is not None:
         # Project-scoped doc: look up parent application
-        proj_result = await db.execute(
-            select(Project.application_id).where(Project.id == document.project_id)
-        )
+        proj_result = await db.execute(select(Project.application_id).where(Project.id == document.project_id))
         app_id = proj_result.scalar_one_or_none()
 
     if app_id is None:
@@ -442,9 +432,7 @@ async def force_take_lock(
 
     # Check application owner role
     perm_service = PermissionService(db)
-    role = await perm_service.get_user_application_role(
-        current_user.id, app_id
-    )
+    role = await perm_service.get_user_application_role(current_user.id, app_id)
 
     if role != "owner":
         raise HTTPException(
@@ -467,9 +455,7 @@ async def force_take_lock(
     }
 
     # Resolve scope IDs for WebSocket broadcast
-    app_id, proj_id = await _resolve_lock_broadcast_ids(
-        db, document.application_id, document.project_id
-    )
+    app_id, proj_id = await _resolve_lock_broadcast_ids(db, document.application_id, document.project_id)
     await handle_document_lock_change(
         document_id=str(document_id),
         lock_type="force_taken",

@@ -119,6 +119,7 @@ class TestSetScopeFks:
 class TestGetScopeFilter:
     def test_application_scope_filter(self):
         from app.models.document import Document
+
         uid = uuid4()
         expr = get_scope_filter(Document, "application", uid)
         # Check that it generates a binary expression (BinaryExpression or BooleanClauseList)
@@ -126,6 +127,7 @@ class TestGetScopeFilter:
 
     def test_invalid_scope_raises_value_error(self):
         from app.models.document import Document
+
         with pytest.raises(ValueError, match="Invalid scope"):
             get_scope_filter(Document, "workspace", uuid4())
 
@@ -167,10 +169,13 @@ class TestTitleCursor:
     def test_decode_old_format_raises_400(self):
         """Old created_at-based cursor (no 'title' key) should raise 400."""
         import base64
-        old_payload = json.dumps({
-            "created_at": "2026-01-01T00:00:00+00:00",
-            "id": str(uuid4()),
-        })
+
+        old_payload = json.dumps(
+            {
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "id": str(uuid4()),
+            }
+        )
         old_cursor = base64.urlsafe_b64encode(old_payload.encode()).decode()
         with pytest.raises(HTTPException) as exc:
             decode_title_cursor(old_cursor)
@@ -228,6 +233,7 @@ class TestValidateFolderDepth:
     async def test_within_limit(self, db_session, test_application):
         """Parent at depth 2 -> child at depth 3 (within limit of 5)."""
         from app.models.document_folder import DocumentFolder
+
         folder = DocumentFolder(
             id=uuid4(),
             name="Parent",
@@ -247,6 +253,7 @@ class TestValidateFolderDepth:
     async def test_exceeds_limit_raises_400(self, db_session, test_application):
         """Parent at depth 5 -> child would be depth 6 -> raises 400."""
         from app.models.document_folder import DocumentFolder
+
         folder = DocumentFolder(
             id=uuid4(),
             name="Deep Folder",
@@ -353,6 +360,7 @@ class TestCheckNameUniqueness:
     async def test_duplicate_folder_name_raises_409(self, db_session, test_application, test_user):
         """Duplicate folder name in same scope + parent -> 409."""
         from app.models.document_folder import DocumentFolder
+
         folder = DocumentFolder(
             id=uuid4(),
             name="Duplicate",
@@ -378,6 +386,7 @@ class TestCheckNameUniqueness:
     async def test_duplicate_document_title_raises_409(self, db_session, test_application, test_user):
         """Duplicate document title in same scope + parent -> 409."""
         from app.models.document import Document
+
         doc = Document(
             id=uuid4(),
             title="Existing Doc",
@@ -401,6 +410,7 @@ class TestCheckNameUniqueness:
     async def test_exclude_self_folder(self, db_session, test_application, test_user):
         """Excluding own folder_id should not flag as duplicate."""
         from app.models.document_folder import DocumentFolder
+
         folder = DocumentFolder(
             id=uuid4(),
             name="My Folder",
@@ -434,9 +444,12 @@ class TestContentConversion:
         assert convert_tiptap_to_markdown("") == ""
 
     def test_markdown_basic_doc(self):
-        doc = {"type": "doc", "content": [
-            {"type": "paragraph", "content": [{"type": "text", "text": "Hello world"}]},
-        ]}
+        doc = {
+            "type": "doc",
+            "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "Hello world"}]},
+            ],
+        }
         result = convert_tiptap_to_markdown(json.dumps(doc))
         assert "Hello world" in result
 
@@ -445,9 +458,12 @@ class TestContentConversion:
         assert convert_tiptap_to_plain_text("") == ""
 
     def test_plain_text_basic_doc(self):
-        doc = {"type": "doc", "content": [
-            {"type": "paragraph", "content": [{"type": "text", "text": "Plain text content"}]},
-        ]}
+        doc = {
+            "type": "doc",
+            "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "Plain text content"}]},
+            ],
+        }
         result = convert_tiptap_to_plain_text(json.dumps(doc))
         assert "Plain text content" in result
 
@@ -466,16 +482,22 @@ class TestExtractAttachmentIds:
         assert extract_attachment_ids("not json") == set()
 
     def test_image_node(self):
-        doc = {"type": "doc", "content": [
-            {"type": "image", "attrs": {"attachmentId": "att-123"}},
-        ]}
+        doc = {
+            "type": "doc",
+            "content": [
+                {"type": "image", "attrs": {"attachmentId": "att-123"}},
+            ],
+        }
         result = extract_attachment_ids(json.dumps(doc))
         assert result == {"att-123"}
 
     def test_drawio_node(self):
-        doc = {"type": "doc", "content": [
-            {"type": "drawio", "attrs": {"attachmentId": "att-456"}},
-        ]}
+        doc = {
+            "type": "doc",
+            "content": [
+                {"type": "drawio", "attrs": {"attachmentId": "att-456"}},
+            ],
+        }
         result = extract_attachment_ids(json.dumps(doc))
         assert result == {"att-456"}
 
@@ -497,21 +519,30 @@ class TestExtractAttachmentIds:
         assert result == {"att-789"}
 
     def test_no_attachment_ids(self):
-        doc = {"type": "doc", "content": [
-            {"type": "paragraph", "content": [{"type": "text", "text": "No images"}]},
-        ]}
+        doc = {
+            "type": "doc",
+            "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "No images"}]},
+            ],
+        }
         result = extract_attachment_ids(json.dumps(doc))
         assert result == set()
 
     def test_multiple_attachment_ids(self):
-        doc = {"type": "doc", "content": [
-            {"type": "image", "attrs": {"attachmentId": "a1"}},
-            {"type": "paragraph", "content": [
-                {"type": "text", "text": "between images"},
-            ]},
-            {"type": "image", "attrs": {"attachmentId": "a2"}},
-            {"type": "drawio", "attrs": {"attachmentId": "a3"}},
-        ]}
+        doc = {
+            "type": "doc",
+            "content": [
+                {"type": "image", "attrs": {"attachmentId": "a1"}},
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {"type": "text", "text": "between images"},
+                    ],
+                },
+                {"type": "image", "attrs": {"attachmentId": "a2"}},
+                {"type": "drawio", "attrs": {"attachmentId": "a3"}},
+            ],
+        }
         result = extract_attachment_ids(json.dumps(doc))
         assert result == {"a1", "a2", "a3"}
 
@@ -524,17 +555,20 @@ class TestExtractAttachmentIds:
 class TestSaveDocumentContent:
     """Tests for save_document_content: concurrency, permission, and 404."""
 
-    TIPTAP_JSON = json.dumps({
-        "type": "doc",
-        "content": [
-            {"type": "paragraph", "content": [{"type": "text", "text": "Hello save"}]},
-        ],
-    })
+    TIPTAP_JSON = json.dumps(
+        {
+            "type": "doc",
+            "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "Hello save"}]},
+            ],
+        }
+    )
 
     @pytest_asyncio.fixture
     async def test_document(self, db_session, test_application, test_user):
         """Create a Document for save_document_content tests."""
         from app.models.document import Document as DocModel
+
         doc = DocModel(
             id=uuid4(),
             title="Save Test Doc",
@@ -547,9 +581,7 @@ class TestSaveDocumentContent:
         return doc
 
     @pytest.mark.asyncio
-    async def test_successful_save_converts_content(
-        self, db_session, test_user, test_document
-    ):
+    async def test_successful_save_converts_content(self, db_session, test_user, test_document):
         """Saving with correct row_version converts content and bumps version."""
         from app.services.document_service import save_document_content
 
@@ -573,9 +605,7 @@ class TestSaveDocumentContent:
         assert search_data is not None
 
     @pytest.mark.asyncio
-    async def test_row_version_mismatch_raises_409(
-        self, db_session, test_user, test_document
-    ):
+    async def test_row_version_mismatch_raises_409(self, db_session, test_user, test_document):
         """Passing wrong row_version should raise 409 Conflict."""
         from app.services.document_service import save_document_content
 
@@ -605,9 +635,7 @@ class TestSaveDocumentContent:
         assert exc.value.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_permission_denied_raises_403(
-        self, db_session, test_user, test_document
-    ):
+    async def test_permission_denied_raises_403(self, db_session, test_user, test_document):
         """When check_edit_permission=True and user lacks edit, should raise 403."""
         from app.services.document_service import save_document_content
 

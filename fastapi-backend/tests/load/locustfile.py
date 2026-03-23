@@ -20,12 +20,12 @@ from locust import HttpUser, between, task
 
 def random_string(length: int = 8) -> str:
     """Generate a random string for unique test data."""
-    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
+    return "".join(random.choices(string.ascii_lowercase + string.digits, k=length))
 
 
 def random_project_key(length: int = 4) -> str:
     """Generate a random project key (uppercase letters only)."""
-    return ''.join(random.choices(string.ascii_uppercase, k=length))
+    return "".join(random.choices(string.ascii_uppercase, k=length))
 
 
 class PMUser(HttpUser):

@@ -29,13 +29,9 @@ def _make_mock_provider(embedding_dim: int = 1536):
     """Create a mock LLM provider that returns fake embeddings."""
     mock_provider = AsyncMock()
     mock_provider.generate_embeddings_batch = AsyncMock(
-        side_effect=lambda texts, model: [
-            [0.1] * embedding_dim for _ in texts
-        ]
+        side_effect=lambda texts, model: [[0.1] * embedding_dim for _ in texts]
     )
-    mock_provider.generate_embedding = AsyncMock(
-        return_value=[0.1] * embedding_dim
-    )
+    mock_provider.generate_embedding = AsyncMock(return_value=[0.1] * embedding_dim)
     return mock_provider
 
 
@@ -45,9 +41,7 @@ def _make_mock_registry(provider=None):
         provider = _make_mock_provider()
 
     mock_registry = AsyncMock()
-    mock_registry.get_embedding_provider = AsyncMock(
-        return_value=(provider, "text-embedding-3-small")
-    )
+    mock_registry.get_embedding_provider = AsyncMock(return_value=(provider, "text-embedding-3-small"))
     return mock_registry
 
 
@@ -55,9 +49,7 @@ def _make_tiptap_content(text: str = "Hello world") -> dict:
     """Create a simple TipTap document for testing."""
     return {
         "type": "doc",
-        "content": [
-            {"type": "paragraph", "content": [{"type": "text", "text": text}]}
-        ],
+        "content": [{"type": "paragraph", "content": [{"type": "text", "text": text}]}],
     }
 
 
@@ -105,9 +97,7 @@ class TestEmbedDocument:
     """Tests for single document embedding."""
 
     @pytest.mark.asyncio
-    async def test_embed_document_creates_chunks(
-        self, embedding_service, test_document, db_session
-    ):
+    async def test_embed_document_creates_chunks(self, embedding_service, test_document, db_session):
         """Verify DocumentChunk rows are created with correct fields."""
         content = _make_tiptap_content("This is a test paragraph with enough text to create a chunk.")
         scope_ids = {
@@ -129,11 +119,11 @@ class TestEmbedDocument:
         assert result.duration_ms >= 0
 
         # Verify chunks in DB
-        chunks = (await db_session.execute(
-            select(DocumentChunk).where(
-                DocumentChunk.document_id == test_document.id
-            )
-        )).scalars().all()
+        chunks = (
+            (await db_session.execute(select(DocumentChunk).where(DocumentChunk.document_id == test_document.id)))
+            .scalars()
+            .all()
+        )
 
         assert len(chunks) >= 1
         for chunk in chunks:
@@ -143,9 +133,7 @@ class TestEmbedDocument:
             assert chunk.token_count > 0
 
     @pytest.mark.asyncio
-    async def test_embed_document_sets_embedding_updated_at(
-        self, embedding_service, test_document, db_session
-    ):
+    async def test_embed_document_sets_embedding_updated_at(self, embedding_service, test_document, db_session):
         """Verify Document.embedding_updated_at is set after embed."""
         content = _make_tiptap_content("Content for timestamp test.")
         scope_ids = {"application_id": test_document.application_id}
@@ -161,9 +149,7 @@ class TestEmbedDocument:
         assert test_document.embedding_updated_at is not None
 
     @pytest.mark.asyncio
-    async def test_embed_document_replaces_existing_chunks(
-        self, embedding_service, test_document, db_session
-    ):
+    async def test_embed_document_replaces_existing_chunks(self, embedding_service, test_document, db_session):
         """Embed twice, verify old chunks deleted and new ones created."""
         scope_ids = {"application_id": test_document.application_id}
 
@@ -176,11 +162,11 @@ class TestEmbedDocument:
             scope_ids=scope_ids,
         )
 
-        chunks1 = (await db_session.execute(
-            select(DocumentChunk).where(
-                DocumentChunk.document_id == test_document.id
-            )
-        )).scalars().all()
+        chunks1 = (
+            (await db_session.execute(select(DocumentChunk).where(DocumentChunk.document_id == test_document.id)))
+            .scalars()
+            .all()
+        )
         count1 = len(chunks1)
         assert count1 >= 1
 
@@ -193,20 +179,18 @@ class TestEmbedDocument:
             scope_ids=scope_ids,
         )
 
-        chunks2 = (await db_session.execute(
-            select(DocumentChunk).where(
-                DocumentChunk.document_id == test_document.id
-            )
-        )).scalars().all()
+        chunks2 = (
+            (await db_session.execute(select(DocumentChunk).where(DocumentChunk.document_id == test_document.id)))
+            .scalars()
+            .all()
+        )
 
         # Old chunks should be replaced, not duplicated
         for chunk in chunks2:
             assert "Second version" in chunk.chunk_text or "different" in chunk.chunk_text
 
     @pytest.mark.asyncio
-    async def test_embed_document_denormalizes_scope_ids(
-        self, embedding_service, test_document, db_session
-    ):
+    async def test_embed_document_denormalizes_scope_ids(self, embedding_service, test_document, db_session):
         """Verify scope IDs are correctly denormalized onto chunks."""
         app_id = test_document.application_id
         user_id = test_document.created_by
@@ -224,11 +208,11 @@ class TestEmbedDocument:
             scope_ids=scope_ids,
         )
 
-        chunks = (await db_session.execute(
-            select(DocumentChunk).where(
-                DocumentChunk.document_id == test_document.id
-            )
-        )).scalars().all()
+        chunks = (
+            (await db_session.execute(select(DocumentChunk).where(DocumentChunk.document_id == test_document.id)))
+            .scalars()
+            .all()
+        )
 
         for chunk in chunks:
             assert chunk.application_id == app_id
@@ -236,9 +220,7 @@ class TestEmbedDocument:
             assert chunk.user_id == user_id
 
     @pytest.mark.asyncio
-    async def test_embed_empty_document(
-        self, embedding_service, test_document, db_session
-    ):
+    async def test_embed_empty_document(self, embedding_service, test_document, db_session):
         """Embedding empty document creates 0 chunks."""
         content = {"type": "doc", "content": []}
         scope_ids = {"application_id": test_document.application_id}
@@ -273,9 +255,7 @@ class TestEmbedBatch:
         db_session.add(doc2)
         await db_session.commit()
 
-        result = await embedding_service.embed_documents_batch(
-            [test_document.id, doc2.id]
-        )
+        result = await embedding_service.embed_documents_batch([test_document.id, doc2.id])
 
         assert isinstance(result, BatchResult)
         assert result.total == 2
@@ -320,9 +300,7 @@ class TestEmbedBatch:
             db=db_session,
         )
 
-        result = await service.embed_documents_batch(
-            [test_document.id, doc2.id]
-        )
+        result = await service.embed_documents_batch([test_document.id, doc2.id])
 
         assert result.total == 2
         assert result.succeeded >= 1
@@ -333,9 +311,7 @@ class TestDeleteChunks:
     """Tests for chunk deletion."""
 
     @pytest.mark.asyncio
-    async def test_delete_document_chunks_removes_all(
-        self, embedding_service, test_document, db_session
-    ):
+    async def test_delete_document_chunks_removes_all(self, embedding_service, test_document, db_session):
         """Create chunks then delete, verify 0 remain."""
         content = _make_tiptap_content("Content to be deleted.")
         scope_ids = {"application_id": test_document.application_id}
@@ -348,28 +324,26 @@ class TestDeleteChunks:
         )
 
         # Verify chunks exist
-        chunks = (await db_session.execute(
-            select(DocumentChunk).where(
-                DocumentChunk.document_id == test_document.id
-            )
-        )).scalars().all()
+        chunks = (
+            (await db_session.execute(select(DocumentChunk).where(DocumentChunk.document_id == test_document.id)))
+            .scalars()
+            .all()
+        )
         assert len(chunks) >= 1
 
         # Delete
         await embedding_service.delete_document_chunks(test_document.id)
 
         # Verify all deleted
-        chunks_after = (await db_session.execute(
-            select(DocumentChunk).where(
-                DocumentChunk.document_id == test_document.id
-            )
-        )).scalars().all()
+        chunks_after = (
+            (await db_session.execute(select(DocumentChunk).where(DocumentChunk.document_id == test_document.id)))
+            .scalars()
+            .all()
+        )
         assert len(chunks_after) == 0
 
     @pytest.mark.asyncio
-    async def test_delete_document_chunks_returns_count(
-        self, embedding_service, test_document, db_session
-    ):
+    async def test_delete_document_chunks_returns_count(self, embedding_service, test_document, db_session):
         """Verify returned int matches number of deleted chunks."""
         content = _make_tiptap_content("Count test content.")
         scope_ids = {"application_id": test_document.application_id}
@@ -386,9 +360,7 @@ class TestDeleteChunks:
         assert deleted == expected_count
 
     @pytest.mark.asyncio
-    async def test_delete_nonexistent_document_returns_zero(
-        self, embedding_service
-    ):
+    async def test_delete_nonexistent_document_returns_zero(self, embedding_service):
         """Deleting chunks for nonexistent document returns 0."""
         deleted = await embedding_service.delete_document_chunks(uuid.uuid4())
         assert deleted == 0
@@ -402,9 +374,7 @@ class TestEmbedErrorHandling:
         pass
 
     @pytest.mark.asyncio
-    async def test_embed_document_raises_llm_provider_error(
-        self, db_session, test_document
-    ):
+    async def test_embed_document_raises_llm_provider_error(self, db_session, test_document):
         """LLMProviderError from provider is re-raised."""
         mock_provider = _make_mock_provider()
         mock_provider.generate_embeddings_batch = AsyncMock(
@@ -427,14 +397,10 @@ class TestEmbedErrorHandling:
             )
 
     @pytest.mark.asyncio
-    async def test_embed_document_wraps_generic_exception(
-        self, db_session, test_document
-    ):
+    async def test_embed_document_wraps_generic_exception(self, db_session, test_document):
         """Generic exception is wrapped in LLMProviderError."""
         mock_provider = _make_mock_provider()
-        mock_provider.generate_embeddings_batch = AsyncMock(
-            side_effect=RuntimeError("connection refused")
-        )
+        mock_provider.generate_embeddings_batch = AsyncMock(side_effect=RuntimeError("connection refused"))
         registry = _make_mock_registry(mock_provider)
         service = EmbeddingService(
             provider_registry=registry,
@@ -452,9 +418,7 @@ class TestEmbedErrorHandling:
             )
 
     @pytest.mark.asyncio
-    async def test_embed_batch_not_found_document(
-        self, db_session
-    ):
+    async def test_embed_batch_not_found_document(self, db_session):
         """Batch embed with nonexistent document ID counts as failed."""
         registry = _make_mock_registry()
         service = EmbeddingService(

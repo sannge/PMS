@@ -72,11 +72,7 @@ async def verify_task_access(
     """
     # Fetch task with project and application
     result = await db.execute(
-        select(Task)
-        .options(
-            selectinload(Task.project).selectinload(Project.application)
-        )
-        .where(Task.id == task_id)
+        select(Task).options(selectinload(Task.project).selectinload(Project.application)).where(Task.id == task_id)
     )
     task = result.scalar_one_or_none()
 
@@ -237,6 +233,7 @@ async def create_comment_endpoint(
     )
 
     # Create notifications for mentioned users
+    # Pass pre-loaded task and current_user to avoid N+1 queries in the loop
     mention_notifications = []
     for user_id in mentioned_user_ids:
         if user_id != current_user.id:  # Don't notify self
@@ -246,6 +243,8 @@ async def create_comment_endpoint(
                 mentioner_id=current_user.id,
                 task_id=task_id,
                 comment_id=comment.id,
+                task=task,
+                mentioner=current_user,
             )
             if n:
                 mention_notifications.append(n)
@@ -311,6 +310,7 @@ async def update_comment_endpoint(
     )
 
     # Create notifications for newly mentioned users
+    # Pass pre-loaded current_user to avoid N+1 queries in the loop
     mention_notifications = []
     for user_id in added_mentions:
         if user_id != current_user.id:
@@ -320,6 +320,7 @@ async def update_comment_endpoint(
                 mentioner_id=current_user.id,
                 task_id=comment.task_id,
                 comment_id=comment.id,
+                mentioner=current_user,
             )
             if n:
                 mention_notifications.append(n)
@@ -378,9 +379,7 @@ async def delete_comment_endpoint(
     # Collect attachment info before deleting from database
     attachment_ids = [str(att.id) for att in comment.attachments]
     minio_files = [
-        (att.minio_bucket, att.minio_key)
-        for att in comment.attachments
-        if att.minio_bucket and att.minio_key
+        (att.minio_bucket, att.minio_key) for att in comment.attachments if att.minio_bucket and att.minio_key
     ]
 
     # Delete comment from database (cascade will delete attachment records)
@@ -390,7 +389,7 @@ async def delete_comment_endpoint(
     # Delete files from MinIO storage (after successful DB commit)
     for bucket, key in minio_files:
         try:
-            minio.delete_file(bucket=bucket, object_name=key)
+            await minio.delete_file(bucket=bucket, object_name=key)
         except Exception:
             # Log error but continue - file might already be deleted
             pass

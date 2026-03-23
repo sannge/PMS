@@ -13,7 +13,9 @@
  * - Keyboard accessibility
  */
 
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
+import { toast } from 'sonner'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   DndContext,
   DragOverlay,
@@ -23,6 +25,7 @@ import {
   type CollisionDetection,
 } from '@dnd-kit/core'
 import { cn } from '@/lib/utils'
+import { queryKeys } from '@/lib/query-client'
 import { useAuthUserId } from '@/contexts/auth-context'
 import { useMoveTask, useTasks, useArchivedTasksCount, useTaskStatuses, type Task } from '@/hooks/use-queries'
 import {
@@ -141,19 +144,10 @@ export function KanbanBoard({
 }: KanbanBoardProps): JSX.Element {
   // Current user (for filtering self-initiated WS notices)
   const currentUserId = useAuthUserId()
+  const queryClient = useQueryClient()
 
   // State
-  const [tasks, setTasks] = useState<Task[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [realtimeNotice, setRealtimeNotice] = useState<string | null>(null)
   const [showArchive, setShowArchive] = useState(false)
-
-  // Ref to always have access to latest tasks (avoids stale closure issues)
-  const tasksRef = useRef<Task[]>([])
-  useEffect(() => {
-    tasksRef.current = tasks
-  }, [tasks])
 
   // Task move mutation
   const moveTaskMutation = useMoveTask(projectId)
@@ -178,8 +172,33 @@ export function KanbanBoard({
   const { status } = useWebSocket()
 
   // ============================================================================
+  // Fetch Tasks via TanStack Query (single source of truth — no local mirror)
+  // ============================================================================
+
+  const { data: cachedTasks, isLoading, error: queryError, refetch } = useTasks(projectId)
+
+  // Derived values from the TanStack cache (the only source of truth)
+  const tasks = cachedTasks ?? []
+  const error = queryError?.message ?? null
+
+  // ============================================================================
   // Task Move Handler
   // ============================================================================
+
+  // Helper to read/write tasks directly in the TanStack cache (single source of truth)
+  const tasksQueryKey = queryKeys.tasks(projectId)
+
+  const getTasksFromCache = useCallback(
+    (): Task[] => queryClient.getQueryData<Task[]>(tasksQueryKey) ?? [],
+    [queryClient, tasksQueryKey]
+  )
+
+  const setTasksInCache = useCallback(
+    (updater: (prev: Task[]) => Task[]) => {
+      queryClient.setQueryData<Task[]>(tasksQueryKey, (old) => updater(old ?? []))
+    },
+    [queryClient, tasksQueryKey]
+  )
 
   const handleTaskMove = useCallback(
     async (
@@ -188,8 +207,7 @@ export function KanbanBoard({
       beforeTaskId: string | null,
       afterTaskId: string | null
     ): Promise<boolean> => {
-      // Use ref to get latest task data (avoids stale closure issues)
-      const currentTasks = tasksRef.current
+      const currentTasks = getTasksFromCache()
       const task = currentTasks.find((t) => t.id === taskId)
       if (!task) {
         return false
@@ -203,15 +221,14 @@ export function KanbanBoard({
       // Look up the target status info from the status name
       const targetInfo = statusNameToInfo.get(targetStatus)
       if (!targetInfo) {
-        setRealtimeNotice('Unknown target status')
-        setTimeout(() => setRealtimeNotice(null), 5000)
+        toast.error('Unknown target status')
         return false
       }
 
-      // Optimistic update
+      // Optimistic update directly in the TanStack cache
       const originalTasks = [...currentTasks]
       const now = new Date().toISOString()
-      setTasks((prevTasks) =>
+      setTasksInCache((prevTasks) =>
         prevTasks.map((t) => {
           if (t.id !== taskId) return t
           const isDone = targetInfo.category === 'Done'
@@ -250,22 +267,21 @@ export function KanbanBoard({
           afterTaskId: afterTaskId || undefined,
         })
 
-        // Update local state with the returned task (includes new row_version)
-        setTasks((prevTasks) =>
+        // Update cache with the returned task (includes new row_version)
+        setTasksInCache((prevTasks) =>
           prevTasks.map((t) => (t.id === taskId ? result : t))
         )
 
         return true
       } catch (err) {
-        // Revert on failure and show error notice
-        setTasks(originalTasks)
+        // Revert on failure
+        queryClient.setQueryData<Task[]>(tasksQueryKey, originalTasks)
         const errorMessage = err instanceof Error ? err.message : 'Failed to move task'
-        setRealtimeNotice(errorMessage)
-        setTimeout(() => setRealtimeNotice(null), 5000)
+        toast.error(errorMessage)
         return false
       }
     },
-    [moveTaskMutation, onTaskStatusChange, statusNameToInfo]
+    [moveTaskMutation, onTaskStatusChange, statusNameToInfo, getTasksFromCache, setTasksInCache, queryClient, tasksQueryKey]
   )
 
   // ============================================================================
@@ -298,13 +314,12 @@ export function KanbanBoard({
 
       const isSelf = data.changed_by === currentUserId
 
-      setTasks((currentTasks) => {
+      setTasksInCache((currentTasks) => {
         if (data.action === 'created' && data.task) {
           const exists = currentTasks.some((t) => t.id === data.task_id)
           if (!exists) {
             if (!isSelf) {
-              setRealtimeNotice('New task added')
-              setTimeout(() => setRealtimeNotice(null), 3000)
+              toast.info('New task added', { duration: 3000 })
             }
             return [...currentTasks, data.task as unknown as Task]
           }
@@ -313,8 +328,7 @@ export function KanbanBoard({
           const index = currentTasks.findIndex((t) => t.id === data.task_id)
           if (index !== -1) {
             if (!isSelf) {
-              setRealtimeNotice('Task updated')
-              setTimeout(() => setRealtimeNotice(null), 3000)
+              toast.info('Task updated', { duration: 3000 })
             }
             const newTasks = [...currentTasks]
             newTasks[index] = data.task as unknown as Task
@@ -325,8 +339,7 @@ export function KanbanBoard({
           const index = currentTasks.findIndex((t) => t.id === data.task_id)
           if (index !== -1) {
             if (!isSelf) {
-              setRealtimeNotice('Task removed')
-              setTimeout(() => setRealtimeNotice(null), 3000)
+              toast.info('Task removed', { duration: 3000 })
             }
             return currentTasks.filter((t) => t.id !== data.task_id)
           }
@@ -335,8 +348,7 @@ export function KanbanBoard({
           const index = currentTasks.findIndex((t) => t.id === data.task_id)
           if (index !== -1) {
             if (!isSelf) {
-              setRealtimeNotice('Task status changed')
-              setTimeout(() => setRealtimeNotice(null), 3000)
+              toast.info('Task status changed', { duration: 3000 })
             }
             const newTasks = [...currentTasks]
             newTasks[index] = data.task as unknown as Task
@@ -347,7 +359,7 @@ export function KanbanBoard({
         return currentTasks
       })
     },
-    [projectId, currentUserId]
+    [projectId, currentUserId, setTasksInCache]
   )
 
   // Subscribe to task updates
@@ -359,22 +371,17 @@ export function KanbanBoard({
 
   const handleTaskMoved = useCallback(
     (data: TaskMovedEventData) => {
-      console.log('[KanbanBoard] handleTaskMoved called:', data)
-      if (data.project_id !== projectId) {
-        console.log('[KanbanBoard] Ignoring - different project:', data.project_id, '!==', projectId)
-        return
-      }
+      if (data.project_id !== projectId) return
 
       const isSelf = data.changed_by === currentUserId
 
-      setTasks((currentTasks) => {
+      setTasksInCache((currentTasks) => {
         const taskIndex = currentTasks.findIndex((t) => t.id === data.task_id)
         if (taskIndex === -1) {
           // Task not found, might have been added - add it if we have the task data
           if (data.task) {
             if (!isSelf) {
-              setRealtimeNotice('Task moved')
-              setTimeout(() => setRealtimeNotice(null), 3000)
+              toast.info('Task moved', { duration: 3000 })
             }
             return [...currentTasks, data.task as unknown as Task]
           }
@@ -383,8 +390,7 @@ export function KanbanBoard({
 
         // Update the task's status and rank
         if (!isSelf) {
-          setRealtimeNotice('Task moved')
-          setTimeout(() => setRealtimeNotice(null), 3000)
+          toast.info('Task moved', { duration: 3000 })
         }
 
         const newTasks = [...currentTasks]
@@ -404,36 +410,11 @@ export function KanbanBoard({
         return newTasks
       })
     },
-    [projectId, currentUserId]
+    [projectId, currentUserId, setTasksInCache]
   )
 
   // Subscribe to task moved events
   useTaskMoved(enableRealtime ? projectId : null, handleTaskMoved)
-
-  // ============================================================================
-  // Fetch Tasks via TanStack Query (single source of truth)
-  // ============================================================================
-
-  const { data: cachedTasks, isLoading: isQueryLoading, error: queryError, refetch } = useTasks(projectId)
-
-  // Sync TanStack cache → local state (local state is needed for optimistic DnD updates)
-  useEffect(() => {
-    if (cachedTasks) {
-      setTasks(cachedTasks)
-      setIsLoading(false)
-    }
-  }, [cachedTasks])
-
-  useEffect(() => {
-    if (queryError) {
-      setError(queryError.message)
-      setIsLoading(false)
-    }
-  }, [queryError])
-
-  useEffect(() => {
-    setIsLoading(isQueryLoading)
-  }, [isQueryLoading])
 
   const fetchTasks = useCallback(() => {
     refetch()
@@ -522,24 +503,7 @@ export function KanbanBoard({
             </div>
           )}
 
-          {/* Real-time update notice */}
-          {realtimeNotice && (
-            <div
-              className={cn(
-                'flex items-center gap-1.5 px-2 py-1 rounded-md text-xs animate-in fade-in slide-in-from-left-2 duration-200',
-                realtimeNotice.toLowerCase().includes('failed')
-                  ? 'bg-red-500/10 text-red-600 dark:text-red-400'
-                  : 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
-              )}
-            >
-              {realtimeNotice.toLowerCase().includes('failed') ? (
-                <AlertCircle className="h-3.5 w-3.5" />
-              ) : (
-                <Wifi className="h-3.5 w-3.5" />
-              )}
-              <span>{realtimeNotice}</span>
-            </div>
-          )}
+          {/* Notices now use sonner toast (bottom-right) */}
 
           {/* Moving indicator */}
           {isMoving && (
@@ -628,7 +592,7 @@ export function KanbanBoard({
           onTaskClick={onTaskClick}
           onTaskRestored={(task) => {
             // Add restored task to local state (task is now in Done status)
-            setTasks((prev) => {
+            setTasksInCache((prev) => {
               const exists = prev.some((t) => t.id === task.id)
               return exists ? prev : [...prev, task]
             })

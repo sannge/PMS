@@ -85,9 +85,7 @@ def _format_cell(value: Any) -> str:
     return text
 
 
-def _rows_to_markdown_table(
-    headers: list[str], rows: list[list[str]]
-) -> str:
+def _rows_to_markdown_table(headers: list[str], rows: list[list[str]]) -> str:
     """Convert rows to a Markdown pipe table."""
     if not headers:
         return ""
@@ -101,14 +99,12 @@ def _rows_to_markdown_table(
     for row in rows:
         # Pad row to match header length
         padded = row + [""] * (len(headers) - len(row))
-        lines.append("| " + " | ".join(padded[:len(headers)]) + " |")
+        lines.append("| " + " | ".join(padded[: len(headers)]) + " |")
 
     return "\n".join(lines) + "\n"
 
 
-def _rows_to_markdown_kv(
-    headers: list[str], rows: list[list[str]]
-) -> str:
+def _rows_to_markdown_kv(headers: list[str], rows: list[list[str]]) -> str:
     """Convert rows to Markdown key-value format (for wide tables)."""
     blocks: list[str] = []
     for row_idx, row in enumerate(rows, 1):
@@ -145,10 +141,7 @@ class SpreadsheetExtractor:
         try:
             from python_calamine import CalamineWorkbook
         except ImportError:
-            raise ImportError(
-                "python-calamine is required for Excel extraction. "
-                "Install with: uv add python-calamine"
-            )
+            raise ImportError("python-calamine is required for Excel extraction. Install with: uv add python-calamine")
 
         warnings: list[str] = []
 
@@ -168,9 +161,7 @@ class SpreadsheetExtractor:
             return SpreadsheetResult(markdown="*Empty workbook*\n", warnings=warnings)
 
         if len(sheet_names) > MAX_SHEETS:
-            warnings.append(
-                f"Workbook has {len(sheet_names)} sheets; only the first {MAX_SHEETS} are processed."
-            )
+            warnings.append(f"Workbook has {len(sheet_names)} sheets; only the first {MAX_SHEETS} are processed.")
             sheet_names = sheet_names[:MAX_SHEETS]
 
         sections: list[str] = []
@@ -188,17 +179,14 @@ class SpreadsheetExtractor:
 
             # Cap rows
             if len(data) > MAX_ROWS_PER_SHEET:
-                warnings.append(
-                    f"Sheet '{sheet_name}' has {len(data)} rows; "
-                    f"capped at {MAX_ROWS_PER_SHEET}."
-                )
+                warnings.append(f"Sheet '{sheet_name}' has {len(data)} rows; capped at {MAX_ROWS_PER_SHEET}.")
                 data = data[:MAX_ROWS_PER_SHEET]
 
             total_rows += len(data)
 
             # First row is headers
             raw_headers = data[0] if data else []
-            headers = [_format_cell(h) or f"Col{i+1}" for i, h in enumerate(raw_headers)]
+            headers = [_format_cell(h) or f"Col{i + 1}" for i, h in enumerate(raw_headers)]
             rows = [[_format_cell(c) for c in row] for row in data[1:]]
 
             # Build section
@@ -258,6 +246,7 @@ class SpreadsheetExtractor:
             except UnicodeDecodeError:
                 try:
                     import chardet
+
                     detected = chardet.detect(sample)
                     encoding = detected.get("encoding", "latin-1") or "latin-1"
                     warnings.append(f"File encoding detected as {encoding} (not UTF-8)")
@@ -271,9 +260,7 @@ class SpreadsheetExtractor:
             reader = csv.reader(f, delimiter=delimiter)
             for row in reader:
                 if len(all_rows) >= MAX_ROWS_PER_SHEET + 1:
-                    warnings.append(
-                        f"CSV file has more than {MAX_ROWS_PER_SHEET} rows; truncated."
-                    )
+                    warnings.append(f"CSV file has more than {MAX_ROWS_PER_SHEET} rows; truncated.")
                     break
                 all_rows.append([_format_cell(c) for c in row])
 
@@ -284,21 +271,19 @@ class SpreadsheetExtractor:
         has_header = True
         try:
             # Re-read a sample for header detection
-            sample_text = "\n".join(
-                delimiter.join(row) for row in all_rows[:20]
-            )
+            sample_text = "\n".join(delimiter.join(row) for row in all_rows[:20])
             has_header = csv.Sniffer().has_header(sample_text)
         except csv.Error:
             pass  # Default to assuming first row is header
 
         if has_header:
             headers = all_rows[0] if all_rows else []
-            headers = [h or f"Col{i+1}" for i, h in enumerate(headers)]
+            headers = [h or f"Col{i + 1}" for i, h in enumerate(headers)]
             data_rows = all_rows[1:]
         else:
             # Generate column headers: Column_1, Column_2, ...
             col_count = len(all_rows[0]) if all_rows else 0
-            headers = [f"Column_{i+1}" for i in range(col_count)]
+            headers = [f"Column_{i + 1}" for i in range(col_count)]
             data_rows = all_rows
             warnings.append("No header row detected; generated column names.")
 

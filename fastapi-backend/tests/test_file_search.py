@@ -439,7 +439,7 @@ class TestRRFFileDedup:
                 document_title="data.xlsx",
                 chunk_text="keyword hit",
                 heading_context=None,
-                chunk_index=None,
+                chunk_index=0,
                 rank=2,
                 raw_score=0.5,
                 source="keyword",
@@ -566,54 +566,49 @@ class TestHighlightTermsInWindow:
 
     def test_single_term_highlighted(self):
         from app.services.search_service import _highlight_terms_in_window
-        result = _highlight_terms_in_window(
-            "The quick brown fox jumps over the lazy dog", 10, 5, {"brown"}
-        )
+
+        result = _highlight_terms_in_window("The quick brown fox jumps over the lazy dog", 10, 5, {"brown"})
         assert "<mark>brown</mark>" in result
 
     def test_multiple_terms_highlighted(self):
         from app.services.search_service import _highlight_terms_in_window
-        result = _highlight_terms_in_window(
-            "The quick brown fox jumps over the lazy dog", 10, 5, {"brown", "fox"}
-        )
+
+        result = _highlight_terms_in_window("The quick brown fox jumps over the lazy dog", 10, 5, {"brown", "fox"})
         assert "<mark>brown</mark>" in result
         assert "<mark>fox</mark>" in result
 
     def test_html_escaped_before_highlight(self):
         from app.services.search_service import _highlight_terms_in_window
-        result = _highlight_terms_in_window(
-            "Use <script> for brown testing", 20, 5, {"brown"}
-        )
+
+        result = _highlight_terms_in_window("Use <script> for brown testing", 20, 5, {"brown"})
         assert "<script>" not in result
         assert "&lt;script&gt;" in result
         assert "<mark>brown</mark>" in result
 
     def test_ellipsis_prefix_when_not_at_start(self):
         from app.services.search_service import _highlight_terms_in_window
+
         content = "x " * 100 + "target word here"
         result = _highlight_terms_in_window(content, 200, 6, {"target"})
         assert result.startswith("...")
 
     def test_no_ellipsis_at_start(self):
         from app.services.search_service import _highlight_terms_in_window
-        result = _highlight_terms_in_window(
-            "brown fox jumps", 0, 5, {"brown"}
-        )
+
+        result = _highlight_terms_in_window("brown fox jumps", 0, 5, {"brown"})
         assert not result.startswith("...")
 
     def test_empty_terms_no_highlights(self):
         from app.services.search_service import _highlight_terms_in_window
-        result = _highlight_terms_in_window(
-            "The quick brown fox", 10, 5, set()
-        )
+
+        result = _highlight_terms_in_window("The quick brown fox", 10, 5, set())
         assert "<mark>" not in result
         assert "brown" in result
 
     def test_case_insensitive_highlight(self):
         from app.services.search_service import _highlight_terms_in_window
-        result = _highlight_terms_in_window(
-            "The Quick BROWN fox", 10, 5, {"brown"}
-        )
+
+        result = _highlight_terms_in_window("The Quick BROWN fox", 10, 5, {"brown"})
         assert "<mark>BROWN</mark>" in result
 
 
@@ -627,11 +622,13 @@ class TestSanitizeMeiliSnippet:
 
     def test_preserves_mark_tags(self):
         from app.services.search_service import _sanitize_meili_snippet
+
         result = _sanitize_meili_snippet("hello <mark>world</mark> foo")
         assert "<mark>world</mark>" in result
 
     def test_escapes_script_tags(self):
         from app.services.search_service import _sanitize_meili_snippet
+
         result = _sanitize_meili_snippet('<script>alert("xss")</script> <mark>safe</mark>')
         assert "<script>" not in result
         assert "&lt;script&gt;" in result
@@ -639,22 +636,26 @@ class TestSanitizeMeiliSnippet:
 
     def test_escapes_html_entities(self):
         from app.services.search_service import _sanitize_meili_snippet
+
         result = _sanitize_meili_snippet("a & b <mark>c</mark>")
         assert "a &amp; b" in result
         assert "<mark>c</mark>" in result
 
     def test_empty_string(self):
         from app.services.search_service import _sanitize_meili_snippet
+
         assert _sanitize_meili_snippet("") == ""
 
     def test_none_passthrough(self):
         from app.services.search_service import _sanitize_meili_snippet
+
         # The function checks `if not html: return html`
         assert _sanitize_meili_snippet("") == ""
 
     def test_preserves_only_exact_mark_tags(self):
         """<mark> preserved, <mark class='x'> and <markdown> escaped."""
         from app.services.search_service import _sanitize_meili_snippet
+
         result = _sanitize_meili_snippet('<mark>good</mark> <mark class="x">bad</mark> <markdown>also bad</markdown>')
         assert "<mark>good</mark>" in result
         # <mark class="x"> should be escaped (not exact <mark>)
@@ -664,6 +665,7 @@ class TestSanitizeMeiliSnippet:
     def test_unbalanced_marks_safe(self):
         """Unbalanced <mark> tags don't cause issues."""
         from app.services.search_service import _sanitize_meili_snippet
+
         result = _sanitize_meili_snippet("hello <mark>world")
         assert "<mark>world" in result  # <mark> preserved even without closing tag
         assert "hello " in result
@@ -679,21 +681,24 @@ class TestExpandHitsOccurrenceBehavior:
 
     def test_first_occurrence_uses_formatted(self):
         from app.services.search_service import _expand_hits
-        hits = [{
-            "id": "doc-1",
-            "title": "Test",
-            "content_plain": "hello world hello again",
-            "_formatted": {
+
+        hits = [
+            {
+                "id": "doc-1",
                 "title": "Test",
-                "content_plain": "...cropped <mark>hello</mark> world...",
-            },
-            "_matchesPosition": {
-                "content_plain": [
-                    {"start": 0, "length": 5},
-                    {"start": 12, "length": 5},
-                ],
-            },
-        }]
+                "content_plain": "hello world hello again",
+                "_formatted": {
+                    "title": "Test",
+                    "content_plain": "...cropped <mark>hello</mark> world...",
+                },
+                "_matchesPosition": {
+                    "content_plain": [
+                        {"start": 0, "length": 5},
+                        {"start": 12, "length": 5},
+                    ],
+                },
+            }
+        ]
         expanded = _expand_hits(hits)
         assert len(expanded) == 2
         # First occurrence uses formatted
@@ -705,39 +710,45 @@ class TestExpandHitsOccurrenceBehavior:
 
     def test_title_only_match_uses_formatted(self):
         from app.services.search_service import _expand_hits
-        hits = [{
-            "id": "doc-2",
-            "title": "Hello World",
-            "content_plain": "some content here",
-            "_formatted": {
-                "title": "<mark>Hello</mark> World",
-                "content_plain": "...some content...",
-            },
-            "_matchesPosition": {
-                "title": [{"start": 0, "length": 5}],
-            },
-        }]
+
+        hits = [
+            {
+                "id": "doc-2",
+                "title": "Hello World",
+                "content_plain": "some content here",
+                "_formatted": {
+                    "title": "<mark>Hello</mark> World",
+                    "content_plain": "...some content...",
+                },
+                "_matchesPosition": {
+                    "title": [{"start": 0, "length": 5}],
+                },
+            }
+        ]
         expanded = _expand_hits(hits)
         assert len(expanded) == 1
         assert expanded[0]["occurrenceIndex"] == 0
 
     def test_matched_terms_on_all_entries(self):
         from app.services.search_service import _expand_hits
-        hits = [{
-            "id": "doc-3",
-            "title": "Test",
-            "content_plain": "hello world hello again",
-            "_formatted": {
+
+        hits = [
+            {
+                "id": "doc-3",
                 "title": "Test",
-                "content_plain": "<mark>hello</mark> world...",
-            },
-            "_matchesPosition": {
-                "content_plain": [
-                    {"start": 0, "length": 5},
-                    {"start": 12, "length": 5},
-                ],
-            },
-        }]
+                "content_plain": "hello world hello again",
+                "_formatted": {
+                    "title": "Test",
+                    "content_plain": "<mark>hello</mark> world...",
+                },
+                "_matchesPosition": {
+                    "content_plain": [
+                        {"start": 0, "length": 5},
+                        {"start": 12, "length": 5},
+                    ],
+                },
+            }
+        ]
         expanded = _expand_hits(hits)
         for entry in expanded:
             assert "matchedTerms" in entry
@@ -746,20 +757,23 @@ class TestExpandHitsOccurrenceBehavior:
     def test_xss_in_formatted_content_escaped(self):
         """Verify that malicious HTML in _formatted.content_plain is escaped while <mark> is preserved."""
         from app.services.search_service import _expand_hits
-        hits = [{
-            "id": "doc-xss",
-            "title": "Test",
-            "content_plain": 'hello <script>alert("xss")</script> world',
-            "_formatted": {
+
+        hits = [
+            {
+                "id": "doc-xss",
                 "title": "Test",
-                "content_plain": '...<mark>hello</mark> <script>alert("xss")</script> world...',
-            },
-            "_matchesPosition": {
-                "content_plain": [
-                    {"start": 0, "length": 5},
-                ],
-            },
-        }]
+                "content_plain": 'hello <script>alert("xss")</script> world',
+                "_formatted": {
+                    "title": "Test",
+                    "content_plain": '...<mark>hello</mark> <script>alert("xss")</script> world...',
+                },
+                "_matchesPosition": {
+                    "content_plain": [
+                        {"start": 0, "length": 5},
+                    ],
+                },
+            }
+        ]
         expanded = _expand_hits(hits)
         assert len(expanded) == 1
         snippet = expanded[0]["snippet"]
@@ -772,20 +786,23 @@ class TestExpandHitsOccurrenceBehavior:
     def test_ampersand_in_formatted_content_not_double_escaped(self):
         """Verify & in content is escaped to &amp; but not double-escaped to &amp;amp;"""
         from app.services.search_service import _expand_hits
-        hits = [{
-            "id": "doc-amp",
-            "title": "Test",
-            "content_plain": "Tom & Jerry meet",
-            "_formatted": {
+
+        hits = [
+            {
+                "id": "doc-amp",
                 "title": "Test",
-                "content_plain": "...<mark>Tom</mark> & Jerry...",
-            },
-            "_matchesPosition": {
-                "content_plain": [
-                    {"start": 0, "length": 3},
-                ],
-            },
-        }]
+                "content_plain": "Tom & Jerry meet",
+                "_formatted": {
+                    "title": "Test",
+                    "content_plain": "...<mark>Tom</mark> & Jerry...",
+                },
+                "_matchesPosition": {
+                    "content_plain": [
+                        {"start": 0, "length": 3},
+                    ],
+                },
+            }
+        ]
         expanded = _expand_hits(hits)
         snippet = expanded[0]["snippet"]
         assert "<mark>Tom</mark>" in snippet

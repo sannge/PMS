@@ -21,10 +21,7 @@ class ApiKeyEncryption:
 
     def __init__(self, encryption_key: str) -> None:
         if not encryption_key:
-            raise ValueError(
-                "AI encryption key is not configured. "
-                "Set the AI_ENCRYPTION_KEY environment variable."
-            )
+            raise ValueError("AI encryption key is not configured. Set the AI_ENCRYPTION_KEY environment variable.")
         key = encryption_key.encode() if isinstance(encryption_key, str) else encryption_key
         self.fernet = Fernet(key)
 
@@ -67,9 +64,7 @@ class ApiKeyEncryption:
         """
         from sqlalchemy import or_
 
-        new_fernet = Fernet(
-            new_key.encode() if isinstance(new_key, str) else new_key
-        )
+        new_fernet = Fernet(new_key.encode() if isinstance(new_key, str) else new_key)
 
         result = await db.execute(
             select(AiProvider).where(
@@ -86,21 +81,15 @@ class ApiKeyEncryption:
         for provider in providers:
             if provider.api_key_encrypted:
                 plaintext = self.decrypt(provider.api_key_encrypted)
-                provider.api_key_encrypted = new_fernet.encrypt(
-                    plaintext.encode()
-                ).decode()
+                provider.api_key_encrypted = new_fernet.encrypt(plaintext.encode()).decode()
                 rotated += 1
             if provider.oauth_access_token:
                 plaintext = self.decrypt(provider.oauth_access_token)
-                provider.oauth_access_token = new_fernet.encrypt(
-                    plaintext.encode()
-                ).decode()
+                provider.oauth_access_token = new_fernet.encrypt(plaintext.encode()).decode()
                 rotated += 1
             if provider.oauth_refresh_token:
                 plaintext = self.decrypt(provider.oauth_refresh_token)
-                provider.oauth_refresh_token = new_fernet.encrypt(
-                    plaintext.encode()
-                ).decode()
+                provider.oauth_refresh_token = new_fernet.encrypt(plaintext.encode()).decode()
                 rotated += 1
 
         logger.info("Rotated %d encrypted field(s) to new encryption key", rotated)

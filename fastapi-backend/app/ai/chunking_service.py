@@ -97,26 +97,28 @@ class SemanticChunker:
     @staticmethod
     def _get_min_tokens() -> int:
         from .config_service import get_agent_config
+
         return get_agent_config().get_int("embedding.min_chunk_tokens", 500)
 
     @staticmethod
     def _get_max_tokens() -> int:
         from .config_service import get_agent_config
+
         return get_agent_config().get_int("embedding.max_chunk_tokens", 800)
 
     @staticmethod
     def _get_canvas_proximity() -> float:
         from .config_service import get_agent_config
+
         return get_agent_config().get_float("embedding.canvas_proximity_threshold", 300.0)
 
     # Backward compat class attrs (frozen at definition, prefer getters)
     from .config_service import get_agent_config as _get_cfg
+
     _chunker_cfg = _get_cfg()
     MIN_TOKENS = _chunker_cfg.get_int("embedding.min_chunk_tokens", 500)
     MAX_TOKENS = _chunker_cfg.get_int("embedding.max_chunk_tokens", 800)
-    CANVAS_PROXIMITY_THRESHOLD = _chunker_cfg.get_float(
-        "embedding.canvas_proximity_threshold", 300.0
-    )
+    CANVAS_PROXIMITY_THRESHOLD = _chunker_cfg.get_float("embedding.canvas_proximity_threshold", 300.0)
     del _chunker_cfg, _get_cfg
 
     def __init__(self, target_tokens: int = 600, overlap_tokens: int = 100) -> None:
@@ -152,9 +154,7 @@ class SemanticChunker:
 
     # ---- TipTap Chunking ----
 
-    def _chunk_tiptap(
-        self, content_json: dict[str, Any], title: str
-    ) -> list[ChunkResult]:
+    def _chunk_tiptap(self, content_json: dict[str, Any], title: str) -> list[ChunkResult]:
         """TipTap document chunking pipeline.
 
         1. Parse TipTap JSON content tree
@@ -212,31 +212,39 @@ class SemanticChunker:
                 if heading_text.strip():
                     current_heading = heading_text.strip()
                     # Start a new block at heading boundary
-                    blocks.append(_TextBlock(
-                        text=f"{'#' * level} {heading_text}\n",
-                        heading_context=current_heading,
-                    ))
+                    blocks.append(
+                        _TextBlock(
+                            text=f"{'#' * level} {heading_text}\n",
+                            heading_context=current_heading,
+                        )
+                    )
 
             elif node_type == "paragraph":
                 text = self._inline_text(node.get("content", []))
                 if text.strip():
-                    blocks.append(_TextBlock(
-                        text=text + "\n",
-                        heading_context=current_heading,
-                    ))
+                    blocks.append(
+                        _TextBlock(
+                            text=text + "\n",
+                            heading_context=current_heading,
+                        )
+                    )
 
             elif node_type in ("bulletList", "orderedList", "taskList"):
                 text = self._extract_list_text(node)
                 if text.strip():
-                    blocks.append(_TextBlock(
-                        text=text,
-                        heading_context=current_heading,
-                    ))
+                    blocks.append(
+                        _TextBlock(
+                            text=text,
+                            heading_context=current_heading,
+                        )
+                    )
                 # Extract non-text nodes (drawio, tables) nested at any depth
                 # inside list items. _extract_list_text only extracts plain text,
                 # so rich nodes must be found recursively.
                 self._extract_rich_nodes_from_tree(
-                    node, blocks, current_heading,
+                    node,
+                    blocks,
+                    current_heading,
                 )
 
             elif node_type == "codeBlock":
@@ -244,10 +252,12 @@ class SemanticChunker:
                 lang = node.get("attrs", {}).get("language", "") or ""
                 text = f"```{lang}\n{code}\n```\n"
                 if code.strip():
-                    blocks.append(_TextBlock(
-                        text=text,
-                        heading_context=current_heading,
-                    ))
+                    blocks.append(
+                        _TextBlock(
+                            text=text,
+                            heading_context=current_heading,
+                        )
+                    )
 
             elif node_type == "blockquote":
                 inner_blocks = self._extract_blocks(
@@ -261,12 +271,14 @@ class SemanticChunker:
             elif node_type == "table":
                 text, header_cells = self._extract_table_text_with_headers(node)
                 if text.strip():
-                    blocks.append(_TextBlock(
-                        text=text,
-                        heading_context=current_heading,
-                        is_table=True,
-                        table_columns=header_cells,
-                    ))
+                    blocks.append(
+                        _TextBlock(
+                            text=text,
+                            heading_context=current_heading,
+                            is_table=True,
+                            table_columns=header_cells,
+                        )
+                    )
 
             elif node_type == "horizontalRule":
                 continue  # Skip presentation-only elements
@@ -277,10 +289,12 @@ class SemanticChunker:
             elif node_type == "drawio":
                 text = self._extract_drawio_text(node)
                 if text.strip():
-                    blocks.append(_TextBlock(
-                        text=text,
-                        heading_context=current_heading,
-                    ))
+                    blocks.append(
+                        _TextBlock(
+                            text=text,
+                            heading_context=current_heading,
+                        )
+                    )
 
             else:
                 # Unknown node type -- recurse into children (graceful degradation)
@@ -316,8 +330,12 @@ class SemanticChunker:
             elif "content" in node:
                 parts.append(self._extract_text_recursive(node["content"]))
                 if node.get("type") in (
-                    "paragraph", "heading", "listItem", "taskItem",
-                    "codeBlock", "blockquote",
+                    "paragraph",
+                    "heading",
+                    "listItem",
+                    "taskItem",
+                    "codeBlock",
+                    "blockquote",
                 ):
                     parts.append("\n")
         return "".join(parts)
@@ -363,27 +381,32 @@ class SemanticChunker:
             if child_type == "drawio":
                 drawio_text = self._extract_drawio_text(child)
                 if drawio_text.strip():
-                    blocks.append(_TextBlock(
-                        text=drawio_text,
-                        heading_context=heading_context,
-                    ))
+                    blocks.append(
+                        _TextBlock(
+                            text=drawio_text,
+                            heading_context=heading_context,
+                        )
+                    )
             elif child_type == "table":
                 table_text, header_cells = self._extract_table_text_with_headers(child)
                 if table_text.strip():
-                    blocks.append(_TextBlock(
-                        text=table_text,
-                        heading_context=heading_context,
-                        is_table=True,
-                        table_columns=header_cells,
-                    ))
+                    blocks.append(
+                        _TextBlock(
+                            text=table_text,
+                            heading_context=heading_context,
+                            is_table=True,
+                            table_columns=header_cells,
+                        )
+                    )
             elif "content" in child:
                 self._extract_rich_nodes_from_tree(
-                    child, blocks, heading_context, _depth + 1,
+                    child,
+                    blocks,
+                    heading_context,
+                    _depth + 1,
                 )
 
-    def _extract_table_text_with_headers(
-        self, node: dict[str, Any]
-    ) -> tuple[str, list[str]]:
+    def _extract_table_text_with_headers(self, node: dict[str, Any]) -> tuple[str, list[str]]:
         """Extract text from table nodes and return header row cells separately.
 
         Returns:
@@ -499,9 +522,7 @@ class SemanticChunker:
             parts.append("Structure:")
             for parent_id, child_ids in children_map.items():
                 parent_label = vertices[parent_id]["label"] or parent_id
-                child_labels = [
-                    vertices[cid]["label"] or cid for cid in child_ids
-                ]
+                child_labels = [vertices[cid]["label"] or cid for cid in child_ids]
                 parts.append(f"- {parent_label} contains: {', '.join(child_labels)}")
 
         return "\n".join(parts) + "\n"
@@ -514,14 +535,12 @@ class SemanticChunker:
         the block text matches the ``## Slide N`` pattern, else None.
         """
         text = block.text.strip()
-        m = re.match(r'^#{1,3}\s+(Slide\s+\d+.*)', text)
+        m = re.match(r"^#{1,3}\s+(Slide\s+\d+.*)", text)
         if m:
             return m.group(1).strip()
         return None
 
-    def _merge_and_split(
-        self, blocks: list[_TextBlock], rows_per_chunk: int = 50
-    ) -> list[ChunkResult]:
+    def _merge_and_split(self, blocks: list[_TextBlock], rows_per_chunk: int = 50) -> list[ChunkResult]:
         """Merge small blocks under same heading; split blocks exceeding MAX_TOKENS.
 
         Special handling:
@@ -558,12 +577,14 @@ class SemanticChunker:
                     if current_tokens <= 20:
                         carry_forward = current_text.strip() + "\n"
                     else:
-                        chunks.append(ChunkResult(
-                            text=current_text.strip(),
-                            heading_context=current_heading,
-                            token_count=current_tokens,
-                            chunk_index=0,
-                        ))
+                        chunks.append(
+                            ChunkResult(
+                                text=current_text.strip(),
+                                heading_context=current_heading,
+                                token_count=current_tokens,
+                                chunk_index=0,
+                            )
+                        )
                     current_text = ""
                     current_tokens = 0
 
@@ -587,17 +608,21 @@ class SemanticChunker:
                 if table_tokens > self._get_max_tokens():
                     # Split oversized table by row groups (MED-2: thread rows_per_chunk)
                     table_chunks = self._split_table_by_rows(
-                        block.text.strip(), preamble, block.heading_context,
+                        block.text.strip(),
+                        preamble,
+                        block.heading_context,
                         rows_per_chunk=rows_per_chunk,
                     )
                     chunks.extend(table_chunks)
                 else:
-                    chunks.append(ChunkResult(
-                        text=table_text,
-                        heading_context=block.heading_context,
-                        token_count=table_tokens,
-                        chunk_index=0,
-                    ))
+                    chunks.append(
+                        ChunkResult(
+                            text=table_text,
+                            heading_context=block.heading_context,
+                            token_count=table_tokens,
+                            chunk_index=0,
+                        )
+                    )
                 current_heading = block.heading_context
                 continue
 
@@ -606,12 +631,14 @@ class SemanticChunker:
             if slide_title is not None:
                 # Flush accumulated text buffer
                 if current_text.strip():
-                    chunks.append(ChunkResult(
-                        text=current_text.strip(),
-                        heading_context=current_heading,
-                        token_count=current_tokens,
-                        chunk_index=0,
-                    ))
+                    chunks.append(
+                        ChunkResult(
+                            text=current_text.strip(),
+                            heading_context=current_heading,
+                            token_count=current_tokens,
+                            chunk_index=0,
+                        )
+                    )
                     current_text = ""
                     current_tokens = 0
                 # Use slide title as heading context for this and subsequent blocks
@@ -621,11 +648,7 @@ class SemanticChunker:
                 continue
 
             # --- 9.12: Speaker notes — blockquotes within slides ---
-            if (
-                current_heading
-                and re.match(r"^Slide\s+\d+", current_heading)
-                and block.text.lstrip().startswith(">")
-            ):
+            if current_heading and re.match(r"^Slide\s+\d+", current_heading) and block.text.lstrip().startswith(">"):
                 # Strip blockquote markers and prefix with [Speaker Notes]
                 lines = block.text.split("\n")
                 cleaned = []
@@ -644,12 +667,14 @@ class SemanticChunker:
             # into the next chunk instead of emitting a near-empty chunk.
             if block.heading_context != current_heading and current_text.strip():
                 if current_tokens > 50:
-                    chunks.append(ChunkResult(
-                        text=current_text.strip(),
-                        heading_context=current_heading,
-                        token_count=current_tokens,
-                        chunk_index=0,
-                    ))
+                    chunks.append(
+                        ChunkResult(
+                            text=current_text.strip(),
+                            heading_context=current_heading,
+                            token_count=current_tokens,
+                            chunk_index=0,
+                        )
+                    )
                     current_text = ""
                     current_tokens = 0
                 current_heading = block.heading_context
@@ -660,12 +685,14 @@ class SemanticChunker:
             # instead of being emitted as a near-empty chunk.
             if current_tokens + block.token_count > self._get_max_tokens() and current_text.strip():
                 if current_tokens > 50:
-                    chunks.append(ChunkResult(
-                        text=current_text.strip(),
-                        heading_context=current_heading,
-                        token_count=current_tokens,
-                        chunk_index=0,
-                    ))
+                    chunks.append(
+                        ChunkResult(
+                            text=current_text.strip(),
+                            heading_context=current_heading,
+                            token_count=current_tokens,
+                            chunk_index=0,
+                        )
+                    )
                     current_text = ""
                     current_tokens = 0
 
@@ -674,12 +701,14 @@ class SemanticChunker:
                 if current_text.strip():
                     if current_tokens > 50:
                         # Buffer is large enough — emit as its own chunk
-                        chunks.append(ChunkResult(
-                            text=current_text.strip(),
-                            heading_context=current_heading,
-                            token_count=current_tokens,
-                            chunk_index=0,
-                        ))
+                        chunks.append(
+                            ChunkResult(
+                                text=current_text.strip(),
+                                heading_context=current_heading,
+                                token_count=current_tokens,
+                                chunk_index=0,
+                            )
+                        )
                         text_to_split = block.text
                     else:
                         # Buffer is tiny (e.g. just a title) — prepend it
@@ -690,9 +719,7 @@ class SemanticChunker:
                 current_text = ""
                 current_tokens = 0
 
-                split_chunks = self._split_large_text(
-                    text_to_split, block.heading_context
-                )
+                split_chunks = self._split_large_text(text_to_split, block.heading_context)
                 chunks.extend(split_chunks)
                 current_heading = block.heading_context
             else:
@@ -702,12 +729,14 @@ class SemanticChunker:
 
         # Flush remaining
         if current_text.strip():
-            chunks.append(ChunkResult(
-                text=current_text.strip(),
-                heading_context=current_heading,
-                token_count=current_tokens,
-                chunk_index=0,
-            ))
+            chunks.append(
+                ChunkResult(
+                    text=current_text.strip(),
+                    heading_context=current_heading,
+                    token_count=current_tokens,
+                    chunk_index=0,
+                )
+            )
 
         return chunks
 
@@ -744,12 +773,14 @@ class SemanticChunker:
         if not data_lines:
             # Table with only a header — emit as single chunk
             full_text = f"{preamble}\n{header_line}"
-            return [ChunkResult(
-                text=full_text,
-                heading_context=heading_context,
-                token_count=self.count_tokens(full_text),
-                chunk_index=0,
-            )]
+            return [
+                ChunkResult(
+                    text=full_text,
+                    heading_context=heading_context,
+                    token_count=self.count_tokens(full_text),
+                    chunk_index=0,
+                )
+            ]
 
         chunks: list[ChunkResult] = []
         total_rows = len(data_lines)
@@ -760,12 +791,14 @@ class SemanticChunker:
 
             chunk_preamble = f"{preamble} (rows {start + 1}-{end})"
             chunk_text = f"{chunk_preamble}\n{header_line}\n" + "\n".join(group)
-            chunks.append(ChunkResult(
-                text=chunk_text,
-                heading_context=heading_context,
-                token_count=self.count_tokens(chunk_text),
-                chunk_index=0,
-            ))
+            chunks.append(
+                ChunkResult(
+                    text=chunk_text,
+                    heading_context=heading_context,
+                    token_count=self.count_tokens(chunk_text),
+                    chunk_index=0,
+                )
+            )
 
         logger.info(
             "Oversized table split: %d rows -> %d chunks of ~%d rows (heading: %s)",
@@ -777,9 +810,7 @@ class SemanticChunker:
 
         return chunks
 
-    def _split_large_text(
-        self, text: str, heading_context: str | None
-    ) -> list[ChunkResult]:
+    def _split_large_text(self, text: str, heading_context: str | None) -> list[ChunkResult]:
         """Split text exceeding MAX_TOKENS at sentence boundaries.
 
         If a single sentence exceeds MAX_TOKENS (e.g., a long code block
@@ -798,36 +829,42 @@ class SemanticChunker:
             if sentence_tokens > self._get_max_tokens():
                 # Flush any accumulated text first
                 if current_text.strip():
-                    chunks.append(ChunkResult(
-                        text=current_text.strip(),
-                        heading_context=heading_context,
-                        token_count=current_tokens,
-                        chunk_index=0,
-                    ))
+                    chunks.append(
+                        ChunkResult(
+                            text=current_text.strip(),
+                            heading_context=heading_context,
+                            token_count=current_tokens,
+                            chunk_index=0,
+                        )
+                    )
                     current_text = ""
                     current_tokens = 0
 
                 # Hard-split at token boundaries
                 tokens = self._encoder.encode(sentence)
                 for start in range(0, len(tokens), self._get_max_tokens()):
-                    sub_tokens = tokens[start:start + self._get_max_tokens()]
+                    sub_tokens = tokens[start : start + self._get_max_tokens()]
                     sub_text = self._encoder.decode(sub_tokens)
                     if sub_text.strip():
-                        chunks.append(ChunkResult(
-                            text=sub_text.strip(),
-                            heading_context=heading_context,
-                            token_count=len(sub_tokens),
-                            chunk_index=0,
-                        ))
+                        chunks.append(
+                            ChunkResult(
+                                text=sub_text.strip(),
+                                heading_context=heading_context,
+                                token_count=len(sub_tokens),
+                                chunk_index=0,
+                            )
+                        )
                 continue
 
             if current_tokens + sentence_tokens > self._get_max_tokens() and current_text.strip():
-                chunks.append(ChunkResult(
-                    text=current_text.strip(),
-                    heading_context=heading_context,
-                    token_count=current_tokens,
-                    chunk_index=0,
-                ))
+                chunks.append(
+                    ChunkResult(
+                        text=current_text.strip(),
+                        heading_context=heading_context,
+                        token_count=current_tokens,
+                        chunk_index=0,
+                    )
+                )
                 current_text = ""
                 current_tokens = 0
 
@@ -835,19 +872,21 @@ class SemanticChunker:
             current_tokens += sentence_tokens
 
         if current_text.strip():
-            chunks.append(ChunkResult(
-                text=current_text.strip(),
-                heading_context=heading_context,
-                token_count=current_tokens,
-                chunk_index=0,
-            ))
+            chunks.append(
+                ChunkResult(
+                    text=current_text.strip(),
+                    heading_context=heading_context,
+                    token_count=current_tokens,
+                    chunk_index=0,
+                )
+            )
 
         return chunks
 
     def _split_into_sentences(self, text: str) -> list[str]:
         """Split text into sentences at period/newline boundaries."""
         # Split at sentence-ending punctuation followed by space, or at newlines
-        parts = re.split(r'(?<=[.!?])\s+|\n+', text)
+        parts = re.split(r"(?<=[.!?])\s+|\n+", text)
         # Re-add spacing
         result: list[str] = []
         for part in parts:
@@ -884,7 +923,7 @@ class SemanticChunker:
             # Get last ~overlap_tokens worth of text from previous chunk
             prev_tokens = self._encoder.encode(prev_text)
             if len(prev_tokens) > self.overlap_tokens:
-                overlap_tokens = prev_tokens[-self.overlap_tokens:]
+                overlap_tokens = prev_tokens[-self.overlap_tokens :]
                 overlap_text = self._encoder.decode(overlap_tokens)
             else:
                 overlap_text = prev_text
@@ -893,12 +932,14 @@ class SemanticChunker:
             new_text = overlap_text.strip() + " " + chunks[i].text
             new_token_count = self.count_tokens(new_text)
 
-            result.append(ChunkResult(
-                text=new_text,
-                heading_context=chunks[i].heading_context,
-                token_count=new_token_count,
-                chunk_index=0,
-            ))
+            result.append(
+                ChunkResult(
+                    text=new_text,
+                    heading_context=chunks[i].heading_context,
+                    token_count=new_token_count,
+                    chunk_index=0,
+                )
+            )
 
         return result
 
@@ -1014,22 +1055,26 @@ class SemanticChunker:
             nonlocal buffer_lines
             text = "\n".join(buffer_lines).strip()
             if text:
-                blocks.append(_TextBlock(
-                    text=text + "\n",
-                    heading_context=current_heading,
-                ))
+                blocks.append(
+                    _TextBlock(
+                        text=text + "\n",
+                        heading_context=current_heading,
+                    )
+                )
             buffer_lines = []
 
         def flush_table() -> None:
             nonlocal table_lines, table_headers, in_table
             text = "\n".join(table_lines).strip()
             if text:
-                blocks.append(_TextBlock(
-                    text=text + "\n",
-                    heading_context=current_heading,
-                    is_table=True,
-                    table_columns=table_headers if table_headers else None,
-                ))
+                blocks.append(
+                    _TextBlock(
+                        text=text + "\n",
+                        heading_context=current_heading,
+                        is_table=True,
+                        table_columns=table_headers if table_headers else None,
+                    )
+                )
             table_lines = []
             table_headers = []
             in_table = False
@@ -1038,13 +1083,13 @@ class SemanticChunker:
             stripped = line.strip()
 
             # Detect heading
-            if re.match(r'^#{1,6}\s+', stripped):
+            if re.match(r"^#{1,6}\s+", stripped):
                 # Flush any accumulated content
                 if in_table:
                     flush_table()
                 flush_buffer()
                 # Extract heading text
-                heading_match = re.match(r'^#{1,6}\s+(.*)', stripped)
+                heading_match = re.match(r"^#{1,6}\s+(.*)", stripped)
                 if heading_match:
                     current_heading = heading_match.group(1).strip()
                 buffer_lines.append(line)
@@ -1052,7 +1097,7 @@ class SemanticChunker:
 
             # Detect pipe table rows
             is_pipe_row = stripped.startswith("|") and stripped.endswith("|")
-            is_separator = bool(re.match(r'^\|[\s\-:|]+\|$', stripped))
+            is_separator = bool(re.match(r"^\|[\s\-:|]+\|$", stripped))
 
             if is_pipe_row:
                 if not in_table:
@@ -1081,9 +1126,7 @@ class SemanticChunker:
 
     # ---- Canvas Chunking ----
 
-    def _chunk_canvas(
-        self, content_json: dict[str, Any], title: str
-    ) -> list[ChunkResult]:
+    def _chunk_canvas(self, content_json: dict[str, Any], title: str) -> list[ChunkResult]:
         """Canvas document chunking pipeline.
 
         1. Detect containers with TipTap content — route through _chunk_tiptap
@@ -1153,12 +1196,14 @@ class SemanticChunker:
                 # Determine heading context from primary element
                 primary = cluster[0]
                 heading = self._canvas_heading_context(primary)
-                chunks.append(ChunkResult(
-                    text=chunk_text.strip(),
-                    heading_context=heading,
-                    token_count=token_count,
-                    chunk_index=0,
-                ))
+                chunks.append(
+                    ChunkResult(
+                        text=chunk_text.strip(),
+                        heading_context=heading,
+                        token_count=token_count,
+                        chunk_index=0,
+                    )
+                )
 
         for i, chunk in enumerate(chunks):
             chunk.chunk_index = i
@@ -1181,12 +1226,14 @@ class SemanticChunker:
             elem_id = elem.get("id", "")
 
             if elem_type == "connector":
-                connectors.append(_CanvasConnector(
-                    id=elem_id,
-                    source_id=elem.get("source", ""),
-                    target_id=elem.get("target", ""),
-                    label=elem.get("label", "") or "",
-                ))
+                connectors.append(
+                    _CanvasConnector(
+                        id=elem_id,
+                        source_id=elem.get("source", ""),
+                        target_id=elem.get("target", ""),
+                        label=elem.get("label", "") or "",
+                    )
+                )
                 continue
 
             # Skip elements with no text content
@@ -1196,16 +1243,18 @@ class SemanticChunker:
 
             position = elem.get("position", {})
             size = elem.get("size", {})
-            elements.append(_CanvasElement(
-                id=elem_id,
-                type=elem_type,
-                position_x=float(position.get("x", 0)),
-                position_y=float(position.get("y", 0)),
-                width=float(size.get("width", 0)),
-                height=float(size.get("height", 0)),
-                text=text.strip(),
-                color=elem.get("color"),
-            ))
+            elements.append(
+                _CanvasElement(
+                    id=elem_id,
+                    type=elem_type,
+                    position_x=float(position.get("x", 0)),
+                    position_y=float(position.get("y", 0)),
+                    width=float(size.get("width", 0)),
+                    height=float(size.get("height", 0)),
+                    text=text.strip(),
+                    color=elem.get("color"),
+                )
+            )
 
         return elements, connectors
 
@@ -1223,6 +1272,7 @@ class SemanticChunker:
 
         # Cap: skip O(n^2) clustering for very large canvases
         from .config_service import get_agent_config
+
         _MAX_CLUSTER_ELEMENTS = get_agent_config().get_int("embedding.max_cluster_elements", 500)
         if len(elements) > _MAX_CLUSTER_ELEMENTS:
             logger.info(
@@ -1310,10 +1360,7 @@ class SemanticChunker:
                     src_label = src.type.replace("_", " ").title()
                     tgt_label = tgt.type.replace("_", " ").title()
                     connector_label = conn.label or "connected to"
-                    parts.append(
-                        f"[{src_label}] {src.text} -> [{connector_label}] -> "
-                        f"[{tgt_label}] {tgt.text}"
-                    )
+                    parts.append(f"[{src_label}] {src.text} -> [{connector_label}] -> [{tgt_label}] {tgt.text}")
 
         return "\n".join(parts)
 
@@ -1357,20 +1404,21 @@ class SemanticChunker:
                 if current_elements:
                     text = self._build_cluster_text(current_elements, connectors)
                     heading = self._canvas_heading_context(current_elements[0])
-                    chunks.append(ChunkResult(
-                        text=text.strip(),
-                        heading_context=heading,
-                        token_count=self.count_tokens(text),
-                        chunk_index=0,
-                    ))
+                    chunks.append(
+                        ChunkResult(
+                            text=text.strip(),
+                            heading_context=heading,
+                            token_count=self.count_tokens(text),
+                            chunk_index=0,
+                        )
+                    )
                     current_elements = []
                     current_tokens = 0
 
                 heading = self._canvas_heading_context(elem)
                 sub_chunks = self._split_large_text(elem_text, heading)
                 logger.info(
-                    "Oversized canvas element sub-split: type=%s, "
-                    "tokens=%d, sub_chunks=%d",
+                    "Oversized canvas element sub-split: type=%s, tokens=%d, sub_chunks=%d",
                     elem.type,
                     elem_tokens,
                     len(sub_chunks),
@@ -1381,12 +1429,14 @@ class SemanticChunker:
             if current_tokens + elem_tokens > self._get_max_tokens() and current_elements:
                 text = self._build_cluster_text(current_elements, connectors)
                 heading = self._canvas_heading_context(current_elements[0])
-                chunks.append(ChunkResult(
-                    text=text.strip(),
-                    heading_context=heading,
-                    token_count=self.count_tokens(text),
-                    chunk_index=0,
-                ))
+                chunks.append(
+                    ChunkResult(
+                        text=text.strip(),
+                        heading_context=heading,
+                        token_count=self.count_tokens(text),
+                        chunk_index=0,
+                    )
+                )
                 current_elements = []
                 current_tokens = 0
 
@@ -1396,11 +1446,13 @@ class SemanticChunker:
         if current_elements:
             text = self._build_cluster_text(current_elements, connectors)
             heading = self._canvas_heading_context(current_elements[0])
-            chunks.append(ChunkResult(
-                text=text.strip(),
-                heading_context=heading,
-                token_count=self.count_tokens(text),
-                chunk_index=0,
-            ))
+            chunks.append(
+                ChunkResult(
+                    text=text.strip(),
+                    heading_context=heading,
+                    token_count=self.count_tokens(text),
+                    chunk_index=0,
+                )
+            )
 
         return chunks

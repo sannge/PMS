@@ -131,9 +131,7 @@ class OllamaProvider(LLMProvider, VisionProvider):
             if max_tokens is not None:
                 payload["options"]["num_predict"] = max_tokens
 
-            async with self._client.stream(
-                "POST", "/api/chat", json=payload
-            ) as response:
+            async with self._client.stream("POST", "/api/chat", json=payload) as response:
                 response.raise_for_status()
                 async for line in response.aiter_lines():
                     if not line:
@@ -199,8 +197,7 @@ class OllamaProvider(LLMProvider, VisionProvider):
             embeddings = data.get("embeddings", [])
             if len(embeddings) != len(texts):
                 raise LLMProviderError(
-                    f"Ollama returned {len(embeddings)} embeddings "
-                    f"for {len(texts)} inputs",
+                    f"Ollama returned {len(embeddings)} embeddings for {len(texts)} inputs",
                     provider="ollama",
                 )
             return embeddings

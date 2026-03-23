@@ -25,6 +25,7 @@ import {
 import { useAuthToken } from '@/contexts/auth-context'
 import { authGet, authPost, authPut, authDelete } from '@/lib/api-client'
 import { queryKeys } from '@/lib/query-client'
+import { useWebSocketStatus } from '@/hooks/use-websocket'
 
 // ============================================================================
 // Constants
@@ -150,8 +151,9 @@ function transformNotification(n: NotificationApiResponse): Notification {
  * Fetch notifications with infinite scroll pagination.
  * Loads 20 notifications per page, persisted to IndexedDB automatically.
  */
-export function useNotificationsInfinite(): UseInfiniteQueryResult<InfiniteData<NotificationPage>, Error> {
+export function useNotificationsInfinite(options?: { enabled?: boolean }): UseInfiniteQueryResult<InfiniteData<NotificationPage>, Error> {
   const token = useAuthToken()
+  const optionEnabled = options?.enabled ?? true
 
   return useInfiniteQuery({
     queryKey: queryKeys.notifications,
@@ -176,7 +178,7 @@ export function useNotificationsInfinite(): UseInfiniteQueryResult<InfiniteData<
     },
     initialPageParam: 0,
     getNextPageParam: (lastPage) => lastPage.nextCursor,
-    enabled: !!token,
+    enabled: !!token && optionEnabled,
     staleTime: 60 * 1000,
     gcTime: 24 * 60 * 60 * 1000,
     refetchOnWindowFocus: false, // WS real-time invalidation handles freshness
@@ -187,7 +189,7 @@ export function useNotificationsInfinite(): UseInfiniteQueryResult<InfiniteData<
  * Convenience hook that flattens infinite query pages into a single list.
  * Memoized to prevent unnecessary recomputation on every render.
  */
-export function useNotifications(): {
+export function useNotifications(options?: { enabled?: boolean }): {
   data: NotificationListResponse | undefined
   isLoading: boolean
   isError: boolean
@@ -197,7 +199,7 @@ export function useNotifications(): {
   hasNextPage: boolean
   isFetchingNextPage: boolean
 } {
-  const infiniteQuery = useNotificationsInfinite()
+  const infiniteQuery = useNotificationsInfinite(options)
 
   // Memoize the expensive data computation in a single pass (O(n) instead of O(2n))
   const data = useMemo((): NotificationListResponse | undefined => {
@@ -238,6 +240,7 @@ export function useNotifications(): {
  */
 export function useUnreadCount(): UseQueryResult<number, Error> {
   const token = useAuthToken()
+  const wsStatus = useWebSocketStatus()
 
   return useQuery({
     queryKey: queryKeys.unreadCount,
@@ -255,7 +258,8 @@ export function useUnreadCount(): UseQueryResult<number, Error> {
     enabled: !!token,
     staleTime: 30 * 1000, // 30 seconds
     gcTime: 24 * 60 * 60 * 1000,
-    refetchInterval: 30 * 1000, // Poll every 30 seconds
+    // Only poll when WebSocket is disconnected; WS pushes invalidation events
+    refetchInterval: wsStatus.isConnected ? false : 30 * 1000,
     refetchOnWindowFocus: false, // WS real-time invalidation handles freshness
   })
 }

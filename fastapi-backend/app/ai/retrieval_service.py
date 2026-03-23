@@ -134,8 +134,10 @@ class HybridRetrievalService:
         _rbac_rs = None
         _cache_key = f"rbac_scope:{user_id}"
         import json as _json
+
         try:
             from ..services.redis_service import redis_service as _rbac_rs
+
             if _rbac_rs.is_connected:
                 _raw = await _rbac_rs.get(_cache_key)
                 if _raw:
@@ -153,10 +155,12 @@ class HybridRetrievalService:
                 if _rbac_rs is not None and _rbac_rs.is_connected:
                     await _rbac_rs.set(
                         _cache_key,
-                        _json.dumps({
-                            "app_ids": [str(a) for a in app_ids],
-                            "project_ids": [str(p) for p in project_ids],
-                        }),
+                        _json.dumps(
+                            {
+                                "app_ids": [str(a) for a in app_ids],
+                                "project_ids": [str(p) for p in project_ids],
+                            }
+                        ),
                         ttl=30,
                     )
             except Exception:
@@ -184,23 +188,22 @@ class HybridRetrievalService:
         # Step 2: Run searches — semantic and fuzzy share the DB session so
         # they must run sequentially; keyword search uses Meilisearch (HTTP)
         # and can run in parallel with the DB searches.
-        keyword_task = asyncio.ensure_future(
-            self._keyword_search(query, scope_ids, limit=20)
-        )
+        keyword_task = asyncio.ensure_future(self._keyword_search(query, scope_ids, limit=20))
 
         # Run DB-backed searches sequentially to avoid concurrent access
         # on the same AsyncSession (not safe with asyncpg).
         try:
             semantic_results: list | Exception = await self._semantic_search(
-                query, scope_ids, limit=20, query_embedding=query_embedding,
+                query,
+                scope_ids,
+                limit=20,
+                query_embedding=query_embedding,
             )
         except Exception as exc:
             semantic_results = exc
 
         try:
-            fuzzy_results: list | Exception = await self._fuzzy_title_search(
-                query, scope_ids, limit=10
-            )
+            fuzzy_results: list | Exception = await self._fuzzy_title_search(query, scope_ids, limit=10)
         except Exception as exc:
             fuzzy_results = exc
 
@@ -264,9 +267,7 @@ class HybridRetrievalService:
             pass
         else:
             try:
-                provider, model_id = await self.provider_registry.get_embedding_provider(
-                    self.db
-                )
+                provider, model_id = await self.provider_registry.get_embedding_provider(self.db)
                 raw_embedding = await provider.generate_embedding(query, model_id)
                 query_embedding = self.normalizer.normalize(raw_embedding)
             except Exception as e:
@@ -284,18 +285,16 @@ class HybridRetrievalService:
         params: dict = {"query_embedding": embedding_str, "limit": limit}
 
         if app_ids:
-            scope_conditions.append('dc.application_id = ANY(:app_ids)')
+            scope_conditions.append("dc.application_id = ANY(:app_ids)")
             params["app_ids"] = [str(aid) for aid in app_ids]
 
         if project_ids:
-            scope_conditions.append('dc.project_id = ANY(:project_ids)')
+            scope_conditions.append("dc.project_id = ANY(:project_ids)")
             params["project_ids"] = [str(pid) for pid in project_ids]
 
         # Personal-scope: only match docs where application_id AND project_id
         # are NULL (truly personal docs), not all docs created by this user.
-        scope_conditions.append(
-            'dc.application_id IS NULL AND dc.project_id IS NULL AND dc.user_id = :user_id'
-        )
+        scope_conditions.append("dc.application_id IS NULL AND dc.project_id IS NULL AND dc.user_id = :user_id")
         params["user_id"] = str(user_id)
 
         scope_filter = " OR ".join(f"({c})" for c in scope_conditions)
@@ -341,21 +340,23 @@ class HybridRetrievalService:
         for rank_pos, row in enumerate(rows, 1):
             # Determine the effective ID for dedup
             effective_id = row.document_id or row.file_id
-            ranked.append(_RankedResult(
-                document_id=effective_id,
-                document_title=row.document_title or "",
-                chunk_text=row.chunk_text or "",
-                heading_context=row.heading_context,
-                chunk_index=row.chunk_index,
-                rank=rank_pos,
-                raw_score=float(row.similarity),
-                source="semantic",
-                application_id=row.application_id,
-                project_id=row.project_id,
-                chunk_type=row.chunk_type or "text",
-                source_type=row.source_type or "document",
-                file_id=row.file_id,
-            ))
+            ranked.append(
+                _RankedResult(
+                    document_id=effective_id,
+                    document_title=row.document_title or "",
+                    chunk_text=row.chunk_text or "",
+                    heading_context=row.heading_context,
+                    chunk_index=row.chunk_index,
+                    rank=rank_pos,
+                    raw_score=float(row.similarity),
+                    source="semantic",
+                    application_id=row.application_id,
+                    project_id=row.project_id,
+                    chunk_type=row.chunk_type or "text",
+                    source_type=row.source_type or "document",
+                    file_id=row.file_id,
+                )
+            )
 
         return ranked
 
@@ -427,20 +428,22 @@ class HybridRetrievalService:
                 source_type = "document"
                 file_id = None
 
-            ranked.append(_RankedResult(
-                document_id=real_id,
-                document_title=hit.get("title", ""),
-                chunk_text=hit.get("content_plain", "")[:500],
-                heading_context=None,
-                chunk_index=None,
-                rank=rank_pos,
-                raw_score=1.0 / rank_pos,  # Approximate relevance from rank
-                source="keyword",
-                application_id=UUID(hit["application_id"]) if hit.get("application_id") else None,
-                project_id=UUID(hit["project_id"]) if hit.get("project_id") else None,
-                source_type=source_type,
-                file_id=file_id,
-            ))
+            ranked.append(
+                _RankedResult(
+                    document_id=real_id,
+                    document_title=hit.get("title", ""),
+                    chunk_text=hit.get("content_plain", "")[:500],
+                    heading_context=None,
+                    chunk_index=None,
+                    rank=rank_pos,
+                    raw_score=1.0 / rank_pos,  # Approximate relevance from rank
+                    source="keyword",
+                    application_id=UUID(hit["application_id"]) if hit.get("application_id") else None,
+                    project_id=UUID(hit["project_id"]) if hit.get("project_id") else None,
+                    source_type=source_type,
+                    file_id=file_id,
+                )
+            )
 
         return ranked
 
@@ -483,17 +486,15 @@ class HybridRetrievalService:
         }
 
         if app_ids:
-            doc_scope_conditions.append('d.application_id = ANY(:app_ids)')
+            doc_scope_conditions.append("d.application_id = ANY(:app_ids)")
             params["app_ids"] = [str(aid) for aid in app_ids]
 
         if project_ids:
-            doc_scope_conditions.append('d.project_id = ANY(:project_ids)')
+            doc_scope_conditions.append("d.project_id = ANY(:project_ids)")
             params["project_ids"] = [str(pid) for pid in project_ids]
 
         # Personal-scope: only match docs with no app/project assignment
-        doc_scope_conditions.append(
-            'd.application_id IS NULL AND d.project_id IS NULL AND d.user_id = :user_id'
-        )
+        doc_scope_conditions.append("d.application_id IS NULL AND d.project_id IS NULL AND d.user_id = :user_id")
         params["user_id"] = str(user_id)
 
         doc_scope_filter = " OR ".join(f"({c})" for c in doc_scope_conditions)
@@ -501,12 +502,10 @@ class HybridRetrievalService:
         # Build scope conditions for FolderFiles (HIGH-14)
         file_scope_conditions: list[str] = []
         if app_ids:
-            file_scope_conditions.append('ff.application_id = ANY(:app_ids)')
+            file_scope_conditions.append("ff.application_id = ANY(:app_ids)")
         if project_ids:
-            file_scope_conditions.append('ff.project_id = ANY(:project_ids)')
-        file_scope_conditions.append(
-            'ff.application_id IS NULL AND ff.project_id IS NULL AND ff.user_id = :user_id'
-        )
+            file_scope_conditions.append("ff.project_id = ANY(:project_ids)")
+        file_scope_conditions.append("ff.application_id IS NULL AND ff.project_id IS NULL AND ff.user_id = :user_id")
         file_scope_filter = " OR ".join(f"({c})" for c in file_scope_conditions)
 
         # HIGH-14: UNION ALL Documents + FolderFiles for fuzzy search
@@ -553,20 +552,22 @@ class HybridRetrievalService:
 
         ranked: list[_RankedResult] = []
         for rank_pos, row in enumerate(rows, 1):
-            ranked.append(_RankedResult(
-                document_id=row.id,
-                document_title=row.title or "",
-                chunk_text=row.content_plain[:500] if row.content_plain else "",
-                heading_context=None,
-                chunk_index=None,
-                rank=rank_pos,
-                raw_score=float(row.sim),
-                source="fuzzy",
-                application_id=row.application_id,
-                project_id=row.project_id,
-                source_type=row.source_type or "document",
-                file_id=row.file_id,
-            ))
+            ranked.append(
+                _RankedResult(
+                    document_id=row.id,
+                    document_title=row.title or "",
+                    chunk_text=row.content_plain[:500] if row.content_plain else "",
+                    heading_context=None,
+                    chunk_index=None,
+                    rank=rank_pos,
+                    raw_score=float(row.sim),
+                    source="fuzzy",
+                    application_id=row.application_id,
+                    project_id=row.project_id,
+                    source_type=row.source_type or "document",
+                    file_id=row.file_id,
+                )
+            )
 
         return ranked
 
@@ -634,10 +635,9 @@ class HybridRetrievalService:
         # Per-document cap: keep only the top _MAX_CHUNKS_PER_DOC chunks
         # per (source_type, document_id) by RRF score.
         from collections import defaultdict
+
         _doc_counts: dict[tuple[str, UUID], int] = defaultdict(int)
-        _sorted_entries = sorted(
-            merged.values(), key=lambda e: e["rrf_score"], reverse=True
-        )
+        _sorted_entries = sorted(merged.values(), key=lambda e: e["rrf_score"], reverse=True)
         _capped_entries: list[dict] = []
         for entry in _sorted_entries:
             doc_key = (entry["source_type"], entry["document_id"])
@@ -649,24 +649,24 @@ class HybridRetrievalService:
         results: list[RetrievalResult] = []
         for entry in _capped_entries:
             source_str = "+".join(sorted(entry["sources"]))
-            snippet = self._generate_snippet(
-                entry["heading_context"], entry["chunk_text"]
+            snippet = self._generate_snippet(entry["heading_context"], entry["chunk_text"])
+            results.append(
+                RetrievalResult(
+                    document_id=entry["document_id"],
+                    document_title=entry["document_title"],
+                    chunk_text=entry["chunk_text"],
+                    heading_context=entry["heading_context"],
+                    score=entry["rrf_score"],
+                    source=source_str,
+                    application_id=entry["application_id"],
+                    project_id=entry["project_id"],
+                    snippet=snippet,
+                    chunk_type=entry.get("chunk_type", "text"),
+                    chunk_index=entry.get("chunk_index"),
+                    source_type=entry.get("source_type", "document"),
+                    file_id=entry.get("file_id"),
+                )
             )
-            results.append(RetrievalResult(
-                document_id=entry["document_id"],
-                document_title=entry["document_title"],
-                chunk_text=entry["chunk_text"],
-                heading_context=entry["heading_context"],
-                score=entry["rrf_score"],
-                source=source_str,
-                application_id=entry["application_id"],
-                project_id=entry["project_id"],
-                snippet=snippet,
-                chunk_type=entry.get("chunk_type", "text"),
-                chunk_index=entry.get("chunk_index"),
-                source_type=entry.get("source_type", "document"),
-                file_id=entry.get("file_id"),
-            ))
 
         return results
 

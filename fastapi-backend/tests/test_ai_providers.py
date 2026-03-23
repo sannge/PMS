@@ -26,8 +26,8 @@ from app.ai.provider_registry import ConfigurationError, ProviderRegistry
 # OpenAI Provider
 # ---------------------------------------------------------------------------
 
-class TestOpenAIProvider:
 
+class TestOpenAIProvider:
     @patch("app.ai.openai_provider.AsyncOpenAI")
     async def test_chat_completion_returns_string(self, mock_openai_cls):
         mock_client = AsyncMock()
@@ -219,8 +219,8 @@ class TestOpenAIProvider:
 # Anthropic Provider
 # ---------------------------------------------------------------------------
 
-class TestAnthropicProvider:
 
+class TestAnthropicProvider:
     @patch("app.ai.anthropic_provider.AsyncAnthropic")
     async def test_chat_completion_returns_string(self, mock_anthropic_cls):
         mock_client = AsyncMock()
@@ -385,8 +385,8 @@ class TestAnthropicProvider:
 # Ollama Provider
 # ---------------------------------------------------------------------------
 
-class TestOllamaProvider:
 
+class TestOllamaProvider:
     @patch("app.ai.ollama_provider.httpx.AsyncClient")
     async def test_chat_completion_returns_string(self, mock_client_cls):
         mock_client = AsyncMock()
@@ -476,9 +476,7 @@ class TestOllamaProvider:
         mock_client = AsyncMock()
         mock_client_cls.return_value = mock_client
 
-        mock_client.post = AsyncMock(
-            side_effect=httpx.HTTPError("connection refused")
-        )
+        mock_client.post = AsyncMock(side_effect=httpx.HTTPError("connection refused"))
 
         provider = OllamaProvider()
         with pytest.raises(LLMProviderError) as exc_info:
@@ -495,9 +493,7 @@ class TestOllamaProvider:
         mock_client = AsyncMock()
         mock_client_cls.return_value = mock_client
 
-        mock_client.post = AsyncMock(
-            side_effect=httpx.ConnectError("Connection refused")
-        )
+        mock_client.post = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
 
         provider = OllamaProvider()
         with pytest.raises(LLMProviderError, match="Ollama embedding failed"):
@@ -559,9 +555,7 @@ class TestOllamaProvider:
         mock_client_cls.return_value = mock_client
 
         mock_resp = MagicMock()
-        mock_resp.json.return_value = {
-            "embeddings": [[0.1, 0.2], [0.3, 0.4]]
-        }
+        mock_resp.json.return_value = {"embeddings": [[0.1, 0.2], [0.3, 0.4]]}
         mock_resp.raise_for_status = MagicMock()
         mock_client.post = AsyncMock(return_value=mock_resp)
 
@@ -625,8 +619,8 @@ class TestOllamaProvider:
 # API Key Encryption
 # ---------------------------------------------------------------------------
 
-class TestApiKeyEncryption:
 
+class TestApiKeyEncryption:
     def test_encryption_roundtrip(self):
         from cryptography.fernet import Fernet
 
@@ -713,8 +707,8 @@ class TestApiKeyEncryption:
 # Embedding Normalizer
 # ---------------------------------------------------------------------------
 
-class TestEmbeddingNormalizer:
 
+class TestEmbeddingNormalizer:
     def test_pads_short_vectors(self):
         # Use target=10 with 9 elements (10% gap — exactly at threshold, allowed)
         normalizer = EmbeddingNormalizer(target_dimensions=10)
@@ -773,6 +767,7 @@ class TestEmbeddingNormalizer:
 # Provider Registry
 # ---------------------------------------------------------------------------
 
+
 class TestProviderRegistry:
     """Test ProviderRegistry resolution logic using mock DB sessions.
 
@@ -783,8 +778,9 @@ class TestProviderRegistry:
         """Reset singleton state before each test."""
         ProviderRegistry._instance = None
 
-    def _make_provider(self, *, provider_type="openai", scope="global",
-                       user_id=None, is_enabled=True, api_key_encrypted="enc"):
+    def _make_provider(
+        self, *, provider_type="openai", scope="global", user_id=None, is_enabled=True, api_key_encrypted="enc"
+    ):
         p = MagicMock()
         p.id = uuid4()
         p.name = f"test-{provider_type}"
@@ -796,8 +792,7 @@ class TestProviderRegistry:
         p.base_url = None
         return p
 
-    def _make_model(self, provider, *, capability="chat", model_id="gpt-4o",
-                    is_default=True, is_enabled=True):
+    def _make_model(self, provider, *, capability="chat", model_id="gpt-4o", is_default=True, is_enabled=True):
         m = MagicMock()
         m.id = uuid4()
         m.provider_id = provider.id
@@ -889,9 +884,7 @@ class TestProviderRegistry:
         mock_enc_cls.return_value = mock_enc_instance
 
         global_provider = self._make_provider(scope="global")
-        embed_model = self._make_model(
-            global_provider, capability="embedding", model_id="text-embedding-3-small"
-        )
+        embed_model = self._make_model(global_provider, capability="embedding", model_id="text-embedding-3-small")
 
         mock_db = AsyncMock()
         mock_result = MagicMock()
@@ -916,9 +909,7 @@ class TestProviderRegistry:
 
         user_id = uuid4()
         user_provider = self._make_provider(scope="user", user_id=user_id)
-        vision_model = self._make_model(
-            user_provider, capability="vision", model_id="gpt-4o-vision"
-        )
+        vision_model = self._make_model(user_provider, capability="vision", model_id="gpt-4o-vision")
 
         mock_db = AsyncMock()
         mock_result = MagicMock()

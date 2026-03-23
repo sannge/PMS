@@ -34,7 +34,6 @@ from app.models import (
     DocumentTagAssignment,
     Invitation,
     Mention,
-
     Notification,
     Project,
     ProjectAssignment,

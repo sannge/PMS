@@ -33,9 +33,7 @@ from dataclasses import dataclass, field
 #   - tools_read.py: call push_sources(refs) inside tool functions.
 # ---------------------------------------------------------------------------
 
-_source_accumulator: ContextVar[list[dict] | None] = ContextVar(
-    "_source_accumulator", default=None
-)
+_source_accumulator: ContextVar[list[dict] | None] = ContextVar("_source_accumulator", default=None)
 
 
 def reset_source_accumulator() -> None:

@@ -135,7 +135,7 @@ class SharedTokenUser(HttpUser):
         """Create a new task."""
         if not SHARED_TOKEN:
             return
-        random_suffix = ''.join(random.choices(string.ascii_lowercase, k=8))
+        random_suffix = "".join(random.choices(string.ascii_lowercase, k=8))
         response = self.client.post(
             f"/api/projects/{self.project_id}/tasks",
             json={
@@ -191,7 +191,7 @@ class SharedTokenUser(HttpUser):
         task_id = random.choice(task_ids) if task_ids else None
         if not task_id:
             return
-        random_suffix = ''.join(random.choices(string.ascii_lowercase, k=8))
+        random_suffix = "".join(random.choices(string.ascii_lowercase, k=8))
         response = self.client.post(
             f"/api/tasks/{task_id}/comments",
             json={

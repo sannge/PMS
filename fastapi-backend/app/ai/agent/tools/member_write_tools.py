@@ -89,9 +89,7 @@ async def add_application_member(
         app_uuid = UUID(resolved_id)  # type: ignore[arg-type]
 
         # Load application
-        result = await db.execute(
-            select(Application).where(Application.id == app_uuid)
-        )
+        result = await db.execute(select(Application).where(Application.id == app_uuid))
         app_obj = result.scalar_one_or_none()
         if not app_obj:
             return f"Error: Application '{app}' not found."
@@ -115,21 +113,13 @@ async def add_application_member(
 
         # Check role hierarchy
         if role_lower not in _ASSIGNABLE_ROLES.get(actor_role, set()):
-            return (
-                f"Access denied: as an {actor_role}, you cannot add members "
-                f"with the '{role_lower}' role."
-            )
+            return f"Access denied: as an {actor_role}, you cannot add members with the '{role_lower}' role."
 
         # Look up target user by email
-        target_result = await db.execute(
-            select(User).where(User.email == email.strip().lower())
-        )
+        target_result = await db.execute(select(User).where(User.email == email.strip().lower()))
         target_user = target_result.scalar_one_or_none()
         if not target_user:
-            return (
-                f"No user found with email '{email}'. "
-                "Use the invitation system to invite external users."
-            )
+            return f"No user found with email '{email}'. Use the invitation system to invite external users."
 
         target_user_id = target_user.id
         target_display = target_user.display_name or target_user.email
@@ -249,9 +239,7 @@ async def update_application_member_role(
         app_uuid = UUID(resolved_id)  # type: ignore[arg-type]
 
         # Load application
-        result = await db.execute(
-            select(Application).where(Application.id == app_uuid)
-        )
+        result = await db.execute(select(Application).where(Application.id == app_uuid))
         app_obj = result.scalar_one_or_none()
         if not app_obj:
             return f"Error: Application '{app}' not found."
@@ -279,9 +267,7 @@ async def update_application_member_role(
         # Try UUID first
         try:
             target_uuid = UUID(user)
-            target_result = await db.execute(
-                select(User).where(User.id == target_uuid)
-            )
+            target_result = await db.execute(select(User).where(User.id == target_uuid))
             target_user_obj = target_result.scalar_one_or_none()
         except (ValueError, AttributeError):
             pass
@@ -290,12 +276,14 @@ async def update_application_member_role(
         if target_user_obj is None:
             escaped = _escape_ilike(user)
             target_result = await db.execute(
-                select(User).where(
+                select(User)
+                .where(
                     or_(
                         User.email.ilike(f"%{escaped}%", escape="\\"),
                         User.display_name.ilike(f"%{escaped}%", escape="\\"),
                     )
-                ).limit(10)
+                )
+                .limit(10)
             )
             matches = target_result.scalars().all()
             if len(matches) == 1:
@@ -303,9 +291,7 @@ async def update_application_member_role(
             elif len(matches) == 0:
                 return f"No user found matching '{user}'."
             else:
-                names = ", ".join(
-                    f"'{m.display_name or m.email}'" for m in matches[:5]
-                )
+                names = ", ".join(f"'{m.display_name or m.email}'" for m in matches[:5])
                 return f"Multiple users match '{user}': {names}. Please be more specific."
 
         if target_user_obj is None:
@@ -329,18 +315,13 @@ async def update_application_member_role(
 
         # Check if already in target role
         if current_role == role_lower:
-            return (
-                f"User '{target_display}' is already a {role_lower.capitalize()} "
-                f"in '{app_name}'. No change needed."
-            )
+            return f"User '{target_display}' is already a {role_lower.capitalize()} in '{app_name}'. No change needed."
 
         # Editor restrictions
         if actor_role == "editor":
             # Editors can only change viewer -> editor
             if not (current_role == "viewer" and role_lower == "editor"):
-                return (
-                    "Access denied: as an editor, you can only promote viewers to editors."
-                )
+                return "Access denied: as an editor, you can only promote viewers to editors."
 
         # Last owner protection
         if current_role == "owner" and role_lower != "owner":
@@ -467,9 +448,7 @@ async def remove_application_member(
         app_uuid = UUID(resolved_id)  # type: ignore[arg-type]
 
         # Load application
-        result = await db.execute(
-            select(Application).where(Application.id == app_uuid)
-        )
+        result = await db.execute(select(Application).where(Application.id == app_uuid))
         app_obj = result.scalar_one_or_none()
         if not app_obj:
             return f"Error: Application '{app}' not found."
@@ -495,9 +474,7 @@ async def remove_application_member(
         # Try UUID first
         try:
             target_uuid = UUID(user)
-            target_result = await db.execute(
-                select(User).where(User.id == target_uuid)
-            )
+            target_result = await db.execute(select(User).where(User.id == target_uuid))
             target_user_obj = target_result.scalar_one_or_none()
         except (ValueError, AttributeError):
             pass
@@ -506,12 +483,14 @@ async def remove_application_member(
         if target_user_obj is None:
             escaped = _escape_ilike(user)
             target_result = await db.execute(
-                select(User).where(
+                select(User)
+                .where(
                     or_(
                         User.email.ilike(f"%{escaped}%", escape="\\"),
                         User.display_name.ilike(f"%{escaped}%", escape="\\"),
                     )
-                ).limit(10)
+                )
+                .limit(10)
             )
             matches = target_result.scalars().all()
             if len(matches) == 1:
@@ -519,9 +498,7 @@ async def remove_application_member(
             elif len(matches) == 0:
                 return f"No user found matching '{user}'."
             else:
-                names = ", ".join(
-                    f"'{m.display_name or m.email}'" for m in matches[:5]
-                )
+                names = ", ".join(f"'{m.display_name or m.email}'" for m in matches[:5])
                 return f"Multiple users match '{user}': {names}. Please be more specific."
 
         if target_user_obj is None:
@@ -675,9 +652,7 @@ async def remove_application_member(
             await db.delete(target_member)
 
             # Cascade: remove ProjectMember records for the user in all app projects
-            project_ids_result = await db.execute(
-                select(Project.id).where(Project.application_id == app_uuid)
-            )
+            project_ids_result = await db.execute(select(Project.id).where(Project.application_id == app_uuid))
             project_ids = [row[0] for row in project_ids_result.all()]
 
             if project_ids:

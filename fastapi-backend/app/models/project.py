@@ -184,7 +184,7 @@ class Project(Base):
     application = relationship(
         "Application",
         back_populates="projects",
-        lazy="joined",
+        lazy="select",
     )
     creator = relationship(
         "User",
@@ -195,13 +195,13 @@ class Project(Base):
         "Task",
         back_populates="project",
         cascade="all, delete-orphan",
-        lazy="dynamic",
+        lazy="write_only",
     )
     assignments = relationship(
         "ProjectAssignment",
         back_populates="project",
         cascade="all, delete-orphan",
-        lazy="dynamic",
+        lazy="write_only",
     )
 
     # Project ownership
@@ -215,7 +215,7 @@ class Project(Base):
     derived_status = relationship(
         "TaskStatus",
         foreign_keys=[derived_status_id],
-        lazy="joined",
+        lazy="select",
     )
     override_status = relationship(
         "TaskStatus",
@@ -233,7 +233,7 @@ class Project(Base):
         "TaskStatus",
         back_populates="project",
         cascade="all, delete-orphan",
-        lazy="dynamic",
+        lazy="write_only",
         foreign_keys="[TaskStatus.project_id]",
     )
 
@@ -242,7 +242,7 @@ class Project(Base):
         "ProjectMember",
         back_populates="project",
         cascade="all, delete-orphan",
-        lazy="dynamic",
+        lazy="write_only",
     )
 
     # Status aggregation for derivation

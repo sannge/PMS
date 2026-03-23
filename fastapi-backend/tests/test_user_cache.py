@@ -486,9 +486,7 @@ class TestCacheSizeLimits:
 
     def test_user_cache_eviction_at_max_size(self):
         """Test user cache evicts when reaching max size."""
-        with patch(
-            "app.services.user_cache_service._get_max_size", return_value=10
-        ):
+        with patch("app.services.user_cache_service._get_max_size", return_value=10):
             for i in range(12):
                 user = MockUser(id=uuid4(), email=f"user{i}@example.com")
                 set_cached_user(user)
@@ -498,9 +496,7 @@ class TestCacheSizeLimits:
 
     def test_app_role_cache_eviction_at_max_size(self):
         """Test app role cache evicts when reaching max size."""
-        with patch(
-            "app.services.user_cache_service._get_max_size", return_value=10
-        ):
+        with patch("app.services.user_cache_service._get_max_size", return_value=10):
             for i in range(12):
                 set_cached_app_role(uuid4(), uuid4(), f"role{i}")
 
@@ -508,9 +504,7 @@ class TestCacheSizeLimits:
 
     def test_project_role_cache_eviction_at_max_size(self):
         """Test project role cache evicts when reaching max size."""
-        with patch(
-            "app.services.user_cache_service._get_max_size", return_value=10
-        ):
+        with patch("app.services.user_cache_service._get_max_size", return_value=10):
             for i in range(12):
                 set_cached_project_role(uuid4(), uuid4(), f"role{i}")
 
@@ -571,12 +565,8 @@ class TestPublishUserCacheInvalidation:
         mock_redis.is_connected = True
         mock_redis.publish = AsyncMock()
 
-        with patch(
-            "app.services.redis_service.redis_service", mock_redis
-        ):
-            await publish_user_cache_invalidation(
-                user_id="abc", app_id="def"
-            )
+        with patch("app.services.redis_service.redis_service", mock_redis):
+            await publish_user_cache_invalidation(user_id="abc", app_id="def")
 
         # Payload strips None values via dict comprehension in source
         mock_redis.publish.assert_awaited_once_with(
@@ -591,9 +581,7 @@ class TestPublishUserCacheInvalidation:
         mock_redis.is_connected = False
         mock_redis.publish = AsyncMock()
 
-        with patch(
-            "app.services.redis_service.redis_service", mock_redis
-        ):
+        with patch("app.services.redis_service.redis_service", mock_redis):
             await publish_user_cache_invalidation(user_id="abc")
 
         mock_redis.publish.assert_not_awaited()
@@ -605,9 +593,7 @@ class TestPublishUserCacheInvalidation:
         mock_redis.is_connected = True
         mock_redis.publish = AsyncMock(side_effect=ConnectionError("Redis down"))
 
-        with patch(
-            "app.services.redis_service.redis_service", mock_redis
-        ):
+        with patch("app.services.redis_service.redis_service", mock_redis):
             # Should NOT raise
             await publish_user_cache_invalidation(user_id="abc")
 
@@ -618,12 +604,8 @@ class TestPublishUserCacheInvalidation:
         mock_redis.is_connected = True
         mock_redis.publish = AsyncMock()
 
-        with patch(
-            "app.services.redis_service.redis_service", mock_redis
-        ):
-            await publish_user_cache_invalidation(
-                user_id="u1", project_id="p1"
-            )
+        with patch("app.services.redis_service.redis_service", mock_redis):
+            await publish_user_cache_invalidation(user_id="u1", project_id="p1")
 
         # Payload strips None values via dict comprehension in source
         mock_redis.publish.assert_awaited_once_with(
@@ -638,9 +620,7 @@ class TestPublishUserCacheInvalidation:
         mock_redis.is_connected = True
         mock_redis.publish = AsyncMock()
 
-        with patch(
-            "app.services.redis_service.redis_service", mock_redis
-        ):
+        with patch("app.services.redis_service.redis_service", mock_redis):
             await publish_user_cache_invalidation()
 
         # Payload strips None values via dict comprehension in source
@@ -668,9 +648,7 @@ class TestHandleUserCacheInvalidation:
         set_cached_app_role(uid, aid, "editor")
         set_cached_app_role(uid, other_aid, "viewer")
 
-        await _handle_user_cache_invalidation(
-            {"user_id": str(uid), "app_id": str(aid)}
-        )
+        await _handle_user_cache_invalidation({"user_id": str(uid), "app_id": str(aid)})
 
         assert get_cached_app_role(uid, aid) is None
         assert not has_cached_app_role(uid, aid)
@@ -687,9 +665,7 @@ class TestHandleUserCacheInvalidation:
         set_cached_project_role(uid, pid, "admin")
         set_cached_project_role(uid, other_pid, "viewer")
 
-        await _handle_user_cache_invalidation(
-            {"user_id": str(uid), "project_id": str(pid)}
-        )
+        await _handle_user_cache_invalidation({"user_id": str(uid), "project_id": str(pid)})
 
         assert get_cached_project_role(uid, pid) is None
         assert not has_cached_project_role(uid, pid)
@@ -778,9 +754,7 @@ class TestHandleUserCacheInvalidation:
         set_cached_app_role(uid, aid, "editor")
 
         # Should not raise, and should not modify anything
-        await _handle_user_cache_invalidation(
-            {"user_id": "not-a-valid-uuid", "app_id": str(aid)}
-        )
+        await _handle_user_cache_invalidation({"user_id": "not-a-valid-uuid", "app_id": str(aid)})
 
         # Existing entries should remain untouched
         assert get_cached_app_role(uid, aid) == "editor"
@@ -814,9 +788,7 @@ class TestHandleUserCacheInvalidation:
         set_cached_app_role(uid, aid, "editor")
         set_cached_project_role(uid, pid, "viewer")
 
-        await _handle_user_cache_invalidation(
-            {"user_id": str(uid), "app_id": str(aid), "project_id": str(pid)}
-        )
+        await _handle_user_cache_invalidation({"user_id": str(uid), "app_id": str(aid), "project_id": str(pid)})
 
         # App role should be invalidated (aid branch taken)
         assert get_cached_app_role(uid, aid) is None
@@ -831,9 +803,7 @@ class TestHandleUserCacheInvalidation:
         set_cached_app_role(uid, aid, "editor")
 
         # Should not raise
-        await _handle_user_cache_invalidation(
-            {"user_id": str(uid), "app_id": "bad-uuid"}
-        )
+        await _handle_user_cache_invalidation({"user_id": str(uid), "app_id": "bad-uuid"})
 
         # Existing entries should remain (bad UUID caught and passed)
         assert get_cached_app_role(uid, aid) == "editor"
@@ -896,9 +866,7 @@ class TestLRUPromotion:
 
     def test_get_promotes_entry_survives_eviction(self):
         """Reading an entry promotes it in LRU order, surviving eviction."""
-        with patch(
-            "app.services.user_cache_service._get_max_size", return_value=5
-        ):
+        with patch("app.services.user_cache_service._get_max_size", return_value=5):
             # Insert 5 entries (cache full)
             user_ids = []
             for i in range(5):
@@ -928,9 +896,7 @@ class TestLRUPromotion:
 
     def test_app_role_get_promotes_lru(self):
         """Reading an app role entry promotes it in LRU order."""
-        with patch(
-            "app.services.user_cache_service._get_max_size", return_value=5
-        ):
+        with patch("app.services.user_cache_service._get_max_size", return_value=5):
             keys = []
             for i in range(5):
                 uid, aid = uuid4(), uuid4()
@@ -976,9 +942,7 @@ class TestCrossWorkerInvalidationE2E:
         set_cached_project_role(uid, uuid4(), "viewer")
 
         # Simulate pub/sub message for specific uid+aid
-        await _handle_user_cache_invalidation(
-            {"user_id": str(uid), "app_id": str(aid_target)}
-        )
+        await _handle_user_cache_invalidation({"user_id": str(uid), "app_id": str(aid_target)})
 
         # Targeted entry is gone
         assert get_cached_app_role(uid, aid_target) is None
@@ -998,9 +962,7 @@ class TestCrossWorkerInvalidationE2E:
         set_cached_project_role(uid, pid_target, "editor")
         set_cached_project_role(uid, pid_other, "viewer")
 
-        await _handle_user_cache_invalidation(
-            {"user_id": str(uid), "project_id": str(pid_target)}
-        )
+        await _handle_user_cache_invalidation({"user_id": str(uid), "project_id": str(pid_target)})
 
         assert get_cached_project_role(uid, pid_target) is None
         assert get_cached_project_role(uid, pid_other) == "viewer"

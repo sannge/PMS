@@ -128,6 +128,8 @@ export function useChecklists(taskId: string | undefined): UseQueryResult<Checkl
     staleTime: 30 * 1000, // 30 seconds
     gcTime: CONTENT_GC_TIME, // 4 hours for content-heavy queries
     refetchOnWindowFocus: false, // WS real-time invalidation handles freshness
+    // refetchOnMount: default 'true' — serves from cache if fresh.
+    // App-level WS handler invalidates on CHECKLIST_*/CHECKLIST_ITEM_* events.
   })
 }
 

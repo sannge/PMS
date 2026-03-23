@@ -166,11 +166,7 @@ class TestDoclingService:
     async def test_convert_pdf_to_markdown(self) -> None:
         """Mock DocumentConverter, verify headings/paragraphs/lists in output."""
         expected_md = (
-            "# Quarterly Report\n\n"
-            "This is the introduction paragraph.\n\n"
-            "- Item one\n"
-            "- Item two\n"
-            "- Item three\n"
+            "# Quarterly Report\n\nThis is the introduction paragraph.\n\n- Item one\n- Item two\n- Item three\n"
         )
         mock_doc = _make_mock_document(markdown=expected_md)
         conv_result = _make_conv_result(document=mock_doc)
@@ -195,11 +191,7 @@ class TestDoclingService:
     async def test_convert_pdf_tables_to_markdown(self) -> None:
         """Verify tables rendered as Markdown pipe tables."""
         table_md = (
-            "# Report\n\n"
-            "| Name | Score | Grade |\n"
-            "|------|-------|-------|\n"
-            "| Alice | 95 | A |\n"
-            "| Bob | 87 | B |\n"
+            "# Report\n\n| Name | Score | Grade |\n|------|-------|-------|\n| Alice | 95 | A |\n| Bob | 87 | B |\n"
         )
         mock_doc = _make_mock_document(markdown=table_md)
         conv_result = _make_conv_result(document=mock_doc)
@@ -387,9 +379,7 @@ class TestDoclingService:
         service.converter = MagicMock()
 
         # Simulate Docling raising an exception with "password" in message
-        service.converter.convert.side_effect = Exception(
-            "Cannot open encrypted/password-protected PDF"
-        )
+        service.converter.convert.side_effect = Exception("Cannot open encrypted/password-protected PDF")
 
         with pytest.raises(ImportError, match="Password-protected PDF"):
             service._convert_sync.__wrapped__ if hasattr(service._convert_sync, "__wrapped__") else None

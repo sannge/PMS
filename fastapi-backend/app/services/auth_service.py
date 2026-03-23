@@ -32,10 +32,10 @@ from .email_service import (
 )
 from .user_cache_service import (
     CachedUser,
-    get_cached_user,
-    invalidate_user,
+    get_cached_user_with_l2,
+    invalidate_user_with_l2,
     publish_user_cache_invalidation,
-    set_cached_user,
+    set_cached_user_with_l2,
 )
 
 logger = logging.getLogger(__name__)
@@ -85,9 +85,7 @@ def create_access_token(
     if expires_delta:
         expire = utc_now() + expires_delta
     else:
-        expire = utc_now() + timedelta(
-            minutes=settings.jwt_access_expiration_minutes
-        )
+        expire = utc_now() + timedelta(minutes=settings.jwt_access_expiration_minutes)
 
     # Add unique token ID for blacklist support
     to_encode.update({"exp": expire, "jti": uuid4().hex})
@@ -156,11 +154,7 @@ def validate_refresh_token(token: str) -> Optional[TokenData]:
         if user_id is None:
             return None
         exp_timestamp = payload.get("exp")
-        exp_dt = (
-            datetime.fromtimestamp(exp_timestamp, tz=timezone.utc)
-            if exp_timestamp
-            else None
-        )
+        exp_dt = datetime.fromtimestamp(exp_timestamp, tz=timezone.utc) if exp_timestamp else None
         return TokenData(
             user_id=user_id,
             email=payload.get("email"),
@@ -195,9 +189,7 @@ async def rotate_refresh_token(
         await blacklist_token(token_data.jti, token_data.exp)
 
     # Issue new pair
-    new_access = create_access_token(
-        data={"sub": token_data.user_id, "email": token_data.email}
-    )
+    new_access = create_access_token(data={"sub": token_data.user_id, "email": token_data.email})
     new_refresh = create_refresh_token(token_data.user_id, token_data.email or "")
     return (new_access, new_refresh)
 
@@ -323,9 +315,7 @@ async def get_user_by_email(db: AsyncSession, email: str) -> Optional[User]:
     Returns:
         User object if found, None otherwise
     """
-    result = await db.execute(
-        select(User).where(func.lower(User.email) == func.lower(email))
-    )
+    result = await db.execute(select(User).where(func.lower(User.email) == func.lower(email)))
     return result.scalar_one_or_none()
 
 
@@ -405,9 +395,7 @@ async def create_user(db: AsyncSession, user_data: UserCreate) -> User:
 
     # Generate verification code
     code = generate_verification_code()
-    code_expires_at = utc_now() + timedelta(
-        minutes=settings.email_verification_code_expiry_minutes
-    )
+    code_expires_at = utc_now() + timedelta(minutes=settings.email_verification_code_expiry_minutes)
 
     # Create user instance
     db_user = User(
@@ -505,7 +493,7 @@ async def verify_email_code(db: AsyncSession, email: str, code: str) -> User:
     await db.commit()
     await db.refresh(user)
 
-    invalidate_user(user.id)
+    await invalidate_user_with_l2(user.id)
     fire_and_forget(
         publish_user_cache_invalidation(user_id=str(user.id)),
         name="verify-email-user-cache-invalidation",
@@ -539,9 +527,7 @@ async def resend_verification_code(db: AsyncSession, email: str) -> None:
         code_sent_at = user.verification_code_expires_at - timedelta(
             minutes=settings.email_verification_code_expiry_minutes
         )
-        cooldown_ends = code_sent_at + timedelta(
-            seconds=settings.email_verification_resend_cooldown_seconds
-        )
+        cooldown_ends = code_sent_at + timedelta(seconds=settings.email_verification_resend_cooldown_seconds)
         if utc_now() < cooldown_ends:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -551,9 +537,7 @@ async def resend_verification_code(db: AsyncSession, email: str) -> None:
     # Generate new code
     code = generate_verification_code()
     user.verification_code = _hash_code(code)
-    user.verification_code_expires_at = utc_now() + timedelta(
-        minutes=settings.email_verification_code_expiry_minutes
-    )
+    user.verification_code_expires_at = utc_now() + timedelta(minutes=settings.email_verification_code_expiry_minutes)
     user.verification_attempts = 0
     await db.commit()
 
@@ -585,18 +569,14 @@ async def request_password_reset(db: AsyncSession, email: str) -> None:
         code_sent_at = user.password_reset_code_expires_at - timedelta(
             minutes=settings.password_reset_code_expiry_minutes
         )
-        cooldown_ends = code_sent_at + timedelta(
-            seconds=settings.email_verification_resend_cooldown_seconds
-        )
+        cooldown_ends = code_sent_at + timedelta(seconds=settings.email_verification_resend_cooldown_seconds)
         if utc_now() < cooldown_ends:
             # Silently return (don't reveal timing info)
             return
 
     code = generate_verification_code()
     user.password_reset_code = _hash_code(code)
-    user.password_reset_code_expires_at = utc_now() + timedelta(
-        minutes=settings.password_reset_code_expiry_minutes
-    )
+    user.password_reset_code_expires_at = utc_now() + timedelta(minutes=settings.password_reset_code_expiry_minutes)
     user.reset_attempts = 0
     await db.commit()
 
@@ -616,9 +596,7 @@ async def generate_and_send_login_code(db: AsyncSession, user: User) -> None:
     """
     code = generate_verification_code()
     user.verification_code = _hash_code(code)
-    user.verification_code_expires_at = utc_now() + timedelta(
-        minutes=settings.email_verification_code_expiry_minutes
-    )
+    user.verification_code_expires_at = utc_now() + timedelta(minutes=settings.email_verification_code_expiry_minutes)
     user.verification_attempts = 0
     await db.commit()
 
@@ -688,9 +666,7 @@ async def verify_login_code(db: AsyncSession, email: str, code: str) -> User:
     return user
 
 
-async def reset_password(
-    db: AsyncSession, email: str, code: str, new_password: str
-) -> None:
+async def reset_password(db: AsyncSession, email: str, code: str, new_password: str) -> None:
     """
     Reset a user's password with the provided code.
 
@@ -753,7 +729,7 @@ async def reset_password(
     user.reset_attempts = 0
     await db.commit()
 
-    invalidate_user(user.id)
+    await invalidate_user_with_l2(user.id)
     fire_and_forget(
         publish_user_cache_invalidation(user_id=str(user.id)),
         name="password-reset-user-cache-invalidation",
@@ -836,8 +812,8 @@ async def get_current_user(
     except ValueError:
         raise credentials_exception
 
-    # Check cache first
-    cached = get_cached_user(user_id)
+    # Check L1 + L2 cache
+    cached = await get_cached_user_with_l2(user_id)
     if cached:
         return _user_from_cache(cached)
 
@@ -846,8 +822,8 @@ async def get_current_user(
     if user is None:
         raise credentials_exception
 
-    # Populate cache for future requests
-    set_cached_user(user)
+    # Populate L1 + L2 cache for future requests
+    await set_cached_user_with_l2(user)
 
     return user
 
@@ -902,5 +878,3 @@ async def validate_ws_connection_token(token: str) -> Optional[str]:
     except Exception:
         logger.warning("Failed to validate WS connection token", exc_info=True)
     return None
-
-

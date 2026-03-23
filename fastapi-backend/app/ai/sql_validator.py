@@ -56,19 +56,49 @@ _CURRENT_SETTING_PATTERN = re.compile(
 # Layer 4 — Function allowlist
 # ---------------------------------------------------------------------------
 
-ALLOWED_FUNCTIONS: frozenset[str] = frozenset({
-    "count", "sum", "avg", "min", "max",
-    "coalesce", "nullif",
-    "lower", "upper", "trim", "length", "substring", "replace", "concat",
-    "date_trunc", "extract", "now", "current_date", "current_timestamp",
-    "cast", "to_char", "to_date", "to_timestamp",
-    "row_number", "rank", "dense_rank",
-    "string_agg", "array_agg",
-    "exists", "case", "greatest", "least",
-    "bool_and", "bool_or",
-    "abs", "round", "ceil", "floor",
-    "current_setting",  # PostgreSQL GUC lookup (used for RBAC user context)
-})
+ALLOWED_FUNCTIONS: frozenset[str] = frozenset(
+    {
+        "count",
+        "sum",
+        "avg",
+        "min",
+        "max",
+        "coalesce",
+        "nullif",
+        "lower",
+        "upper",
+        "trim",
+        "length",
+        "substring",
+        "replace",
+        "concat",
+        "date_trunc",
+        "extract",
+        "now",
+        "current_date",
+        "current_timestamp",
+        "cast",
+        "to_char",
+        "to_date",
+        "to_timestamp",
+        "row_number",
+        "rank",
+        "dense_rank",
+        "string_agg",
+        "array_agg",
+        "exists",
+        "case",
+        "greatest",
+        "least",
+        "bool_and",
+        "bool_or",
+        "abs",
+        "round",
+        "ceil",
+        "floor",
+        "current_setting",  # PostgreSQL GUC lookup (used for RBAC user context)
+    }
+)
 
 
 @dataclass
@@ -104,10 +134,7 @@ def _check_regex_blocklist(sql: str) -> str | None:
     for m in _CURRENT_SETTING_PATTERN.finditer(sql):
         param = m.group(1)
         if param != "app.current_user_id":
-            return (
-                f"Invalid current_setting parameter '{param}'. "
-                f"Only 'app.current_user_id' is available."
-            )
+            return f"Invalid current_setting parameter '{param}'. Only 'app.current_user_id' is available."
 
     return None
 
@@ -169,49 +196,147 @@ def _extract_function_names(parsed: exp.Expression) -> set[str]:
 
 # Functions that sqlglot parses into specific AST nodes rather than
 # exp.Anonymous. These are safe built-in SQL constructs we always allow.
-_SQLGLOT_BUILTIN_KEYS: frozenset[str] = frozenset({
-    # Aggregate functions
-    "count", "sum", "avg", "min", "max",
-    "arrayagg", "array_agg",
-    # String functions
-    "lower", "upper", "trim", "length", "substring", "replace", "concat",
-    "initcap", "left", "right", "lpad", "rpad",
-    # Conditional
-    "coalesce", "nullif", "if", "case", "greatest", "least",
-    # Type casting
-    "cast", "tryCast", "trycast",
-    # Date/time
-    "extract", "datetrunc", "date_trunc", "currentdate", "current_date",
-    "currenttimestamp", "current_timestamp",
-    "tochar", "to_char", "todate", "to_date", "totimestamp", "to_timestamp",
-    # Window functions
-    "rownumber", "row_number", "rank", "denserank", "dense_rank",
-    # Aggregation
-    "stringagg", "string_agg",
-    "booland", "bool_and", "boolor", "bool_or",
-    # Math
-    "abs", "round", "ceil", "floor",
-    # Postgres-specific
-    "now", "currentsetting", "current_setting",
-    # Subquery predicates
-    "exists", "in", "any", "all",
-    # Other structural nodes sqlglot maps
-    "between", "like", "ilike", "is", "not",
-    "and", "or",
-    "alias", "column", "star", "literal", "ordered", "subquery",
-    "select", "from", "where", "group", "having", "order", "limit",
-    "join", "on", "union", "except", "intersect", "with", "cte",
-    "window", "windowspec", "over", "partition",
-    "distinct", "parameter", "placeholder",
-    "table", "schema", "database",
-    "eq", "neq", "gt", "gte", "lt", "lte",
-    "add", "sub", "mul", "div", "mod",
-    "neg", "bitwiseand", "bitwiseor", "bitwisexor",
-    "paren", "tuple",
-    "null", "boolean", "true", "false",
-    "asc", "desc",
-    "dp", "ts", "interval",
-})
+_SQLGLOT_BUILTIN_KEYS: frozenset[str] = frozenset(
+    {
+        # Aggregate functions
+        "count",
+        "sum",
+        "avg",
+        "min",
+        "max",
+        "arrayagg",
+        "array_agg",
+        # String functions
+        "lower",
+        "upper",
+        "trim",
+        "length",
+        "substring",
+        "replace",
+        "concat",
+        "initcap",
+        "left",
+        "right",
+        "lpad",
+        "rpad",
+        # Conditional
+        "coalesce",
+        "nullif",
+        "if",
+        "case",
+        "greatest",
+        "least",
+        # Type casting
+        "cast",
+        "tryCast",
+        "trycast",
+        # Date/time
+        "extract",
+        "datetrunc",
+        "date_trunc",
+        "currentdate",
+        "current_date",
+        "currenttimestamp",
+        "current_timestamp",
+        "tochar",
+        "to_char",
+        "todate",
+        "to_date",
+        "totimestamp",
+        "to_timestamp",
+        # Window functions
+        "rownumber",
+        "row_number",
+        "rank",
+        "denserank",
+        "dense_rank",
+        # Aggregation
+        "stringagg",
+        "string_agg",
+        "booland",
+        "bool_and",
+        "boolor",
+        "bool_or",
+        # Math
+        "abs",
+        "round",
+        "ceil",
+        "floor",
+        # Postgres-specific
+        "now",
+        "currentsetting",
+        "current_setting",
+        # Subquery predicates
+        "exists",
+        "in",
+        "any",
+        "all",
+        # Other structural nodes sqlglot maps
+        "between",
+        "like",
+        "ilike",
+        "is",
+        "not",
+        "and",
+        "or",
+        "alias",
+        "column",
+        "star",
+        "literal",
+        "ordered",
+        "subquery",
+        "select",
+        "from",
+        "where",
+        "group",
+        "having",
+        "order",
+        "limit",
+        "join",
+        "on",
+        "union",
+        "except",
+        "intersect",
+        "with",
+        "cte",
+        "window",
+        "windowspec",
+        "over",
+        "partition",
+        "distinct",
+        "parameter",
+        "placeholder",
+        "table",
+        "schema",
+        "database",
+        "eq",
+        "neq",
+        "gt",
+        "gte",
+        "lt",
+        "lte",
+        "add",
+        "sub",
+        "mul",
+        "div",
+        "mod",
+        "neg",
+        "bitwiseand",
+        "bitwiseor",
+        "bitwisexor",
+        "paren",
+        "tuple",
+        "null",
+        "boolean",
+        "true",
+        "false",
+        "asc",
+        "desc",
+        "dp",
+        "ts",
+        "interval",
+    }
+)
 
 
 def _check_function_allowlist(parsed: exp.Expression) -> str | None:

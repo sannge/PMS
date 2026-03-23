@@ -49,9 +49,7 @@ class TestValidateToken:
         mock_client.messages.create = AsyncMock(return_value=MagicMock())
 
         with patch("anthropic.AsyncAnthropic", return_value=mock_client):
-            success, message, latency, token_mode = await _validate_token(
-                "anthropic", "oauth-long-lived-token-1234"
-            )
+            success, message, latency, token_mode = await _validate_token("anthropic", "oauth-long-lived-token-1234")
 
         assert success is True
         assert "validated" in message.lower() or "success" in message.lower()
@@ -76,9 +74,7 @@ class TestValidateToken:
         mock_client.messages.create = AsyncMock(side_effect=side_effect)
 
         with patch("anthropic.AsyncAnthropic", return_value=mock_client):
-            success, message, latency, token_mode = await _validate_token(
-                "anthropic", "sk-ant-test-valid-key-1234"
-            )
+            success, message, latency, token_mode = await _validate_token("anthropic", "sk-ant-test-valid-key-1234")
 
         assert success is True
         assert token_mode == "apikey"
@@ -167,9 +163,7 @@ class TestValidateToken:
     async def test_generic_error(self):
         """Generic Exception returns (False, 'Validation failed: ...', latency)."""
         mock_client = AsyncMock()
-        mock_client.models.list = AsyncMock(
-            side_effect=RuntimeError("Connection reset by peer")
-        )
+        mock_client.models.list = AsyncMock(side_effect=RuntimeError("Connection reset by peer"))
 
         with patch("openai.AsyncOpenAI", return_value=mock_client):
             success, message, latency, token_mode = await _validate_token("openai", "sk-test-generic-err")
@@ -182,9 +176,7 @@ class TestValidateToken:
     async def test_timeout(self):
         """asyncio.TimeoutError is caught and returns a friendly message."""
         mock_client = AsyncMock()
-        mock_client.models.list = AsyncMock(
-            side_effect=asyncio.TimeoutError()
-        )
+        mock_client.models.list = AsyncMock(side_effect=asyncio.TimeoutError())
 
         with patch("openai.AsyncOpenAI", return_value=mock_client):
             success, message, latency, token_mode = await _validate_token("openai", "sk-test-timeout-key")
@@ -219,13 +211,12 @@ class TestProviderRegistrySessionToken:
         provider = self._make_provider(provider_type="openai")
         registry = ProviderRegistry()
 
-        with patch(
-            "app.ai.provider_registry.ApiKeyEncryption"
-        ) as MockEnc:
+        with patch("app.ai.provider_registry.ApiKeyEncryption") as MockEnc:
             MockEnc.return_value.decrypt.return_value = "decrypted-access-token"
             adapter = registry._build_adapter(provider, api_key=None)
 
         from app.ai.codex_provider import CodexProvider
+
         assert isinstance(adapter, CodexProvider)
 
     def test_session_token_anthropic_returns_anthropic(self):
@@ -233,13 +224,12 @@ class TestProviderRegistrySessionToken:
         provider = self._make_provider(provider_type="anthropic")
         registry = ProviderRegistry()
 
-        with patch(
-            "app.ai.provider_registry.ApiKeyEncryption"
-        ) as MockEnc:
+        with patch("app.ai.provider_registry.ApiKeyEncryption") as MockEnc:
             MockEnc.return_value.decrypt.return_value = "decrypted-access-token"
             adapter = registry._build_adapter(provider, api_key=None)
 
         from app.ai.anthropic_provider import AnthropicProvider
+
         assert isinstance(adapter, AnthropicProvider)
 
     def test_session_token_anthropic_bearer_mode(self):
@@ -250,13 +240,12 @@ class TestProviderRegistrySessionToken:
         )
         registry = ProviderRegistry()
 
-        with patch(
-            "app.ai.provider_registry.ApiKeyEncryption"
-        ) as MockEnc:
+        with patch("app.ai.provider_registry.ApiKeyEncryption") as MockEnc:
             MockEnc.return_value.decrypt.return_value = "decrypted-bearer-token"
             adapter = registry._build_adapter(provider, api_key=None)
 
         from app.ai.anthropic_provider import AnthropicProvider
+
         assert isinstance(adapter, AnthropicProvider)
 
     def test_session_token_no_access_token_raises(self):
@@ -278,9 +267,7 @@ class TestProviderRegistrySessionToken:
         )
         registry = ProviderRegistry()
 
-        with patch(
-            "app.ai.provider_registry.ApiKeyEncryption"
-        ) as MockEnc:
+        with patch("app.ai.provider_registry.ApiKeyEncryption") as MockEnc:
             MockEnc.return_value.decrypt.return_value = "decrypted-access-token"
             with pytest.raises(ConfigurationError, match="not supported"):
                 registry._build_adapter(provider, api_key=None)
@@ -290,9 +277,7 @@ class TestProviderRegistrySessionToken:
         provider = self._make_provider(provider_type="openai")
         registry = ProviderRegistry()
 
-        with patch(
-            "app.ai.provider_registry.ApiKeyEncryption"
-        ) as MockEnc:
+        with patch("app.ai.provider_registry.ApiKeyEncryption") as MockEnc:
             MockEnc.return_value.decrypt.side_effect = Exception("InvalidToken")
             with pytest.raises(ConfigurationError, match="corrupt"):
                 registry._build_adapter(provider, api_key=None)

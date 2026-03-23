@@ -24,13 +24,9 @@ class FolderFileResponse(BaseModel):
     file_size: int
     file_extension: str
     has_thumbnail: bool = False
-    extraction_status: Literal[
-        "pending", "processing", "completed", "failed", "unsupported"
-    ] = "pending"
+    extraction_status: Literal["pending", "processing", "completed", "failed", "unsupported"] = "pending"
     extracted_metadata: dict[str, Any] = Field(default_factory=dict)
-    embedding_status: Literal[
-        "none", "stale", "syncing", "synced", "failed"
-    ] = "none"
+    embedding_status: Literal["none", "stale", "syncing", "synced", "failed"] = "none"
     embedding_updated_at: Optional[datetime] = None
     sort_order: int = 0
     created_by: Optional[UUID] = None
@@ -74,12 +70,8 @@ class FolderFileListItem(BaseModel):
     file_extension: str
     mime_type: str
     file_size: int
-    extraction_status: Literal[
-        "pending", "processing", "completed", "failed", "unsupported"
-    ] = "pending"
-    embedding_status: Literal[
-        "none", "stale", "syncing", "synced", "failed"
-    ] = "none"
+    extraction_status: Literal["pending", "processing", "completed", "failed", "unsupported"] = "pending"
+    embedding_status: Literal["none", "stale", "syncing", "synced", "failed"] = "none"
     sort_order: int = 0
     folder_id: Optional[UUID] = None
     created_by: Optional[UUID] = None
@@ -149,7 +141,5 @@ class FolderFileReplaceResponse(BaseModel):
 
     id: UUID
     display_name: str
-    extraction_status: Literal[
-        "pending", "processing", "completed", "failed", "unsupported"
-    ] = "pending"
+    extraction_status: Literal["pending", "processing", "completed", "failed", "unsupported"] = "pending"
     message: str = "File replaced successfully"

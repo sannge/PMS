@@ -16,6 +16,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 
+from ..graph_context import bound_model_var, chat_model_var, system_prompt_var
 from ..state import AgentState
 
 logger = logging.getLogger(__name__)
@@ -24,9 +25,9 @@ logger = logging.getLogger(__name__)
 async def respond_node(
     state: AgentState,
     *,
-    bound_model_cache: list[Any],
-    chat_model_cache: list[Any],
-    system_prompt_cache: list[str],
+    bound_model_cache: list[Any] | None = None,
+    chat_model_cache: list[Any] | None = None,
+    system_prompt_cache: list[str] | None = None,
 ) -> dict:
     """Deliver the final response.
 
@@ -37,13 +38,25 @@ async def respond_node(
     Args:
         state: Current pipeline state.
         bound_model_cache: Mutable list containing the tool-bound model.
-        chat_model_cache: Mutable list containing the raw model.
+            Falls back to ``bound_model_var`` ContextVar when ``None``.
+        chat_model_cache: Mutable list containing the raw model.  Falls
+            back to ``chat_model_var`` ContextVar when ``None``.
         system_prompt_cache: Mutable list containing the system prompt.
+            Falls back to ``system_prompt_var`` ContextVar when ``None``.
 
     Returns:
         State update with current_phase set to "respond". May include
         an LLM response for fast-path requests.
     """
+    bound_model_cache = bound_model_cache or bound_model_var.get()
+    if bound_model_cache is None:
+        bound_model_cache = []
+    chat_model_cache = chat_model_cache or chat_model_var.get()
+    if chat_model_cache is None:
+        chat_model_cache = []
+    system_prompt_cache = system_prompt_cache or system_prompt_var.get()
+    if system_prompt_cache is None:
+        system_prompt_cache = []
     # Deferred import to avoid circular dependency: graph.py -> nodes -> graph.py
     from ..graph import _sanitize_orphaned_tool_calls, _strip_completed_tool_messages
 

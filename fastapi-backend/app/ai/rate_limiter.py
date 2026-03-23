@@ -1,9 +1,20 @@
 """Redis-based rate limiting for AI endpoints.
 
-Uses a sliding window counter pattern backed by Redis sorted sets.
-Each request is stored as a member (timestamp) in a sorted set keyed by
-``ratelimit:{endpoint}:{scope_id}:{window}``. Expired entries are pruned
-on each check, giving accurate per-window counts.
+Uses a sliding window counter pattern backed by Redis INCR counters.
+Each fixed time window gets its own counter key. The effective request count
+is estimated by blending the current and previous window counts:
+
+    effective = current_count + previous_count * (1 - elapsed_fraction)
+
+This gives sliding-window precision while using O(1) Redis operations
+(GET + INCR + EXPIRE) instead of the O(log N) sorted-set approach.
+
+Key format:
+    ``ratelimit:{endpoint}:{scope_id}:{window}:{window_number}``
+
+Each endpoint+scope uses at most 2 Redis keys (current window + previous
+window), regardless of request volume. At 5,000 users this means ~10,000
+keys total -- compared to 150,000 sorted-set members under the old scheme.
 
 A Lua script executes the check-and-increment atomically in Redis, avoiding
 TOCTOU race conditions that could occur with pipelined commands.
@@ -18,8 +29,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
-import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -36,51 +47,84 @@ logger = logging.getLogger(__name__)
 # Redis Lua scripts (executed atomically on the server)
 # ---------------------------------------------------------------------------
 
-# Check-and-increment: prune expired, check limit, add only if under limit.
-# Returns new count on success, -1 if rate limit exceeded.
+# Sliding window counter: check limit, increment current window if under limit.
+# Uses 2 keys: KEYS[1] = current window counter, KEYS[2] = previous window counter.
+# Returns effective count on success, -1 if rate limit exceeded.
 _CHECK_AND_INCREMENT_SCRIPT = """
-local key = KEYS[1]
-local now = tonumber(ARGV[1])
-local window = tonumber(ARGV[2])
-local limit = tonumber(ARGV[3])
-local member = ARGV[4]
-local ttl = tonumber(ARGV[5])
+local curr_key = KEYS[1]
+local prev_key = KEYS[2]
+local window = tonumber(ARGV[1])
+local limit = tonumber(ARGV[2])
+local now = tonumber(ARGV[3])
 
-redis.call('ZREMRANGEBYSCORE', key, '-inf', now - window)
-local count = redis.call('ZCARD', key)
-if count >= limit then
-    redis.call('EXPIRE', key, ttl)
-    return -1
+-- Calculate window boundaries
+local curr_window = math.floor(now / window)
+local curr_start = curr_window * window
+local elapsed = now - curr_start
+local weight = 1 - (elapsed / window)
+
+-- Get counts
+local curr_count = tonumber(redis.call('GET', curr_key) or '0')
+local prev_count = tonumber(redis.call('GET', prev_key) or '0')
+
+-- Sliding estimate (use math.floor for consistent integer comparison)
+local estimate = curr_count + math.floor(prev_count * weight)
+
+if estimate >= limit then
+    return -1  -- Rate limited
 end
-redis.call('ZADD', key, now, member)
-redis.call('EXPIRE', key, ttl)
-return count + 1
+
+-- Increment current window
+local new_count = redis.call('INCR', curr_key)
+-- Set TTL to 2 windows (current + buffer for next window's prev lookup)
+redis.call('EXPIRE', curr_key, window * 2)
+-- Ensure prev_key also has a TTL so stale keys don't persist indefinitely
+redis.call('EXPIRE', prev_key, window * 2)
+
+return new_count + math.floor(prev_count * weight)
 """
 
-# Increment-only: prune expired, add member, return count.
+# Sliding window counter: increment current window unconditionally, return count.
+# Uses 2 keys: KEYS[1] = current window counter, KEYS[2] = previous window counter.
 _INCREMENT_SCRIPT = """
-local key = KEYS[1]
-local now = tonumber(ARGV[1])
-local window = tonumber(ARGV[2])
-local member = ARGV[3]
-local ttl = tonumber(ARGV[4])
+local curr_key = KEYS[1]
+local prev_key = KEYS[2]
+local window = tonumber(ARGV[1])
+local now = tonumber(ARGV[2])
 
-redis.call('ZREMRANGEBYSCORE', key, '-inf', now - window)
-redis.call('ZADD', key, now, member)
-redis.call('EXPIRE', key, ttl)
-return redis.call('ZCARD', key)
+local curr_window = math.floor(now / window)
+local curr_start = curr_window * window
+local elapsed = now - curr_start
+local weight = 1 - (elapsed / window)
+
+local prev_count = tonumber(redis.call('GET', prev_key) or '0')
+
+-- Increment current window
+local new_count = redis.call('INCR', curr_key)
+redis.call('EXPIRE', curr_key, window * 2)
+-- Ensure prev_key also has a TTL so stale keys don't persist indefinitely
+redis.call('EXPIRE', prev_key, window * 2)
+
+return new_count + math.floor(prev_count * weight)
 """
 
-# Check-only: prune expired, return current count.
+# Check-only: read current + previous window counts, return sliding estimate.
+# Uses 2 keys: KEYS[1] = current window counter, KEYS[2] = previous window counter.
 _CHECK_SCRIPT = """
-local key = KEYS[1]
-local now = tonumber(ARGV[1])
-local window = tonumber(ARGV[2])
-local ttl = tonumber(ARGV[3])
+local curr_key = KEYS[1]
+local prev_key = KEYS[2]
+local window = tonumber(ARGV[1])
+local now = tonumber(ARGV[2])
 
-redis.call('ZREMRANGEBYSCORE', key, '-inf', now - window)
-redis.call('EXPIRE', key, ttl)
-return redis.call('ZCARD', key)
+local curr_window = math.floor(now / window)
+local curr_start = curr_window * window
+local elapsed = now - curr_start
+local weight = 1 - (elapsed / window)
+
+local curr_count = tonumber(redis.call('GET', curr_key) or '0')
+local prev_count = tonumber(redis.call('GET', prev_key) or '0')
+
+return curr_count + math.floor(prev_count * weight)
 """
 
 
@@ -122,8 +166,8 @@ def _get_key_lock(key: str) -> asyncio.Lock:
     return _inmemory_locks[key]
 
 
-# { key: [(timestamp, ...)] }  -- list of request timestamps within window
-_inmemory_counters: dict[str, list[float]] = {}
+# { key: count }  -- per-window counter (key includes window number)
+_inmemory_counters: dict[str, int] = {}
 # HIGH-3 fix: use same limit as Redis (1x) -- previously 2x which multiplied
 # by worker count, allowing far more requests than intended during outages.
 _INMEMORY_LIMIT_MULTIPLIER = 1
@@ -160,13 +204,13 @@ RATE_LIMITS: dict[str, tuple[int, int]] = {
     "ai_test": (10, 60),
     "session_crud": (120, 60),
     "session_summarize": (5, 60),
-    "web_search": (20, 60),    # 20 searches per 60s per user
-    "web_scrape": (10, 60),    # 10 scrapes per 60s per user
+    "web_search": (20, 60),  # 20 searches per 60s per user
+    "web_scrape": (10, 60),  # 10 scrapes per 60s per user
     "auth_login": (10, 60),
     "auth_register": (5, 60),
     "auth_verify": (10, 60),
     "auth_reset": (5, 60),
-    "file_upload": (20, 60),    # 20 uploads per 60s per user
+    "file_upload": (20, 60),  # 20 uploads per 60s per user
 }
 
 
@@ -204,9 +248,7 @@ def _load_rate_limits() -> dict[str, tuple[int, int]]:
                 limits[key] = (int(parts[0].strip()), int(parts[1].strip()))
                 continue
             except (IndexError, ValueError):
-                logger.warning(
-                    "Invalid rate limit env var %s=%s, using default", env_key, env_val
-                )
+                logger.warning("Invalid rate limit env var %s=%s, using default", env_key, env_val)
 
         # Priority 2: DB config (AgentConfigurations table)
         config_key = f"rate_limit.{key}"
@@ -245,40 +287,49 @@ class AIRateLimiter:
             self._check = None
 
     @staticmethod
-    async def _inmemory_count_and_add(
-        key: str, window_seconds: int, *, add: bool = False
-    ) -> int:
-        """Return current count in window using in-memory fallback.
+    async def _inmemory_count_and_add(key: str, window_seconds: int, *, add: bool = False) -> int:
+        """Return sliding window estimate using in-memory fallback counters.
 
-        If *add* is True, also records a new request timestamp.
-        Prunes expired entries on each call.  If the dict grows beyond
-        ``_INMEMORY_MAX_KEYS``, evicts expired entries first, then the
-        oldest 25% of remaining keys.
+        Uses the same two-window counter approach as the Redis Lua scripts:
+        the key is split into ``{key}:{window_number}`` counters, and the
+        effective count blends the current and previous windows.
+
+        If *add* is True, increments the current window counter.
 
         Uses a per-key lock so concurrent requests to different keys
         do not serialize behind a single global lock.
         """
         now = time.time()
-        cutoff = now - window_seconds
+        curr_window = int(now // window_seconds)
+        curr_start = curr_window * window_seconds
+        elapsed = now - curr_start
+        weight = 1 - (elapsed / window_seconds)
+
+        curr_key = f"{key}:{curr_window}"
+        prev_key = f"{key}:{curr_window - 1}"
 
         async with _get_key_lock(key):
             # Safety valve: prevent unbounded memory growth
             if len(_inmemory_counters) > _INMEMORY_MAX_KEYS:
-                # BE-P9: Evict expired entries first, then oldest 25%
-                expired_keys = [
-                    k for k, ts_list in _inmemory_counters.items()
-                    if not any(ts > cutoff for ts in ts_list)
-                ]
-                for k in expired_keys:
+                # Evict keys from old windows (window number < curr_window - 1)
+                stale_keys = []
+                for k in _inmemory_counters:
+                    try:
+                        parts = k.rsplit(":", 1)
+                        if len(parts) == 2 and parts[1].lstrip("-").isdigit():
+                            win_num = int(parts[1])
+                            # Key is from 2+ windows ago -- safe to evict
+                            if win_num < curr_window - 1:
+                                stale_keys.append(k)
+                    except (ValueError, IndexError):
+                        stale_keys.append(k)
+                for k in stale_keys:
                     del _inmemory_counters[k]
 
                 # If still over limit, evict oldest 25%
                 if len(_inmemory_counters) > _INMEMORY_MAX_KEYS:
                     evict_count = max(1, len(_inmemory_counters) // 4)
-                    sorted_keys = sorted(
-                        _inmemory_counters.keys(),
-                        key=lambda k: max(_inmemory_counters[k]) if _inmemory_counters[k] else 0,
-                    )
+                    sorted_keys = sorted(_inmemory_counters.keys())
                     for k in sorted_keys[:evict_count]:
                         del _inmemory_counters[k]
 
@@ -287,13 +338,14 @@ class AIRateLimiter:
                     len(_inmemory_counters),
                 )
 
-            timestamps = _inmemory_counters.get(key, [])
-            # Prune expired entries
-            timestamps = [ts for ts in timestamps if ts > cutoff]
+            prev_count = _inmemory_counters.get(prev_key, 0)
+            curr_count = _inmemory_counters.get(curr_key, 0)
+
             if add:
-                timestamps.append(now)
-            _inmemory_counters[key] = timestamps
-            return len(timestamps)
+                curr_count += 1
+                _inmemory_counters[curr_key] = curr_count
+
+            return curr_count + math.floor(prev_count * weight)
 
     async def _fallback_result(
         self,
@@ -311,7 +363,8 @@ class AIRateLimiter:
         """
         fallback_limit = limit * _INMEMORY_LIMIT_MULTIPLIER
         count = await self._inmemory_count_and_add(key, window_seconds, add=add)
-        allowed = count <= fallback_limit
+        # Use strict '<' to match Redis behavior (block at exactly limit, not limit+1)
+        allowed = count < fallback_limit
         remaining = max(0, fallback_limit - count)
         now = time.time()
         reset_at = datetime.fromtimestamp(now + window_seconds, tz=timezone.utc)
@@ -335,22 +388,26 @@ class AIRateLimiter:
 
         Returns a :class:`RateLimitResult` with ``allowed=True`` if the
         caller has not exceeded *limit* requests in the current sliding
-        *window_seconds*.  Uses a Lua script for atomic prune + count.
+        *window_seconds*.  Uses a Lua script for atomic read of the
+        current and previous window counters.
         """
-        key = f"ratelimit:{endpoint}:{scope_id}:{window_seconds}"
+        base_key = f"ratelimit:{endpoint}:{scope_id}:{window_seconds}"
         now = time.time()
-        ttl = window_seconds + 1
+        curr_window = int(now // window_seconds)
+        curr_key = f"{base_key}:{curr_window}"
+        prev_key = f"{base_key}:{curr_window - 1}"
 
         try:
             current_count: int = await self._check(
-                keys=[key], args=[now, window_seconds, ttl]
+                keys=[curr_key, prev_key],
+                args=[window_seconds, now],
             )
         except Exception as exc:
             logger.critical(
                 "Rate limit fallback: Redis unavailable, using in-memory counters (per-worker): %s",
                 exc,
             )
-            return await self._fallback_result(key, limit, window_seconds, add=False)
+            return await self._fallback_result(base_key, limit, window_seconds, add=False)
 
         remaining = max(0, limit - current_count)
         allowed = current_count < limit
@@ -373,33 +430,36 @@ class AIRateLimiter:
     ) -> RateLimitResult:
         """Atomically record a request and check whether it exceeds the limit.
 
-        Uses a Lua script that prunes expired entries, checks the current
-        count, and only adds the new member if under the limit -- all in a
-        single atomic Redis EVAL.  Returns ``allowed=False`` when the limit
-        is reached (the member is NOT added in that case).
+        Uses a Lua script that reads the current and previous window
+        counters, computes the sliding estimate, and only increments the
+        current window counter if under the limit -- all in a single
+        atomic Redis EVAL.  Returns ``allowed=False`` when the limit
+        is reached (the counter is NOT incremented in that case).
 
         Returns a :class:`RateLimitResult` with ``allowed=True`` if the
         caller (including this request) has not exceeded *limit* in the
         current sliding *window_seconds*.
         """
-        key = f"ratelimit:{endpoint}:{scope_id}:{window_seconds}"
+        base_key = f"ratelimit:{endpoint}:{scope_id}:{window_seconds}"
         now = time.time()
-        member = f"{now}:{uuid.uuid4().hex[:8]}"
-        ttl = window_seconds + 1
+        curr_window = int(now // window_seconds)
+        curr_key = f"{base_key}:{curr_window}"
+        prev_key = f"{base_key}:{curr_window - 1}"
 
         try:
             result: int = await self._check_and_inc(
-                keys=[key], args=[now, window_seconds, limit, member, ttl]
+                keys=[curr_key, prev_key],
+                args=[window_seconds, limit, now],
             )
         except Exception as exc:
             logger.critical(
                 "Rate limit fallback: Redis unavailable, using in-memory counters (per-worker): %s",
                 exc,
             )
-            return await self._fallback_result(key, limit, window_seconds, add=True)
+            return await self._fallback_result(base_key, limit, window_seconds, add=True)
 
         if result == -1:
-            # Limit exceeded -- member was NOT added
+            # Limit exceeded -- counter was NOT incremented
             reset_at = datetime.fromtimestamp(now + window_seconds, tz=timezone.utc)
             return RateLimitResult(
                 allowed=False,
@@ -427,22 +487,24 @@ class AIRateLimiter:
         scope_id: str,
         window_seconds: int,
     ) -> int:
-        """Record a request and return the current count in the window.
+        """Record a request and return the current sliding window count.
 
-        Uses a Lua script for atomic prune + add + count.
+        Uses a Lua script for atomic increment + sliding count.
 
         .. note::
             Prefer :meth:`check_and_increment` for rate-limiting middleware
             to avoid TOCTOU race conditions.
         """
-        key = f"ratelimit:{endpoint}:{scope_id}:{window_seconds}"
+        base_key = f"ratelimit:{endpoint}:{scope_id}:{window_seconds}"
         now = time.time()
-        member = f"{now}:{uuid.uuid4().hex[:8]}"
-        ttl = window_seconds + 1
+        curr_window = int(now // window_seconds)
+        curr_key = f"{base_key}:{curr_window}"
+        prev_key = f"{base_key}:{curr_window - 1}"
 
         try:
             count: int = await self._inc(
-                keys=[key], args=[now, window_seconds, member, ttl]
+                keys=[curr_key, prev_key],
+                args=[window_seconds, now],
             )
             return count
         except Exception as exc:
@@ -450,7 +512,7 @@ class AIRateLimiter:
                 "Rate limit fallback: Redis unavailable, using in-memory counters (per-worker): %s",
                 exc,
             )
-            return await self._inmemory_count_and_add(key, window_seconds, add=True)
+            return await self._inmemory_count_and_add(base_key, window_seconds, add=True)
 
 
 # ---------------------------------------------------------------------------
@@ -535,15 +597,14 @@ def _raise_rate_limit(result: RateLimitResult, detail_prefix: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_user_rate_limit_dep(
-    key_suffix: str, detail_prefix: str
-) -> Any:
+def _make_user_rate_limit_dep(key_suffix: str, detail_prefix: str) -> Any:
     """Factory for user-scoped rate limit dependencies.
 
     Returns an async callable suitable for use with ``Depends()``.
     Reads limit/window from ``_get_limits()`` at call time (not at
     import time) so that reloaded config takes effect without restart.
     """
+
     async def _check(
         current_user: User = Depends(get_current_user),
         rate_limiter: AIRateLimiter = Depends(get_rate_limiter),
@@ -564,15 +625,14 @@ def _make_user_rate_limit_dep(
     return _check
 
 
-def _make_ip_rate_limit_dep(
-    key_suffix: str, detail_prefix: str
-) -> Any:
+def _make_ip_rate_limit_dep(key_suffix: str, detail_prefix: str) -> Any:
     """Factory for IP-scoped rate limit dependencies.
 
     Returns an async callable suitable for use with ``Depends()``.
     Reads limit/window from ``_get_limits()`` at call time (not at
     import time) so that reloaded config takes effect without restart.
     """
+
     async def _check(
         request: Request,
         rate_limiter: AIRateLimiter = Depends(get_rate_limiter),
@@ -581,6 +641,7 @@ def _make_ip_rate_limit_dep(
         # a trusted proxy (checked via settings).  Falls back to direct connection IP.
         # R2-7: Use rightmost non-trusted-proxy IP to prevent XFF spoofing.
         from ..config import settings as _rl_settings
+
         _xff = request.headers.get("x-forwarded-for", "")
         if _xff and getattr(_rl_settings, "trusted_proxy_ips", ""):
             _conn_ip = request.client.host if request.client else ""
@@ -661,18 +722,10 @@ async def check_embedding_rate_limit(
 # IP-based rate limits for auth endpoints (no authenticated user)
 # ---------------------------------------------------------------------------
 
-check_auth_login_rate_limit = _make_ip_rate_limit_dep(
-    "auth_login", "Too many login attempts"
-)
+check_auth_login_rate_limit = _make_ip_rate_limit_dep("auth_login", "Too many login attempts")
 
-check_auth_register_rate_limit = _make_ip_rate_limit_dep(
-    "auth_register", "Too many registration attempts"
-)
+check_auth_register_rate_limit = _make_ip_rate_limit_dep("auth_register", "Too many registration attempts")
 
-check_auth_verify_rate_limit = _make_ip_rate_limit_dep(
-    "auth_verify", "Too many verification attempts"
-)
+check_auth_verify_rate_limit = _make_ip_rate_limit_dep("auth_verify", "Too many verification attempts")
 
-check_auth_reset_rate_limit = _make_ip_rate_limit_dep(
-    "auth_reset", "Too many reset attempts"
-)
+check_auth_reset_rate_limit = _make_ip_rate_limit_dep("auth_reset", "Too many reset attempts")

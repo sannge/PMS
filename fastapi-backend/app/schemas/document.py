@@ -42,6 +42,7 @@ class DocumentCreate(BaseModel):
     def validate_json_string(cls, v: Optional[str]) -> Optional[str]:
         if v is not None:
             import json
+
             try:
                 json.loads(v)
             except (json.JSONDecodeError, TypeError) as e:
@@ -99,6 +100,7 @@ class DocumentContentUpdate(BaseModel):
     @classmethod
     def validate_json_string(cls, v: str) -> str:
         import json
+
         try:
             json.loads(v)
         except (json.JSONDecodeError, TypeError) as e:

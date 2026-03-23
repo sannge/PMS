@@ -211,9 +211,7 @@ class TestMinIOServiceUpload:
 
         mock_client = MagicMock()
         mock_client.bucket_exists.return_value = True
-        mock_client.put_object.side_effect = S3Error(
-            "Error", "Error", "Error", "Error", "Error", "Error"
-        )
+        mock_client.put_object.side_effect = S3Error("Error", "Error", "Error", "Error", "Error", "Error")
         mock_minio_class.return_value = mock_client
 
         service = MinIOService()

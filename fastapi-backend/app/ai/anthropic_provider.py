@@ -50,14 +50,16 @@ def _convert_messages(
             new_parts: list[dict[str, Any]] = []
             for part in content:
                 if isinstance(part, dict) and part.get("type") == "image":
-                    new_parts.append({
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": part.get("media_type", "image/png"),
-                            "data": part["data"],
-                        },
-                    })
+                    new_parts.append(
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": part.get("media_type", "image/png"),
+                                "data": part["data"],
+                            },
+                        }
+                    )
                 else:
                     new_parts.append(part)
             converted.append({**msg, "content": new_parts})
@@ -118,11 +120,7 @@ class AnthropicProvider(LLMProvider, VisionProvider):
 
             response = await self._client.messages.create(**params)
             # Anthropic returns content as a list of blocks
-            text_parts = [
-                block.text
-                for block in response.content
-                if hasattr(block, "text")
-            ]
+            text_parts = [block.text for block in response.content if hasattr(block, "text")]
             return "".join(text_parts)
         except anthropic.AuthenticationError as exc:
             err_msg = str(exc).lower()
@@ -203,20 +201,14 @@ class AnthropicProvider(LLMProvider, VisionProvider):
         text: str,
         model: str,
     ) -> list[float]:
-        raise NotImplementedError(
-            "Anthropic does not provide an embeddings API. "
-            "Use OpenAI or Ollama for embeddings."
-        )
+        raise NotImplementedError("Anthropic does not provide an embeddings API. Use OpenAI or Ollama for embeddings.")
 
     async def generate_embeddings_batch(
         self,
         texts: list[str],
         model: str,
     ) -> list[list[float]]:
-        raise NotImplementedError(
-            "Anthropic does not provide an embeddings API. "
-            "Use OpenAI or Ollama for embeddings."
-        )
+        raise NotImplementedError("Anthropic does not provide an embeddings API. Use OpenAI or Ollama for embeddings.")
 
     async def describe_image(
         self,
@@ -247,11 +239,7 @@ class AnthropicProvider(LLMProvider, VisionProvider):
                 messages=messages,
                 max_tokens=1024,
             )
-            text_parts = [
-                block.text
-                for block in response.content
-                if hasattr(block, "text")
-            ]
+            text_parts = [block.text for block in response.content if hasattr(block, "text")]
             return "".join(text_parts)
         except anthropic.APIError as exc:
             raise LLMProviderError(

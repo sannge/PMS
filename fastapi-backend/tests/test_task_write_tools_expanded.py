@@ -31,6 +31,7 @@ from app.ai.agent.tools.context import clear_tool_context, set_tool_context
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _setup_context(**overrides):
     """Populate tool context with sensible defaults + overrides."""
     ctx = {
@@ -41,10 +42,18 @@ def _setup_context(**overrides):
         "provider_registry": MagicMock(),
     }
     ctx.update(overrides)
-    set_tool_context(**{k: ctx[k] for k in (
-        "user_id", "accessible_app_ids", "accessible_project_ids",
-        "db_session_factory", "provider_registry",
-    )})
+    set_tool_context(
+        **{
+            k: ctx[k]
+            for k in (
+                "user_id",
+                "accessible_app_ids",
+                "accessible_project_ids",
+                "db_session_factory",
+                "provider_registry",
+            )
+        }
+    )
     return ctx
 
 
@@ -78,7 +87,6 @@ def _async_ctx(session):
 
 
 class TestUpdateTask:
-
     async def test_update_task_partial_fields(self):
         """update_task updates only the title when only title is provided."""
         task_id = str(uuid4())
@@ -130,10 +138,12 @@ class TestUpdateTask:
                 ]
                 mock_interrupt.return_value = {"approved": True}
 
-                result = await update_task.ainvoke({
-                    "task": task_id,
-                    "title": "New Title",
-                })
+                result = await update_task.ainvoke(
+                    {
+                        "task": task_id,
+                        "title": "New Title",
+                    }
+                )
 
                 assert "Updated task SP-1" in result
                 mock_interrupt.assert_called_once()
@@ -146,10 +156,12 @@ class TestUpdateTask:
         """update_task rejects invalid priority 'critical'."""
         _setup_context()
         try:
-            result = await update_task.ainvoke({
-                "task": str(uuid4()),
-                "priority": "critical",
-            })
+            result = await update_task.ainvoke(
+                {
+                    "task": str(uuid4()),
+                    "priority": "critical",
+                }
+            )
             assert "Invalid priority" in result
             assert "critical" in result
         finally:
@@ -159,10 +171,12 @@ class TestUpdateTask:
         """update_task rejects invalid due_date 'not-a-date'."""
         _setup_context()
         try:
-            result = await update_task.ainvoke({
-                "task": str(uuid4()),
-                "due_date": "not-a-date",
-            })
+            result = await update_task.ainvoke(
+                {
+                    "task": str(uuid4()),
+                    "due_date": "not-a-date",
+                }
+            )
             assert "Invalid due_date" in result
             assert "not-a-date" in result
         finally:
@@ -185,10 +199,12 @@ class TestUpdateTask:
 
                 mock_tool_session.return_value = _async_ctx(session)
 
-                result = await update_task.ainvoke({
-                    "task": task_id,
-                    "title": "Should Fail",
-                })
+                result = await update_task.ainvoke(
+                    {
+                        "task": task_id,
+                        "title": "Should Fail",
+                    }
+                )
 
                 assert "No task found" in result or "not found" in result.lower()
         finally:
@@ -198,9 +214,11 @@ class TestUpdateTask:
         """update_task rejects when no fields are provided."""
         _setup_context()
         try:
-            result = await update_task.ainvoke({
-                "task": str(uuid4()),
-            })
+            result = await update_task.ainvoke(
+                {
+                    "task": str(uuid4()),
+                }
+            )
             assert "At least one field" in result
         finally:
             _clear()
@@ -212,7 +230,6 @@ class TestUpdateTask:
 
 
 class TestAddTaskComment:
-
     async def test_add_comment_with_mentions(self):
         """add_task_comment creates comment + mention records + notifications."""
         task_id = str(uuid4())
@@ -256,12 +273,14 @@ class TestAddTaskComment:
                 mention_user_result = MagicMock()
                 mention_user_result.scalar_one_or_none.return_value = mock_mention_user
 
-                pre_session.execute = AsyncMock(side_effect=[
-                    resolve_result,
-                    task_result,
-                    mention_resolve_result,
-                    mention_user_result,
-                ])
+                pre_session.execute = AsyncMock(
+                    side_effect=[
+                        resolve_result,
+                        task_result,
+                        mention_resolve_result,
+                        mention_user_result,
+                    ]
+                )
 
                 # Post-approval session
                 post_session = _mock_db_session()
@@ -276,10 +295,12 @@ class TestAddTaskComment:
                 membership_result = MagicMock()
                 membership_result.scalar_one_or_none.return_value = uuid4()  # has access
 
-                post_session.execute = AsyncMock(side_effect=[
-                    proj_app_result,
-                    membership_result,
-                ])
+                post_session.execute = AsyncMock(
+                    side_effect=[
+                        proj_app_result,
+                        membership_result,
+                    ]
+                )
 
                 # Track db.add calls
                 added_objects = []
@@ -291,11 +312,13 @@ class TestAddTaskComment:
                 ]
                 mock_interrupt.return_value = {"approved": True}
 
-                result = await add_task_comment.ainvoke({
-                    "task": task_id,
-                    "content": "Great work on this!",
-                    "mentions": mention_user_id,
-                })
+                result = await add_task_comment.ainvoke(
+                    {
+                        "task": task_id,
+                        "content": "Great work on this!",
+                        "mentions": mention_user_id,
+                    }
+                )
 
                 assert "Added comment to SP-1" in result
                 mock_interrupt.assert_called_once()
@@ -310,10 +333,12 @@ class TestAddTaskComment:
         """add_task_comment rejects content over 5000 chars."""
         _setup_context()
         try:
-            result = await add_task_comment.ainvoke({
-                "task": str(uuid4()),
-                "content": "x" * 5001,
-            })
+            result = await add_task_comment.ainvoke(
+                {
+                    "task": str(uuid4()),
+                    "content": "x" * 5001,
+                }
+            )
             assert "5,000 characters" in result
         finally:
             _clear()
@@ -358,10 +383,12 @@ class TestAddTaskComment:
                 membership_result = MagicMock()
                 membership_result.scalar_one_or_none.return_value = uuid4()  # has access
 
-                post_session.execute = AsyncMock(side_effect=[
-                    proj_app_result,
-                    membership_result,
-                ])
+                post_session.execute = AsyncMock(
+                    side_effect=[
+                        proj_app_result,
+                        membership_result,
+                    ]
+                )
 
                 mock_tool_session.side_effect = [
                     _async_ctx(pre_session),
@@ -369,10 +396,12 @@ class TestAddTaskComment:
                 ]
                 mock_interrupt.return_value = {"approved": True}
 
-                result = await add_task_comment.ainvoke({
-                    "task": task_id,
-                    "content": "Viewer can comment too!",
-                })
+                result = await add_task_comment.ainvoke(
+                    {
+                        "task": task_id,
+                        "content": "Viewer can comment too!",
+                    }
+                )
 
                 assert "Added comment" in result
                 assert "SP-5" in result
@@ -383,10 +412,12 @@ class TestAddTaskComment:
         """add_task_comment rejects empty content."""
         _setup_context()
         try:
-            result = await add_task_comment.ainvoke({
-                "task": str(uuid4()),
-                "content": "",
-            })
+            result = await add_task_comment.ainvoke(
+                {
+                    "task": str(uuid4()),
+                    "content": "",
+                }
+            )
             assert "required" in result.lower()
         finally:
             _clear()
@@ -398,7 +429,6 @@ class TestAddTaskComment:
 
 
 class TestDeleteTask:
-
     async def test_delete_task_cascade(self):
         """delete_task deletes task and updates agg counters."""
         task_id = str(uuid4())
@@ -431,9 +461,7 @@ class TestDeleteTask:
                 mock_status.name = "Todo"
                 status_result = MagicMock()
                 status_result.scalar_one_or_none.return_value = mock_status
-                pre_session.execute = AsyncMock(
-                    side_effect=[resolve_result, task_result, status_result]
-                )
+                pre_session.execute = AsyncMock(side_effect=[resolve_result, task_result, status_result])
 
                 # Post-approval combined session: RBAC re-check + re-load task + agg lookup + delete
                 post_session = _mock_db_session()
@@ -456,9 +484,7 @@ class TestDeleteTask:
                 agg_result = MagicMock()
                 agg_result.scalar_one_or_none.return_value = mock_agg
 
-                post_session.execute = AsyncMock(
-                    side_effect=[rbac_result, post_task_result, agg_result]
-                )
+                post_session.execute = AsyncMock(side_effect=[rbac_result, post_task_result, agg_result])
 
                 mock_tool_session.side_effect = [
                     _async_ctx(pre_session),
@@ -466,9 +492,11 @@ class TestDeleteTask:
                 ]
                 mock_interrupt.return_value = {"approved": True}
 
-                result = await delete_task.ainvoke({
-                    "task": task_id,
-                })
+                result = await delete_task.ainvoke(
+                    {
+                        "task": task_id,
+                    }
+                )
 
                 assert "Deleted task SP-1" in result
                 mock_interrupt.assert_called_once()
@@ -495,9 +523,11 @@ class TestDeleteTask:
 
                 mock_tool_session.return_value = _async_ctx(session)
 
-                result = await delete_task.ainvoke({
-                    "task": task_id,
-                })
+                result = await delete_task.ainvoke(
+                    {
+                        "task": task_id,
+                    }
+                )
 
                 assert "No task found" in result or "not found" in result.lower()
         finally:
@@ -530,16 +560,16 @@ class TestDeleteTask:
                 mock_status.name = "Todo"
                 status_result = MagicMock()
                 status_result.scalar_one_or_none.return_value = mock_status
-                pre_session.execute = AsyncMock(
-                    side_effect=[resolve_result, task_result, status_result]
-                )
+                pre_session.execute = AsyncMock(side_effect=[resolve_result, task_result, status_result])
 
                 mock_tool_session.return_value = _async_ctx(pre_session)
                 mock_interrupt.return_value = {"approved": False}
 
-                result = await delete_task.ainvoke({
-                    "task": task_id,
-                })
+                result = await delete_task.ainvoke(
+                    {
+                        "task": task_id,
+                    }
+                )
 
                 assert "cancelled" in result.lower()
         finally:
@@ -552,7 +582,6 @@ class TestDeleteTask:
 
 
 class TestWriteToolsRegistryExpanded:
-
     def test_includes_new_tools(self):
         """WRITE_TOOLS includes update_task, add_task_comment, delete_task."""
         names = {t.name for t in WRITE_TOOLS}

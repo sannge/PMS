@@ -22,7 +22,7 @@ Assignment Rules:
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import exists, select
+from sqlalchemy import and_, exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -60,6 +60,9 @@ class PermissionService:
         """
         Get the user's role in an application.
 
+        Uses a single query with LEFT JOIN to fetch both owner_id and member
+        role in one round-trip instead of two sequential queries.
+
         Args:
             user_id: The user's ID
             application_id: The application's ID
@@ -68,30 +71,45 @@ class PermissionService:
         Returns:
             The role string ('owner', 'editor', 'viewer') or None if not a member.
         """
-        # If application is provided, use it; otherwise fetch
-        if application is None:
+        # Fast path: if application is pre-fetched, avoid the DB query for owner check
+        if application is not None:
+            if application.owner_id == user_id:
+                return "owner"
+            # Still need member role from DB
             result = await self.db.execute(
-                select(Application).where(Application.id == application_id)
+                select(ApplicationMember.role).where(
+                    ApplicationMember.application_id == application_id,
+                    ApplicationMember.user_id == user_id,
+                )
             )
-            application = result.scalar_one_or_none()
+            role = result.scalar_one_or_none()
+            return role
 
-        if not application:
+        # Single query: LEFT JOIN Application with ApplicationMember
+        stmt = (
+            select(Application.owner_id, ApplicationMember.role)
+            .outerjoin(
+                ApplicationMember,
+                and_(
+                    ApplicationMember.application_id == Application.id,
+                    ApplicationMember.user_id == user_id,
+                ),
+            )
+            .where(Application.id == application_id)
+        )
+        result = await self.db.execute(stmt)
+        row = result.first()
+
+        if row is None:
             return None
 
-        # Check if user is the original owner
-        if application.owner_id == user_id:
+        owner_id = row[0]
+        member_role = row[1]
+
+        if owner_id == user_id:
             return "owner"
 
-        # Check ApplicationMembers table
-        result = await self.db.execute(
-            select(ApplicationMember).where(
-                ApplicationMember.application_id == application_id,
-                ApplicationMember.user_id == user_id,
-            )
-        )
-        member = result.scalar_one_or_none()
-
-        return member.role if member else None
+        return member_role
 
     async def is_application_member(
         self,
@@ -111,19 +129,18 @@ class PermissionService:
             True if user is an ApplicationMember or owner, False otherwise.
         """
         # Single query: check owner OR member via UNION ALL inside EXISTS
-        from sqlalchemy import union_all, literal
-        owner_check = select(literal(1)).where(
+        from sqlalchemy import literal, union_all
+
+        owner_check = select(literal(1)).select_from(Application).where(
             Application.id == application_id,
             Application.owner_id == user_id,
         )
-        member_check = select(literal(1)).where(
+        member_check = select(literal(1)).select_from(ApplicationMember).where(
             ApplicationMember.application_id == application_id,
             ApplicationMember.user_id == user_id,
         )
         combined = union_all(owner_check, member_check)
-        result = await self.db.execute(
-            select(exists(combined.subquery().select()))
-        )
+        result = await self.db.execute(select(exists(combined.subquery().select())))
         return result.scalar() or False
 
     async def is_application_owner(
@@ -211,15 +228,11 @@ class PermissionService:
             Project with application loaded, or None if not found.
         """
         result = await self.db.execute(
-            select(Project)
-            .options(selectinload(Project.application))
-            .where(Project.id == project_id)
+            select(Project).options(selectinload(Project.application)).where(Project.id == project_id)
         )
         return result.scalar_one_or_none()
 
-    async def check_can_view_knowledge(
-        self, user_id: UUID, scope: str, scope_id: UUID
-    ) -> bool:
+    async def check_can_view_knowledge(self, user_id: UUID, scope: str, scope_id: UUID) -> bool:
         """Check if user can view documents/folders in a scope.
 
         Args:
@@ -241,9 +254,7 @@ class PermissionService:
             return await self.is_application_member(user_id, project.application_id)
         return False
 
-    async def check_can_edit_knowledge(
-        self, user_id: UUID, scope: str, scope_id: UUID
-    ) -> bool:
+    async def check_can_edit_knowledge(self, user_id: UUID, scope: str, scope_id: UUID) -> bool:
         """Check if user can create/edit/delete documents/folders in a scope.
 
         Args:
@@ -263,9 +274,7 @@ class PermissionService:
             project = await self.get_project_with_application(scope_id)
             if not project:
                 return False
-            app_role = await self.get_user_application_role(
-                user_id, project.application_id
-            )
+            app_role = await self.get_user_application_role(user_id, project.application_id)
             if app_role == "owner":
                 return True
             if app_role not in ("editor",):
@@ -420,7 +429,11 @@ class PermissionService:
         if not role or role == "viewer":
             return False
 
-        # Must be a ProjectMember
+        # App owners can be assigned without being project members
+        if role == "owner":
+            return True
+
+        # Editors must be a ProjectMember
         return await self.is_project_member(user_id, project_id)
 
     async def check_can_manage_project_members(
@@ -573,16 +586,15 @@ class PermissionService:
             application = project.application
         else:
             project = None
-            result = await self.db.execute(
-                select(Application).where(Application.id == application_id)
-            )
+            result = await self.db.execute(select(Application).where(Application.id == application_id))
             application = result.scalar_one_or_none()
 
         if not application:
             return []
 
         # Single query: project members who are also app owners or editors
-        from sqlalchemy import or_, union_all, literal_column
+        from sqlalchemy import or_, union_all
+
         pm_users = (
             select(User)
             .join(ProjectMember, ProjectMember.user_id == User.id)
@@ -603,26 +615,21 @@ class PermissionService:
         )
 
         # App owners (even if not project members)
-        app_owner_users = (
-            select(User)
-            .where(
-                or_(
-                    User.id == application.owner_id,
-                    User.id.in_(
-                        select(ApplicationMember.user_id).where(
-                            ApplicationMember.application_id == application_id,
-                            ApplicationMember.role == "owner",
-                        )
-                    ),
-                )
+        app_owner_users = select(User).where(
+            or_(
+                User.id == application.owner_id,
+                User.id.in_(
+                    select(ApplicationMember.user_id).where(
+                        ApplicationMember.application_id == application_id,
+                        ApplicationMember.role == "owner",
+                    )
+                ),
             )
         )
 
         # Combine and deduplicate
         combined = union_all(pm_users, app_owner_users).subquery()
-        result = await self.db.execute(
-            select(User).where(User.id.in_(select(combined.c.id)))
-        )
+        result = await self.db.execute(select(User).where(User.id.in_(select(combined.c.id))))
         return list(result.scalars().all())
 
 
@@ -651,9 +658,7 @@ async def get_user_application_role(
     application: Optional[Application] = None,
 ) -> Optional[str]:
     """Standalone wrapper around PermissionService.get_user_application_role."""
-    return await PermissionService(db).get_user_application_role(
-        user_id, application_id, application
-    )
+    return await PermissionService(db).get_user_application_role(user_id, application_id, application)
 
 
 async def is_application_owner(

@@ -112,11 +112,10 @@ async def invalidate_room_cache(room_id: str) -> None:
 _ROOM_AUTH_INVALIDATE_CHANNEL = "ws:room_auth_invalidate"
 
 
-async def publish_room_auth_invalidation(
-    *, user_id: str | None = None, room_id: str | None = None
-) -> None:
+async def publish_room_auth_invalidation(*, user_id: str | None = None, room_id: str | None = None) -> None:
     """Publish a room auth cache invalidation event to all workers."""
     from ..services.redis_service import redis_service
+
     if redis_service.is_connected:
         try:
             payload = {k: v for k, v in {"user_id": user_id, "room_id": room_id}.items() if v is not None}
@@ -134,6 +133,7 @@ async def _handle_room_auth_invalidation(data: dict) -> None:
     rid = data.get("room_id")
     if uid:
         from uuid import UUID as _UUID
+
         try:
             await invalidate_user_cache(_UUID(uid))
         except (ValueError, AttributeError):
@@ -145,10 +145,9 @@ async def _handle_room_auth_invalidation(data: dict) -> None:
 async def setup_room_auth_pubsub() -> None:
     """Subscribe to room auth invalidation channel (call at startup)."""
     from ..services.redis_service import redis_service
+
     if redis_service.is_connected:
-        await redis_service.subscribe(
-            _ROOM_AUTH_INVALIDATE_CHANNEL, _handle_room_auth_invalidation
-        )
+        await redis_service.subscribe(_ROOM_AUTH_INVALIDATE_CHANNEL, _handle_room_auth_invalidation)
 
 
 async def check_room_access(user_id: UUID, room_id: str) -> bool:
@@ -225,16 +224,10 @@ async def _check_application_access(db: AsyncSession, user_id: UUID, application
     from sqlalchemy import exists, literal
 
     stmt = select(literal(1)).where(
-        exists(
-            select(literal(1)).where(
-                (Application.id == application_id)
-                & (Application.owner_id == user_id)
-            )
-        )
+        exists(select(literal(1)).where((Application.id == application_id) & (Application.owner_id == user_id)))
         | exists(
             select(literal(1)).where(
-                (ApplicationMember.application_id == application_id)
-                & (ApplicationMember.user_id == user_id)
+                (ApplicationMember.application_id == application_id) & (ApplicationMember.user_id == user_id)
             )
         )
     )
@@ -250,38 +243,27 @@ async def _check_project_access(db: AsyncSession, user_id: UUID, project_id: UUI
     """
     from sqlalchemy import exists, literal
 
-    stmt = select(literal(1)).where(
-        exists(
-            select(literal(1))
-            .select_from(Project)
-            .where(Project.id == project_id)
-        )
-    ).where(
-        # Application owner (via project's application_id)
-        exists(
-            select(literal(1))
-            .select_from(Project)
-            .join(Application, Application.id == Project.application_id)
-            .where(
-                (Project.id == project_id)
-                & (Application.owner_id == user_id)
+    stmt = (
+        select(literal(1))
+        .where(exists(select(literal(1)).select_from(Project).where(Project.id == project_id)))
+        .where(
+            # Application owner (via project's application_id)
+            exists(
+                select(literal(1))
+                .select_from(Project)
+                .join(Application, Application.id == Project.application_id)
+                .where((Project.id == project_id) & (Application.owner_id == user_id))
             )
-        )
-        # Application member
-        | exists(
-            select(literal(1))
-            .select_from(Project)
-            .join(ApplicationMember, ApplicationMember.application_id == Project.application_id)
-            .where(
-                (Project.id == project_id)
-                & (ApplicationMember.user_id == user_id)
+            # Application member
+            | exists(
+                select(literal(1))
+                .select_from(Project)
+                .join(ApplicationMember, ApplicationMember.application_id == Project.application_id)
+                .where((Project.id == project_id) & (ApplicationMember.user_id == user_id))
             )
-        )
-        # Direct project member
-        | exists(
-            select(literal(1)).where(
-                (ProjectMember.project_id == project_id)
-                & (ProjectMember.user_id == user_id)
+            # Direct project member
+            | exists(
+                select(literal(1)).where((ProjectMember.project_id == project_id) & (ProjectMember.user_id == user_id))
             )
         )
     )
@@ -291,9 +273,7 @@ async def _check_project_access(db: AsyncSession, user_id: UUID, project_id: UUI
 
 async def _check_task_access(db: AsyncSession, user_id: UUID, task_id: UUID) -> bool:
     """Check if user has access to the task via project/application membership."""
-    result = await db.execute(
-        select(Task).where(Task.id == task_id)
-    )
+    result = await db.execute(select(Task).where(Task.id == task_id))
     task = result.scalar_one_or_none()
     if not task:
         return False
@@ -326,5 +306,3 @@ async def _check_document_access(db: AsyncSession, user_id: UUID, document_id: U
         return await _check_project_access(db, user_id, document.project_id)
 
     return False
-
-

@@ -226,15 +226,15 @@ async def generate_query(
 
             if not sql:
                 last_error = "LLM returned empty SQL"
-                logger.warning(
-                    "SQL generation attempt %d: empty SQL", attempt
-                )
+                logger.warning("SQL generation attempt %d: empty SQL", attempt)
                 # Feed error back to LLM for correction
                 messages.append({"role": "assistant", "content": response})
-                messages.append({
-                    "role": "user",
-                    "content": f"Error: {last_error}. Please generate a valid SQL query.",
-                })
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": f"Error: {last_error}. Please generate a valid SQL query.",
+                    }
+                )
                 continue
 
             # Validate the generated SQL
@@ -249,13 +249,15 @@ async def generate_query(
                 )
                 # Feed validation error back to LLM for correction
                 messages.append({"role": "assistant", "content": response})
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        f"The SQL you generated failed validation: {validation.error}\n"
-                        f"Please fix the SQL and return valid JSON."
-                    ),
-                })
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"The SQL you generated failed validation: {validation.error}\n"
+                            f"Please fix the SQL and return valid JSON."
+                        ),
+                    }
+                )
                 continue
 
             # Use sanitized SQL (LIMIT may have been adjusted)
@@ -281,14 +283,16 @@ async def generate_query(
             # Feed parse error back to LLM
             if response:
                 messages.append({"role": "assistant", "content": response})
-            messages.append({
-                "role": "user",
-                "content": (
-                    f"Error parsing your response: {exc}\n"
-                    f"Please return ONLY a valid JSON object with keys: "
-                    f"sql, explanation, tables_used."
-                ),
-            })
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        f"Error parsing your response: {exc}\n"
+                        f"Please return ONLY a valid JSON object with keys: "
+                        f"sql, explanation, tables_used."
+                    ),
+                }
+            )
             continue
 
         except LLMProviderError:
@@ -296,7 +300,4 @@ async def generate_query(
             raise
 
     duration_ms = int((time.monotonic() - start_time) * 1000)
-    raise ValueError(
-        f"SQL generation failed after {attempts} attempts. "
-        f"Last error: {last_error}"
-    )
+    raise ValueError(f"SQL generation failed after {attempts} attempts. Last error: {last_error}")

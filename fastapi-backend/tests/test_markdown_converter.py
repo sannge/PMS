@@ -1,4 +1,5 @@
 """Tests for markdown_to_tiptap_json converter in worker.py."""
+
 from app.worker import markdown_to_tiptap_json
 
 
@@ -122,10 +123,7 @@ class TestMarkdownToTiptapJson:
         result = markdown_to_tiptap_json("[click me](javascript:alert(1))")
         para = result["content"][0]
         texts = para["content"]
-        link_nodes = [
-            t for t in texts
-            if any(m.get("type") == "link" for m in t.get("marks", []))
-        ]
+        link_nodes = [t for t in texts if any(m.get("type") == "link" for m in t.get("marks", []))]
         assert len(link_nodes) == 0
         text_nodes = [t for t in texts if t.get("type") == "text"]
         assert any("click me" in t.get("text", "") for t in text_nodes)
@@ -135,8 +133,5 @@ class TestMarkdownToTiptapJson:
         result = markdown_to_tiptap_json("[xss](data:text/html,<script>alert(1)</script>)")
         para = result["content"][0]
         texts = para["content"]
-        link_nodes = [
-            t for t in texts
-            if any(m.get("type") == "link" for m in t.get("marks", []))
-        ]
+        link_nodes = [t for t in texts if any(m.get("type") == "link" for m in t.get("marks", []))]
         assert len(link_nodes) == 0

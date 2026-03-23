@@ -35,10 +35,8 @@ from ..ai.config_service import get_agent_config
 
 logger = logging.getLogger(__name__)
 
-_cfg = get_agent_config()
-
 # Control character pattern
-CONTROL_CHAR_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
+CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 # Meilisearch highlight tag constants
 _MARK_OPEN = "<mark>"
@@ -59,12 +57,13 @@ def _get_scope_cache_ttl() -> int:
 def _get_snippet_context_chars() -> int:
     return get_agent_config().get_int("search.snippet_context_chars", 60)
 
+
 # Index settings (configure BEFORE adding documents)
 MEILISEARCH_INDEX_SETTINGS = {
     "searchableAttributes": [
-        "title",           # Highest priority -- title matches rank first
-        "file_name",       # File names also searchable
-        "content_plain",   # Main body text
+        "title",  # Highest priority -- title matches rank first
+        "file_name",  # File names also searchable
+        "content_plain",  # Main body text
     ],
     "filterableAttributes": [
         "application_id",
@@ -97,12 +96,12 @@ MEILISEARCH_INDEX_SETTINGS = {
     ],
     "rankingRules": [
         "words",
+        "proximity",  # Promoted: "sprint 4" adjacent ranks above "sprint...4" far apart
         "typo",
-        "proximity",
         "attribute",
         "sort",
         "exactness",
-        "updated_at:desc",   # Custom: prefer recently updated docs
+        "updated_at:desc",  # Custom: prefer recently updated docs
     ],
     "typoTolerance": TypoTolerance(
         enabled=True,
@@ -116,6 +115,8 @@ MEILISEARCH_INDEX_SETTINGS = {
 
 _meili_failure_count: int = 0
 _meili_circuit_open_until: float = 0.0  # Unix timestamp when circuit closes
+
+
 def _get_meili_failure_threshold() -> int:
     return get_agent_config().get_int("search.circuit_failure_threshold", 3)
 
@@ -163,8 +164,7 @@ async def init_meilisearch() -> None:
 
     if not settings.meilisearch_api_key:
         logger.warning(
-            "meilisearch_api_key is empty -- Meilisearch is unauthenticated. "
-            "Set MEILISEARCH_API_KEY in production."
+            "meilisearch_api_key is empty -- Meilisearch is unauthenticated. Set MEILISEARCH_API_KEY in production."
         )
 
     _meili_client = AsyncClient(
@@ -177,39 +177,25 @@ async def init_meilisearch() -> None:
     try:
         _meili_index = await _meili_client.get_index(settings.meilisearch_index_name)
     except Exception:
-        _meili_index = await _meili_client.create_index(
-            settings.meilisearch_index_name, primary_key="id"
-        )
+        _meili_index = await _meili_client.create_index(settings.meilisearch_index_name, primary_key="id")
 
     # Configure index settings (wait for each task to complete before proceeding)
-    task_info = await _meili_index.update_searchable_attributes(
-        MEILISEARCH_INDEX_SETTINGS["searchableAttributes"]
-    )
+    task_info = await _meili_index.update_searchable_attributes(MEILISEARCH_INDEX_SETTINGS["searchableAttributes"])
     await _meili_client.wait_for_task(task_info.task_uid)
 
-    task_info = await _meili_index.update_filterable_attributes(
-        MEILISEARCH_INDEX_SETTINGS["filterableAttributes"]
-    )
+    task_info = await _meili_index.update_filterable_attributes(MEILISEARCH_INDEX_SETTINGS["filterableAttributes"])
     await _meili_client.wait_for_task(task_info.task_uid)
 
-    task_info = await _meili_index.update_sortable_attributes(
-        MEILISEARCH_INDEX_SETTINGS["sortableAttributes"]
-    )
+    task_info = await _meili_index.update_sortable_attributes(MEILISEARCH_INDEX_SETTINGS["sortableAttributes"])
     await _meili_client.wait_for_task(task_info.task_uid)
 
-    task_info = await _meili_index.update_displayed_attributes(
-        MEILISEARCH_INDEX_SETTINGS["displayedAttributes"]
-    )
+    task_info = await _meili_index.update_displayed_attributes(MEILISEARCH_INDEX_SETTINGS["displayedAttributes"])
     await _meili_client.wait_for_task(task_info.task_uid)
 
-    task_info = await _meili_index.update_ranking_rules(
-        MEILISEARCH_INDEX_SETTINGS["rankingRules"]
-    )
+    task_info = await _meili_index.update_ranking_rules(MEILISEARCH_INDEX_SETTINGS["rankingRules"])
     await _meili_client.wait_for_task(task_info.task_uid)
 
-    task_info = await _meili_index.update_typo_tolerance(
-        MEILISEARCH_INDEX_SETTINGS["typoTolerance"]
-    )
+    task_info = await _meili_index.update_typo_tolerance(MEILISEARCH_INDEX_SETTINGS["typoTolerance"])
     await _meili_client.wait_for_task(task_info.task_uid)
 
     logger.info("Meilisearch initialized: index=%s", settings.meilisearch_index_name)
@@ -231,32 +217,28 @@ def get_meili_client() -> AsyncClient:
 
 # ---- Query Sanitization ----
 
+
 def sanitize_search_query(q: str) -> str:
     """Sanitize search query: strip control characters, collapse whitespace."""
-    q = CONTROL_CHAR_RE.sub('', q)
-    q = ' '.join(q.split())
+    q = CONTROL_CHAR_RE.sub("", q)
+    q = " ".join(q.split())
     return q.strip()
 
 
 # ---- RBAC Filter Construction ----
 
-async def _get_user_application_ids(
-    db: AsyncSession, user_id: UUID
-) -> list[UUID]:
+
+async def _get_user_application_ids(db: AsyncSession, user_id: UUID) -> list[UUID]:
     """Single query: all applications where user is a member OR owner."""
     result = await db.execute(
         select(ApplicationMember.application_id)
         .where(ApplicationMember.user_id == user_id)
-        .union(
-            select(Application.id).where(Application.owner_id == user_id)
-        )
+        .union(select(Application.id).where(Application.owner_id == user_id))
     )
     return list(result.scalars().all())
 
 
-async def _get_projects_in_applications(
-    db: AsyncSession, app_ids: list[UUID]
-) -> list[UUID]:
+async def _get_projects_in_applications(db: AsyncSession, app_ids: list[UUID]) -> list[UUID]:
     """Batch query: all project IDs belonging to the given applications.
 
     A user who is an application member can view ALL project-scoped documents
@@ -265,16 +247,11 @@ async def _get_projects_in_applications(
     """
     if not app_ids:
         return []
-    result = await db.execute(
-        select(Project.id)
-        .where(Project.application_id.in_(app_ids))
-    )
+    result = await db.execute(select(Project.id).where(Project.application_id.in_(app_ids)))
     return list(result.scalars().all())
 
 
-async def get_fallback_scope_ids(
-    db: AsyncSession, user_id: UUID
-) -> tuple[list[UUID], list[UUID]]:
+async def get_fallback_scope_ids(db: AsyncSession, user_id: UUID) -> tuple[list[UUID], list[UUID]]:
     """Public helper: return (app_ids, project_ids) for a user's RBAC scope.
 
     Used by the PG FTS fallback in document_search.py to avoid importing
@@ -285,9 +262,7 @@ async def get_fallback_scope_ids(
     return app_ids, project_ids
 
 
-async def build_search_filter(
-    db: AsyncSession, user_id: UUID
-) -> list[list[str] | str]:
+async def build_search_filter(db: AsyncSession, user_id: UUID) -> list[list[str] | str]:
     """Build Meilisearch RBAC filter using array syntax (no string interpolation).
 
     Returns array-of-arrays filter:
@@ -325,9 +300,7 @@ async def build_search_filter(
     return [scope_filters, "deleted_at IS NULL"]
 
 
-async def get_cached_scope_filter(
-    redis_service, db: AsyncSession, user_id: UUID
-) -> list[list[str] | str]:
+async def get_cached_scope_filter(redis_service, db: AsyncSession, user_id: UUID) -> list[list[str] | str]:
     """Get or compute the user's RBAC search filter with Redis caching (30s TTL).
 
     Falls back to uncached filter if Redis is unavailable.
@@ -367,6 +340,7 @@ async def get_cached_scope_filter(
 
 # ---- Document Indexing ----
 
+
 def build_search_doc_data(
     doc: Document,
     project_application_id: UUID | None = None,
@@ -391,7 +365,7 @@ def build_search_doc_data(
     return {
         "id": str(doc.id),
         "title": doc.title,
-        "content_plain": (doc.content_plain or "")[:_get_max_content_length()],
+        "content_plain": (doc.content_plain or "")[: _get_max_content_length()],
         "application_id": str(application_id) if application_id else None,
         "project_id": str(doc.project_id) if doc.project_id else None,
         "user_id": str(doc.user_id) if doc.user_id else None,
@@ -452,10 +426,14 @@ async def index_document_soft_delete(doc_id: UUID) -> None:
     """
     try:
         index = get_meili_index()
-        await index.update_documents([{
-            "id": str(doc_id),
-            "deleted_at": int(time.time()),
-        }])
+        await index.update_documents(
+            [
+                {
+                    "id": str(doc_id),
+                    "deleted_at": int(time.time()),
+                }
+            ]
+        )
     except Exception as exc:
         logger.error("Failed to update deleted_at for doc %s: %s", doc_id, exc)
 
@@ -468,10 +446,14 @@ async def index_document_restore(doc_id: UUID) -> None:
     """
     try:
         index = get_meili_index()
-        await index.update_documents([{
-            "id": str(doc_id),
-            "deleted_at": None,
-        }])
+        await index.update_documents(
+            [
+                {
+                    "id": str(doc_id),
+                    "deleted_at": None,
+                }
+            ]
+        )
     except Exception as exc:
         logger.error("Failed to restore index for doc %s: %s", doc_id, exc)
 
@@ -490,12 +472,12 @@ async def remove_document_from_index(doc_id: UUID) -> None:
         await client.wait_for_task(task.task_uid, timeout_in_ms=5000)
     except Exception as exc:
         logger.warning(
-            "Failed to remove doc %s from search index (will be caught by consistency checker): %s",
-            doc_id, exc
+            "Failed to remove doc %s from search index (will be caught by consistency checker): %s", doc_id, exc
         )
 
 
 # ---- File Indexing ----
+
 
 def build_search_file_data(
     ff,
@@ -525,7 +507,7 @@ def build_search_file_data(
         "id": f"file_{ff.id}",
         "title": ff.display_name,
         "file_name": ff.display_name,
-        "content_plain": (ff.content_plain or "")[:_get_max_content_length()],
+        "content_plain": (ff.content_plain or "")[: _get_max_content_length()],
         "content_type": "file",
         "mime_type": ff.mime_type,
         "application_id": str(application_id) if application_id else None,
@@ -562,7 +544,8 @@ async def remove_file_from_index(file_id: UUID) -> None:
     except Exception as exc:
         logger.warning(
             "Failed to remove file %s from search index: %s",
-            file_id, exc,
+            file_id,
+            exc,
         )
 
 
@@ -583,17 +566,17 @@ def _pg_extract_snippet(text: str, start: int, length: int) -> str:
 
     # Expand to word boundaries
     if snippet_start > 0:
-        space = text.rfind(' ', snippet_start - 20, snippet_start)
+        space = text.rfind(" ", snippet_start - 20, snippet_start)
         if space != -1:
             snippet_start = space + 1
     if snippet_end < len(text):
-        space = text.find(' ', snippet_end, snippet_end + 20)
+        space = text.find(" ", snippet_end, snippet_end + 20)
         if space != -1:
             snippet_end = space
 
     before = html_mod.escape(text[snippet_start:start])
-    match = html_mod.escape(text[start:start + length])
-    after = html_mod.escape(text[start + length:snippet_end])
+    match = html_mod.escape(text[start : start + length])
+    after = html_mod.escape(text[start + length : snippet_end])
 
     prefix = "..." if snippet_start > 0 else ""
     suffix = "..." if snippet_end < len(text) else ""
@@ -613,11 +596,11 @@ def _highlight_terms_in_window(content: str, start: int, length: int, terms: set
 
     # Expand to word boundaries
     if window_start > 0:
-        space = content.rfind(' ', max(0, window_start - 20), window_start)
+        space = content.rfind(" ", max(0, window_start - 20), window_start)
         if space != -1:
             window_start = space + 1
     if window_end < len(content):
-        space = content.find(' ', window_end, min(len(content), window_end + 20))
+        space = content.find(" ", window_end, min(len(content), window_end + 20))
         if space != -1:
             window_end = space
 
@@ -669,12 +652,12 @@ def _sanitize_meili_snippet(html: str) -> str:
             # <mark> comes first
             result.append(html_mod.escape(remaining[:mark_open_pos]))
             result.append(_MARK_OPEN)
-            remaining = remaining[mark_open_pos + len(_MARK_OPEN):]
+            remaining = remaining[mark_open_pos + len(_MARK_OPEN) :]
         else:
             # </mark> comes first
             result.append(html_mod.escape(remaining[:mark_close_pos]))
             result.append(_MARK_CLOSE)
-            remaining = remaining[mark_close_pos + len(_MARK_CLOSE):]
+            remaining = remaining[mark_close_pos + len(_MARK_CLOSE) :]
 
     return "".join(result)
 
@@ -696,7 +679,7 @@ def _byte_to_char_offset(encoded: bytes, byte_offset: int) -> int:
     return len(encoded[:byte_offset].decode("utf-8", errors="replace"))
 
 
-def _expand_hits(hits: list[dict]) -> list[dict]:
+def _expand_hits(hits: list[dict], query_word_count: int = 1) -> list[dict]:
     """Expand search hits into multiple entries per document.
 
     First entry uses Meilisearch's native crop+highlight. Additional entries
@@ -705,6 +688,12 @@ def _expand_hits(hits: list[dict]) -> list[dict]:
 
     Each entry carries ``matchCount`` (total matches in the document) and
     ``occurrenceIndex`` (0-based position of this entry).
+
+    For multi-word queries (query_word_count >= 2), positions are filtered
+    to only include those where at least two distinct query terms appear
+    within a proximity window. This prevents isolated single-term matches
+    (e.g. "4" in "38/40") from generating separate result rows when the
+    user searched for "sprint 4".
     """
     expanded: list[dict] = []
 
@@ -715,9 +704,9 @@ def _expand_hits(hits: list[dict]) -> list[dict]:
 
         # Base fields (exclude content_plain and internal Meilisearch keys)
         base = {
-            k: v for k, v in hit.items()
-            if k not in ("content_plain", "_matchesPosition", "_formatted",
-                         "_rankingScore", "_rankingScoreDetails")
+            k: v
+            for k, v in hit.items()
+            if k not in ("content_plain", "_matchesPosition", "_formatted", "_rankingScore", "_rankingScoreDetails")
         }
         hit_id = hit.get("id", "")
         if isinstance(hit_id, str) and hit_id.startswith("file_"):
@@ -751,14 +740,59 @@ def _expand_hits(hits: list[dict]) -> list[dict]:
                     matched_terms_set.add(content[char_start:char_end].lower())
 
         valid_positions = [p for p in positions if p.get("length", 0) > 0]
+
+        # Proximity filtering for multi-word queries: only keep positions
+        # that have a DIFFERENT matched term within PROXIMITY_WINDOW chars.
+        # This prevents isolated single-term matches (e.g. "4" in "38/40")
+        # from generating separate result rows for a query like "sprint 4".
+        if query_word_count >= 2 and len(valid_positions) > 1 and content:
+            _PROXIMITY_WINDOW = 120  # chars — end-to-start gap between matches
+
+            # Build char position list with their matched term text
+            _cp_list: list[tuple[int, int, str, dict]] = []
+            for _pos in valid_positions:
+                _bs = _pos.get("start", 0)
+                _bl = _pos.get("length", 0)
+                _cs = _byte_to_char_offset(content_encoded, _bs)
+                _ce = _byte_to_char_offset(content_encoded, _bs + _bl)
+                _term = content[_cs:_ce].lower() if _cs < len(content) else ""
+                _cp_list.append((_cs, _ce, _term, _pos))
+
+            _cp_list.sort(key=lambda x: x[0])
+
+            # Keep only positions that have a DIFFERENT term within window.
+            # Measures end-to-start gap (not start-to-start) for accuracy.
+            # Guard: skip proximity filter for pathologically large position lists.
+            _proximity_positions: list[dict] = []
+            if len(_cp_list) <= 200:
+                for _i, (_cs, _ce, _term, _pos) in enumerate(_cp_list):
+                    _has_neighbor = False
+                    for _j, (_cs2, _ce2, _term2, _) in enumerate(_cp_list):
+                        if _i == _j or _term == _term2:
+                            continue
+                        # End-to-start gap: how far apart are the two spans?
+                        _gap = max(0, max(_cs, _cs2) - min(_ce, _ce2))
+                        if _gap <= _PROXIMITY_WINDOW:
+                            _has_neighbor = True
+                            break
+                    if _has_neighbor:
+                        _proximity_positions.append(_pos)
+
+            if _proximity_positions:
+                valid_positions = _proximity_positions
+            else:
+                # No proximity pairs found — show title-only instead of noisy
+                # isolated single-term matches
+                valid_positions = []
+
         total_matches = len(valid_positions) or (1 if title_positions else 0)
 
-        if not positions:
-            # Title-only match
+        if not positions or not valid_positions:
+            # Title-only match, or proximity filter removed all content positions
             formatted_snippet = formatted.get("content_plain", "")
             if not formatted_snippet and content:
                 truncated = content[:200]
-                space = truncated.rfind(' ', 150)
+                space = truncated.rfind(" ", 150)
                 if space > 0:
                     truncated = truncated[:space]
                 formatted_snippet = html_mod.escape(truncated) + "..."
@@ -771,10 +805,13 @@ def _expand_hits(hits: list[dict]) -> list[dict]:
 
         doc_start_idx = len(expanded)
 
-        # Deduplicate and expand up to MAX_OCCURRENCES_PER_DOC
-        seen_char_starts: set[int] = set()
+        # Deduplicate and expand up to MAX_OCCURRENCES_PER_DOC.
+        # Merge positions that would produce overlapping snippet windows
+        # (within snippet_context_chars of each other) to avoid near-identical results.
+        _snippet_ctx = _get_snippet_context_chars()
+        seen_windows: list[int] = []  # char_start of each emitted snippet
         occ_idx = 0
-        for pos in positions:
+        for pos in valid_positions:
             if occ_idx >= MAX_OCCURRENCES_PER_DOC:
                 break
             byte_start = pos.get("start", 0)
@@ -785,24 +822,52 @@ def _expand_hits(hits: list[dict]) -> list[dict]:
             char_start = _byte_to_char_offset(content_encoded, byte_start)
             char_length = _byte_to_char_offset(content_encoded, byte_start + byte_length) - char_start
 
-            if char_start in seen_char_starts or char_start >= len(content):
+            if char_start >= len(content):
                 continue
-            seen_char_starts.add(char_start)
+            # Skip if this position falls within an already-emitted snippet window.
+            # Window extends _snippet_ctx on EACH side, so overlap occurs within 2x.
+            if any(abs(char_start - prev) < 2 * _snippet_ctx for prev in seen_windows):
+                continue
+            seen_windows.append(char_start)
 
             entry = {**base}
             if occ_idx == 0:
                 formatted_snippet = formatted.get("content_plain", "")
-                if formatted_snippet:
+                use_native_crop = bool(formatted_snippet)
+
+                # For multi-word queries, verify the native crop has 2+ distinct
+                # query terms. If Meilisearch cropped around an isolated term
+                # (e.g. "4" in "38/40" for query "sprint 4"), discard it and
+                # use our proximity-filtered position instead.
+                if use_native_crop and query_word_count >= 2 and matched_terms_set:
+                    sanitized = _sanitize_meili_snippet(formatted_snippet)
+                    plain_check = re.sub(r"<[^>]+>", "", sanitized).lower()
+                    # Use word-boundary matching to avoid "4" matching inside "38/40"
+                    terms_found = sum(
+                        1
+                        for t in matched_terms_set
+                        if re.search(r"(?<!\w)" + re.escape(t) + r"(?!\w)", plain_check)
+                    )
+                    if terms_found < 2:
+                        use_native_crop = False
+
+                if use_native_crop:
                     entry["snippet"] = _sanitize_meili_snippet(formatted_snippet)
                 elif content and matched_terms_set:
                     entry["snippet"] = _highlight_terms_in_window(
-                        content, char_start, char_length, matched_terms_set,
+                        content,
+                        char_start,
+                        char_length,
+                        matched_terms_set,
                     )
                 else:
                     entry["snippet"] = ""
             else:
                 entry["snippet"] = _highlight_terms_in_window(
-                    content, char_start, char_length, matched_terms_set,
+                    content,
+                    char_start,
+                    char_length,
+                    matched_terms_set,
                 )
             entry["occurrenceIndex"] = occ_idx
             entry["matchCount"] = total_matches
@@ -833,17 +898,40 @@ async def search_documents(
     if _meili_circuit_is_open():
         raise RuntimeError("Meilisearch circuit breaker is open")
 
-    # Drop single-character words — they match everywhere and pollute results
-    # (e.g. "pm d" → "pm" instead of matching every "d" in every document).
-    words = [w for w in query.split() if len(w) >= 2]
-    if not words:
-        # All words were single chars — use original query as-is (prefix search)
-        words = query.split()
-    query = " ".join(words)
+    # Detect quoted phrase search — pass through to Meilisearch as-is.
+    # Meilisearch handles "sprint 4" as an exact phrase match natively.
+    is_phrase_search = query.startswith('"') and query.endswith('"') and len(query) > 2
 
-    # Use "all" for short queries (1-2 words) to require every term,
-    # "last" for longer queries so partial matches still surface results.
-    strategy = "all" if len(words) <= 2 else "last"
+    if not is_phrase_search:
+        # Strip stray quotes that aren't balanced phrase delimiters
+        query = query.replace('"', '')
+
+    if is_phrase_search:
+        # Exact phrase — don't filter words, don't change strategy
+        # Meilisearch will match the exact phrase in order
+        strategy = "all"
+        query_word_count = 2  # phrase search always treated as multi-word
+    else:
+        # Normal search — apply word filtering and strategy selection.
+        # Only drop single-char words for single-word queries (too vague).
+        # Multi-word queries keep everything: "sprint 4" → ["sprint", "4"].
+        words = query.split()
+        if len(words) > 1:
+            # Multi-word query: keep all words including single-char ones.
+            # "sprint 4" → ["sprint", "4"], "PM d" → ["PM", "d"]
+            pass
+        else:
+            # Single word: drop if single char (too vague, matches everywhere)
+            words = [w for w in words if len(w) >= 2]
+        if not words:
+            # All words were single chars — use original query as-is (prefix search)
+            words = query.split()
+        query = " ".join(words)
+        query_word_count = len(words)
+
+        # Use "all" for short queries (1-2 words) to require every term,
+        # "last" for longer queries so partial matches still surface results.
+        strategy = "all" if len(words) <= 2 else "last"
 
     try:
         index = get_meili_index()
@@ -853,14 +941,14 @@ async def search_documents(
             limit=limit,
             offset=offset,
             matching_strategy=strategy,
-            attributes_to_highlight=["title", "content_plain"],   # Fix 1: add content_plain
-            attributes_to_crop=["content_plain"],                 # Fix 1: crop around match
-            crop_length=30,                                       # ~30 words context
-            crop_marker="...",                                    # ellipsis at crop boundary
+            attributes_to_highlight=["title", "content_plain"],  # Fix 1: add content_plain
+            attributes_to_crop=["content_plain"],  # Fix 1: crop around match
+            crop_length=30,  # ~30 words context
+            crop_marker="...",  # ellipsis at crop boundary
             highlight_pre_tag="<mark>",
             highlight_post_tag="</mark>",
             show_ranking_score=False,
-            show_matches_position=True,   # keep for occurrence counting + matchedTerms extraction
+            show_matches_position=True,  # keep for occurrence counting + matchedTerms extraction
         )
         _meili_record_success()
     except RuntimeError:
@@ -870,7 +958,7 @@ async def search_documents(
         _meili_record_failure()
         raise
 
-    expanded = _expand_hits(results.hits)
+    expanded = _expand_hits(results.hits, query_word_count=query_word_count)
     return {
         "hits": expanded,
         "estimatedTotalHits": results.estimated_total_hits,
@@ -881,6 +969,7 @@ async def search_documents(
 
 
 # ---- PostgreSQL FTS Fallback ----
+
 
 async def search_documents_pg_fallback(
     db: AsyncSession,
@@ -906,6 +995,7 @@ async def search_documents_pg_fallback(
 
     # Validate scope IDs as UUIDs to prevent SQL injection via f-string interpolation
     from uuid import UUID as _UUID
+
     if scope_application_id:
         try:
             _UUID(scope_application_id)
@@ -916,6 +1006,13 @@ async def search_documents_pg_fallback(
             _UUID(scope_project_id)
         except (ValueError, AttributeError):
             return {"documents": [], "files": [], "total_count": 0}
+
+    # Sanitize query for websearch_to_tsquery: strip operator characters
+    # that could cause unexpected behavior (e.g. "-sprint" negates, "OR" broadens).
+    # Bind params prevent SQL injection, but operators affect query semantics.
+    _pg_query = re.sub(r'["\-|]', ' ', query)
+    _pg_query = re.sub(r'\bOR\b', ' ', _pg_query, flags=re.IGNORECASE)
+    _pg_query = ' '.join(_pg_query.split()) or query  # fallback if everything stripped
 
     all_scope_ids = [str(uid) for uid in accessible_app_ids]
     all_project_ids = [str(uid) for uid in project_ids]
@@ -939,7 +1036,7 @@ async def search_documents_pg_fallback(
         scope_params["scope_proj_id"] = scope_project_id
 
     base_params = {
-        "query": query,
+        "query": _pg_query,
         "app_ids": all_scope_ids,
         "project_ids": all_project_ids,
         "user_id": str(user_id),
@@ -958,16 +1055,16 @@ async def search_documents_pg_fallback(
             d.updated_at,
             d.created_by,
             ts_headline(
-                'english', d.title, plainto_tsquery('english', :query),
+                'english', d.title, websearch_to_tsquery('english', :query),
                 'StartSel=<mark>, StopSel=</mark>, MaxWords=20, MinWords=10'
             ) AS title_highlighted,
             ts_headline(
-                'english', COALESCE(d.content_plain, ''), plainto_tsquery('english', :query),
+                'english', COALESCE(d.content_plain, ''), websearch_to_tsquery('english', :query),
                 'StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=20'
             ) AS snippet,
             ts_rank(
                 d.search_vector,
-                plainto_tsquery('english', :query)
+                websearch_to_tsquery('english', :query)
             ) AS rank,
             COUNT(*) OVER() AS total_count
         FROM "Documents" d
@@ -978,7 +1075,7 @@ async def search_documents_pg_fallback(
                 OR d.project_id = ANY(:project_ids)
                 OR d.user_id = :user_id
             )
-            AND d.search_vector @@ plainto_tsquery('english', :query)
+            AND d.search_vector @@ websearch_to_tsquery('english', :query)
             {scope_clause}
         ORDER BY rank DESC
         LIMIT :limit OFFSET :offset
@@ -1013,16 +1110,16 @@ async def search_documents_pg_fallback(
             f.updated_at,
             f.created_by,
             ts_headline(
-                'english', f.display_name, plainto_tsquery('english', :query),
+                'english', f.display_name, websearch_to_tsquery('english', :query),
                 'StartSel=<mark>, StopSel=</mark>, MaxWords=20, MinWords=10'
             ) AS title_highlighted,
             ts_headline(
-                'english', COALESCE(f.content_plain, ''), plainto_tsquery('english', :query),
+                'english', COALESCE(f.content_plain, ''), websearch_to_tsquery('english', :query),
                 'StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=20'
             ) AS snippet,
             ts_rank(
                 to_tsvector('english', COALESCE(f.display_name, '') || ' ' || COALESCE(f.content_plain, '')),
-                plainto_tsquery('english', :query)
+                websearch_to_tsquery('english', :query)
             ) AS rank,
             COUNT(*) OVER() AS total_count
         FROM "FolderFiles" f
@@ -1035,7 +1132,7 @@ async def search_documents_pg_fallback(
                 OR f.user_id = :user_id
             )
             AND to_tsvector('english', COALESCE(f.display_name, '') || ' ' || COALESCE(f.content_plain, ''))
-                @@ plainto_tsquery('english', :query)
+                @@ websearch_to_tsquery('english', :query)
             {file_scope_clause}
         ORDER BY rank DESC
         LIMIT :limit OFFSET :offset
@@ -1068,7 +1165,7 @@ async def search_documents_pg_fallback(
             "snippet": _sanitize_meili_snippet(row.snippet) if row.snippet else "",
             "occurrenceIndex": 0,
             "matchCount": 1,
-            "matchedTerms": [t for t in query.lower().split() if len(t) >= 2],
+            "matchedTerms": [t for t in (w.strip('"\'') for w in _pg_query.lower().split()) if len(t) >= 2],
         }
 
     # Interleave by rank descending
@@ -1094,6 +1191,7 @@ async def search_documents_pg_fallback(
 
 # ---- Health Check ----
 
+
 async def check_search_health() -> dict:
     """Check Meilisearch availability and return stats.
 
@@ -1116,6 +1214,7 @@ async def check_search_health() -> dict:
 
 
 # ---- Consistency Checker (arq background job) ----
+
 
 async def check_search_index_consistency(ctx: dict) -> None:
     """Compare PostgreSQL documents with Meilisearch index.
@@ -1165,9 +1264,8 @@ async def check_search_index_consistency(ctx: dict) -> None:
 
         # Also count active files (Meilisearch index contains both docs and files)
         from app.models.folder_file import FolderFile as FF
-        file_count_result = await db.execute(
-            select(sa_func.count(FF.id)).where(FF.deleted_at.is_(None))
-        )
+
+        file_count_result = await db.execute(select(sa_func.count(FF.id)).where(FF.deleted_at.is_(None)))
         pg_active_file_count = file_count_result.scalar() or 0
 
         # Compare total indexed (docs + soft-deleted docs + files) against Meilisearch
@@ -1175,7 +1273,10 @@ async def check_search_index_consistency(ctx: dict) -> None:
         if abs(expected_meili_count - meili_count) > 10:  # tolerance for in-flight indexing
             logger.warning(
                 "Search index drift: expected=%d (docs=%d, files=%d), Meilisearch=%d",
-                expected_meili_count, pg_total_count, pg_active_file_count, meili_count,
+                expected_meili_count,
+                pg_total_count,
+                pg_active_file_count,
+                meili_count,
             )
 
         # Find documents updated since last check (DB-012: keyset pagination).
@@ -1230,24 +1331,28 @@ async def check_search_index_consistency(ctx: dict) -> None:
 
             for row in stale_rows:
                 if row.deleted_at:
-                    soft_delete_batch.append({
-                        "id": str(row.id),
-                        "deleted_at": int(row.deleted_at.timestamp()),
-                    })
+                    soft_delete_batch.append(
+                        {
+                            "id": str(row.id),
+                            "deleted_at": int(row.deleted_at.timestamp()),
+                        }
+                    )
                 else:
                     app_id = row.application_id or row.project_app_id
-                    reindex_batch.append({
-                        "id": str(row.id),
-                        "title": row.title,
-                        "content_plain": (row.content_plain or "")[:_get_max_content_length()],
-                        "application_id": str(app_id) if app_id else None,
-                        "project_id": str(row.project_id) if row.project_id else None,
-                        "user_id": str(row.user_id) if row.user_id else None,
-                        "folder_id": str(row.folder_id) if row.folder_id else None,
-                        "created_by": str(row.created_by) if row.created_by else None,
-                        "updated_at": int(row.updated_at.timestamp()),
-                        "deleted_at": None,
-                    })
+                    reindex_batch.append(
+                        {
+                            "id": str(row.id),
+                            "title": row.title,
+                            "content_plain": (row.content_plain or "")[: _get_max_content_length()],
+                            "application_id": str(app_id) if app_id else None,
+                            "project_id": str(row.project_id) if row.project_id else None,
+                            "user_id": str(row.user_id) if row.user_id else None,
+                            "folder_id": str(row.folder_id) if row.folder_id else None,
+                            "created_by": str(row.created_by) if row.created_by else None,
+                            "updated_at": int(row.updated_at.timestamp()),
+                            "deleted_at": None,
+                        }
+                    )
 
                 if row.updated_at and row.updated_at > batch_max_updated_at:
                     batch_max_updated_at = row.updated_at
@@ -1281,9 +1386,7 @@ async def check_search_index_consistency(ctx: dict) -> None:
 
             # Safety cap: don't process more than 5000 per run
             if total_reindexed >= 5000:
-                logger.warning(
-                    "Consistency check hit 5000-row safety cap, will continue next run"
-                )
+                logger.warning("Consistency check hit 5000-row safety cap, will continue next run")
                 break
 
             # If we got fewer than batch_size, we've processed everything
@@ -1348,21 +1451,23 @@ async def check_search_index_consistency(ctx: dict) -> None:
                         file_delete_ids.append(f"file_{row.id}")
                     else:
                         app_id = row.application_id or row.project_app_id
-                        file_reindex_batch.append({
-                            "id": f"file_{row.id}",
-                            "title": row.display_name,
-                            "file_name": row.display_name,
-                            "content_plain": (row.content_plain or "")[:_get_max_content_length()],
-                            "content_type": "file",
-                            "mime_type": row.mime_type,
-                            "application_id": str(app_id) if app_id else None,
-                            "project_id": str(row.project_id) if row.project_id else None,
-                            "user_id": str(row.user_id) if row.user_id else None,
-                            "folder_id": str(row.folder_id) if row.folder_id else None,
-                            "created_by": str(row.created_by) if row.created_by else None,
-                            "updated_at": int(row.updated_at.timestamp()),
-                            "deleted_at": None,
-                        })
+                        file_reindex_batch.append(
+                            {
+                                "id": f"file_{row.id}",
+                                "title": row.display_name,
+                                "file_name": row.display_name,
+                                "content_plain": (row.content_plain or "")[: _get_max_content_length()],
+                                "content_type": "file",
+                                "mime_type": row.mime_type,
+                                "application_id": str(app_id) if app_id else None,
+                                "project_id": str(row.project_id) if row.project_id else None,
+                                "user_id": str(row.user_id) if row.user_id else None,
+                                "folder_id": str(row.folder_id) if row.folder_id else None,
+                                "created_by": str(row.created_by) if row.created_by else None,
+                                "updated_at": int(row.updated_at.timestamp()),
+                                "deleted_at": None,
+                            }
+                        )
 
                     if row.updated_at and row.updated_at > file_batch_max_updated_at:
                         file_batch_max_updated_at = row.updated_at
@@ -1409,6 +1514,7 @@ async def check_search_index_consistency(ctx: dict) -> None:
 
 # ---- Full Reindex (Admin) ----
 
+
 async def full_reindex(db: AsyncSession) -> dict:
     """Rebuild entire Meilisearch index using index swap pattern.
 
@@ -1424,34 +1530,22 @@ async def full_reindex(db: AsyncSession) -> dict:
     temp_index = await client.create_index(temp_index_name, primary_key="id")
 
     # 2. Configure settings on temp index (wait for each task)
-    task_info = await temp_index.update_searchable_attributes(
-        MEILISEARCH_INDEX_SETTINGS["searchableAttributes"]
-    )
+    task_info = await temp_index.update_searchable_attributes(MEILISEARCH_INDEX_SETTINGS["searchableAttributes"])
     await client.wait_for_task(task_info.task_uid)
 
-    task_info = await temp_index.update_filterable_attributes(
-        MEILISEARCH_INDEX_SETTINGS["filterableAttributes"]
-    )
+    task_info = await temp_index.update_filterable_attributes(MEILISEARCH_INDEX_SETTINGS["filterableAttributes"])
     await client.wait_for_task(task_info.task_uid)
 
-    task_info = await temp_index.update_sortable_attributes(
-        MEILISEARCH_INDEX_SETTINGS["sortableAttributes"]
-    )
+    task_info = await temp_index.update_sortable_attributes(MEILISEARCH_INDEX_SETTINGS["sortableAttributes"])
     await client.wait_for_task(task_info.task_uid)
 
-    task_info = await temp_index.update_displayed_attributes(
-        MEILISEARCH_INDEX_SETTINGS["displayedAttributes"]
-    )
+    task_info = await temp_index.update_displayed_attributes(MEILISEARCH_INDEX_SETTINGS["displayedAttributes"])
     await client.wait_for_task(task_info.task_uid)
 
-    task_info = await temp_index.update_ranking_rules(
-        MEILISEARCH_INDEX_SETTINGS["rankingRules"]
-    )
+    task_info = await temp_index.update_ranking_rules(MEILISEARCH_INDEX_SETTINGS["rankingRules"])
     await client.wait_for_task(task_info.task_uid)
 
-    task_info = await temp_index.update_typo_tolerance(
-        MEILISEARCH_INDEX_SETTINGS["typoTolerance"]
-    )
+    task_info = await temp_index.update_typo_tolerance(MEILISEARCH_INDEX_SETTINGS["typoTolerance"])
     await client.wait_for_task(task_info.task_uid)
 
     # 3. Batch-load all active documents (select only needed columns, 1000 per batch).
@@ -1490,18 +1584,23 @@ async def full_reindex(db: AsyncSession) -> dict:
 
         last_id = rows[-1].id
 
-        batch = [{
-            "id": str(row.id),
-            "title": row.title,
-            "content_plain": (row.content_plain or "")[:_get_max_content_length()],
-            "application_id": str(row.application_id or row.project_app_id) if (row.application_id or row.project_app_id) else None,
-            "project_id": str(row.project_id) if row.project_id else None,
-            "user_id": str(row.user_id) if row.user_id else None,
-            "folder_id": str(row.folder_id) if row.folder_id else None,
-            "created_by": str(row.created_by) if row.created_by else None,
-            "updated_at": int(row.updated_at.timestamp()),
-            "deleted_at": None,
-        } for row in rows]
+        batch = [
+            {
+                "id": str(row.id),
+                "title": row.title,
+                "content_plain": (row.content_plain or "")[: _get_max_content_length()],
+                "application_id": str(row.application_id or row.project_app_id)
+                if (row.application_id or row.project_app_id)
+                else None,
+                "project_id": str(row.project_id) if row.project_id else None,
+                "user_id": str(row.user_id) if row.user_id else None,
+                "folder_id": str(row.folder_id) if row.folder_id else None,
+                "created_by": str(row.created_by) if row.created_by else None,
+                "updated_at": int(row.updated_at.timestamp()),
+                "deleted_at": None,
+            }
+            for row in rows
+        ]
 
         await temp_index.add_documents(batch)
         total += len(rows)
@@ -1540,29 +1639,32 @@ async def full_reindex(db: AsyncSession) -> dict:
 
         file_last_id = file_rows[-1].id
 
-        file_batch = [{
-            "id": f"file_{row.id}",
-            "title": row.display_name,
-            "file_name": row.display_name,
-            "content_plain": (row.content_plain or "")[:_get_max_content_length()],
-            "content_type": "file",
-            "mime_type": row.mime_type,
-            "application_id": str(row.application_id or row.project_app_id) if (row.application_id or row.project_app_id) else None,
-            "project_id": str(row.project_id) if row.project_id else None,
-            "user_id": str(row.user_id) if row.user_id else None,
-            "folder_id": str(row.folder_id) if row.folder_id else None,
-            "created_by": str(row.created_by) if row.created_by else None,
-            "updated_at": int(row.updated_at.timestamp()),
-            "deleted_at": None,
-        } for row in file_rows]
+        file_batch = [
+            {
+                "id": f"file_{row.id}",
+                "title": row.display_name,
+                "file_name": row.display_name,
+                "content_plain": (row.content_plain or "")[: _get_max_content_length()],
+                "content_type": "file",
+                "mime_type": row.mime_type,
+                "application_id": str(row.application_id or row.project_app_id)
+                if (row.application_id or row.project_app_id)
+                else None,
+                "project_id": str(row.project_id) if row.project_id else None,
+                "user_id": str(row.user_id) if row.user_id else None,
+                "folder_id": str(row.folder_id) if row.folder_id else None,
+                "created_by": str(row.created_by) if row.created_by else None,
+                "updated_at": int(row.updated_at.timestamp()),
+                "deleted_at": None,
+            }
+            for row in file_rows
+        ]
 
         await temp_index.add_documents(file_batch)
         file_total += len(file_rows)
 
     # 4. Atomic swap
-    task = await client.swap_indexes([
-        (settings.meilisearch_index_name, temp_index_name)
-    ])
+    task = await client.swap_indexes([(settings.meilisearch_index_name, temp_index_name)])
     await client.wait_for_task(task.task_uid)
 
     # 5. Delete old index (now named temp)

@@ -153,7 +153,7 @@ export function SearchBar({ className, scopeToContext }: SearchBarProps = {}): J
             setShowResults(true)
           }
         }}
-        placeholder="Search documents..."
+        placeholder='Search documents... (use "quotes" for exact phrase)'
         role="combobox"
         aria-expanded={showResults}
         aria-controls="search-results-listbox"

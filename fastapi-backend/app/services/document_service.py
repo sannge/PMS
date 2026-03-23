@@ -190,10 +190,12 @@ def encode_cursor(created_at: datetime, id: UUID) -> str:
     Returns:
         Base64-encoded cursor string
     """
-    payload = json.dumps({
-        "created_at": created_at.isoformat(),
-        "id": str(id),
-    })
+    payload = json.dumps(
+        {
+            "created_at": created_at.isoformat(),
+            "id": str(id),
+        }
+    )
     return base64.urlsafe_b64encode(payload.encode()).decode()
 
 
@@ -270,8 +272,7 @@ async def validate_folder_depth(
         return 0, None
 
     result = await db.execute(
-        select(DocumentFolder.depth, DocumentFolder.materialized_path)
-        .where(DocumentFolder.id == parent_id)
+        select(DocumentFolder.depth, DocumentFolder.materialized_path).where(DocumentFolder.id == parent_id)
     )
     parent = result.one_or_none()
     if parent is None:
@@ -336,9 +337,7 @@ async def update_descendant_paths(
         update(DocumentFolder)
         .where(DocumentFolder.materialized_path.like(f"{old_path}%"))
         .values(
-            materialized_path=func.replace(
-                DocumentFolder.materialized_path, old_path, new_path
-            ),
+            materialized_path=func.replace(DocumentFolder.materialized_path, old_path, new_path),
             depth=DocumentFolder.depth + depth_delta,
         )
     )
@@ -360,6 +359,7 @@ def convert_tiptap_to_markdown(content_json: Optional[str]) -> str:
     if not content_json:
         return ""
     from .content_converter import tiptap_json_to_markdown
+
     content_dict = json.loads(content_json)
     return tiptap_json_to_markdown(content_dict)
 
@@ -439,10 +439,9 @@ async def cleanup_orphaned_attachments(
     # Grace period: skip recently created attachments (may be in-flight uploads)
     cutoff = utc_now() - CLEANUP_GRACE_PERIOD
     orphans = [
-        a for a in all_attachments
-        if str(a.id) not in referenced_ids
-        and a.created_at is not None
-        and a.created_at < cutoff
+        a
+        for a in all_attachments
+        if str(a.id) not in referenced_ids and a.created_at is not None and a.created_at < cutoff
     ]
 
     if not orphans:
@@ -450,33 +449,36 @@ async def cleanup_orphaned_attachments(
 
     logger.debug(
         "cleanup_orphaned_attachments: document=%s, referenced=%d, db=%d, orphans=%d",
-        document_id, len(referenced_ids), len(all_attachments), len(orphans),
+        document_id,
+        len(referenced_ids),
+        len(all_attachments),
+        len(orphans),
     )
 
     # 4. Delete MinIO files (best-effort, log failures but continue)
     for orphan in orphans:
         if orphan.minio_bucket and orphan.minio_key:
             try:
-                minio.delete_file(
+                await minio.delete_file(
                     bucket=orphan.minio_bucket,
                     object_name=orphan.minio_key,
                 )
             except MinIOServiceError:
                 logger.warning(
-                    "Failed to delete MinIO file for orphaned attachment %s "
-                    "(bucket=%s, key=%s)",
-                    orphan.id, orphan.minio_bucket, orphan.minio_key,
+                    "Failed to delete MinIO file for orphaned attachment %s (bucket=%s, key=%s)",
+                    orphan.id,
+                    orphan.minio_bucket,
+                    orphan.minio_key,
                 )
 
     # 5. Delete Attachment DB records
     orphan_ids = [o.id for o in orphans]
-    await db.execute(
-        delete(Attachment).where(Attachment.id.in_(orphan_ids))
-    )
+    await db.execute(delete(Attachment).where(Attachment.id.in_(orphan_ids)))
 
     logger.info(
         "Cleaned up %d orphaned attachment(s) for document %s",
-        len(orphans), document_id,
+        len(orphans),
+        document_id,
     )
 
     return len(orphans)
@@ -520,6 +522,7 @@ async def save_document_content(
     # Permission check (when called from save_content endpoint, avoids double-load)
     if check_edit_permission:
         from .permission_service import PermissionService
+
         # Single query: existence check + full load combined
         result_perm = await db.execute(
             select(Document).where(
@@ -544,6 +547,7 @@ async def save_document_content(
     # Run content conversion BEFORE the atomic update
     content_dict = json.loads(content_json)
     from .content_converter import tiptap_json_to_markdown, tiptap_json_to_plain_text
+
     content_markdown = tiptap_json_to_markdown(content_dict)
     content_plain = tiptap_json_to_plain_text(content_dict)
 
@@ -573,9 +577,7 @@ async def save_document_content(
     if document is None:
         # Distinguish 404 vs 409
         exists = await db.scalar(
-            select(Document.id)
-            .where(Document.id == document_id)
-            .where(Document.deleted_at.is_(None))
+            select(Document.id).where(Document.id == document_id).where(Document.deleted_at.is_(None))
         )
         if exists is None:
             raise HTTPException(
@@ -608,6 +610,7 @@ async def save_document_content(
         )
 
     from .search_service import build_search_doc_data
+
     search_doc_data = build_search_doc_data(document, project_application_id=project_application_id)
 
     return document, search_doc_data
@@ -640,9 +643,7 @@ async def validate_tag_scope(
 
     if document.project_id is not None:
         # Project-scoped document: look up project's parent application_id
-        result = await db.execute(
-            select(Project.application_id).where(Project.id == document.project_id)
-        )
+        result = await db.execute(select(Project.application_id).where(Project.id == document.project_id))
         project_app_id = result.scalar_one_or_none()
         if project_app_id is None:
             return False
@@ -670,5 +671,6 @@ def convert_tiptap_to_plain_text(content_json: Optional[str]) -> str:
     if not content_json:
         return ""
     from .content_converter import tiptap_json_to_plain_text
+
     content_dict = json.loads(content_json)
     return tiptap_json_to_plain_text(content_dict)
