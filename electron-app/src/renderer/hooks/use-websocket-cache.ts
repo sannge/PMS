@@ -311,8 +311,18 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
           queryClient.invalidateQueries({ queryKey: queryKeys.task(data.task_id) })
           queryClient.invalidateQueries({ queryKey: queryKeys.tasks(data.project_id) })
         }
-        // Invalidate cross-app list — updates can change assignee which affects "My Tasks"
-        queryClient.invalidateQueries({ queryKey: queryKeys.myTasksCrossApp })
+        // Invalidate My Tasks if the current user is the assignee, reporter,
+        // or WAS previously assigned (reassignment away from current user).
+        // The WS payload only contains the NEW assignee, so we check the cache
+        // to detect if the task was previously in our "My Tasks" list.
+        const assigneeId = taskPayload?.assignee_id as string | undefined
+        const reporterId = taskPayload?.reporter_id as string | undefined
+        const userId = currentUserRef.current
+        const cachedMyTasks = queryClient.getQueryData<Task[]>(queryKeys.myTasksCrossApp)
+        const wasMyTask = cachedMyTasks?.some((t) => t.id === data.task_id)
+        if (userId && (wasMyTask || assigneeId === userId || reporterId === userId)) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.myTasksCrossApp })
+        }
       })
     )
 
@@ -330,18 +340,11 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
 
     unsubscribers.push(
       wsClient.on<TaskEventData>(MessageType.TASK_STATUS_CHANGED, (data) => {
-        const taskPayload = data.task
-        if (taskPayload?.id && taskPayload?.title) {
-          const task = taskPayload as unknown as Task
-          queryClient.setQueryData<Task>(queryKeys.task(data.task_id), task)
-          queryClient.setQueryData<Task[]>(queryKeys.tasks(data.project_id), (old) =>
-            old?.map((t) => (t.id === data.task_id ? task : t))
-          )
-        } else {
-          queryClient.invalidateQueries({ queryKey: queryKeys.task(data.task_id) })
-          queryClient.invalidateQueries({ queryKey: queryKeys.tasks(data.project_id) })
-        }
-        queryClient.invalidateQueries({ queryKey: queryKeys.myTasksCrossApp })
+        // The backend sends TASK_UPDATED alongside TASK_STATUS_CHANGED, so
+        // task/tasks cache updates are already handled by the TASK_UPDATED handler.
+        // Here we only handle status-specific side effects: project-level status
+        // aggregation (e.g., project progress %) may need a refresh.
+        queryClient.invalidateQueries({ queryKey: queryKeys.project(data.project_id) })
       })
     )
 
@@ -729,12 +732,12 @@ export function useWebSocketCacheInvalidation(options: WebSocketCacheOptions = {
         if (!isOwnAction) {
           queryClient.invalidateQueries({ queryKey: ['search'] })
         }
-        if (data.folder_id !== undefined) {
-          queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders(data.scope, data.scope_id) })
-          if (data.scope === 'project' && data.application_id) {
-            queryClient.invalidateQueries({ queryKey: queryKeys.documentFolders('application', data.application_id) })
-          }
-        }
+        // documentFolders NOT invalidated here: content edits and title renames
+        // don't change folder tree structure or document_count. Folder moves
+        // (which change folder_id) are handled by the mutation's onSuccess, and
+        // folder tree document_count refreshes via staleTime or next mount.
+        // scopesSummary and projects-with-content also NOT invalidated: document
+        // count doesn't change on updates, only on create/delete.
       })
     )
 

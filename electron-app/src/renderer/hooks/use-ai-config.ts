@@ -641,6 +641,7 @@ export function useIndexProgress(): UseQueryResult<IndexProgressResponse, Error>
       return response.data
     },
     enabled: !!token,
+    staleTime: 30_000,
     refetchInterval: (query) => {
       const data = query.state.data as IndexProgressResponse | undefined
       return data?.status === 'running' ? 15_000 : false

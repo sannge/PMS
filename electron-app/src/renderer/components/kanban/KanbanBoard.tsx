@@ -226,7 +226,6 @@ export function KanbanBoard({
       }
 
       // Optimistic update directly in the TanStack cache
-      const originalTasks = [...currentTasks]
       const now = new Date().toISOString()
       setTasksInCache((prevTasks) =>
         prevTasks.map((t) => {
@@ -274,8 +273,10 @@ export function KanbanBoard({
 
         return true
       } catch (err) {
-        // Revert on failure
-        queryClient.setQueryData<Task[]>(tasksQueryKey, originalTasks)
+        // Invalidate to get fresh data from server instead of restoring a
+        // potentially stale snapshot (WS events may have updated the cache
+        // between drag start and rollback).
+        queryClient.invalidateQueries({ queryKey: tasksQueryKey })
         const errorMessage = err instanceof Error ? err.message : 'Failed to move task'
         toast.error(errorMessage)
         return false

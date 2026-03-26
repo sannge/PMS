@@ -201,15 +201,19 @@ export function useNotifications(options?: { enabled?: boolean }): {
 } {
   const infiniteQuery = useNotificationsInfinite(options)
 
-  // Memoize the expensive data computation in a single pass (O(n) instead of O(2n))
+  // Memoize the expensive data computation in a single pass.
+  // Deduplicates by ID to handle page boundary overlap after WS prepends + refetch.
   const data = useMemo((): NotificationListResponse | undefined => {
     if (!infiniteQuery.data) return undefined
 
     const items: Notification[] = []
+    const seen = new Set<string>()
     let unreadCount = 0
 
     for (const page of infiniteQuery.data.pages) {
       for (const item of page.items) {
+        if (seen.has(item.id)) continue
+        seen.add(item.id)
         items.push(item)
         if (!item.is_read) unreadCount++
       }
